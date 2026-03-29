@@ -1,0 +1,26 @@
+{
+  "油畫": {
+    "color": [255, 200, 150],
+    "thickness_multiplier": 1.5,
+    "alpha": 0.85,
+    "background": [30, 20, 10]
+  },
+  "素描": {
+    "color": [220, 220, 220],
+    "thickness_multiplier": 0.8,
+    "alpha": 1.0,
+    "background": [255, 255, 255]
+  },
+  "水墨": {
+    "color": [40, 40, 40],
+    "thickness_multiplier": 1.2,
+    "alpha": 0.6,
+    "background": [245, 245, 240]
+  },
+  "名畫風": {
+    "color": [180, 130, 70],
+    "thickness_multiplier": 1.0,
+    "alpha": 0.9,
+    "background": [20, 15, 30]
+  }
+}
