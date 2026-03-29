@@ -194,21 +194,7 @@ python tests/benchmark.py
 在 __ 規格的電腦上，延遲約 __ ms，FPS 約 __，體驗 __。
 建議展場使用至少 __ 規格的電腦。
 
-## 展場配置建議
 
-### 顯示設備比較
-| | 投影機 | 大螢幕（55吋以上）|
-|---|---|---|
-| 優點 | 畫面大、沉浸感強 | 畫質清晰、不受光線影響 |
-| 缺點 | 需要暗場、設定麻煩 | 面積受限 |
-| 建議距離 | 觀眾距螢幕 1.5–2m | 觀眾距螢幕 1–1.5m |
-
-### 明信片列印方案
-| 方式 | 費用 | 等待時間 | 可行性 |
-|---|---|---|---|
-| 便利商店（ibon/FamilyMart）| 約 NT$5–10/張 | 即時 | 需手動操作 |
-| 照片列印機（租借）| 待詢問 | 30秒/張 | 最適合展場 |
-| 預先列印 | 低 | 無 | 展後帶走 |
 ```
 
 把你測到的數字填進去。
@@ -276,8 +262,6 @@ git commit -m "feat: 完成效能測量模組"
 git add tests/test_perf.py tests/benchmark.py
 git commit -m "test: 新增效能測試腳本"
 
-git add docs/PERF_REPORT.md
-git commit -m "docs: 新增效能測試報告與展場配置建議"
 
 git push origin feature/perf-monitor
 ```
@@ -300,4 +284,4 @@ git push origin feature/perf-monitor
 - [ ] `modules/perf_monitor.py` — FPS 和延遲測量正常
 - [ ] `tests/test_perf.py` — 全部 PASS
 - [ ] `tests/benchmark.py` — 能獨立跑基準測試
-- [ ] `docs/PERF_REPORT.md` — 至少一台電腦的數據，加展場配置建議
+- [ ] `docs/PERF_REPORT.md` — 至少一台電腦的數據
