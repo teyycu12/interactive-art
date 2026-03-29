@@ -1,25 +1,26 @@
-# 組員 D 工作說明｜效能測量與展場研究
+# 組員 E 工作說明｜風格設計與整合
 
 ## 你負責的模組
-`modules/perf_monitor.py` `tests/test_perf.py`
+`modules/style_manager.py` `main.py` `tests/test_style.py`
 
 ---
 
 ## 你的任務目標
 
-測量系統效能（FPS 和延遲），提供教授看得懂的數據。同時研究展場配置方案。你的模組**不需要接任何其他模組**，從 Day 1 就能完全獨立進行。
+Day 1–3 獨立研究四種風格的視覺設計。Day 4 把所有人的模組整合進 `main.py`。你是最後一道關卡，負責讓整個系統跑起來。
 
-**完成細項：**
-- 效能測量模組（FPS、延遲、畫面顯示）
-- 至少兩台電腦的 MediaPipe 基準測試數據
-- 展場配置建議（投影 vs 螢幕、明信片列印方案）
+**本週結束前要完成：**
+- 四種風格的參數設計（色彩、背景、筆觸個性）
+- 風格選擇介面（畫面上的按鈕）
+- Day 4 整合所有模組進 `main.py`
+- 30 秒示範影片 + 一張成品截圖
 
 ---
 
 ## 第一步：環境安裝
 
 ```bash
-pip install mediapipe opencv-python numpy
+pip install opencv-python numpy mediapipe
 ```
 
 ---
@@ -30,275 +31,402 @@ pip install mediapipe opencv-python numpy
 git clone https://github.com/你的帳號/interactive-art.git
 cd interactive-art
 git checkout dev
-git checkout -b feature/perf-monitor
+git checkout -b feature/style-main
 ```
 
 ---
 
-## 第三步：逐步完成功能
+## 第三步：Day 1–3 獨立完成風格模組
 
-### Day 1 — 效能測量模組
+### Day 1 — 設計四種風格參數
 
-開啟 `modules/perf_monitor.py`，填入：
+開啟 `assets/styles.json`，把參數填完整：
 
-```python
-"""
-perf_monitor.py
-負責人：組員 D
-功能：FPS 測量、端到端延遲測量、數字疊加在畫面上
-"""
-import cv2
-import time
-import numpy as np
-from collections import deque
-
-# 用過去 30 幀算平均 FPS
-_frame_times = deque(maxlen=30)
-_last_tick = time.perf_counter()
-_latency_ms = 0.0
-_latency_start = 0.0
-
-def tick() -> None:
-    """每幀開始時呼叫，計算 FPS"""
-    global _last_tick
-    now = time.perf_counter()
-    _frame_times.append(now - _last_tick)
-    _last_tick = now
-
-def mark_input() -> None:
-    """手部座標讀取完成時呼叫（延遲計算起點）"""
-    global _latency_start
-    _latency_start = time.perf_counter()
-
-def mark_output() -> None:
-    """筆觸畫出時呼叫（延遲計算終點）"""
-    global _latency_ms
-    if _latency_start > 0:
-        _latency_ms = (time.perf_counter() - _latency_start) * 1000
-
-def get_fps() -> float:
-    if not _frame_times:
-        return 0.0
-    avg = sum(_frame_times) / len(_frame_times)
-    return 1.0 / avg if avg > 0 else 0.0
-
-def get_latency() -> float:
-    """回傳延遲（ms）"""
-    return _latency_ms
-
-def draw_overlay(frame: np.ndarray) -> np.ndarray:
-    """在畫面左上角顯示 FPS 和延遲"""
-    out = frame.copy()
-    fps = get_fps()
-    lat = get_latency()
-
-    color = (0, 255, 0) if fps >= 25 else (0, 165, 255) if fps >= 15 else (0, 0, 255)
-
-    cv2.putText(out, f"FPS: {fps:.1f}", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-    cv2.putText(out, f"Latency: {lat:.1f}ms", (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-    return out
+```json
+{
+  "油畫": {
+    "bg_color": [15, 10, 5],
+    "stroke_color": [150, 180, 220],
+    "thickness_multiplier": 1.5,
+    "alpha": 0.85,
+    "blur": 1,
+    "description": "厚重、堆疊感，背景深色"
+  },
+  "素描": {
+    "bg_color": [245, 245, 245],
+    "stroke_color": [30, 30, 30],
+    "thickness_multiplier": 0.7,
+    "alpha": 1.0,
+    "blur": 0,
+    "description": "細線、清晰，白色背景"
+  },
+  "水墨": {
+    "bg_color": [235, 230, 220],
+    "stroke_color": [20, 20, 20],
+    "thickness_multiplier": 1.2,
+    "alpha": 0.55,
+    "blur": 2,
+    "description": "暈染感，米白背景"
+  },
+  "名畫風": {
+    "bg_color": [15, 10, 25],
+    "stroke_color": [180, 140, 80],
+    "thickness_multiplier": 1.0,
+    "alpha": 0.9,
+    "blur": 1,
+    "description": "金棕色調，深色背景"
+  }
+}
 ```
 
-### Day 2 — 基準測試腳本
-
-建一個獨立測試腳本，直接跑 MediaPipe 測量你電腦的效能：
+開啟 `modules/style_manager.py`，填入：
 
 ```python
-# 存成 tests/benchmark.py
 """
-benchmark.py — MediaPipe 基準效能測試
-執行：python tests/benchmark.py
-測試完會在終端機印出結果，複製下來存進 docs/
+style_manager.py
+負責人：組員 E
+功能：風格切換管理、取得目前風格參數、顯示風格選擇 UI
+"""
+import cv2
+import json
+import numpy as np
+from config import STYLES
+
+_styles = {}
+_current = STYLES[0]
+
+def _load():
+    global _styles
+    try:
+        with open("assets/styles.json", "r", encoding="utf-8") as f:
+            _styles = json.load(f)
+    except FileNotFoundError:
+        # 預設值，避免找不到檔案時崩潰
+        _styles = {name: {"bg_color": [0,0,0], "stroke_color": [255,255,255],
+                           "thickness_multiplier": 1.0, "alpha": 1.0, "blur": 0}
+                   for name in STYLES}
+
+_load()
+
+def get_styles() -> list:
+    return list(_styles.keys())
+
+def set_style(name: str) -> None:
+    global _current
+    if name in _styles:
+        _current = name
+
+def get_current() -> str:
+    return _current
+
+def get_params() -> dict:
+    return _styles.get(_current, {})
+
+def get_bg_canvas(w: int, h: int) -> np.ndarray:
+    """回傳目前風格的背景顏色畫布"""
+    params = get_params()
+    bg = params.get("bg_color", [0, 0, 0])
+    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    canvas[:] = bg[::-1]  # RGB 轉 BGR
+    return canvas
+
+def draw_selector(frame: np.ndarray) -> np.ndarray:
+    """在畫面右上角顯示風格選擇按鈕"""
+    out = frame.copy()
+    h, w = out.shape[:2]
+    styles = get_styles()
+    btn_w, btn_h = 120, 36
+    margin = 10
+    start_x = w - btn_w - margin
+    start_y = margin
+
+    for i, style in enumerate(styles):
+        y = start_y + i * (btn_h + 6)
+        is_active = (style == _current)
+
+        bg_color = (60, 60, 60) if not is_active else (200, 160, 60)
+        cv2.rectangle(out, (start_x, y), (start_x + btn_w, y + btn_h),
+                      bg_color, -1)
+        cv2.rectangle(out, (start_x, y), (start_x + btn_w, y + btn_h),
+                      (150, 150, 150), 1)
+        text_color = (255, 255, 255) if not is_active else (20, 20, 20)
+        cv2.putText(out, style, (start_x + 8, y + 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 1,
+                    cv2.LINE_AA)
+    return out
+
+def handle_key(key: int) -> bool:
+    """按 1-4 切換風格，回傳是否有切換"""
+    styles = get_styles()
+    if ord('1') <= key <= ord('4'):
+        idx = key - ord('1')
+        if idx < len(styles):
+            set_style(styles[idx])
+            print(f"切換風格：{styles[idx]}")
+            return True
+    return False
+```
+
+### Day 2 — 做風格預覽工具
+
+建一個獨立測試工具，確認四種風格的視覺效果：
+
+```python
+# 存成 tests/style_preview.py
+"""
+style_preview.py — 風格視覺預覽工具
+執行：python tests/style_preview.py
+用滑鼠在每種風格下畫線，截圖存進 assets/
 """
 import sys
 sys.path.insert(0, '.')
 import cv2
-import mediapipe as mp
-import time
 import numpy as np
-from modules.perf_monitor import tick, get_fps, get_latency, mark_input, mark_output
+from modules.style_manager import get_params, set_style, draw_selector, handle_key, STYLES, get_styles
 
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7)
+W, H = 1280, 720
+prev_x, prev_y = None, None
 
-cap = cv2.VideoCapture(0)
-fps_log = []
-latency_log = []
+styles = get_styles()
+set_style(styles[0])
 
-print("測試開始，60 秒後自動結束...")
-start = time.time()
+def get_canvas():
+    params = get_params()
+    bg = params.get("bg_color", [0,0,0])
+    c = np.zeros((H, W, 3), dtype=np.uint8)
+    c[:] = bg[::-1]
+    return c
 
-while time.time() - start < 60:
-    tick()
-    ret, frame = cap.read()
-    if not ret:
+canvas = get_canvas()
+
+def mouse_cb(event, x, y, flags, param):
+    global prev_x, prev_y, canvas
+    params = get_params()
+    color = params.get("stroke_color", [255,255,255])
+    thick = int(8 * params.get("thickness_multiplier", 1.0))
+    if event == cv2.EVENT_MOUSEMOVE and (flags & cv2.EVENT_FLAG_LBUTTON):
+        if prev_x is not None:
+            cv2.line(canvas, (prev_x, prev_y), (x, y),
+                     color[::-1], thick, cv2.LINE_AA)
+        prev_x, prev_y = x, y
+    elif event == cv2.EVENT_LBUTTONUP:
+        prev_x, prev_y = None, None
+
+cv2.namedWindow("style preview")
+cv2.setMouseCallback("style preview", mouse_cb)
+
+while True:
+    display = draw_selector(canvas)
+    cv2.imshow("style preview", display)
+    key = cv2.waitKey(1) & 0xFF
+    if handle_key(key):
+        canvas = get_canvas()
+    elif key == ord('s'):
+        from modules.style_manager import _current
+        path = f"assets/style_{_current}.png"
+        cv2.imwrite(path, canvas)
+        print(f"存圖：{path}")
+    elif key == ord('c'):
+        canvas = get_canvas()
+    elif key == ord('q'):
         break
-
-    mark_input()
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands.process(frame_rgb)
-    mark_output()
-
-    fps = get_fps()
-    lat = get_latency()
-    if fps > 0:
-        fps_log.append(fps)
-    if lat > 0:
-        latency_log.append(lat)
-
-    display = frame.copy()
-    from modules.perf_monitor import draw_overlay
-    display = draw_overlay(display)
-    cv2.imshow("benchmark", display)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cap.release()
 cv2.destroyAllWindows()
-hands.close()
-
-if fps_log and latency_log:
-    print("\n===== 測試結果 =====")
-    print(f"平均 FPS:     {np.mean(fps_log):.1f}")
-    print(f"最低 FPS:     {np.min(fps_log):.1f}")
-    print(f"平均延遲:     {np.mean(latency_log):.1f} ms")
-    print(f"最高延遲:     {np.max(latency_log):.1f} ms")
-    print("=====================")
-    print("複製以上結果，填進 docs/PERF_REPORT.md")
 ```
 
-在**自己的電腦**跑一次，記錄結果。如果能借到另一台電腦再跑一次，數據越多越好。
-
-執行：
+執行，每種風格各畫一下然後按 S 截圖：
 ```bash
-python tests/benchmark.py
+python tests/style_preview.py
 ```
-
-### Day 3 — 整理測試結果 + 展場研究
-
-**建立效能報告文件** `docs/PERF_REPORT.md`：
-
-```markdown
-# 效能測試報告
-
-## 測試結果
-
-| 硬體 | CPU | RAM | 平均 FPS | 最低 FPS | 平均延遲 | 體感流暢度（1-5）|
-|---|---|---|---|---|---|---|
-| 電腦 A | __ | __ | __ | __ | __ ms | __ |
-| 電腦 B | __ | __ | __ | __ | __ ms | __ |
-
-## 結論
-
-在 __ 規格的電腦上，延遲約 __ ms，FPS 約 __，體驗 __。
-建議展場使用至少 __ 規格的電腦。
-
-## 展場配置建議
-
-### 顯示設備比較
-| | 投影機 | 大螢幕（55吋以上）|
-|---|---|---|
-| 優點 | 畫面大、沉浸感強 | 畫質清晰、不受光線影響 |
-| 缺點 | 需要暗場、設定麻煩 | 面積受限 |
-| 建議距離 | 觀眾距螢幕 1.5–2m | 觀眾距螢幕 1–1.5m |
-
-### 明信片列印方案
-| 方式 | 費用 | 等待時間 | 可行性 |
-|---|---|---|---|
-| 便利商店（ibon/FamilyMart）| 約 NT$5–10/張 | 即時 | 需手動操作 |
-| 照片列印機（租借）| 待詢問 | 30秒/張 | 最適合展場 |
-| 預先列印 | 低 | 無 | 展後帶走 |
-```
-
-把你測到的數字填進去。
 
 ### Day 3 — 測試腳本
 
-開啟 `tests/test_perf.py`：
+開啟 `tests/test_style.py`：
 
 ```python
 """
-test_perf.py — 組員 D 的獨立測試
-執行：python tests/test_perf.py
+test_style.py — 組員 E 的獨立測試
 """
 import sys
 sys.path.insert(0, '.')
-import time
-from modules.perf_monitor import tick, get_fps, get_latency, mark_input, mark_output, _frame_times
+from modules.style_manager import get_styles, set_style, get_params, get_current
+import numpy as np
 
-def test_fps_after_ticks():
-    _frame_times.clear()
-    for _ in range(10):
-        tick()
-        time.sleep(1/30)
-    fps = get_fps()
-    assert 20 <= fps <= 40, f"模擬 30fps 時應在 20-40 之間，實際：{fps:.1f}"
-    print(f"PASS: FPS 計算正確（{fps:.1f}）")
+def test_styles_loaded():
+    styles = get_styles()
+    assert len(styles) >= 4, f"應至少有 4 種風格，實際：{len(styles)}"
+    print(f"PASS: 載入 {len(styles)} 種風格")
 
-def test_latency_measurement():
-    mark_input()
-    time.sleep(0.02)
-    mark_output()
-    lat = get_latency()
-    assert 15 <= lat <= 40, f"模擬 20ms 延遲時應在 15-40ms，實際：{lat:.1f}ms"
-    print(f"PASS: 延遲計算正確（{lat:.1f}ms）")
+def test_set_style():
+    styles = get_styles()
+    set_style(styles[1])
+    assert get_current() == styles[1], "set_style 後應切換成功"
+    print("PASS: set_style 切換正常")
 
-def test_draw_overlay_returns_frame():
+def test_params_has_required_keys():
+    styles = get_styles()
+    for s in styles:
+        set_style(s)
+        params = get_params()
+        for key in ["bg_color", "stroke_color", "thickness_multiplier", "alpha"]:
+            assert key in params, f"風格 '{s}' 缺少欄位 '{key}'"
+    print("PASS: 所有風格參數欄位完整")
+
+def test_draw_selector_output():
     import numpy as np
-    from modules.perf_monitor import draw_overlay
-    fake = np.zeros((480, 640, 3), dtype=np.uint8)
-    result = draw_overlay(fake)
-    assert result.shape == fake.shape, "overlay 輸出尺寸應與輸入相同"
-    print("PASS: draw_overlay 輸出尺寸正確")
+    from modules.style_manager import draw_selector
+    fake = np.zeros((720, 1280, 3), dtype=np.uint8)
+    result = draw_selector(fake)
+    assert result.shape == fake.shape
+    print("PASS: draw_selector 輸出尺寸正確")
 
 if __name__ == "__main__":
-    test_fps_after_ticks()
-    test_latency_measurement()
-    test_draw_overlay_returns_frame()
+    test_styles_loaded()
+    test_set_style()
+    test_params_has_required_keys()
+    test_draw_selector_output()
     print("\n全部測試通過")
 ```
 
-執行：
+---
+
+## 第四步：Day 4 整合 main.py
+
+等其他人都開了 PR 並 merge 進 `dev` 之後，先 pull 最新版：
+
 ```bash
-python tests/test_perf.py
+git checkout dev
+git pull origin dev
+git checkout feature/style-main
+git merge dev
+```
+
+然後開啟 `main.py`，把整合邏輯填入：
+
+```python
+"""
+main.py
+負責人：組員 E
+整合日：Day 4
+"""
+import cv2
+import os
+from config import CAM_INDEX, OUTPUT_DIR, CANVAS_W, CANVAS_H
+from modules.hand_tracker import init as init_tracker, get_hand_state, release as release_tracker
+from modules.canvas import init as init_canvas, draw_stroke, overlay_webcam, clear, save, stop_stroke
+from modules.stroke_mapper import compute_stroke, reset as reset_mapper
+from modules.perf_monitor import tick, draw_overlay, mark_input, mark_output
+from modules.style_manager import get_params, draw_selector, handle_key, set_style, get_styles
+
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    init_tracker(CAM_INDEX)
+    init_canvas(CAM_INDEX)
+
+    print("啟動！按 1-4 切換風格，S 存圖，C 清畫布，Q 結束")
+
+    cap = cv2.VideoCapture(CAM_INDEX)
+
+    while cap.isOpened():
+        tick()
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # 取得手部狀態
+        mark_input()
+        state = get_hand_state()
+        mark_output()
+
+        # 計算筆觸參數
+        stroke = compute_stroke(state["speed"], state["z"])
+
+        # 取得目前風格
+        params = get_params()
+        color = params.get("stroke_color", [255, 255, 255])
+        thickness = int(stroke["thickness"] * params.get("thickness_multiplier", 1.0))
+        thickness = max(1, min(thickness, 40))
+
+        # 畫筆觸
+        if state["drawing"]:
+            draw_stroke(state["x"], state["y"], thickness, tuple(color[::-1]))
+        else:
+            stop_stroke()
+            reset_mapper()
+
+        # 合成畫面
+        display = overlay_webcam(frame, alpha=0.25)
+        display = draw_selector(display)
+        display = draw_overlay(display)
+        cv2.imshow("Interactive Art", display)
+
+        # 鍵盤控制
+        key = cv2.waitKey(1) & 0xFF
+        if handle_key(key):
+            clear()
+        elif key == ord('s'):
+            save()
+        elif key == ord('c'):
+            clear()
+        elif key == ord('q'):
+            break
+
+    release_tracker()
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
 ```
 
 ---
 
-## 第四步：上傳到 GitHub
+## 第五步：上傳到 GitHub
 
 ```bash
-mkdir docs
-git add modules/perf_monitor.py
-git commit -m "feat: 完成效能測量模組"
+# Day 1–3：風格模組
+git add modules/style_manager.py assets/styles.json tests/test_style.py
+git commit -m "feat: 完成 style_manager 與四種風格參數設計"
 
-git add tests/test_perf.py tests/benchmark.py
-git commit -m "test: 新增效能測試腳本"
+git add assets/style_油畫.png assets/style_素描.png assets/style_水墨.png assets/style_名畫風.png
+git commit -m "docs: 新增四種風格視覺截圖"
 
-git add docs/PERF_REPORT.md
-git commit -m "docs: 新增效能測試報告與展場配置建議"
+# Day 4：整合
+git add main.py
+git commit -m "feat: Day 4 整合完成，main.py 可完整執行"
 
-git push origin feature/perf-monitor
+git push origin feature/style-main
 ```
 
 ---
 
-## 第五步：開 Pull Request
+## 第六步：開 Pull Request
 
 1. 進 GitHub repo 頁面
 2. 點 `Compare & pull request`
-3. Base 選 `dev`，compare 選 `feature/perf-monitor`
-4. 標題填：`feat: 完成 perf_monitor 模組`
-5. 說明裡直接貼效能測試數字
-6. 點 `Create pull request`，通知組員 E
+3. Base 選 `dev`，compare 選 `feature/style-main`
+4. 標題填：`feat: 完成 style_manager 與整合 main.py`
+5. 點 `Create pull request`
+
+整合完 PR merge 進 `dev` 後，再由你從 `dev` 開一個 PR 到 `main`，代表這週的里程碑完成。
+
+---
+
+## 第七步：錄製示範影片
+
+整合完成後錄 30 秒影片：
+- 打開程式，切換風格
+- 用手畫幾筆，展示筆觸跟著速度變化
+- 按 S 存圖，展示輸出
+
+用 OBS 或手機直接拍螢幕都可以。存進 `assets/demo.mp4`，上傳到 GitHub 或 Google Drive，把連結貼在 PR 說明裡。
 
 ---
 
 ## 交付物清單
 
-- [ ] `modules/perf_monitor.py` — FPS 和延遲測量正常
-- [ ] `tests/test_perf.py` — 全部 PASS
-- [ ] `tests/benchmark.py` — 能獨立跑基準測試
-- [ ] `docs/PERF_REPORT.md` — 至少一台電腦的數據，加展場配置建議
+- [ ] `modules/style_manager.py` — 四種風格可切換，UI 正常顯示
+- [ ] `assets/styles.json` — 四種風格參數完整
+- [ ] `tests/test_style.py` — 全部 PASS
+- [ ] `assets/` 裡有四種風格截圖
+- [ ] `main.py` — 整合完整，一鍵 `python main.py` 就能跑
+- [ ] 30 秒示範影片連結貼在 PR 說明裡
