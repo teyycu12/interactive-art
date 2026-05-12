@@ -123,10 +123,11 @@ function getFloorBounds(y_orig) {
 
 // ─── 5. LEGO 角色類別（移植自 boids_concept.html）────────────────────────────
 class LegoCharacter extends PIXI.Container {
-  constructor(topColor = 0xC81E1E, bottomColor = 0x2A52BE) {
+  constructor(topColor = 0xC81E1E, bottomColor = 0x2A52BE, armColor = null) {
     super();
     this.topColor    = topColor;
     this.bottomColor = bottomColor;
+    this.armColor    = armColor; // null = same as topColor
     this.skinColor   = 0xFFCC00;
 
     this.inner = new PIXI.Container();
@@ -151,37 +152,112 @@ class LegoCharacter extends PIXI.Container {
 
     this.inner.addChild(this.leftLeg, this.rightLeg, this.body,
                         this.leftArm, this.rightArm, this.head, this.glasses);
+    this._buildClothGridOverlay();
+    this._buildAccContainers();
     this.updateColors(this.topColor, this.bottomColor);
   }
 
+  // ── Cloth-grid overlay (zIndex 3.5 – above body fill, below arms/head) ─────
+  _buildClothGridOverlay() {
+    // Body overlay only — trapezoid mask matching body shape in inner units
+    // (tTop/2=19, tBottom/2=25, torsoH/2=25)
+    this._clothGfx  = new PIXI.Graphics(); this._clothGfx.zIndex = 3.5;
+    this._clothMask = new PIXI.Graphics();
+    this._clothMask.beginFill(0xFFFFFF);
+    this._clothMask.moveTo(-19,-25); this._clothMask.lineTo(19,-25);
+    this._clothMask.lineTo(25,25);   this._clothMask.lineTo(-25,25);
+    this._clothMask.closePath(); this._clothMask.endFill();
+    this._clothGfx.mask = this._clothMask;
+    this.inner.addChild(this._clothGfx, this._clothMask);
+
+    // Body outline above the cloth-grid layer — fixed 0xBBBBBB so it stays
+    // visible even when topColor is very dark (tint would make black outline invisible).
+    this._bodyOutline = new PIXI.Graphics();
+    this._bodyOutline.zIndex = 3.6;
+    this._bodyOutline.beginFill(0, 0); this._bodyOutline.lineStyle(1.5, 0xBBBBBB);
+    this._bodyOutline.moveTo(-19,-25); this._bodyOutline.lineTo(19,-25);
+    this._bodyOutline.lineTo(25,25);   this._bodyOutline.lineTo(-25,25);
+    this._bodyOutline.closePath(); this._bodyOutline.endFill();
+    this.inner.addChild(this._bodyOutline);
+
+    // _lowerGfx intentionally removed — per-leg grid causes z-index/outline conflicts.
+    // Legs use flat tinted color + always-visible outline instead (see _createLeg).
+    this._lowerGfx = null;
+  }
+
+  updateClothGrid(grid) {
+    if (!this._clothGfx) return;
+    this._clothGfx.clear();
+    if (!grid || !grid.cells || grid.cells.length === 0) return;
+    const { cols, rows, cells } = grid;
+    for (let row = 0; row < rows; row++) {
+      const v1 = row / rows, v2 = (row + 1) / rows;
+      const y1 = -25 + v1 * 50, y2 = -25 + v2 * 50;
+      const w1 = 38 + 12 * v1, w2 = 38 + 12 * v2;  // trapezoid width interpolation
+      for (let col = 0; col < cols; col++) {
+        const cell = cells[row * cols + col];
+        if (!cell || !cell.active) continue;
+        const u1 = col / cols, u2 = (col + 1) / cols;
+        const x1t = -w1/2 + u1*w1, x2t = -w1/2 + u2*w1;
+        const x1b = -w2/2 + u1*w2, x2b = -w2/2 + u2*w2;
+        this._clothGfx.beginFill((cell.r << 16) | (cell.g << 8) | cell.b);
+        this._clothGfx.lineStyle(0);
+        this._clothGfx.drawPolygon([x1t,y1, x2t,y1, x2b,y2, x1b,y2]);
+        this._clothGfx.endFill();
+      }
+    }
+  }
+
+  updateLowerGrid(_grid) { /* disabled – leg grid causes z-index/outline conflicts */ }
+
   _createLeg() {
     const c = new PIXI.Container();
-    const g = new PIXI.Graphics();
-    g.beginFill(0xFFFFFF); g.lineStyle(1.5, 0x000000);
-    g.drawRect(-10.5, 0, 21, 38);
-    g.drawRoundedRect(-11.5, 38, 23, 10, 2);
-    g.endFill();
-    c.addChild(g); c.base = g; return c;
+    // Fill: white with no outline — receives tint for actual leg color.
+    const fill = new PIXI.Graphics();
+    fill.beginFill(0xFFFFFF); fill.lineStyle(0);
+    fill.drawRect(-10.5, 0, 21, 38);
+    fill.drawRoundedRect(-11.5, 38, 23, 10, 2);
+    fill.endFill();
+    // Outline: no fill, fixed light-gray line — NOT tinted, always visible
+    // even against very dark (near-black) pants. Mirrors lego.js legOutline logic.
+    const outline = new PIXI.Graphics();
+    outline.beginFill(0, 0); outline.lineStyle(1.5, 0xBBBBBB);
+    outline.drawRect(-10.5, 0, 21, 38);
+    outline.drawRoundedRect(-11.5, 38, 23, 10, 2);
+    outline.endFill();
+    c.addChild(fill, outline);
+    c.base = fill;  // tint target
+    return c;
   }
 
   _createArm() {
     const c = new PIXI.Container();
-    const sleeve = new PIXI.Graphics();
-    sleeve.beginFill(0xFFFFFF); sleeve.lineStyle(1.5, 0x000000);
-    sleeve.drawRoundedRect(-6.5, 0, 13, 40, 5); sleeve.endFill();
+    // Fill: white, no outline — receives tint.
+    const sleeveFill = new PIXI.Graphics();
+    sleeveFill.beginFill(0xFFFFFF); sleeveFill.lineStyle(0);
+    sleeveFill.drawRoundedRect(-6.5, 0, 13, 40, 5); sleeveFill.endFill();
+    // Outline: fixed gray — visible on both dark and light sleeves.
+    const sleeveOutline = new PIXI.Graphics();
+    sleeveOutline.beginFill(0, 0); sleeveOutline.lineStyle(1.5, 0xBBBBBB);
+    sleeveOutline.drawRoundedRect(-6.5, 0, 13, 40, 5); sleeveOutline.endFill();
     const hand = new PIXI.Graphics();
-    hand.beginFill(this.skinColor); hand.lineStyle(1.5, 0x000000);
+    hand.beginFill(this.skinColor); hand.lineStyle(1.5, 0x444444);
     const rIn = 5, rOut = 10;
     hand.moveTo(rOut * Math.cos(Math.PI), rOut * Math.sin(Math.PI) + 45);
     for (let a = 180; a <= 360; a += 10) hand.lineTo(rOut * Math.cos(a * Math.PI / 180), rOut * Math.sin(a * Math.PI / 180) + 45);
     for (let a = 360; a >= 180; a -= 10) hand.lineTo(rIn  * Math.cos(a * Math.PI / 180), rIn  * Math.sin(a * Math.PI / 180) + 45);
     hand.closePath(); hand.endFill();
-    c.addChild(sleeve, hand); c.base = sleeve; return c;
+    c.addChild(sleeveFill, sleeveOutline, hand);
+    c.base = sleeveFill;  // tint target
+    return c;
   }
 
   _createBody() {
+    // Must stay as Graphics so this.body.tint works. Fill only — outline
+    // is drawn as a separate _bodyOutline Graphics inside _buildClothGridOverlay
+    // (zIndex 3.6, above the cloth-grid layer) so it stays visible on dark shirts.
     const g = new PIXI.Graphics();
-    g.beginFill(0xFFFFFF); g.lineStyle(1.5, 0x000000);
+    g.beginFill(0xFFFFFF); g.lineStyle(0);
     g.moveTo(-19,-25); g.lineTo(19,-25); g.lineTo(25,25); g.lineTo(-25,25); g.endFill();
     return g;
   }
@@ -212,6 +288,121 @@ class LegoCharacter extends PIXI.Container {
     return g;
   }
 
+  // ── Accessory creators (inner-unit coords, scale factor vs p5 = 1/1.5 ≈ 0.667) ──
+
+  _accHat() {
+    const g = new PIXI.Graphics();
+    g.beginFill(0x231909); g.lineStyle(1.5, 0x5a3a29);
+    g.drawRect(-17, -89, 34, 25);   // crown
+    g.drawEllipse(0, -64, 29, 5);   // brim
+    g.endFill();
+    g.beginFill(0xC83232); g.lineStyle(0);
+    g.drawRect(-17, -79, 34, 5);    // band
+    g.endFill();
+    g.zIndex = 8; return g;
+  }
+
+  _accGlasses() {
+    const g = new PIXI.Graphics();
+    g.lineStyle(2, 0x141414);
+    g.beginFill(0xFFFFFF, 0.25);
+    g.drawRoundedRect(-24, -54, 19, 13, 3);  // left lens
+    g.drawRoundedRect(5,   -54, 19, 13, 3);  // right lens
+    g.endFill();
+    g.lineStyle(2, 0x141414);
+    g.moveTo(-5, -47); g.lineTo(5, -47);     // bridge
+    g.moveTo(-24, -49); g.lineTo(-30, -55);  // left temple
+    g.moveTo(24,  -49); g.lineTo(30,  -55);  // right temple
+    g.zIndex = 7; return g;
+  }
+
+  _accBouquet() {
+    const c = new PIXI.Container(); c.x = -23; c.y = 15;
+    const g = new PIXI.Graphics();
+    g.lineStyle(2, 0x2D7A2D);
+    g.moveTo(0, 18); g.lineTo(-4, 5);
+    g.moveTo(0, 18); g.lineTo(4, 5);
+    const fs = [[0,-3,0xFF5078],[- 9,1,0xFFC840],[9,1,0xC864FF],[-5,-12,0xFF96B4],[5,-12,0x64C8FF]];
+    for (const [fx, fy, fc] of fs) {
+      g.beginFill(fc); g.lineStyle(0); g.drawCircle(fx, fy, 7); g.endFill();
+      g.beginFill(0xFFFFAA); g.drawCircle(fx, fy, 2.5); g.endFill();
+    }
+    g.beginFill(0xFFF0DC, 0.7); g.lineStyle(0.7, 0xC8B4A0, 0.6);
+    g.drawEllipse(0, 14, 8, 4); g.endFill();
+    c.addChild(g); c.zIndex = 5; return c;
+  }
+
+  _accCamera() {
+    const c = new PIXI.Container(); c.x = 20; c.y = 11;
+    const g = new PIXI.Graphics();
+    g.beginFill(0x282828); g.lineStyle(1.5, 0x505050);
+    g.drawRoundedRect(-9, -7, 18, 14, 2); g.endFill();
+    g.beginFill(0x141432); g.lineStyle(1.5, 0x6496FF, 0.8);
+    g.drawCircle(0, 1, 5); g.endFill();
+    g.beginFill(0x3C64C8, 0.7); g.lineStyle(0);
+    g.drawCircle(0, 1, 3); g.endFill();
+    g.beginFill(0xFFFF96); g.drawRect(5, -7, 4, 3); g.endFill();
+    g.lineStyle(1.5, 0xA06432, 0.6);
+    g.moveTo(-9, -4); g.bezierCurveTo(-18, -15, -15, -29, -8, -32);
+    c.addChild(g); c.zIndex = 5; return c;
+  }
+
+  _accBag() {
+    const c = new PIXI.Container(); c.x = 25; c.y = 20;
+    const g = new PIXI.Graphics();
+    g.beginFill(0xAF7337); g.lineStyle(1.5, 0x5a3a29);
+    g.drawRoundedRect(-8, -9, 16, 19, 3); g.endFill();
+    g.beginFill(0x9B5F2D); g.lineStyle(1.5, 0x5a3a29);
+    g.drawRoundedRect(-8, -9, 16, 8, 3); g.endFill();
+    g.beginFill(0xDCBE50); g.lineStyle(0);
+    g.drawCircle(0, -3, 2.5); g.endFill();
+    g.lineStyle(2, 0x9B5F2D, 0.6);
+    g.moveTo(-8, -5); g.bezierCurveTo(-20, -18, -19, -38, -10, -40);
+    c.addChild(g); c.zIndex = 4; return c;
+  }
+
+  _accCat() {
+    const c = new PIXI.Container(); c.x = -30; c.y = 22;
+    const g = new PIXI.Graphics();
+    g.beginFill(0xF0F0F0); g.lineStyle(1.5, 0x5a3a29);
+    g.drawEllipse(0, 0, 11, 8);      // body
+    g.drawEllipse(0, -13, 9, 7);     // head
+    g.drawPolygon([-7,-18,-10,-26,-2,-18]);  // left ear
+    g.drawPolygon([7,-18,10,-26,2,-18]);     // right ear
+    g.endFill();
+    g.beginFill(0x282828); g.lineStyle(0);
+    g.drawCircle(-3, -14, 1.5); g.drawCircle(3, -14, 1.5); g.endFill();
+    g.lineStyle(1, 0xF090A0);
+    g.moveTo(0,-12); g.lineTo(-4,-10);
+    g.moveTo(0,-12); g.lineTo(4,-10);
+    c.addChild(g); c.zIndex = 4; return c;
+  }
+
+  _buildAccContainers() {
+    this._acc = {
+      hat:     this._accHat(),
+      glasses: this._accGlasses(),
+      bouquet: this._accBouquet(),
+      camera:  this._accCamera(),
+      bag:     this._accBag(),
+      cat:     this._accCat(),
+    };
+    for (const node of Object.values(this._acc)) {
+      node.visible = false;
+      this.inner.addChild(node);
+    }
+  }
+
+  updateAccessories(list) {
+    if (!this._acc) return;
+    const active = new Set(Array.isArray(list) ? list : []);
+    for (const [key, node] of Object.entries(this._acc)) {
+      node.visible = active.has(key);
+    }
+    // Legacy glasses (the simple blue rect) — hide when new acc system has glasses
+    if (this.glasses) this.glasses.visible = false;
+  }
+
   _darken(hex) {
     const r = Math.floor(((hex >> 16) & 0xFF) * 0.6);
     const g = Math.floor(((hex >>  8) & 0xFF) * 0.6);
@@ -219,9 +410,10 @@ class LegoCharacter extends PIXI.Container {
     return (r << 16) | (g << 8) | b;
   }
 
-  updateColors(topColor, bottomColor) {
+  updateColors(topColor, bottomColor, armColor) {
     if (topColor    !== undefined) this.topColor    = topColor;
     if (bottomColor !== undefined) this.bottomColor = bottomColor;
+    if (armColor    !== undefined) this.armColor    = armColor;
   }
 
   updateAnimation(isWalking, isMovingRight, _time, isGreeting = false, speedMag = 1.0) {
@@ -234,16 +426,17 @@ class LegoCharacter extends PIXI.Container {
     if (this.glasses) this.glasses.scale.x = this.head.scale.x;
     const leftFront = isMovingRight;
 
+    const ac = this.armColor !== null && this.armColor !== undefined ? this.armColor : this.topColor;
     if (leftFront) {
       this.leftArm.zIndex  = 5; this.leftLeg.zIndex  = 4;
       this.rightArm.zIndex = 1; this.rightLeg.zIndex = 2;
-      this.leftArm.base.tint  = this.topColor;    this.leftLeg.base.tint  = this.bottomColor;
-      this.rightArm.base.tint = this._darken(this.topColor); this.rightLeg.base.tint = this._darken(this.bottomColor);
+      this.leftArm.base.tint  = ac;                    this.leftLeg.base.tint  = this.bottomColor;
+      this.rightArm.base.tint = this._darken(ac);      this.rightLeg.base.tint = this._darken(this.bottomColor);
     } else {
       this.leftArm.zIndex  = 1; this.leftLeg.zIndex  = 2;
       this.rightArm.zIndex = 5; this.rightLeg.zIndex = 4;
-      this.rightArm.base.tint = this.topColor;    this.rightLeg.base.tint = this.bottomColor;
-      this.leftArm.base.tint  = this._darken(this.topColor); this.leftLeg.base.tint  = this._darken(this.bottomColor);
+      this.rightArm.base.tint = ac;                    this.rightLeg.base.tint = this.bottomColor;
+      this.leftArm.base.tint  = this._darken(ac);      this.leftLeg.base.tint  = this._darken(this.bottomColor);
     }
     this.body.tint = this.topColor;
 
@@ -455,17 +648,37 @@ function _hexToPixi(hex) {
   return parseInt(hex.replace('#', ''), 16);
 }
 
-function _extractColors(char) {
-  const outfit = char.outfit || {};
-  const top = _hexToPixi(outfit.inner_color || (char.upper && char.upper.hex))
-              ?? Math.floor(Math.random() * 0xFFFFFF);
-  const bot = _hexToPixi(outfit.lower_color || (char.lower && char.lower.hex))
-              ?? Math.floor(Math.random() * 0xFFFFFF);
-  return [top, bot];
+function _safeHex(hex) {
+  const v = _hexToPixi(hex);
+  return (v === null || v === undefined || Number.isNaN(v)) ? null : v;
 }
 
-function _spawnBoid(charId, topColor, botColor) {
-  const lego = new LegoCharacter(topColor, botColor);
+function _extractColors(char) {
+  const outfit = char.outfit || {};
+  // Body (torso)
+  const rawTop = outfit.inner_color || (char.upper && char.upper.hex) || null;
+  // Legs
+  const rawBot = outfit.lower_color || (char.lower && char.lower.hex) || null;
+  // Arms: outfit.outer_color > char.arm.hex > fall back to body color
+  const rawArm = outfit.outer_color || (char.arm && char.arm.hex) || rawTop;
+
+  let top = _safeHex(rawTop) ?? Math.floor(Math.random() * 0xFFFFFF);
+  let bot = _safeHex(rawBot) ?? Math.floor(Math.random() * 0xFFFFFF);
+  let arm = _safeHex(rawArm);  // null = will fall back to topColor in LegoCharacter
+
+  if (!rawTop || !rawBot) {
+    console.warn('[projection] missing color for char', char.id,
+      '| outfit.inner_color:', outfit.inner_color,
+      '| upper.hex:', char.upper?.hex);
+  }
+  return [top, bot, arm];
+}
+
+function _spawnBoid(charId, topColor, botColor, armColor, accList, clothGrid, lowerGrid) {
+  const lego = new LegoCharacter(topColor, botColor, armColor);
+  lego.updateAccessories(accList || []);
+  lego.updateClothGrid(clothGrid || null);
+  lego.updateLowerGrid(lowerGrid || null);
   let rx = pixiApp.screen.width / 2 + (Math.random() - 0.5) * 300;
   let ry = pixiApp.screen.height / 2 + (Math.random() - 0.5) * 100;
   if (window.bgTransform) {
@@ -488,6 +701,8 @@ function initSocket() {
 
     socket.on('connect', () => {
       statusEl.textContent = `已連線 Socket.io ✓ (${socket.id})`;
+      // Request current swarm state immediately on connect — don't wait for next tick.
+      socket.emit('get_swarm', {});
     });
     socket.on('disconnect', () => {
       statusEl.textContent = '已斷線，重新連線中…';
@@ -498,6 +713,11 @@ function initSocket() {
 
     socket.on('update_positions', (data) => {
       const chars = data.characters || [];
+      if (chars.length > 0) {
+        console.log('[projection] update_positions', chars.length, 'chars, first id:', chars[0]?.id,
+          'outfit.inner_color:', chars[0]?.outfit?.inner_color,
+          'upper.hex:', chars[0]?.upper?.hex);
+      }
       const activeIds = new Set(chars.map(c => c.id));
 
       // Remove boids whose characters left the swarm
@@ -511,14 +731,20 @@ function initSocket() {
       }
 
       for (const char of chars) {
-        const [top, bot] = _extractColors(char);
+        const [top, bot, arm] = _extractColors(char);
+        // Build accessories list: char.accessories array (preferred) OR single char.accessory
+        const accList = Array.isArray(char.accessories)
+          ? [...char.accessories]
+          : (char.accessory && char.accessory !== 'none' ? [char.accessory] : []);
+        // Merge has_glasses from outfit (VLM-detected)
+        if (char.outfit?.has_glasses && !accList.includes('glasses')) accList.push('glasses');
         if (!boidMap[char.id]) {
-          _spawnBoid(char.id, top, bot);
+          _spawnBoid(char.id, top, bot, arm, accList, char.cloth_grid, char.lower_grid);
         } else {
-          boidMap[char.id].characterDisplay.updateColors(top, bot);
-          if (char.outfit && char.outfit.has_glasses !== undefined) {
-            boidMap[char.id].characterDisplay.glasses.visible = !!char.outfit.has_glasses;
-          }
+          boidMap[char.id].characterDisplay.updateColors(top, bot, arm);
+          boidMap[char.id].characterDisplay.updateAccessories(accList);
+          boidMap[char.id].characterDisplay.updateClothGrid(char.cloth_grid || null);
+          boidMap[char.id].characterDisplay.updateLowerGrid(char.lower_grid || null);
         }
       }
 
@@ -539,9 +765,10 @@ try {
     if (!data) return;
     const top = _hexToPixi(data.topColor);
     const bot = _hexToPixi(data.bottomColor);
+    const arm = data.armColor ? _hexToPixi(data.armColor) : undefined;
     const boid = boidMap[data.boidId] || flock[0];
     if (!boid) return;
-    if (top !== null) boid.characterDisplay.updateColors(top, bot !== null ? bot : undefined);
+    if (top !== null) boid.characterDisplay.updateColors(top, bot !== null ? bot : undefined, arm);
     if (data.hasOwnProperty('hasGlasses')) boid.characterDisplay.glasses.visible = data.hasGlasses;
   };
 } catch (_) { /* BroadcastChannel not available */ }

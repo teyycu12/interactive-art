@@ -129,6 +129,19 @@ def health_check():
 @socketio.on("connect")
 def handle_connect():
     emit("server_message", {"message": "Connected to PersonaFlow backend."})
+    # Push current swarm state immediately so projection.html doesn't have to
+    # wait for the next _swarm_background tick (which only fires when non-empty).
+    with _swarm_lock:
+        chars = list(_swarm_chars.values())
+    if chars:
+        emit("update_positions", {"characters": chars})
+
+
+@socketio.on("get_swarm")
+def handle_get_swarm(_payload=None):
+    with _swarm_lock:
+        chars = list(_swarm_chars.values())
+    emit("update_positions", {"characters": chars})
 
 
 @socketio.on("disconnect")
@@ -270,9 +283,13 @@ def handle_join_swarm(payload):
             "vy": existing.get("vy", random.uniform(-1.0, 1.0)),
             "upper": payload.get("upper", existing.get("upper")),
             "lower": payload.get("lower", existing.get("lower")),
+            "arm":   payload.get("arm",   existing.get("arm")),
             "upper_type": payload.get("upper_type", existing.get("upper_type", "short_sleeve")),
             "lower_type": payload.get("lower_type", existing.get("lower_type", "shorts")),
-            "accessory": payload.get("accessory", existing.get("accessory", "none")),
+            "accessories": payload.get("accessories", existing.get("accessories", [])),
+            "accessory":   payload.get("accessory",   existing.get("accessory", "none")),
+            "cloth_grid":  payload.get("cloth_grid",  existing.get("cloth_grid")),
+            "lower_grid":  payload.get("lower_grid",  existing.get("lower_grid")),
             "face": payload.get("face", existing.get("face")),
             "outfit": payload.get("outfit", existing.get("outfit")),
         }
@@ -293,7 +310,7 @@ def handle_update_character(payload):
         return
     with _swarm_lock:
         if char_id in _swarm_chars:
-            for k in ("upper", "lower", "upper_type", "lower_type", "accessory", "face", "outfit"):
+            for k in ("upper", "lower", "arm", "upper_type", "lower_type", "accessories", "accessory", "face", "outfit"):
                 if k in payload:
                     _swarm_chars[char_id][k] = payload[k]
 

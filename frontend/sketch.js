@@ -396,6 +396,7 @@ function setup() {
     if (window.personaFlow?.socket && window.personaFlow.myCharId) {
       window.personaFlow.socket.emit("leave_swarm", { id: window.personaFlow.myCharId });
     }
+    window.personaFlow._lastJoinPayload = null;
     currentState = APP_STATES.CUSTOMIZE;
   });
 
@@ -817,18 +818,61 @@ function _drawGreetingBubble(x, y) {
 function _joinSwarm() {
   if (!window.personaFlow?.socket) return;
   const p = characters[0];
-  const toHex = c => '#' + [c.r, c.g, c.b].map(v => v.toString(16).padStart(2, '0')).join('');
+
+  // _enhanceSolid is from lego.js (loaded before sketch.js): camera correction + saturation boost.
+  // Apply it here so projection.html receives already-enhanced colors instead of raw CV hex.
+  const _enh = (src) => {
+    const [r, g, b] = _enhanceSolid(src);
+    const clamp = v => Math.min(255, Math.max(0, Math.round(v)));
+    const hex = '#' + [r, g, b].map(v => clamp(v).toString(16).padStart(2, '0')).join('');
+    return { r: clamp(r), g: clamp(g), b: clamp(b), hex };
+  };
+
+  // Mirror lego.js armSource: armColor > outerColor > innerColor
+  const armSrc = p.armColor
+    || (p.outerType && p.outerType !== 'none' && p.outerColor ? p.outerColor : null)
+    || p.innerColor;
+
+  const eInner = _enh(p.innerColor);
+  const eLower = _enh(p.lowerColor);
+  const eArm   = _enh(armSrc);
+
+  // Build enhanced outfit so projection.html doesn't see the raw CV hex
+  let enhancedOutfit = myAvatarData?.outfit ? { ...myAvatarData.outfit } : null;
+  if (enhancedOutfit) {
+    enhancedOutfit.inner_color = eInner.hex;
+    enhancedOutfit.lower_color = eLower.hex;
+    if (enhancedOutfit.outer_color) {
+      enhancedOutfit.outer_color = _enh(hexToRgb(enhancedOutfit.outer_color)).hex;
+    }
+  }
+
+  // Run the same grid pipeline that lego.js uses so projection.html gets pre-processed cells.
+  const _procCloth = p.clothGrid
+    ? _makeSymmetric(_enhanceGrid(_clusterGrid(
+        _filterHairCells(p.clothGrid, p.hairColor, p.innerColor)
+      )))
+    : null;
+  const _procLower = p.lowerGrid
+    ? _enhanceGrid(_clusterGrid(
+        _filterShirtFromLower(p.lowerGrid, p.innerColor, p.lowerColor)
+      ))
+    : null;
+
   const payload = {
     x: 960, y: 540,
-    upper: { hex: toHex(p.innerColor), rgb: [p.innerColor.r, p.innerColor.g, p.innerColor.b] },
-    lower: { hex: toHex(p.lowerColor), rgb: [p.lowerColor.r, p.lowerColor.g, p.lowerColor.b] },
+    upper: { hex: eInner.hex, rgb: [eInner.r, eInner.g, eInner.b] },
+    lower: { hex: eLower.hex, rgb: [eLower.r, eLower.g, eLower.b] },
+    arm:   { hex: eArm.hex,   rgb: [eArm.r,   eArm.g,   eArm.b  ] },
     upper_type: 'short_sleeve',
     lower_type: (p.lowerType === 'jeans' || p.lowerType === 'suit_pants' || p.lowerType === 'long_pants')
       ? 'long_pants' : 'shorts',
     accessories: p.accessories,
     accessory:   p.accessories[0] || 'none',
-    face:   myAvatarData?.face   || null,
-    outfit: myAvatarData?.outfit || null,
+    face:        myAvatarData?.face || null,
+    outfit:      enhancedOutfit,
+    cloth_grid:  _procCloth,
+    lower_grid:  _procLower,
   };
 
   // ✅ FIX 1: Stay on CUSTOMIZE — don't switch currentState to SWARM.
@@ -837,6 +881,7 @@ function _joinSwarm() {
   // ✅ FIX 2: Emit join_swarm FIRST, then open the new tab after a short delay.
   // This ensures the character is registered in the backend swarm state before
   // projection.html's socket connects and starts receiving update_positions.
+  window.personaFlow._lastJoinPayload = payload; // saved so socket.js can re-join on reconnect
   window.personaFlow.socket.emit("join_swarm", payload);
 
   // BroadcastChannel: projection.html listens and applies colors immediately.
@@ -844,8 +889,9 @@ function _joinSwarm() {
     const bc = new BroadcastChannel('avatar_sync');
     bc.postMessage({
       boidId:      window.personaFlow.myCharId || 'user_0',
-      topColor:    toHex(p.innerColor),
-      bottomColor: toHex(p.lowerColor),
+      topColor:    eInner.hex,
+      bottomColor: eLower.hex,
+      armColor:    eArm.hex,
       hasGlasses:  p.accessories.includes('glasses'),
     });
     bc.close();

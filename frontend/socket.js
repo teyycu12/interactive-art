@@ -13,6 +13,12 @@
   socket.on("connect", () => {
     console.log("[personaFlow] connected:", backendUrl);
     socket.emit("client_event", { type: "frontend_ready", ts: Date.now() });
+    // Re-join swarm on reconnect if user had already joined (socket SID changes on reconnect,
+    // so the backend removes the old character via handle_disconnect).
+    if (window.personaFlow._lastJoinPayload) {
+      console.log("[personaFlow] reconnected — re-joining swarm");
+      socket.emit("join_swarm", window.personaFlow._lastJoinPayload);
+    }
   });
 
   socket.on("server_message", (data) => {
