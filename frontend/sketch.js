@@ -21,7 +21,7 @@ let lastFrameSent = 0;
 let latestFeatures = null;
 
 // UI Elements
-let accessorySelect;
+let accessoryPanel;
 let downloadBtn;
 let retryBtn;
 let joinProjectionBtn;
@@ -31,23 +31,16 @@ let leaveSwarmBtn;
 const swarmPersons = {};
 let myAvatarData = null;
 
-function hexToRgb(hex) {
-  if (typeof hex !== "string") return { r: 255, g: 255, b: 255 };
-  const normalized = hex.trim().replace("#", "");
-  if (normalized.length !== 6) return { r: 255, g: 255, b: 255 };
-  const r = parseInt(normalized.slice(0, 2), 16);
-  const g = parseInt(normalized.slice(2, 4), 16);
-  const b = parseInt(normalized.slice(4, 6), 16);
-  if ([r, g, b].some((v) => Number.isNaN(v))) {
-    return { r: 255, g: 255, b: 255 };
-  }
-  return { r, g, b };
-}
+// hexToRgb is defined in character.js (loaded before sketch.js)
 
 class Person {
   constructor(x, y) {
     this.x = x;
     this.y = y;
+
+    // Walking animation state (used by lego.js drawLegoCharacter)
+    this.vel       = { x: 0, y: 0 };
+    this.walkPhase = 0;
 
     // Clothing
     this.innerColor = { r: 200, g: 200, b: 200 };
@@ -57,13 +50,14 @@ class Person {
     this.outerType  = 'none';
     this.lowerType  = 'shorts';
     this.stencilImg = null;
-    this.accessory  = 'none';
+    this.accessories = [];
     this.alpha      = 255;
     // Colour-grid (from cv_module contour sampling)
     this.clothGrid  = null;   // { cols, rows, cells:[{r,g,b,active}] }
     this.lowerGrid  = null;
 
     // Face / hair (defaults — overwritten by updateFace)
+    this.armColor     = null;  // detected sleeve colour; overrides outerColor for arm rendering
     this.skinColor    = { r: 255, g: 224, b: 196 };
     this.hairColor    = { r: 45,  g: 35,  b: 30  };
     this.eyeColor     = { r: 55,  g: 35,  b: 20  }; // dark brown default
@@ -118,6 +112,11 @@ class Person {
 
     if (ACTIVE_THEME === 'lego') {
       drawLegoCharacter(this);
+      // hatY: Lego head top ≈ -96 (anime ≈ -122)
+      // handYBoost: Lego hands sit at y≈30 vs anime y≈8
+      if (typeof drawAccessories === 'function') {
+        drawAccessories(this.accessories, 1, { hatY: -96, handYBoost: 22 });
+      }
       pop();
       return;
     }
@@ -293,8 +292,8 @@ class Person {
     stroke('#5a3a29'); strokeWeight(2);
     _hairFront(this.hairStyle, hc);
 
-    // 16. Accessory
-    if (typeof drawAccessory === 'function') drawAccessory(this.accessory, 1);
+    // 16. Accessories (multi)
+    if (typeof drawAccessories === 'function') drawAccessories(this.accessories, 1);
 
     pop();
   }
@@ -319,36 +318,51 @@ function createBtn(label, bg, action) {
   return btn;
 }
 
-function createSelectDOM() {
-  const sel = document.createElement('select');
-  sel.style.position = 'absolute';
-  sel.style.padding = '10px';
-  sel.style.background = '#21262d';
-  sel.style.color = '#c9d1d9';
-  sel.style.border = '1px solid #30363d';
-  sel.style.borderRadius = '6px';
-  sel.style.outline = 'none';
-  sel.style.cursor = 'pointer';
-  sel.style.fontSize = '16px';
-  sel.style.fontWeight = 'bold';
-  sel.style.display = 'none';
-  document.body.appendChild(sel);
-  
+function createAccessoryPanel() {
+  const panel = document.createElement('div');
+  panel.style.position = 'absolute';
+  panel.style.display = 'none';
+  panel.style.flexWrap = 'wrap';
+  panel.style.gap = '6px';
+  panel.style.width = '170px';
+  document.body.appendChild(panel);
+
+  const selected = new Set();
+  const buttons = {};
+  const items = typeof ACCESSORIES_LIST !== 'undefined'
+    ? ACCESSORIES_LIST.filter(a => a.value !== 'none') : [];
+
+  for (const acc of items) {
+    const btn = document.createElement('button');
+    btn.innerText = acc.label;
+    btn.style.cssText = 'width:82px;height:36px;background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;font-size:13px;cursor:pointer;';
+    btn.onclick = () => {
+      if (selected.has(acc.value)) {
+        selected.delete(acc.value);
+        btn.style.background = '#21262d';
+        btn.style.border = '1px solid #30363d';
+      } else {
+        selected.add(acc.value);
+        btn.style.background = '#1f6feb';
+        btn.style.border = '1px solid #58a6ff';
+      }
+    };
+    panel.appendChild(btn);
+    buttons[acc.value] = btn;
+  }
+
   return {
-    sel: sel,
-    addOption: (label, val) => {
-      const opt = document.createElement('option');
-      opt.value = val;
-      opt.text = label;
-      sel.appendChild(opt);
+    values:   () => Array.from(selected),
+    show:     () => { panel.style.display = 'flex'; },
+    hide:     () => { panel.style.display = 'none'; },
+    position: (x, y) => { panel.style.left = x + 'px'; panel.style.top = y + 'px'; },
+    reset:    () => {
+      selected.clear();
+      for (const b of Object.values(buttons)) {
+        b.style.background = '#21262d';
+        b.style.border = '1px solid #30363d';
+      }
     },
-    position: (x, y) => {
-      sel.style.left = x + 'px';
-      sel.style.top = y + 'px';
-    },
-    value: () => sel.value,
-    show: () => sel.style.display = 'block',
-    hide: () => sel.style.display = 'none'
   };
 }
 
@@ -360,10 +374,7 @@ function setup() {
 
   characters.push(new Person(0, 0));
 
-  accessorySelect = createSelectDOM();
-  if (typeof ACCESSORIES_LIST !== 'undefined') {
-    for (const acc of ACCESSORIES_LIST) accessorySelect.addOption(acc.label, acc.value);
-  }
+  accessoryPanel = createAccessoryPanel();
   
   downloadBtn = createBtn('💾 DOWNLOAD AVATAR', '#2ea043', () => {
     saveCanvas('PersonaFlow_Avatar', 'png');
@@ -373,7 +384,8 @@ function setup() {
     currentState = APP_STATES.LIVE;
     isDetecting = false;
     countdownValue = 0;
-    accessorySelect.hide();
+    accessoryPanel.hide();
+    accessoryPanel.reset();
     downloadBtn.style.display = 'none';
     retryBtn.style.display = 'none';
     joinProjectionBtn.style.display = 'none';
@@ -396,6 +408,9 @@ function setup() {
     if (latestFeatures?.lower_grid) {
       characters[0].lowerGrid = latestFeatures.lower_grid;
     }
+    if (latestFeatures?.arm_color) {
+      characters[0].armColor = hexToRgb(latestFeatures.arm_color.hex);
+    }
   });
 
   window.addEventListener("avatar_generated", (e) => {
@@ -410,6 +425,7 @@ function setup() {
         payload.lower_grid || null
       );
       if (payload.face) characters[0].updateFace(payload.face);
+      if (payload.arm_color) characters[0].armColor = hexToRgb(payload.arm_color.hex);
       currentState = APP_STATES.CUSTOMIZE;
     } else {
       console.error("Avatar Gen Failed", payload.error);
@@ -435,12 +451,17 @@ function setup() {
           p.lowerType = c.lower_type === 'long_pants' ? 'jeans' : 'shorts';
         }
         if (c.face) p.updateFace(c.face);
-        if (c.accessory) p.accessory = c.accessory;
+        if (Array.isArray(c.accessories)) p.accessories = c.accessories;
+        else if (c.accessory && c.accessory !== 'none') p.accessories = [c.accessory];
         swarmPersons[c.id] = p;
       }
       const p = swarmPersons[c.id];
-      p.x = c.x / 1920 * width;
-      p.y = c.y / 1080 * height;
+      const newX = c.x / 1920 * width;
+      const newY = c.y / 1080 * height;
+      // Compute velocity from position delta for walking animation
+      p.vel = { x: newX - (p.x || newX), y: newY - (p.y || newY) };
+      p.x = newX;
+      p.y = newY;
       p.swarmState = c.state || 'ROAMING';
     }
   });
@@ -494,7 +515,7 @@ function _getLiveLayout() {
 }
 
 function drawLiveState() {
-  accessorySelect.hide();
+  accessoryPanel.hide();
   downloadBtn.style.display = 'none';
   retryBtn.style.display = 'none';
   joinProjectionBtn.style.display = 'none';
@@ -578,7 +599,7 @@ function drawLiveState() {
 }
 
 function drawProcessingState() {
-  accessorySelect.hide();
+  accessoryPanel.hide();
   downloadBtn.style.display = 'none';
   retryBtn.style.display = 'none';
   joinProjectionBtn.style.display = 'none';
@@ -610,38 +631,38 @@ function drawCustomizeState() {
   // Center avatar
   const person = characters[0];
   person.x = width/2 - 100; // shift slightly left to make room for UI
-  person.y = height/2 + (height * 0.15);
-  person.accessory = accessorySelect.value();
+  person.y = height/2 + (height * 0.05);
+  person.accessories = accessoryPanel.values();
   
   // Dynamic scale based on screen height to avoid overflowing
   const dynamicScale = Math.max(1.2, Math.min(2.2, height / 450));
   person.drawSelf(dynamicScale);
 
-  // Accessory Select position
+  // Accessory panel position
   const uiX = width/2 + 150;
-  const uiY = height/2 - 50;
-  
-  accessorySelect.show();
-  accessorySelect.position(uiX, uiY);
+  const uiY = height/2 - 120;
 
-  // Buttons
+  accessoryPanel.show();
+  accessoryPanel.position(uiX, uiY);
+
+  // Buttons — pushed down to make room for the multi-select panel (~120px)
   downloadBtn.style.display = 'block';
   downloadBtn.style.left = uiX + 'px';
-  downloadBtn.style.top = (uiY + 60) + 'px';
+  downloadBtn.style.top = (uiY + 130) + 'px';
 
   retryBtn.style.display = 'block';
   retryBtn.style.left = uiX + 'px';
-  retryBtn.style.top = (uiY + 120) + 'px';
+  retryBtn.style.top = (uiY + 190) + 'px';
 
   joinProjectionBtn.style.display = myAvatarData ? 'block' : 'none';
   joinProjectionBtn.style.left = uiX + 'px';
-  joinProjectionBtn.style.top = (uiY + 180) + 'px';
+  joinProjectionBtn.style.top = (uiY + 250) + 'px';
 
   leaveSwarmBtn.style.display = 'none';
 
-  // Label for accessory
+  // Label for accessory panel
   fill('#c9d1d9'); noStroke(); textSize(14); textAlign(LEFT, BOTTOM);
-  text("ADD ACCESSORY:", uiX, uiY - 5);
+  text("ACCESSORIES 選多個：", uiX, uiY - 5);
 }
 
 function mousePressed() {
@@ -746,7 +767,7 @@ function _drawColorPreview(feat, px, py) {
 // ─────────────────────────────────────────
 
 function drawSwarmState() {
-  accessorySelect.hide();
+  accessoryPanel.hide();
   downloadBtn.style.display = 'none';
   retryBtn.style.display = 'none';
   joinProjectionBtn.style.display = 'none';
@@ -766,8 +787,13 @@ function drawSwarmState() {
   fill('#8b949e'); textSize(13); textStyle(NORMAL);
   text(n + ' character' + (n !== 1 ? 's' : '') + ' on the wall', 20, 46);
 
-  for (const [, p] of Object.entries(swarmPersons)) {
-    p.drawSelf(0.7);
+  // Sort by Y for correct depth layering (characters lower on screen = in front)
+  const sorted = Object.values(swarmPersons).sort((a, b) => a.y - b.y);
+  for (const p of sorted) {
+    // Perspective scale: characters near bottom of screen appear larger
+    const tDepth = Math.max(0, Math.min(1, (p.y / height - 0.1) / 0.8));
+    const perspScale = lerp(0.45, 0.95, tDepth);
+    p.drawSelf(perspScale);
     if (p.swarmState === 'GREETING') {
       _drawGreetingBubble(p.x, p.y);
     }
@@ -792,18 +818,42 @@ function _joinSwarm() {
   if (!window.personaFlow?.socket) return;
   const p = characters[0];
   const toHex = c => '#' + [c.r, c.g, c.b].map(v => v.toString(16).padStart(2, '0')).join('');
-  window.personaFlow.socket.emit("join_swarm", {
+  const payload = {
     x: 960, y: 540,
     upper: { hex: toHex(p.innerColor), rgb: [p.innerColor.r, p.innerColor.g, p.innerColor.b] },
     lower: { hex: toHex(p.lowerColor), rgb: [p.lowerColor.r, p.lowerColor.g, p.lowerColor.b] },
     upper_type: 'short_sleeve',
     lower_type: (p.lowerType === 'jeans' || p.lowerType === 'suit_pants' || p.lowerType === 'long_pants')
       ? 'long_pants' : 'shorts',
-    accessory: p.accessory,
+    accessories: p.accessories,
+    accessory:   p.accessories[0] || 'none',
     face:   myAvatarData?.face   || null,
     outfit: myAvatarData?.outfit || null,
-  });
-  currentState = APP_STATES.SWARM;
+  };
+
+  // ✅ FIX 1: Stay on CUSTOMIZE — don't switch currentState to SWARM.
+  // The old page remains unchanged; projection.html is the virtual scene.
+
+  // ✅ FIX 2: Emit join_swarm FIRST, then open the new tab after a short delay.
+  // This ensures the character is registered in the backend swarm state before
+  // projection.html's socket connects and starts receiving update_positions.
+  window.personaFlow.socket.emit("join_swarm", payload);
+
+  // BroadcastChannel: projection.html listens and applies colors immediately.
+  try {
+    const bc = new BroadcastChannel('avatar_sync');
+    bc.postMessage({
+      boidId:      window.personaFlow.myCharId || 'user_0',
+      topColor:    toHex(p.innerColor),
+      bottomColor: toHex(p.lowerColor),
+      hasGlasses:  p.accessories.includes('glasses'),
+    });
+    bc.close();
+  } catch (_) { /* BroadcastChannel not supported */ }
+
+  // Open projection wall in a new tab after 300 ms so join_swarm reaches the
+  // backend before projection.html's socket connects.
+  setTimeout(() => window.open('projection.html', '_blank'), 300);
 }
 
 // ─────────────────────────────────────────
