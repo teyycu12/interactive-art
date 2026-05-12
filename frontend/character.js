@@ -352,19 +352,30 @@ function _drawBeard(style, _skinColor, hairColor) {
 //  ACCESSORIES  (unchanged)
 // ─────────────────────────────────────────
 
-function drawAccessory(name, a) {
+// opts: { hatY, handYBoost }
+function drawAccessory(name, a, opts = {}) {
   if (!name || name === 'none') return;
-  if (name === 'bouquet') _drawBouquet(a);
-  else if (name === 'camera') _drawCamera(a);
-  else if (name === 'hat') _drawHat(a);
-  else if (name === 'bag') _drawBag(a);
+  const yb = opts.handYBoost ?? 0;
+  if (name === 'bouquet') _drawBouquet(a, yb);
+  else if (name === 'camera') _drawCamera(a, yb);
+  else if (name === 'hat')    _drawHat(a, opts.hatY ?? -122);
+  else if (name === 'bag')    _drawBag(a, yb);
   else if (name === 'glasses') _drawGlasses(a);
-  else if (name === 'cat') _drawCat(a);
+  else if (name === 'cat')    _drawCat(a);
 }
 
-function _drawBouquet(a) {
+function drawAccessories(names, a, opts = {}) {
+  if (!names || names.length === 0) return;
+  // lego.js (and any theme) may leave rectMode(CENTER) active; accessories expect CORNER
   push();
-  translate(-34, 0);
+  rectMode(CORNER);
+  for (const name of names) drawAccessory(name, a, opts);
+  pop();
+}
+
+function _drawBouquet(a, yBoost = 0) {
+  push();
+  translate(-34, yBoost);
   stroke(70, 150, 70, a * 255); strokeWeight(3);
   line(0, 28, -6, 8); line(0, 28, 6, 8);
   const flowers = [
@@ -384,8 +395,8 @@ function _drawBouquet(a) {
   pop();
 }
 
-function _drawCamera(a) {
-  push(); translate(30, -5);
+function _drawCamera(a, yBoost = 0) {
+  push(); translate(30, -5 + yBoost);
   fill(40, 40, 40, a * 255); stroke(80, 80, 80, a * 255); strokeWeight(2);
   rect(-14, -10, 28, 20, 3);
   fill(20, 20, 50, a * 255); stroke(100, 150, 255, a * 200); strokeWeight(2);
@@ -397,8 +408,8 @@ function _drawCamera(a) {
   pop();
 }
 
-function _drawHat(a) {
-  push(); translate(0, -122);
+function _drawHat(a, y = -122) {
+  push(); translate(0, y);
   fill(35, 25, 15, a * 255); stroke('#5a3a29'); strokeWeight(3);
   ellipse(0, 0, 88, 14);
   rect(-26, -38, 52, 38, 4, 4, 0, 0);
@@ -406,8 +417,8 @@ function _drawHat(a) {
   pop();
 }
 
-function _drawBag(a) {
-  push(); translate(38, 8);
+function _drawBag(a, yBoost = 0) {
+  push(); translate(38, 8 + yBoost);
   fill(175, 115, 55, a * 255); stroke('#5a3a29'); strokeWeight(2);
   rect(-12, -14, 24, 28, 4);
   fill(155, 95, 45, a * 255); rect(-12, -14, 24, 12, 4, 4, 0, 0);

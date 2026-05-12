@@ -190,9 +190,18 @@ def _sample_grid_with_mask(
     for i, c in enumerate(centers):
         r_c, g_c, b_c = int(round(float(c[0]))), int(round(float(c[1]))), int(round(float(c[2])))
         hsv = cv2.cvtColor(np.uint8([[[r_c, g_c, b_c]]]), cv2.COLOR_RGB2HSV)[0][0]
-        hsv[1] = min(255, int(hsv[1] * 1.35))
-        if hsv[2] < 40:
-            hsv[2] = min(255, int(hsv[2] * 1.3))
+        s_raw = int(hsv[1])
+        v_raw = int(hsv[2])
+        if v_raw < 60:
+            # 近黑色：相機藍偏是雜訊，壓低飽和度讓黑色保持中性暗色
+            hsv[1] = min(s_raw, 40)
+            hsv[2] = min(255, int(v_raw * 1.25))
+        elif v_raw > 185 and s_raw < 70:
+            # 近白/米白：不提升飽和度，避免摺皺陰影的微小色偏被放大
+            pass
+        else:
+            # 一般有彩色：提升飽和度讓顏色更鮮明
+            hsv[1] = min(255, int(s_raw * 1.35))
         enhanced[i] = cv2.cvtColor(np.uint8([[hsv]]), cv2.COLOR_HSV2RGB)[0][0]
     enh_f = enhanced.astype(np.float32)  # for distance computation
 
@@ -368,6 +377,9 @@ def get_clothing_features(
             return np.array([128, 128, 128])
         return np.median(patch.reshape(-1, 3), axis=0)
 
+    lelbow = np.array([lm[13].x, lm[13].y])
+    relbow = np.array([lm[14].x, lm[14].y])
+
     forearm_pt = (lm[13].x + lm[14].x + lm[15].x + lm[16].x) / 4.0, \
                  (lm[13].y + lm[14].y + lm[15].y + lm[16].y) / 4.0
     calf_pt    = (lm[25].x + lm[26].x + lm[27].x + lm[28].x) / 4.0, \
@@ -383,6 +395,17 @@ def get_clothing_features(
     upper_type = "long_sleeve" if _col_dist(upper_arr, forearm_col) < 50.0 else "short_sleeve"
     lower_type = "long_pants"  if _col_dist(np.array(lower_color["rgb"], dtype=float), calf_col) < 50.0 else "shorts"
 
+    # ── 手臂/袖子顏色偵測（比照上衣邏輯，但針對袖子 ROI）──
+    # 在肩→肘 30% 處取樣（避開肩關節、只取袖子段），左右各取後平均。
+    # 此顏色優先用於樂高手臂，不依賴 VLM outer_color。
+    l_arm_pt = lsho * 0.70 + lelbow * 0.30
+    r_arm_pt = rsho * 0.70 + relbow * 0.30
+    larm_col = _px_color(rgb, float(l_arm_pt[0]), float(l_arm_pt[1]), half=12)
+    rarm_col = _px_color(rgb, float(r_arm_pt[0]), float(r_arm_pt[1]), half=12)
+    arm_avg  = (larm_col.astype(float) + rarm_col.astype(float)) / 2.0
+    arm_r, arm_g, arm_b = int(round(arm_avg[0])), int(round(arm_avg[1])), int(round(arm_avg[2]))
+    arm_color = {"hex": _rgb_to_hex((arm_r, arm_g, arm_b)), "rgb": [arm_r, arm_g, arm_b]}
+
     # ── stencil（保留舊邏輯用於 VLM 服裝識別）──
     torso_cx = float((lsho[0] + rsho[0] + lhip[0] + rhip[0]) / 4.0)
     torso_cy = float((lsho[1] + rsho[1] + lhip[1] + rhip[1]) / 4.0)
@@ -397,6 +420,7 @@ def get_clothing_features(
         "ok": True,
         "upper": upper_color,
         "lower": lower_color,
+        "arm_color": arm_color,
         "upper_type": upper_type,
         "lower_type": lower_type,
         "cloth_grid": cloth_grid,

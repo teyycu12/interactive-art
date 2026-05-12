@@ -75,6 +75,7 @@ _last_success_landmarks: Optional[list] = None
 _last_success_roi: Optional[Dict[str, Any]] = None
 _last_success_cloth_grid: Optional[Dict[str, Any]] = None
 _last_success_lower_grid: Optional[Dict[str, Any]] = None
+_last_success_arm_color:  Optional[Dict[str, Any]] = None
 _last_success_ts: Optional[float] = None
 
 # --- swarm state ---
@@ -85,7 +86,8 @@ _swarm_lock = threading.Lock()
 def _merge_fallback_payload(features: Dict[str, Any]) -> Dict[str, Any]:
     global _last_success_upper, _last_success_lower, _last_success_upper_type, \
         _last_success_lower_type, _last_success_landmarks, _last_success_roi, \
-        _last_success_cloth_grid, _last_success_lower_grid, _last_success_ts
+        _last_success_cloth_grid, _last_success_lower_grid, _last_success_arm_color, \
+        _last_success_ts
 
     if features.get("ok") is True:
         _last_success_upper = features.get("upper")
@@ -96,6 +98,7 @@ def _merge_fallback_payload(features: Dict[str, Any]) -> Dict[str, Any]:
         _last_success_roi = features.get("roi")
         _last_success_cloth_grid = features.get("cloth_grid")
         _last_success_lower_grid = features.get("lower_grid")
+        _last_success_arm_color  = features.get("arm_color")
         _last_success_ts = time.time()
         return features
 
@@ -104,6 +107,7 @@ def _merge_fallback_payload(features: Dict[str, Any]) -> Dict[str, Any]:
         "error": features.get("error"),
         "upper": _last_success_upper,
         "lower": _last_success_lower,
+        "arm_color": _last_success_arm_color,
         "upper_type": _last_success_upper_type,
         "lower_type": _last_success_lower_type,
         "landmarks": _last_success_landmarks,
@@ -237,12 +241,13 @@ def handle_generate_avatar(payload):
                 })
 
             socketio.emit("avatar_generated", {
-                "ok":    True,
-                "outfit": outfit_data,
-                "stencil": cv_result.get("stencil"),
+                "ok":        True,
+                "outfit":    outfit_data,
+                "stencil":   cv_result.get("stencil"),
                 "cloth_grid": cv_result.get("cloth_grid"),
                 "lower_grid": cv_result.get("lower_grid"),
-                "face":  face_data or None,
+                "arm_color": cv_result.get("arm_color"),
+                "face":      face_data or None,
             }, to=sid)
         except Exception as e:
             print(f"[generate_avatar] error: {e}")
