@@ -14,8 +14,8 @@ import cv2
 import numpy as np
 
 try:
+    from mediapipe import Image, ImageFormat
     from mediapipe.tasks.python.core.base_options import BaseOptions
-    from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
     from mediapipe.tasks.python.vision.face_landmarker import (
         FaceLandmarker,
         FaceLandmarkerOptions,

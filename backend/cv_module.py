@@ -18,8 +18,8 @@ import cv2
 import numpy as np
 
 try:
+    from mediapipe import Image, ImageFormat
     from mediapipe.tasks.python.core.base_options import BaseOptions
-    from mediapipe.tasks.python.vision.core.image import Image, ImageFormat
     from mediapipe.tasks.python.vision.pose_landmarker import (
         PoseLandmarker,
         PoseLandmarkerOptions,
@@ -393,6 +393,22 @@ def get_clothing_features(
         for l in lm
     ]
 
+    # ── Full-body polygon (for OpenAI body-sprite generation) ──
+    # Top = above shoulders so collar/hood is included; bottom = below ankles;
+    # left/right = widest of shoulders / wrists / ankles so arms aren't clipped.
+    top_y    = float(min(lsho[1], rsho[1])) - 0.05
+    bottom_y = float(max(lank[1], rank[1])) + 0.05
+    lwri_x = lm[15].x if lm[15].visibility > 0.3 else lsho[0]
+    rwri_x = lm[16].x if lm[16].visibility > 0.3 else rsho[0]
+    left_x  = float(min(lsho[0], rsho[0], lwri_x, rwri_x, lank[0], rank[0])) - 0.03
+    right_x = float(max(lsho[0], rsho[0], lwri_x, rwri_x, lank[0], rank[0])) + 0.03
+    body_poly = np.array([
+        [left_x,  top_y],
+        [right_x, top_y],
+        [right_x, bottom_y],
+        [left_x,  bottom_y],
+    ], dtype=np.float32)
+
     return {
         "ok": True,
         "upper": upper_color,
@@ -408,6 +424,10 @@ def get_clothing_features(
             "lower": {"x": float((lhip[0] + rhip[0]) / 2), "y": float((lhip[1] + rhip[1]) / 2),
                       "size": dynamic_patch_size / float(rgb.shape[1])},
         },
+        # Normalised polygons (xy in 0..1) — used by garment_gen.py for cropping
+        "upper_poly": upper_poly.tolist(),
+        "lower_poly": lower_poly.tolist(),
+        "body_poly":  body_poly.tolist(),
     }
 
 

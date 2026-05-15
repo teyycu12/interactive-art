@@ -71,7 +71,8 @@ function drawLegoCharacter(person) {
   const [lr, lg, lb] = _enhanceSolid(person.lowerColor);
   const bodyColor = color(br, bg, bb);
   const legColor  = color(lr, lg, lb);
-  const skinColor = color(255, 204, 0);
+  // Detected skin tone (VLM), falls back to anime-default when unavailable
+  const skinColor = color(person.skinColor.r, person.skinColor.g, person.skinColor.b);
 
   // Adaptive outline: light if body is still dark after enhancement
   const bodyOutline = _luma(br, bg, bb) < 0.42 ? color(205, 205, 205) : color(0);
@@ -80,6 +81,92 @@ function drawLegoCharacter(person) {
   strokeJoin(ROUND); strokeCap(ROUND);
   strokeWeight(2 * s);
   rectMode(CENTER);
+
+  // ══ FULL-CHARACTER MODE — the AI sprite IS the entire figure (head→feet).
+  //     Skip every programmatic LEGO part; just draw the sprite at full
+  //     character height. T-pose / front view, so future skeletal rigging
+  //     can hang a rig over this image directly.
+  const bodySpriteReady = person.bodySprite && person.bodySprite.width > 0;
+  if (bodySpriteReady && person.renderMode === 'full_character') {
+    const headTop      = headY - headS / 2;                       // very top of head
+    const figureBottom = legTop + legH + footH;                   // bottom of feet
+    const fullH        = figureBottom - headTop;
+    const aspectRatio  = person.bodySprite.width / person.bodySprite.height;
+    const fullW        = fullH * aspectRatio;
+    const centerY      = (headTop + figureBottom) / 2;
+
+    imageMode(CENTER);
+    image(person.bodySprite, 0, centerY, fullW, fullH);
+    imageMode(CORNER);
+    rectMode(CENTER);
+    return;
+  }
+
+  // ══ BODY-SPRITE MODE — sprite covers torso+legs only; head, hands, feet
+  //     are programmatic LEGO parts with detected skin tone.
+  if (bodySpriteReady) {
+    // Sprite is tight-cropped server-side to its actual content bbox.
+    // Position it so its TOP edge sits flush against the bottom of the head,
+    // and scale it by HEIGHT preserving the sprite's native aspect ratio so
+    // the cardigan + jeans don't get distorted by being squished into a square.
+    const headBottom  = headY + headS / 2;       // bottom of LEGO head
+    const bodyTop     = headBottom + 1 * s;      // tiny overlap to hide seams
+    const bodyBottom  = legTop + legH + footH;
+    const targetH     = bodyBottom - bodyTop;
+    const aspectRatio = person.bodySprite.width / person.bodySprite.height;
+    const targetW     = targetH * aspectRatio;
+    const bodyCenterY = (bodyTop + bodyBottom) / 2;
+
+    imageMode(CENTER);
+    image(person.bodySprite, 0, bodyCenterY, targetW, targetH);
+    imageMode(CORNER);
+
+    // ── Arms — skin colour for short sleeves, shirt colour for long sleeves ──
+    // Drawn on top of the sprite so canonical LEGO arms always sit at 15°.
+    const isShortSleeve = (person.upperKind || 'short_sleeve') === 'short_sleeve';
+    const armFill = isShortSleeve ? skinColor : bodyColor;
+
+    strokeWeight(2 * s);
+    push();
+    translate(-tTop / 2, shldY); rotate(radians(15));
+    fill(armFill); stroke(bodyOutline); rectMode(CORNER);
+    rect(-aW, 0, aW, aL, 5 * s);
+    translate(-aW / 2, aL + 5 * s);
+    _legoHand(s, skinColor, bodyOutline);
+    pop();
+
+    push();
+    translate(tTop / 2, shldY); rotate(radians(-15));
+    fill(armFill); stroke(bodyOutline); rectMode(CORNER);
+    rect(0, 0, aW, aL, 5 * s);
+    translate(aW / 2, aL + 5 * s);
+    _legoHand(s, skinColor, bodyOutline);
+    pop();
+
+    // ── Dark LEGO feet ──
+    rectMode(CENTER);
+    fill(35); stroke(0); strokeWeight(2 * s);
+    rect(lLegCx, legTop + legH + footH / 2, legW + 2 * s, footH, 2 * s);
+    rect(rLegCx, legTop + legH + footH / 2, legW + 2 * s, footH, 2 * s);
+
+    // ── Head, neck stud, hair, eyes, mouth — all in detected skin tone ──
+    fill(skinColor); stroke(0);
+    rect(0, -torsoH / 2 - 2 * s, 16 * s, 4 * s);              // neck stud
+    rect(0, headY, headS * 1.1, headS, 8 * s);                // head
+    rect(0, headY - headS / 2 - 3 * s, 18 * s, 7 * s, 2 * s); // hair bar
+
+    fill(0); noStroke();
+    circle(-7 * s, headY - 2 * s, 5 * s);
+    circle( 7 * s, headY - 2 * s, 5 * s);
+
+    noFill(); stroke(0); strokeWeight(2 * s);
+    const smileW = (14 + (person.smileScore || 0) * 8) * s;
+    const smileH = ( 8 + (person.smileScore || 0) * 4) * s;
+    arc(0, headY + 7 * s, smileW, smileH, 0, PI);
+
+    rectMode(CENTER);
+    return;
+  }
 
   // ══ PASS A – Solid fills ═══════════════════════════════════════
 
@@ -95,11 +182,30 @@ function drawLegoCharacter(person) {
   rect(lLegCx, legTop + legH + footH / 2, legW + 2 * s, footH, 2 * s);
   rect(rLegCx, legTop + legH + footH / 2, legW + 2 * s, footH, 2 * s);
 
-  // ══ PASS B – Grid overlays ═════════════════════════════════════
+  // ══ PASS B – Sprite overlay (OpenAI) OR grid overlay (CV fallback) ═══
 
-  if (clothGrid) _drawClothGrid(drawingContext, torsoPoly, clothGrid);
-  if (lowerGrid) {
-    _drawClothGrid(drawingContext, lLegPoly, lowerGrid, true);   // left: mirror UV
+  const upperSpriteReady = person.clothSprite && person.clothSprite.width > 0;
+  const lowerSpriteReady = person.lowerSprite && person.lowerSprite.width > 0;
+
+  if (upperSpriteReady) {
+    _drawClothSprite(drawingContext, torsoPoly, person.clothSprite.canvas || person.clothSprite.elt);
+  } else if (clothGrid) {
+    _drawClothGrid(drawingContext, torsoPoly, clothGrid);
+  }
+
+  if (lowerSpriteReady) {
+    // Sprite is a single PNG showing both legs; draw it once across the
+    // combined leg region (including the centre gap) so we don't double-render.
+    const spriteEl = person.lowerSprite.canvas || person.lowerSprite.elt;
+    const combinedLegsPoly = [
+      [lLegLeft,         legTop],
+      [rLegLeft + legW,  legTop],
+      [rLegLeft + legW,  legTop + legH],
+      [lLegLeft,         legTop + legH],
+    ];
+    _drawClothSprite(drawingContext, combinedLegsPoly, spriteEl);
+  } else if (lowerGrid) {
+    _drawClothGrid(drawingContext, lLegPoly, lowerGrid, true);
     _drawClothGrid(drawingContext, rLegPoly, lowerGrid, false);
   }
 
@@ -116,18 +222,43 @@ function drawLegoCharacter(person) {
 
   // ══ PASS D – Arms, head, face ══════════════════════════════════
 
+  // Pre-compute sprite slices for arms (used only when upper sprite is ready).
+  // Prompt asks for T-shape flat-lay: torso centred, sleeves to far left/right.
+  // → left arm samples the left ~25% of the sprite, right arm the right ~25%.
+  const upperSprEl = upperSpriteReady ? (person.clothSprite.canvas || person.clothSprite.elt) : null;
+  const sliceW = upperSprEl ? upperSprEl.width * 0.25 : 0;
+  const sliceH = upperSprEl ? upperSprEl.height : 0;
+  const rightSliceX = upperSprEl ? upperSprEl.width * 0.75 : 0;
+
   push();
   translate(-tTop / 2, shldY); rotate(radians(15));
-  fill(bodyColor); stroke(bodyOutline); rectMode(CORNER);
-  rect(-aW, 0, aW, aL, 5 * s);
+  rectMode(CORNER);
+  if (upperSprEl) {
+    // Texture-only fill, no opaque rect underneath
+    const armPoly = [[-aW, 0], [0, 0], [0, aL], [-aW, aL]];
+    _drawClothSpriteSlice(drawingContext, armPoly, upperSprEl, 0, 0, sliceW, sliceH);
+    noFill(); stroke(bodyOutline);
+    rect(-aW, 0, aW, aL, 5 * s);
+  } else {
+    fill(bodyColor); stroke(bodyOutline);
+    rect(-aW, 0, aW, aL, 5 * s);
+  }
   translate(-aW / 2, aL + 5 * s);
   _legoHand(s, skinColor, bodyOutline);
   pop();
 
   push();
   translate(tTop / 2, shldY); rotate(radians(-15));
-  fill(bodyColor); stroke(bodyOutline); rectMode(CORNER);
-  rect(0, 0, aW, aL, 5 * s);
+  rectMode(CORNER);
+  if (upperSprEl) {
+    const armPoly = [[0, 0], [aW, 0], [aW, aL], [0, aL]];
+    _drawClothSpriteSlice(drawingContext, armPoly, upperSprEl, rightSliceX, 0, sliceW, sliceH);
+    noFill(); stroke(bodyOutline);
+    rect(0, 0, aW, aL, 5 * s);
+  } else {
+    fill(bodyColor); stroke(bodyOutline);
+    rect(0, 0, aW, aL, 5 * s);
+  }
   translate(aW / 2, aL + 5 * s);
   _legoHand(s, skinColor, bodyOutline);
   pop();

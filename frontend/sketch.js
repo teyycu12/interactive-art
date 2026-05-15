@@ -26,6 +26,8 @@ let downloadBtn;
 let retryBtn;
 let joinProjectionBtn;
 let leaveSwarmBtn;
+let loadPhotoBtn;
+let photoFileInput;
 
 // Swarm state
 const swarmPersons = {};
@@ -56,12 +58,17 @@ class Person {
     this.innerType  = 'tshirt';
     this.outerType  = 'none';
     this.lowerType  = 'shorts';
+    this.upperKind  = 'short_sleeve';   // 'short_sleeve' | 'long_sleeve' — drives bare-arm rendering
     this.stencilImg = null;
     this.accessory  = 'none';
     this.alpha      = 255;
     // Colour-grid (from cv_module contour sampling)
     this.clothGrid  = null;   // { cols, rows, cells:[{r,g,b,active}] }
     this.lowerGrid  = null;
+    // OpenAI-generated garment sprites (preferred over grid when loaded)
+    this.clothSprite = null;  // p5.Image (legacy: upper-only)
+    this.lowerSprite = null;  // p5.Image (legacy: lower-only)
+    this.bodySprite  = null;  // p5.Image (NEW: full LEGO body, neck down)
 
     // Face / hair (defaults — overwritten by updateFace)
     this.skinColor    = { r: 255, g: 224, b: 196 };
@@ -75,6 +82,20 @@ class Person {
     this.smileScore   = 0.0;
     this.hasBeard     = false;
     this.beardStyle   = 'none';
+
+    // Render mode — chosen at avatar-generation time. 'body_sprite' = upper+lower
+    // garment sprites + programmatic LEGO head/hands/feet. 'full_character' = single
+    // AI image covers the entire figure; programmatic parts skipped.
+    this.renderMode   = 'body_sprite';
+
+    // Forward-compat slots for future skeletal rigging (out of scope here, but
+    // populated by a downstream pipeline so themes/animation can read them).
+    this.skeleton     = null;   // { joints: [...], bones: [...] }
+    this.animState    = 'idle'; // 'idle' | 'walking' | 'greeting' | ...
+  }
+
+  setRenderMode(mode) {
+    if (mode === 'body_sprite' || mode === 'full_character') this.renderMode = mode;
   }
 
   updateFromVLM(outfit, stencilB64, face, clothGrid, lowerGrid) {
@@ -95,10 +116,22 @@ class Person {
     this.updateFace(face);
   }
 
+  // Load OpenAI-generated full-body LEGO sprite (base64 PNG, no data: prefix)
+  updateBodySprite(bodyPng) {
+    if (bodyPng) {
+      loadImage('data:image/png;base64,' + bodyPng,
+        img => { this.bodySprite = img; },
+        () => { console.warn('body sprite load failed'); }
+      );
+    } else {
+      this.bodySprite = null;
+    }
+  }
+
   updateFace(face) {
     if (!face) return;
-    // Fix skin tone to a default anime skin color instead of sampling
-    this.skinColor    = { r: 255, g: 240, b: 235 };
+    // Use VLM-detected skin tone (head + hands + bare arms render in this colour)
+    if (face.skin_tone) this.skinColor = hexToRgb(face.skin_tone);
     if (face.hair_color)    this.hairColor    = hexToRgb(face.hair_color);
     if (face.eye_color)     this.eyeColor     = hexToRgb(face.eye_color);
     if (face.lip_color)     this.lipColor     = hexToRgb(face.lip_color);
@@ -380,6 +413,32 @@ function setup() {
   });
 
   joinProjectionBtn = createBtn('🌐 JOIN PROJECTION WALL', '#8250df', _joinSwarm);
+
+  // 測試用：載入本地照片取代拍照，走相同 generate_avatar 路徑
+  photoFileInput = document.createElement('input');
+  photoFileInput.type = 'file';
+  photoFileInput.accept = 'image/*';
+  photoFileInput.style.display = 'none';
+  photoFileInput.onchange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      if (window.personaFlow?.socket) {
+        window.personaFlow.socket.emit("generate_avatar", { image: dataUrl, mode: _getSelectedMode() });
+        currentState = APP_STATES.PROCESSING;
+      }
+    };
+    reader.readAsDataURL(file);
+    photoFileInput.value = '';
+  };
+  document.body.appendChild(photoFileInput);
+
+  loadPhotoBtn = createBtn('📁 LOAD TEST PHOTO', '#6e7681', () => {
+    photoFileInput.click();
+  });
+
   leaveSwarmBtn = createBtn('← BACK', '#6e7681', () => {
     if (window.personaFlow?.socket && window.personaFlow.myCharId) {
       window.personaFlow.socket.emit("leave_swarm", { id: window.personaFlow.myCharId });
@@ -402,6 +461,8 @@ function setup() {
     const payload = e.detail;
     if (payload.ok) {
       myAvatarData = payload;
+      // Set render mode FIRST so subsequent sprite/face updates can read it if needed
+      if (payload.character_mode) characters[0].setRenderMode(payload.character_mode);
       characters[0].updateFromVLM(
         payload.outfit,
         payload.stencil,
@@ -409,6 +470,11 @@ function setup() {
         payload.cloth_grid || null,
         payload.lower_grid || null
       );
+      // body_sprite mode: sprite is just the torso+legs, overlaid with programmatic LEGO parts
+      // full_character mode: sprite is the entire figure (head→feet), programmatic parts skipped
+      characters[0].updateBodySprite(payload.body_png);
+      // Sleeve length (from cv_module): drives bare-arm rendering in lego theme
+      if (payload.upper_type) characters[0].upperKind = payload.upper_type;
       if (payload.face) characters[0].updateFace(payload.face);
       currentState = APP_STATES.CUSTOMIZE;
     } else {
@@ -500,6 +566,12 @@ function drawLiveState() {
   joinProjectionBtn.style.display = 'none';
   leaveSwarmBtn.style.display = 'none';
 
+  // 測試用照片載入按鈕（右上角）
+  loadPhotoBtn.style.display = 'block';
+  loadPhotoBtn.style.right = '20px';
+  loadPhotoBtn.style.left = 'auto';
+  loadPhotoBtn.style.top = '20px';
+
   fill('#58a6ff'); noStroke();
   textSize(24); textStyle(BOLD); textAlign(LEFT, TOP);
   text("PERSONAFLOW: DIGITAL TWIN DASHBOARD", 20, 20);
@@ -569,7 +641,7 @@ function drawLiveState() {
         countdownValue = 0;
         const b64 = _captureBase64(0.8);
         if (b64 && window.personaFlow?.socket) {
-          window.personaFlow.socket.emit("generate_avatar", { image: b64 });
+          window.personaFlow.socket.emit("generate_avatar", { image: b64, mode: _getSelectedMode() });
           currentState = APP_STATES.PROCESSING;
         }
       }
@@ -583,6 +655,7 @@ function drawProcessingState() {
   retryBtn.style.display = 'none';
   joinProjectionBtn.style.display = 'none';
   leaveSwarmBtn.style.display = 'none';
+  loadPhotoBtn.style.display = 'none';
   const t = millis() / 1000;
   fill(255); noStroke();
   textSize(32); textStyle(BOLD); textAlign(CENTER, CENTER);
@@ -612,9 +685,25 @@ function drawCustomizeState() {
   person.x = width/2 - 100; // shift slightly left to make room for UI
   person.y = height/2 + (height * 0.15);
   person.accessory = accessorySelect.value();
-  
+
   // Dynamic scale based on screen height to avoid overflowing
   const dynamicScale = Math.max(1.2, Math.min(2.2, height / 450));
+
+  // Stage frame behind avatar — gives a light-vs-dark contrast halo so dark
+  // LEGO outfits (e.g. black hair + dark shirt) read clearly against the
+  // #0d1117 page background. Geometry comes from drawLegoCharacter at s=1.5:
+  //   figure top    = headY - headS/2 ≈ -83.5
+  //   figure bottom = legTop + legH + footH ≈ 97
+  //   center offset ≈ +6.75, height ≈ 180.5, max width ≈ 130 (arms+hands)
+  const stageH = 280 * dynamicScale;
+  const stageW = 230 * dynamicScale;
+  const stageY = person.y + 7 * dynamicScale;
+  push();
+  rectMode(CENTER);
+  fill('#586069'); stroke('#8b949e'); strokeWeight(2);
+  rect(person.x, stageY, stageW, stageH, 18);
+  pop();
+
   person.drawSelf(dynamicScale);
 
   // Accessory Select position
@@ -638,6 +727,7 @@ function drawCustomizeState() {
   joinProjectionBtn.style.top = (uiY + 180) + 'px';
 
   leaveSwarmBtn.style.display = 'none';
+  loadPhotoBtn.style.display = 'none';
 
   // Label for accessory
   fill('#c9d1d9'); noStroke(); textSize(14); textAlign(LEFT, BOTTOM);
@@ -678,6 +768,11 @@ function _captureBase64(quality) {
   tmp.width = 640; tmp.height = 480;
   tmp.getContext('2d').drawImage(capture.elt, 0, 0, 640, 480);
   return tmp.toDataURL('image/jpeg', quality);
+}
+
+function _getSelectedMode() {
+  const checked = document.querySelector('input[name="genMode"]:checked');
+  return checked ? checked.value : 'body_sprite';
 }
 
 function _drawSkeleton(landmarks, ix, iy, vw, vh) {
@@ -750,6 +845,7 @@ function drawSwarmState() {
   downloadBtn.style.display = 'none';
   retryBtn.style.display = 'none';
   joinProjectionBtn.style.display = 'none';
+  loadPhotoBtn.style.display = 'none';
   leaveSwarmBtn.style.display = 'block';
   leaveSwarmBtn.style.left = '20px';
   leaveSwarmBtn.style.top = (height - 60) + 'px';
@@ -856,5 +952,70 @@ function _drawClothGrid(ctx, poly, grid, mirrorX = false) {
     }
   }
 
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────
+//  CLOTH SPRITE RENDERER  (OpenAI-generated PNG)
+//  Draws the sprite scaled to the polygon's bounding box, clipped to the
+//  polygon shape so it follows the character silhouette.
+// ─────────────────────────────────────────
+function _drawClothSprite(ctx, poly, img, mirrorX = false) {
+  if (!img || !img.width || !img.height) return;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [px, py] of poly) {
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+    if (px > maxX) maxX = px;
+    if (py > maxY) maxY = py;
+  }
+  const bw = maxX - minX;
+  const bh = maxY - minY;
+  if (bw <= 0 || bh <= 0) return;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(poly[0][0], poly[0][1]);
+  for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+  ctx.closePath();
+  ctx.clip();
+
+  if (mirrorX) {
+    ctx.translate(minX + bw, minY);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img, 0, 0, bw, bh);
+  } else {
+    ctx.drawImage(img, minX, minY, bw, bh);
+  }
+
+  ctx.restore();
+}
+
+// ─────────────────────────────────────────
+//  CLOTH SPRITE SLICE — draw a sub-region (UV source rect) of the sprite,
+//  fitted to the polygon's bounding box and clipped to its outline.
+//  Used so LEGO arms get the cardigan's sleeve texture instead of solid colour.
+// ─────────────────────────────────────────
+function _drawClothSpriteSlice(ctx, poly, img, sx, sy, sw, sh) {
+  if (!img || !img.width || !img.height) return;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [px, py] of poly) {
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+    if (px > maxX) maxX = px;
+    if (py > maxY) maxY = py;
+  }
+  const bw = maxX - minX;
+  const bh = maxY - minY;
+  if (bw <= 0 || bh <= 0) return;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(poly[0][0], poly[0][1]);
+  for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(img, sx, sy, sw, sh, minX, minY, bw, bh);
   ctx.restore();
 }

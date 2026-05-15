@@ -1,8 +1,17 @@
 import base64
+import os
 import random
 import threading
 import time
 from typing import Any, Dict, Optional
+
+# Load .env before importing modules that read env vars (vlm_module, garment_gen)
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+    load_dotenv()  # also try CWD
+except ImportError:
+    pass
 
 import eventlet
 import eventlet.tpool
@@ -33,10 +42,15 @@ except Exception:
     from vlm_module import analyze_outfit, analyze_face
     from face_module import get_face_features
 
+try:
+    from backend.garment_gen import generate_body_png, generate_full_character_png  # type: ignore
+except Exception:
+    from garment_gen import generate_body_png, generate_full_character_png  # type: ignore
+
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "personaflow-dev-secret"
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", max_http_buffer_size=20 * 1024 * 1024)
 
 # VLM colour name → hex (used instead of CV colour sampling)
 _HAIR_HEX = {
@@ -182,6 +196,13 @@ def handle_generate_avatar(payload):
 
     sid = request.sid
 
+    # Generation mode: "body_sprite" (existing, fast, just upper+lower)
+    #                  "full_character" (new, slow, head→feet single image).
+    # Frontend sends mode in payload; .env GENERATION_MODE is the default.
+    mode = (payload.get("mode") or os.environ.get("GENERATION_MODE", "body_sprite")).strip()
+    if mode not in {"body_sprite", "full_character"}:
+        mode = "body_sprite"
+
     def _background():
         try:
             # 並行執行兩個 VLM call（outfit + face），各自在 tpool 執行緒中運行
@@ -196,12 +217,31 @@ def handle_generate_avatar(payload):
 
             cv_result      = {}
             face_cv_result = {}
+            rgb_full       = None
+            body_poly      = None
+            t_garment      = None
             if frame is not None:
                 cv_result      = get_clothing_features(frame, max_width=480)
                 face_cv_result = get_face_features(frame, max_width=480)
 
+                if cv_result.get("ok") and "body_poly" in cv_result:
+                    try:
+                        rgb_full  = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        body_poly = np.array(cv_result["body_poly"], dtype=np.float32)
+                    except Exception as ge:
+                        print(f"[generate_avatar] poly prep failed: {ge}")
+
+            # body_sprite mode: spawn generation in PARALLEL with VLM (no VLM context needed).
+            # full_character mode: must wait for VLM to inject face+outfit attrs into prompt.
+            if mode == "body_sprite" and rgb_full is not None and body_poly is not None:
+                t_garment = eventlet.spawn(
+                    eventlet.tpool.execute,
+                    generate_body_png,
+                    rgb_full, body_poly,
+                )
+
             # 等待 VLM 結果
-            vlm_result     = t_outfit.wait()
+            vlm_result      = t_outfit.wait()
             vlm_face_result = t_face_vlm.wait()
 
             # --- 服裝資料 ---
@@ -210,6 +250,18 @@ def handle_generate_avatar(payload):
                 outfit_data["inner_color"] = cv_result["upper"]["hex"]
             if "lower" in cv_result and "hex" in cv_result["lower"]:
                 outfit_data["lower_color"] = cv_result["lower"]["hex"]
+
+            # Derive sleeve length from VLM outfit semantics — more reliable
+            # than cv_module's forearm-vs-shirt pixel-distance heuristic.
+            _LONG_SLEEVE_OUTERS = {"blazer", "cardigan", "denim_jacket"}
+            _LONG_SLEEVE_INNERS = {"button_up"}
+            vlm_outer = (outfit_data.get("outer") or "none").lower()
+            vlm_inner = (outfit_data.get("inner") or "tshirt").lower()
+            if vlm_outer in _LONG_SLEEVE_OUTERS or vlm_inner in _LONG_SLEEVE_INNERS:
+                sleeve_kind = "long_sleeve"
+            else:
+                # Fall back to cv heuristic if VLM gave us only a t-shirt label
+                sleeve_kind = cv_result.get("upper_type", "short_sleeve")
 
             # --- 臉部資料 ---
             face_data: dict = {}
@@ -236,6 +288,18 @@ def handle_generate_avatar(payload):
                     "beard_style": vf.get("beard_style", "none"),
                 })
 
+            # --- Garment / character generation ---
+            if mode == "full_character":
+                if rgb_full is not None and body_poly is not None:
+                    garment_result = eventlet.tpool.execute(
+                        generate_full_character_png,
+                        rgb_full, body_poly, face_data, outfit_data,
+                    )
+                else:
+                    garment_result = {"ok": False, "error": "no_body_poly"}
+            else:
+                garment_result = t_garment.wait() if t_garment is not None else {"ok": False}
+
             socketio.emit("avatar_generated", {
                 "ok":    True,
                 "outfit": outfit_data,
@@ -243,6 +307,15 @@ def handle_generate_avatar(payload):
                 "cloth_grid": cv_result.get("cloth_grid"),
                 "lower_grid": cv_result.get("lower_grid"),
                 "face":  face_data or None,
+                # Sleeve length flag — lets frontend render bare arm in skin colour for short sleeves
+                "upper_type": sleeve_kind,
+                "lower_type": cv_result.get("lower_type", "shorts"),
+                # AI-generated sprite — same field for both modes; character_mode tells the
+                # frontend which renderer to use (sprite-as-body vs sprite-as-whole-figure).
+                "body_png":  garment_result.get("body_png"),
+                "body_bbox": garment_result.get("body_bbox"),
+                "garment_source": "openai" if garment_result.get("ok") else "grid",
+                "character_mode": mode,
             }, to=sid)
         except Exception as e:
             print(f"[generate_avatar] error: {e}")
@@ -313,4 +386,4 @@ socketio.start_background_task(_swarm_background)
 
 
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)

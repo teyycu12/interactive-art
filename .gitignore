@@ -6,6 +6,10 @@ __pycache__/
 .Python
 *.egg-info/
 
+# Secrets / env
+.env
+.env.local
+
 # Virtual environment
 .venv/
 venv/

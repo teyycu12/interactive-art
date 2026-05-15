@@ -15,9 +15,45 @@
       canvas {
         display: block;
       }
+      #mode-selector {
+        position: absolute;
+        top: 20px;
+        right: 280px;
+        background: #21262d;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 10px 14px;
+        color: #c9d1d9;
+        font-family: system-ui, sans-serif;
+        font-size: 13px;
+        z-index: 10;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-width: 260px;
+      }
+      #mode-selector .title {
+        color: #8b949e;
+        font-size: 11px;
+        margin-bottom: 2px;
+      }
+      #mode-selector label {
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #mode-selector input[type="radio"] {
+        accent-color: #58a6ff;
+      }
     </style>
   </head>
   <body>
+    <div id="mode-selector">
+      <span class="title">生成模式</span>
+      <label><input type="radio" name="genMode" value="body_sprite" checked> 上下身偵測（穩定、快）</label>
+      <label><input type="radio" name="genMode" value="full_character"> 全人物生成（細節豐富、較慢）</label>
+    </div>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/p5@1.9.3/lib/p5.min.js"></script>
     <script src="./character.js"></script>
