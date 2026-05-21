@@ -87,7 +87,7 @@ function drawLegoCharacter(person) {
   //     character height. T-pose / front view, so future skeletal rigging
   //     can hang a rig over this image directly.
   const bodySpriteReady = person.bodySprite && person.bodySprite.width > 0;
-  if (bodySpriteReady && person.renderMode === 'full_character') {
+  if (bodySpriteReady && (person.renderMode === 'full_character' || person.renderMode === 'full_character_refined')) {
     const headTop      = headY - headS / 2;                       // very top of head
     const figureBottom = legTop + legH + footH;                   // bottom of feet
     const fullH        = figureBottom - headTop;

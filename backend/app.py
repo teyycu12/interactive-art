@@ -43,9 +43,19 @@ except Exception:
     from face_module import get_face_features
 
 try:
-    from backend.garment_gen import generate_body_png, generate_full_character_png  # type: ignore
+    from backend.garment_gen import (  # type: ignore
+        generate_body_png,
+        generate_full_character_png,
+        generate_refine_character_png,
+        _remove_white_background as _gg_remove_white_background,
+    )
 except Exception:
-    from garment_gen import generate_body_png, generate_full_character_png  # type: ignore
+    from garment_gen import (  # type: ignore
+        generate_body_png,
+        generate_full_character_png,
+        generate_refine_character_png,
+        _remove_white_background as _gg_remove_white_background,
+    )
 
 
 app = Flask(__name__)
@@ -200,7 +210,7 @@ def handle_generate_avatar(payload):
     #                  "full_character" (new, slow, head→feet single image).
     # Frontend sends mode in payload; .env GENERATION_MODE is the default.
     mode = (payload.get("mode") or os.environ.get("GENERATION_MODE", "body_sprite")).strip()
-    if mode not in {"body_sprite", "full_character"}:
+    if mode not in {"body_sprite", "full_character", "full_character_refined"}:
         mode = "body_sprite"
 
     def _background():
@@ -295,6 +305,38 @@ def handle_generate_avatar(payload):
                         generate_full_character_png,
                         rgb_full, body_poly, face_data, outfit_data,
                     )
+                else:
+                    garment_result = {"ok": False, "error": "no_body_poly"}
+            elif mode == "full_character_refined":
+                # Two-pass: base (no bg-removal so white background still signals
+                # the model on pass 2) then refine. If refine fails, fall back to base.
+                if rgb_full is not None and body_poly is not None:
+                    base_result = eventlet.tpool.execute(
+                        generate_full_character_png,
+                        rgb_full, body_poly, face_data, outfit_data, False,
+                    )
+                    if base_result.get("ok") and base_result.get("body_png"):
+                        refined = eventlet.tpool.execute(
+                            generate_refine_character_png,
+                            base_result["body_png"], rgb_full, body_poly,
+                            face_data, outfit_data,
+                        )
+                        if refined.get("ok"):
+                            # refine reused the same crop, so bbox is identical
+                            refined.setdefault("body_bbox", base_result.get("body_bbox"))
+                            garment_result = refined
+                        else:
+                            # Refine pass produced nothing — fall back to a
+                            # bg-removed version of the base draft.
+                            print("[generate_avatar] refine failed, falling back to base")
+                            base_cleaned = _gg_remove_white_background(base_result["body_png"])
+                            garment_result = {
+                                "ok": True,
+                                "body_png": base_cleaned,
+                                "body_bbox": base_result.get("body_bbox"),
+                            }
+                    else:
+                        garment_result = base_result
                 else:
                     garment_result = {"ok": False, "error": "no_body_poly"}
             else:
