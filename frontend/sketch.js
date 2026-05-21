@@ -17,6 +17,7 @@ let capture;
 let countdownValue = 0;
 let countdownStartTime = 0;
 let isDetecting = false;
+let cameraEnabled = true;
 let lastFrameSent = 0;
 let latestFeatures = null;
 
@@ -95,7 +96,9 @@ class Person {
   }
 
   setRenderMode(mode) {
-    if (mode === 'body_sprite' || mode === 'full_character') this.renderMode = mode;
+    if (mode === 'body_sprite' || mode === 'full_character' || mode === 'full_character_refined') {
+      this.renderMode = mode;
+    }
   }
 
   updateFromVLM(outfit, stencilB64, face, clothGrid, lowerGrid) {
@@ -583,7 +586,13 @@ function drawLiveState() {
   fill('#161b22'); stroke('#30363d'); strokeWeight(2);
   rect(margin, headerH + margin, panelW, panelH, 12);
 
-  if (capture && capture.loadedmetadata) {
+  // Video feed or camera-off placeholder
+  if (!cameraEnabled) {
+    fill('#0d1117'); stroke('#30363d'); strokeWeight(2);
+    rect(imgX, imgY, vidW, vidH, 8);
+    fill('#484f58'); noStroke(); textSize(18); textStyle(NORMAL); textAlign(CENTER, CENTER);
+    text('攝影機已關閉', imgX + vidW / 2, imgY + vidH / 2);
+  } else if (capture && capture.loadedmetadata) {
     push();
     translate(imgX + vidW, imgY);
     scale(-1, 1);
@@ -605,30 +614,6 @@ function drawLiveState() {
       _drawSkeleton(latestFeatures.landmarks, imgX, imgY, vidW, vidH);
     }
 
-    // 上下半身顏色預覽（影像右側）
-    _drawColorPreview(latestFeatures, imgX + vidW + 16, imgY);
-
-    // 按鈕群組
-    const gap = 12;
-    const startW = 90;
-    const pauseW = 90;
-    const captureW = 130;
-    const totalBtnW = startW + gap + pauseW + gap + captureW;
-    const startX = imgX + vidW / 2 - totalBtnW / 2;
-    
-    const btns = [
-      { id: 'start', label: '▶ START', x: startX, w: startW, color: isDetecting ? '#238636' : '#2ea043' },
-      { id: 'pause', label: '⏸ PAUSE', x: startX + startW + gap, w: pauseW, color: !isDetecting && countdownValue === 0 ? '#da3633' : '#a42e2c' },
-      { id: 'capture', label: countdownValue > 0 ? "📸 CAPTURING..." : "📸 3s CAPTURE", x: startX + startW + pauseW + gap * 2, w: captureW, color: countdownValue > 0 ? '#1f6feb' : '#1f6feb' }
-    ];
-
-    for (const b of btns) {
-      fill(b.color);
-      noStroke(); rect(b.x, btnY, b.w, btnH, 8);
-      fill(255); textSize(14); textStyle(BOLD); textAlign(CENTER, CENTER);
-      text(b.label, b.x + b.w / 2, btnY + btnH / 2);
-    }
-
     // 倒數邏輯
     if (countdownValue > 0) {
       const elapsed = millis() - countdownStartTime;
@@ -646,6 +631,38 @@ function drawLiveState() {
         }
       }
     }
+  }
+
+  // 上下半身顏色預覽（影像右側）
+  _drawColorPreview(latestFeatures, imgX + vidW + 16, imgY);
+
+  // 按鈕群組
+  const gap = 12;
+  const startW = 90;
+  const pauseW = 90;
+  const captureW = 130;
+  const camW = 110;
+  const totalBtnW = startW + gap + pauseW + gap + captureW + gap + camW;
+  const startX = imgX + vidW / 2 - totalBtnW / 2;
+
+  const btns = [
+    { id: 'start',   label: '▶ START',   x: startX, w: startW,
+      color: !cameraEnabled ? '#373e47' : (isDetecting ? '#238636' : '#2ea043') },
+    { id: 'pause',   label: '⏸ PAUSE',   x: startX + startW + gap, w: pauseW,
+      color: !cameraEnabled ? '#373e47' : (!isDetecting && countdownValue === 0 ? '#da3633' : '#a42e2c') },
+    { id: 'capture', label: countdownValue > 0 ? "📸 CAPTURING..." : "📸 3s CAPTURE",
+      x: startX + startW + pauseW + gap * 2, w: captureW,
+      color: !cameraEnabled ? '#373e47' : '#1f6feb' },
+    { id: 'cam',     label: cameraEnabled ? '📷 關閉攝影機' : '📷 開啟攝影機',
+      x: startX + startW + pauseW + captureW + gap * 3, w: camW,
+      color: cameraEnabled ? '#6e7681' : '#388bfd' },
+  ];
+
+  for (const b of btns) {
+    fill(b.color);
+    noStroke(); rect(b.x, btnY, b.w, btnH, 8);
+    fill(255); textSize(14); textStyle(BOLD); textAlign(CENTER, CENTER);
+    text(b.label, b.x + b.w / 2, btnY + btnH / 2);
   }
 }
 
@@ -741,18 +758,24 @@ function mousePressed() {
     const startW = 90;
     const pauseW = 90;
     const captureW = 130;
-    const totalBtnW = startW + gap + pauseW + gap + captureW;
+    const camW = 110;
+    const totalBtnW = startW + gap + pauseW + gap + captureW + gap + camW;
     const startX = imgX + vidW / 2 - totalBtnW / 2;
-    
+
     if (mouseY >= btnY && mouseY <= btnY + btnH) {
-      if (mouseX >= startX && mouseX <= startX + startW) {
-        isDetecting = true;
-      } else if (mouseX >= startX + startW + gap && mouseX <= startX + startW + gap + pauseW) {
-        isDetecting = false;
-      } else if (mouseX >= startX + startW + pauseW + gap * 2 && mouseX <= startX + totalBtnW) {
-        countdownValue = 3;
-        countdownStartTime = millis();
-        isDetecting = true;
+      const camX = startX + startW + pauseW + captureW + gap * 3;
+      if (mouseX >= camX && mouseX <= camX + camW) {
+        _toggleCamera();
+      } else if (cameraEnabled) {
+        if (mouseX >= startX && mouseX <= startX + startW) {
+          isDetecting = true;
+        } else if (mouseX >= startX + startW + gap && mouseX <= startX + startW + gap + pauseW) {
+          isDetecting = false;
+        } else if (mouseX >= startX + startW + pauseW + gap * 2 && mouseX <= startX + startW + pauseW + gap * 2 + captureW) {
+          countdownValue = 3;
+          countdownStartTime = millis();
+          isDetecting = true;
+        }
       }
     }
   }
@@ -768,6 +791,27 @@ function _captureBase64(quality) {
   tmp.width = 640; tmp.height = 480;
   tmp.getContext('2d').drawImage(capture.elt, 0, 0, 640, 480);
   return tmp.toDataURL('image/jpeg', quality);
+}
+
+function _toggleCamera() {
+  if (cameraEnabled) {
+    const stream = capture?.elt?.srcObject;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (capture?.elt) capture.elt.srcObject = null;
+    cameraEnabled = false;
+    isDetecting = false;
+  } else {
+    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      .then(stream => {
+        if (capture?.elt) {
+          capture.elt.srcObject = stream;
+          capture.elt.play().catch(() => {});
+          capture.loadedmetadata = true;
+        }
+        cameraEnabled = true;
+      })
+      .catch(err => console.error('[camera] restart failed:', err));
+  }
 }
 
 function _getSelectedMode() {

@@ -15,8 +15,9 @@ from __future__ import annotations
 import base64
 import io
 import os
+import time
 import traceback
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image as PILImage
@@ -241,11 +242,16 @@ def _extract_image_b64(message) -> Optional[str]:
     return None
 
 
-def _call_image_chat(image_data_url: str, prompt: str, model: Optional[str] = None) -> Optional[str]:
-    """Call chat completions with multimodal input + image-output modality.
+def _call_image_chat_multi(
+    image_data_urls: List[str],
+    prompt: str,
+    model: Optional[str] = None,
+) -> Optional[str]:
+    """Call chat completions with one OR MORE input images + image-output.
 
-    model: explicit override (used by full-character mode with its own env var).
-    When None, falls back to OUTFIT_GEN_MODEL.
+    image_data_urls: list of data: URLs (PNG/JPEG base64). Order matters when
+    the prompt refers to "Image 1 / Image 2" etc.
+    model: explicit override; falls back to OUTFIT_GEN_MODEL.
     """
     client = _get_client()
     if client is None:
@@ -254,20 +260,18 @@ def _call_image_chat(image_data_url: str, prompt: str, model: Optional[str] = No
     if model is None:
         model = os.environ.get("OUTFIT_GEN_MODEL", "google/gemini-2.5-flash-image-preview").strip()
 
+    content: list = [{"type": "text", "text": prompt}]
+    for url in image_data_urls:
+        content.append({"type": "image_url", "image_url": {"url": url}})
+
     try:
         response = client.chat.completions.create(
             model=model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_data_url}},
-                ],
-            }],
+            messages=[{"role": "user", "content": content}],
             modalities=["image", "text"],
         )
     except Exception as e:
-        print(f"[garment_gen] chat call failed (model={model}): {e}")
+        print(f"[garment_gen] chat call failed (model={model}, n_images={len(image_data_urls)}): {e}")
         traceback.print_exc()
         return None
 
@@ -279,10 +283,14 @@ def _call_image_chat(image_data_url: str, prompt: str, model: Optional[str] = No
 
     b64 = _extract_image_b64(msg)
     if not b64:
-        # Dump enough info to debug without flooding logs
         snippet = str(msg)[:400]
         print(f"[garment_gen] no image in response. msg_preview={snippet}")
     return b64
+
+
+def _call_image_chat(image_data_url: str, prompt: str, model: Optional[str] = None) -> Optional[str]:
+    """Single-image convenience wrapper around _call_image_chat_multi."""
+    return _call_image_chat_multi([image_data_url], prompt, model=model)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -399,12 +407,17 @@ def generate_full_character_png(
     body_poly_norm: Optional[np.ndarray],
     face_data: Optional[Dict[str, Any]] = None,
     outfit_data: Optional[Dict[str, Any]] = None,
+    remove_bg: bool = True,
 ) -> Dict[str, Any]:
     """Generate ONE complete LEGO-minifigure sprite (head→feet, all-in-one).
 
     Uses a SEPARATE env var FULL_CHARACTER_MODEL so the user can swap the
     image-gen model independently of the body-only flow. Returns the same
     shape as generate_body_png so the frontend can stay simple.
+
+    remove_bg: when False, returns the raw b64 with white background intact.
+    Used by the refine pipeline so the base image still carries the white
+    background signal when fed back to the model in pass 2.
     """
     out: Dict[str, Any] = {"ok": False}
 
@@ -422,7 +435,8 @@ def generate_full_character_png(
         or os.environ.get("OUTFIT_GEN_MODEL", "").strip()
         or "google/gemini-2.5-flash-image-preview"
     )
-    print(f"[garment_gen] start full-character (frame={w}x{h}, model={model})")
+    print(f"[garment_gen] start full-character (frame={w}x{h}, model={model}, remove_bg={remove_bg})")
+    t_start = time.perf_counter()
 
     try:
         # Wide crop so head + arms + feet all sit inside the input frame.
@@ -435,18 +449,21 @@ def generate_full_character_png(
         )
         b64 = _call_image_chat(data_url, prompt, model=model)
         if b64:
-            b64 = _remove_white_background(b64)
+            if remove_bg:
+                b64 = _remove_white_background(b64)
             out["body_png"] = b64
             out["body_bbox"] = [x1 / w, y1 / h, x2 / w, y2 / h]
             out["ok"] = True
-            print(f"[garment_gen] full-character OK ({len(b64)} b64 chars, bg removed)")
+            bg_note = "bg removed" if remove_bg else "raw (bg kept)"
+            print(f"[garment_gen] full-character OK ({len(b64)} b64 chars, {bg_note})")
         else:
             print("[garment_gen] full-character failed (no image in response)")
     except Exception as e:
         print(f"[garment_gen] full-character error: {e}")
         traceback.print_exc()
 
-    print(f"[garment_gen] full-character done, ok={out['ok']}")
+    elapsed = time.perf_counter() - t_start
+    print(f"[garment_gen] full-character done in {elapsed:.2f}s, ok={out['ok']}")
     return out
 
 
@@ -474,6 +491,7 @@ def generate_body_png(
 
     h, w = rgb.shape[:2]
     print(f"[garment_gen] start full-body (frame={w}x{h})")
+    t_start = time.perf_counter()
 
     try:
         # Wide horizontal pad so arms / hands are inside the crop; moderate
@@ -496,5 +514,116 @@ def generate_body_png(
         print(f"[garment_gen] body error: {e}")
         traceback.print_exc()
 
-    print(f"[garment_gen] done, ok={out['ok']}")
+    elapsed = time.perf_counter() - t_start
+    print(f"[garment_gen] body done in {elapsed:.2f}s, ok={out['ok']}")
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  REFINE MODE — pass 2 on top of generate_full_character_png
+# ─────────────────────────────────────────────────────────────────────────────
+
+_REFINE_PROMPT = (
+    "You are refining a LEGO minifigure illustration. You are given TWO images:\n"
+    "  • Image 1: the ORIGINAL photograph of the person (detail reference).\n"
+    "  • Image 2: a DRAFT LEGO minifigure illustration of that same person "
+    "(composition lock — pose, proportions, colours, background placement).\n\n"
+
+    "TASK: produce an improved version of Image 2 with sharper, more refined "
+    "detail, while STRICTLY preserving Image 2's composition.\n\n"
+
+    "DETECTED ATTRIBUTES (must still match):\n"
+    "{attrs}\n\n"
+
+    "STRICT PRESERVATION (do NOT change from Image 2):\n"
+    "- Overall pose: strict front view, T-pose-like stance, arms at ~15° outward, both legs straight with a visible gap.\n"
+    "- LEGO minifigure proportions and the position / size of head, torso, arms, legs, feet.\n"
+    "- The dominant garment colours (top, lower, hair, skin) from Image 2.\n"
+    "- Pure solid white (#FFFFFF) background filling every empty pixel.\n"
+    "- Flat cel-shaded vector style with crisp black outlines (NOT 3D, NOT photo).\n\n"
+
+    "IMPROVEMENTS TO MAKE (refine, do NOT redesign):\n"
+    "- Face: sharpen and cleanly redraw the two dot eyes, eyebrows, and mouth "
+    "as crisp simple shapes — symmetrical, clearly readable, no smudging.\n"
+    "- Hair: clean outline of the hair piece, clear boundary between hair and head, "
+    "consistent single hair colour matching Image 2.\n"
+    "- Top garment: tighten the silhouette and outline, ensure ONE uniform colour "
+    "across chest / back / sleeves (collar or thin trim line may be a slightly darker "
+    "shade — never random patches).\n"
+    "- Lower garment: same uniform-colour rule for both legs, no patches or swatches.\n"
+    "- Shoes: at the bottom of EACH leg draw a clearly distinct dark slab (dark grey / "
+    "black / brown) wider than the leg with a thin horizontal seam line above it. "
+    "NEVER omit the shoes.\n"
+    "- Black outlines: clean, uniform stroke width around every part.\n\n"
+
+    "Output: ONE refined image, same square aspect, same centred layout as Image 2, "
+    "pure white background.\n\n"
+    + _FULL_CHARACTER_NEGATIVE
+)
+
+
+def generate_refine_character_png(
+    base_b64: str,
+    rgb: np.ndarray,
+    body_poly_norm: Optional[np.ndarray],
+    face_data: Optional[Dict[str, Any]] = None,
+    outfit_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Pass 2 of the refined pipeline.
+
+    Takes the (non-bg-removed) base PNG from generate_full_character_png plus
+    the original photo, and asks the model to sharpen face / hair / garment /
+    shoes detail while preserving the base's composition. Returns the same
+    schema as generate_full_character_png.
+    """
+    out: Dict[str, Any] = {"ok": False}
+
+    if _get_client() is None:
+        out["error"] = "openai_unavailable"
+        return out
+
+    if body_poly_norm is None or len(body_poly_norm) < 3:
+        out["error"] = "no_body_poly"
+        return out
+
+    if not base_b64:
+        out["error"] = "no_base_image"
+        return out
+
+    h, w = rgb.shape[:2]
+    model = (
+        os.environ.get("REFINE_CHARACTER_MODEL", "").strip()
+        or os.environ.get("FULL_CHARACTER_MODEL", "").strip()
+        or os.environ.get("OUTFIT_GEN_MODEL", "").strip()
+        or "google/gemini-2.5-flash-image-preview"
+    )
+    print(f"[garment_gen] start refine pass (frame={w}x{h}, model={model})")
+    t_start = time.perf_counter()
+
+    try:
+        # Same crop params as generate_full_character_png so the original photo
+        # we feed in lines up with the base draft.
+        square, (x1, y1, x2, y2) = _crop_square_padded(
+            rgb, body_poly_norm, pad_ratio=0.22, pad_ratio_x=0.30,
+        )
+        orig_url = _pil_to_data_url(square)
+        base_url = f"data:image/png;base64,{base_b64}"
+        prompt = _REFINE_PROMPT.format(
+            attrs=_attr_lines(face_data, outfit_data)
+        )
+        b64 = _call_image_chat_multi([orig_url, base_url], prompt, model=model)
+        if b64:
+            b64 = _remove_white_background(b64)
+            out["body_png"] = b64
+            out["body_bbox"] = [x1 / w, y1 / h, x2 / w, y2 / h]
+            out["ok"] = True
+            print(f"[garment_gen] refine OK ({len(b64)} b64 chars, bg removed)")
+        else:
+            print("[garment_gen] refine failed (no image in response)")
+    except Exception as e:
+        print(f"[garment_gen] refine error: {e}")
+        traceback.print_exc()
+
+    elapsed = time.perf_counter() - t_start
+    print(f"[garment_gen] refine done in {elapsed:.2f}s, ok={out['ok']}")
     return out

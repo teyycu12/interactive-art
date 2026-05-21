@@ -9,20 +9,41 @@
 |---|---|
 | 即時人體偵測 | MediaPipe Pose + Face Landmarker 抓取姿勢、面部特徵 |
 | 服裝色調提取 | OpenCV K-Means 取出上下身主色，產生 grid 色塊網格 |
-| AI 角色生成 | 兩種模式可即時切換（見下方） |
+| AI 角色生成 | 三種模式可即時切換（見下方） |
 | Boids 群聚演算法 | 角色在共創畫布上自然漫遊 / 打招呼 |
 | 程式化樂高渲染 | p5.js 即時合成頭、髮、手、腳等 LEGO 部件 |
+| 攝影機開關 | 前端可即時關閉 / 重啟攝影機，方便展示中切換隱私狀態 |
 
 ---
 
-## 🎭 兩種生成模式
+## 🎭 三種生成模式
 
 | 模式 | 行為 | 特點 |
 |---|---|---|
 | **body_sprite**（穩定、快） | AI 只生成上下身衣物，頭/手/腳由程式繪製 LEGO 標準件 | 速度快、穩定度高、易疊加配件 |
 | **full_character**（細節豐富、較慢） | AI 一次生成完整樂高 minifigure（頭 + 髮 + 臉 + 身 + 腳） | 細節豐富、預留骨架欄位以利未來動畫擴充 |
+| **full_character_refined**（最精緻、最慢） | 兩段式 pipeline：先產生 full_character 底圖，再以「原始照片 + 底圖」雙圖輸入做精修 pass | 五官、髮型、鞋子等細節最銳利；任一段失敗會自動回退到底圖 |
 
 前端 UI 可逐次切換；後端用獨立環境變數設定各自模型，方便 A/B 測試生圖品質。
+
+### 🔁 full_character_refined 兩段式流程
+
+```
+       原始照片
+          │
+          ▼
+[Pass 1] generate_full_character_png   ←─ FULL_CHARACTER_MODEL
+   (產出帶白底的底圖，方便 Pass 2 對齊)
+          │
+          ▼
+[Pass 2] generate_refine_character_png ←─ REFINE_CHARACTER_MODEL
+   (同時看「原始照片 + Pass 1 底圖」，鎖構圖、銳化臉/髮/鞋細節)
+          │
+          ▼
+   去白底 → 回傳前端 (body_png + body_bbox)
+```
+
+若 Pass 2 失敗，後端會自動 fallback 回去白底處理後的 Pass 1 底圖，前端體驗不會中斷。
 
 ---
 
@@ -90,8 +111,9 @@ npx live-server               # 預設 http://127.0.0.1:8080
 | `OPENAI_API_KEY` | OpenRouter / OpenAI 金鑰 | `sk-or-v1-...` |
 | `OUTFIT_GEN_MODEL` | body_sprite 模式用的生圖模型 | `google/gemini-3.1-flash-image-preview` |
 | `FULL_CHARACTER_MODEL` | full_character 模式用的生圖模型 | `google/gemini-3-pro-image-preview` |
-| `GENERATION_MODE` | 後端預設模式（前端可逐次覆蓋） | `body_sprite` |
-| `GEMINI_API_KEY` | VLM 服裝屬性分析用 | `AIzaSy...` |
+| `REFINE_CHARACTER_MODEL` | full_character_refined 第二段精修用的模型；省略時依序 fallback 到 `FULL_CHARACTER_MODEL` → `OUTFIT_GEN_MODEL` | `google/gemini-3-pro-image-preview` |
+| `GENERATION_MODE` | 後端預設模式（前端可逐次覆蓋） | `body_sprite` / `full_character` / `full_character_refined` |
+| `GEMINI_API_KEY` | VLM 服裝屬性分析用（**必填**，不再有內建 fallback） | `AIzaSy...` |
 
 > ⚠️ **僅支援 chat-completions 多模態介面的模型**（Google Nano Banana 系列）。FLUX 等需走 `/images/generations` 的模型在這套程式碼裡會回 404。
 
