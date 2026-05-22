@@ -312,7 +312,14 @@ _FULL_CHARACTER_NEGATIVE = (
     "NO plaid/tartan/checkered squares unless the photo clearly shows them, "
     "NO patchwork, NO sewn-on badges, NO pocket stickers, NO logos, "
     "NO mismatched colour blocks within a single garment piece. "
-    "NEVER omit shoes — both feet must always wear visible LEGO shoes."
+    "NEVER omit shoes — both feet must always wear visible LEGO shoes. "
+    "STRICT BODY-PART COUNT: EXACTLY one head, exactly two arms, "
+    "EXACTLY TWO hands total (one at the end of each arm, at the wrist), "
+    "exactly two legs, exactly two feet/shoes. "
+    "NO extra hands, NO duplicate hands, NO floating hands, "
+    "NO hands attached to the torso, hip, or legs, "
+    "NO hands at the bottom of the legs (those positions are for SHOES, not hands). "
+    "NO extra arms, NO duplicate limbs anywhere."
 )
 
 _FULL_CHARACTER_PROMPT_TEMPLATE = (
