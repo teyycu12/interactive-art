@@ -4,8 +4,9 @@ import os
 import google.generativeai as genai
 from typing import Dict, Any
 
-# Ensure API Key is configured via environment variable, or fallback to the provided one.
-_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyDS0VLIuy8iXOR7LUBXHaIsUQXESZLD8Qg")
+_API_KEY = os.environ.get("GEMINI_API_KEY")
+if not _API_KEY:
+    raise RuntimeError("GEMINI_API_KEY not set — add it to your .env file")
 genai.configure(api_key=_API_KEY)
 
 def analyze_outfit(base64_image: str) -> Dict[str, Any]:
