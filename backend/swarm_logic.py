@@ -30,8 +30,11 @@ def update_swarm_state(characters, *, width: float = 1920, height: float = 1080)
 
     updated = []
     for i, c in enumerate(characters):
-        vx = c.get("vx", random.uniform(-1.0, 1.0))
-        vy = c.get("vy", random.uniform(-1.0, 1.0))
+        # Ensure vx and vy are floats
+        vx = c.get("vx")
+        if vx is None: vx = random.uniform(-1.0, 1.0)
+        vy = c.get("vy")
+        if vy is None: vy = random.uniform(-1.0, 1.0)
 
         sep_x = sep_y = 0.0
         sep_n = 0
@@ -44,8 +47,10 @@ def update_swarm_state(characters, *, width: float = 1920, height: float = 1080)
         for j, other in enumerate(characters):
             if i == j:
                 continue
-            dx = c["x"] - other["x"]
-            dy = c["y"] - other["y"]
+            ox = other.get("x", 0.0)
+            oy = other.get("y", 0.0)
+            dx = c.get("x", 0.0) - ox
+            dy = c.get("y", 0.0) - oy
             dist = math.sqrt(dx * dx + dy * dy) + 1e-6
 
             if dist < GREETING_DIST:
@@ -59,8 +64,8 @@ def update_swarm_state(characters, *, width: float = 1920, height: float = 1080)
                 ali_vy += other.get("vy", 0.0)
                 ali_n += 1
             if dist < _COH_RADIUS:
-                coh_x += other["x"]
-                coh_y += other["y"]
+                coh_x += ox
+                coh_y += oy
                 coh_n += 1
 
         fx = fy = 0.0
@@ -73,13 +78,13 @@ def update_swarm_state(characters, *, width: float = 1920, height: float = 1080)
             fx += ax * _ALI_WEIGHT
             fy += ay * _ALI_WEIGHT
         if coh_n:
-            tx, ty = _limit(coh_x / coh_n - c["x"], coh_y / coh_n - c["y"], _MAX_FORCE)
+            tx, ty = _limit(coh_x / coh_n - c.get("x", 0.0), coh_y / coh_n - c.get("y", 0.0), _MAX_FORCE)
             fx += tx * _COH_WEIGHT
             fy += ty * _COH_WEIGHT
 
         vx, vy = _limit(vx + fx, vy + fy, _MAX_SPEED)
-        x = (c["x"] + vx) % width
-        y = (c["y"] + vy) % height
+        x = (c.get("x", 0.0) + vx) % width
+        y = (c.get("y", 0.0) + vy) % height
 
         nc = {**c, "x": x, "y": y, "vx": vx, "vy": vy,
               "state": "GREETING" if greeting else "ROAMING"}

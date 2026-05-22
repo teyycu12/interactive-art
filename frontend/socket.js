@@ -1,6 +1,6 @@
 // Socket.io client bootstrap (non-module for compatibility with index.html).
 (function () {
-  const backendUrl = "http://localhost:5000";
+  const backendUrl = "http://127.0.0.1:5001";
 
   window.personaFlow = window.personaFlow || {};
 

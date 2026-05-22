@@ -15,7 +15,7 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
     """
     try:
         # Use gemini-1.5-flash for fast multimodal processing
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         
         # Decode base64 to bytes
         if base64_image.startswith("data:image"):
@@ -99,7 +99,7 @@ def analyze_face(base64_image: str) -> Dict[str, Any]:
         "beard_style": "none",
     }
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         if base64_image.startswith("data:image"):
             base64_image = base64_image.split(",")[1]
         image_bytes = base64.b64decode(base64_image)

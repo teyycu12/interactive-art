@@ -545,7 +545,7 @@ function drawLiveState() {
 
     // 定期送 frame 給後端做骨架偵測
     const now = millis();
-    if (isDetecting && now - lastFrameSent > 500 && window.personaFlow?.socket) {
+    if (isDetecting && now - lastFrameSent > 150 && window.personaFlow?.socket) {
       const b64 = _captureBase64(0.5);
       if (b64) { lastFrameSent = now; window.personaFlow.socket.emit("process_frame", { image: b64 }); }
     }

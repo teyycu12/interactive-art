@@ -33,6 +33,9 @@ except ModuleNotFoundError:
 _landmarker: Optional[Any] = None
 _landmarker_lock = threading.Lock()
 
+_prev_landmarks: Optional[List[Any]] = None
+_EMA_ALPHA = 0.35
+
 _MODEL_FILENAME = "pose_landmarker_lite.task"
 _MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
 
@@ -95,7 +98,7 @@ def _get_landmarker(*, allow_download: bool = True) -> Any:
         base_options = BaseOptions(model_asset_path=model_path)
         options = PoseLandmarkerOptions(
             base_options=base_options,
-            output_segmentation_masks=False,
+            output_segmentation_masks=True,
         )
         _landmarker = PoseLandmarker.create_from_options(options)
         return _landmarker
@@ -142,6 +145,7 @@ def _sample_grid_with_mask(
     grid_rows: int,
     min_coverage: float = 0.20,
     n_colors: int = 5,
+    seg_mask: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """
     三步驟格柵取樣：
@@ -174,15 +178,24 @@ def _sample_grid_with_mask(
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillPoly(mask, [px_pts], 255)
 
+    if seg_mask is not None:
+        mask = cv2.bitwise_and(mask, seg_mask)
+
     valid_all = img[mask == 255]  # (N, 3) RGB
     if len(valid_all) < n_colors * 4:
         return _inactive_grid()
 
+    # 將 RGB 轉為 LAB 色彩空間進行 K-Means (LAB 距離更符合人類視覺)
+    valid_lab = cv2.cvtColor(np.uint8([valid_all]), cv2.COLOR_RGB2LAB)[0]
+
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.5)
-    _, _lbl, centers = cv2.kmeans(
-        np.float32(valid_all), n_colors, None, criteria, 5,
+    _, _lbl, centers_lab = cv2.kmeans(
+        np.float32(valid_lab), n_colors, None, criteria, 5,
         cv2.KMEANS_PP_CENTERS,
     )
+    
+    # 將分群中心從 LAB 轉回 RGB
+    centers = cv2.cvtColor(np.uint8([centers_lab]), cv2.COLOR_LAB2RGB)[0].astype(np.float32)
     # centers: (n_colors, 3) float32, RGB
 
     # 對調色盤做一次性飽和度提升（所有格子統一，保持色彩一致性）
@@ -297,7 +310,31 @@ def get_clothing_features(
     if not result.pose_landmarks or len(result.pose_landmarks) == 0:
         return {"ok": False, "error": "no_person_detected"}
 
-    lm = result.pose_landmarks[0]
+    raw_lm = result.pose_landmarks[0]
+    
+    # ── 時序平滑 (Temporal EMA) ──
+    global _prev_landmarks
+    if _prev_landmarks is None or len(_prev_landmarks) != len(raw_lm):
+        lm = raw_lm
+    else:
+        from types import SimpleNamespace
+        lm = []
+        for curr, prev in zip(raw_lm, _prev_landmarks):
+            vis = getattr(curr, "visibility", 1.0)
+            if vis > 0.5:
+                sx = _EMA_ALPHA * curr.x + (1 - _EMA_ALPHA) * prev.x
+                sy = _EMA_ALPHA * curr.y + (1 - _EMA_ALPHA) * prev.y
+                sz = _EMA_ALPHA * getattr(curr, "z", 0) + (1 - _EMA_ALPHA) * getattr(prev, "z", 0)
+                lm.append(SimpleNamespace(x=sx, y=sy, z=sz, visibility=vis))
+            else:
+                lm.append(prev)
+    _prev_landmarks = lm
+
+    # 取得 Segmentation Mask (轉為 0/255 uint8)
+    seg_mask_uint8 = None
+    if result.segmentation_masks and len(result.segmentation_masks) > 0:
+        mask_np = result.segmentation_masks[0].numpy_view()
+        seg_mask_uint8 = (mask_np > 0.5).astype(np.uint8) * 255
 
     # ── 關節點座標（正規化 0-1）──
     # 11=左肩 12=右肩 23=左髖 24=右髖 25=左膝 26=右膝
@@ -330,7 +367,10 @@ def get_clothing_features(
 
     # ── 下半身輪廓多邊形──
     # 使用 髖→膝 / 髖→踝 之間區段
-    if lkne[1] > lhip[1] and rkne[1] > rhip[1]:
+    lkne_vis = getattr(lm[25], "visibility", 1.0)
+    rkne_vis = getattr(lm[26], "visibility", 1.0)
+    
+    if lkne_vis > 0.5 and rkne_vis > 0.5 and lkne[1] > lhip[1] and rkne[1] > rhip[1]:
         # 正常偵測到膝蓋
         lower_poly = np.array([
             [lhip[0] + side_shrink,  lhip[1]],
@@ -350,9 +390,9 @@ def get_clothing_features(
 
     # ── 格柵取樣 ──
     # 上衣：32 欄 × 40 列（水平條紋/垂直條紋都能清楚捕捉）
-    cloth_grid = _sample_grid_with_mask(rgb, upper_poly, grid_cols=32, grid_rows=40)
+    cloth_grid = _sample_grid_with_mask(rgb, upper_poly, grid_cols=32, grid_rows=40, seg_mask=seg_mask_uint8)
     # 下半身：24 欄 × 30 列
-    lower_grid = _sample_grid_with_mask(rgb, lower_poly, grid_cols=24, grid_rows=30)
+    lower_grid = _sample_grid_with_mask(rgb, lower_poly, grid_cols=24, grid_rows=30, seg_mask=seg_mask_uint8)
 
     # ── 保留單色 fallback（取格柵 active 格的中位數）──
     def _grid_dominant(grid: Dict) -> Dict[str, Any]:
@@ -388,11 +428,19 @@ def get_clothing_features(
     forearm_col = _px_color(rgb, *forearm_pt)
     calf_col    = _px_color(rgb, *calf_pt)
     upper_arr   = np.array(upper_color["rgb"], dtype=float)
+    
+    # 取得簡單膚色基準 (從頸部/下巴附近取樣，0=鼻尖)
+    skin_pt = (lm[0].x, min(1.0, lm[0].y + 0.1))
+    skin_col = _px_color(rgb, *skin_pt, half=8)
 
     def _col_dist(a: np.ndarray, b: np.ndarray) -> float:
         return float(np.linalg.norm(a.astype(float) - b.astype(float)))
 
-    upper_type = "long_sleeve" if _col_dist(upper_arr, forearm_col) < 50.0 else "short_sleeve"
+    # 如果前臂顏色比衣服顏色更接近膚色，代表是短袖露出手臂
+    dist_to_skin = _col_dist(forearm_col, skin_col)
+    dist_to_shirt = _col_dist(forearm_col, upper_arr)
+    upper_type = "long_sleeve" if dist_to_shirt < dist_to_skin else "short_sleeve"
+    
     lower_type = "long_pants"  if _col_dist(np.array(lower_color["rgb"], dtype=float), calf_col) < 50.0 else "shorts"
 
     # ── 手臂/袖子顏色偵測（比照上衣邏輯，但針對袖子 ROI）──
