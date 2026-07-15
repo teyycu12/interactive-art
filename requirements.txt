@@ -1,4 +1,21 @@
+# PersonaFlow 後端相依套件
+# 安裝：pip install -r requirements.txt
+
+# Web / 通訊層（M3）
 Flask
 Flask-SocketIO
+python-socketio        # stress_test.py 的壓測 client 也用到
+websocket-client       # python-socketio 走 websocket transport 所需
+python-dotenv          # 讀取 .env 的 API 金鑰（見 .env.example）
+
+# 感知層（M1）
 mediapipe
 opencv-python
+numpy
+pillow                 # generate_avatar 影像解碼
+pillow-heif            # iPhone HEIC/HEIF 照片支援
+
+# AI 生成（M2）
+google-generativeai    # Gemini：服裝 / 臉部特徵分類
+openai                 # OpenRouter 相容 fallback client（見 vlm_module）
+requests
