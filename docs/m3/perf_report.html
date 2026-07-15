@@ -1,0 +1,269 @@
+<title>PersonaFlow · M3 效能量測報告</title>
+<style>
+  :root {
+    --paper: #f4f6f7; --panel: #ffffff; --ink: #0e1520; --ink-soft: #4a5765;
+    --line: #dde3e8; --signal: #158f82; --signal-soft: #7fc3bb;
+    --pass: #1f9d6b; --warn: #c98a1e; --miss: #8a94a0; --nodata: #9aa4b0;
+    --grid: #eef2f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0c1218; --panel: #131b23; --ink: #e8edf1; --ink-soft: #93a2b0;
+      --line: #223039; --signal: #34c0b0; --signal-soft: #1c5851;
+      --pass: #3ed08c; --warn: #e0a63e; --miss: #6c7783; --nodata: #5a6570;
+      --grid: #1a242c;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #f4f6f7; --panel: #ffffff; --ink: #0e1520; --ink-soft: #4a5765;
+    --line: #dde3e8; --signal: #158f82; --signal-soft: #7fc3bb;
+    --pass: #1f9d6b; --warn: #c98a1e; --miss: #8a94a0; --nodata: #9aa4b0; --grid: #eef2f4;
+  }
+  :root[data-theme="dark"] {
+    --paper: #0c1218; --panel: #131b23; --ink: #e8edf1; --ink-soft: #93a2b0;
+    --line: #223039; --signal: #34c0b0; --signal-soft: #1c5851;
+    --pass: #3ed08c; --warn: #e0a63e; --miss: #6c7783; --nodata: #5a6570; --grid: #1a242c;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+    line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  /* ── header / status strip ── */
+  header { border-bottom: 1px solid var(--line); padding-bottom: 20px; margin-bottom: 28px; }
+  .eyebrow {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--signal); margin: 0 0 8px;
+  }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; text-wrap: balance; }
+  .sub { color: var(--ink-soft); font-size: 14px; margin: 0; }
+  .range {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; color: var(--ink-soft); margin-top: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── metric grid ── */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-bottom: 32px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; position: relative; overflow: hidden;
+  }
+  .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--miss); }
+  .card.v-pass::before { background: var(--pass); }
+  .card.v-warn::before { background: var(--warn); }
+  .card.v-nodata::before { background: var(--nodata); opacity: 0.5; }
+  .card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .card-label {
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft);
+  }
+  .chip {
+    font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 600;
+    font-family: ui-monospace, monospace;
+  }
+  .chip-pass { background: color-mix(in srgb, var(--pass) 16%, transparent); color: var(--pass); }
+  .chip-warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  .chip-miss { background: color-mix(in srgb, var(--miss) 18%, transparent); color: var(--miss); }
+  .chip-nodata { background: color-mix(in srgb, var(--nodata) 15%, transparent); color: var(--nodata); }
+  .card-value {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 30px; font-weight: 600; margin: 10px 0 6px; letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .card-meta { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--ink-soft); }
+  .card-meta .tgt { font-family: ui-monospace, monospace; }
+
+  /* ── sections ── */
+  section { margin-bottom: 36px; }
+  h2 {
+    font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft);
+    margin: 0 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--line); font-weight: 600;
+  }
+  .chart-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+  canvas { display: block; width: 100%; height: auto; }
+  .chart-cap { font-size: 12px; color: var(--ink-soft); margin-top: 10px; font-family: ui-monospace, monospace; }
+
+  /* ── event table ── */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); font-weight: 600; }
+  td.ev { font-family: ui-monospace, monospace; color: var(--ink); }
+  td.num { text-align: right; font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; color: var(--signal); }
+
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-soft); }
+  footer code { font-family: ui-monospace, monospace; background: var(--grid); padding: 1px 6px; border-radius: 4px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .card { transition: none; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">PersonaFlow · M3 通訊與集中式狀態管理</p>
+    <h1>效能量測報告</h1>
+    <p class="sub">依技術架構文件第 6 節指標，從結構化事件 log 計算。</p>
+    <p class="range">量測區間　2026-07-14T22:53:40.010+08:00　→　2026-07-14T23:12:27.426+08:00　·　事件總數 2,402</p>
+  </header>
+
+  <div class="grid">
+      <article class="card v-nodata">
+        <div class="card-top">
+          <span class="card-label">生成延遲 p50</span>
+          <span class="chip chip-nodata">待實測</span>
+        </div>
+        <div class="card-value">待實測</div>
+        <div class="card-meta"><span class="tgt">目標 &lt; 5s</span><span class="det">p90 —　max —</span></div>
+      </article>
+      <article class="card v-nodata">
+        <div class="card-top">
+          <span class="card-label">CV 子流程 p50</span>
+          <span class="chip chip-nodata">待實測</span>
+        </div>
+        <div class="card-value">待實測</div>
+        <div class="card-meta"><span class="tgt">目標 &lt; 1s</span><span class="det">p90 —</span></div>
+      </article>
+      <article class="card v-nodata">
+        <div class="card-top">
+          <span class="card-label">VLM 子流程 p50</span>
+          <span class="chip chip-nodata">待實測</span>
+        </div>
+        <div class="card-value">待實測</div>
+        <div class="card-meta"><span class="tgt">目標 &lt; 5s</span><span class="det">p90 —　兩支 Gemini 並行</span></div>
+      </article>
+      <article class="card v-nodata">
+        <div class="card-top">
+          <span class="card-label">生成失敗率</span>
+          <span class="chip chip-nodata">待實測</span>
+        </div>
+        <div class="card-value">待實測</div>
+        <div class="card-meta"><span class="tgt">目標 &lt; 15%</span><span class="det">樣本 0 次</span></div>
+      </article>
+      <article class="card v-pass">
+        <div class="card-top">
+          <span class="card-label">併發承載量</span>
+          <span class="chip chip-pass">達標</span>
+        </div>
+        <div class="card-value">31</div>
+        <div class="card-meta"><span class="tgt">目標 ≥ 30</span><span class="det">同時在場峰值（含 system_bot）</span></div>
+      </article>
+      <article class="card v-pass">
+        <div class="card-top">
+          <span class="card-label">相遇事件</span>
+          <span class="chip chip-pass">達標</span>
+        </div>
+        <div class="card-value">2132</div>
+        <div class="card-meta"><span class="tgt">目標 —</span><span class="det">character_encounter 累計</span></div>
+      </article></div>
+
+  <section>
+    <h2>承載量時序 · swarm_summary</h2>
+    <div class="chart-panel">
+      <canvas id="loadChart" width="900" height="260"></canvas>
+      <p class="chart-cap">每 5 秒一筆的在場人數快照（實線）與同時相遇數（填色）。峰值 31 人。</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>事件分佈</h2>
+    <div class="chart-panel tbl-wrap">
+      <table>
+        <thead><tr><th>事件 event</th><th style="text-align:right">次數 count</th></tr></thead>
+        <tbody><tr><td class="ev">character_encounter</td><td class="num">2,132</td></tr><tr><td class="ev">swarm_summary</td><td class="num">126</td></tr><tr><td class="ev">connect</td><td class="num">37</td></tr><tr><td class="ev">disconnect</td><td class="num">37</td></tr><tr><td class="ev">join_swarm</td><td class="num">35</td></tr><tr><td class="ev">leave_swarm</td><td class="num">35</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    由 <code>backend/report_html.py</code> 從 <code>backend/logs/events-*.jsonl</code> 產生。
+    重跑：<code>.venv/bin/python backend/report_html.py --glob -o docs/m3/perf_report.html</code>。
+    生成延遲/失敗率若顯示「待實測」，跑 <code>bench_generate.py</code> 產生真數據後重跑本報告即可補上。
+  </footer>
+</div>
+
+<script>
+  const SERIES = [{"size": 1, "greeting": 0, "ts": "2026-07-14T22:53:40.010+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:53:45.082+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:53:50.181+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:53:55.273+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:00.278+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:05.284+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:10.374+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:15.382+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:20.398+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:25.475+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:30.560+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:35.650+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:40.741+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:45.825+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:50.904+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:54:55.978+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:01.073+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:06.163+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:11.252+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:16.340+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:21.416+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:26.501+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:31.602+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:36.684+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:41.774+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:46.779+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:51.790+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:55:56.869+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:01.964+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:07.055+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:12.063+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:17.163+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:22.260+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:27.269+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:32.273+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:37.364+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:42.367+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:47.453+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:52.544+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:56:57.553+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:02.560+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:07.620+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:12.701+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:17.797+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:22.890+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:27.898+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:32.980+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:38.063+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:43.117+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:48.136+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:53.163+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:57:58.241+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:03.281+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:08.376+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:13.475+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:18.481+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:23.504+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:28.550+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:33.608+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:38.688+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:43.762+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:48.825+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:53.882+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:58:58.949+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:59:04.030+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T22:59:09.088+08:00"}, {"size": 31, "greeting": 4, "ts": "2026-07-14T22:59:14.189+08:00"}, {"size": 31, "greeting": 21, "ts": "2026-07-14T22:59:19.269+08:00"}, {"size": 30, "greeting": 24, "ts": "2026-07-14T22:59:24.356+08:00"}, {"size": 28, "greeting": 26, "ts": "2026-07-14T22:59:29.445+08:00"}, {"size": 27, "greeting": 22, "ts": "2026-07-14T22:59:34.529+08:00"}, {"size": 25, "greeting": 22, "ts": "2026-07-14T22:59:39.601+08:00"}, {"size": 23, "greeting": 19, "ts": "2026-07-14T22:59:44.683+08:00"}, {"size": 22, "greeting": 20, "ts": "2026-07-14T22:59:49.746+08:00"}, {"size": 20, "greeting": 17, "ts": "2026-07-14T22:59:54.817+08:00"}, {"size": 18, "greeting": 16, "ts": "2026-07-14T22:59:59.890+08:00"}, {"size": 17, "greeting": 16, "ts": "2026-07-14T23:00:04.958+08:00"}, {"size": 15, "greeting": 9, "ts": "2026-07-14T23:00:10.055+08:00"}, {"size": 13, "greeting": 10, "ts": "2026-07-14T23:00:15.110+08:00"}, {"size": 12, "greeting": 8, "ts": "2026-07-14T23:00:20.197+08:00"}, {"size": 10, "greeting": 5, "ts": "2026-07-14T23:00:25.260+08:00"}, {"size": 7, "greeting": 4, "ts": "2026-07-14T23:00:30.348+08:00"}, {"size": 6, "greeting": 4, "ts": "2026-07-14T23:00:35.391+08:00"}, {"size": 4, "greeting": 2, "ts": "2026-07-14T23:00:40.409+08:00"}, {"size": 2, "greeting": 0, "ts": "2026-07-14T23:00:45.514+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:00:50.620+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:00:55.707+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:00.801+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:05.882+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:10.962+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:15.962+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:21.066+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:26.070+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:31.136+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:36.239+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:41.246+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:46.336+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:51.337+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:01:56.431+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:01.524+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:06.593+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:11.696+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:16.776+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:21.875+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:26.951+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:32.034+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:37.104+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:42.202+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:47.210+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:52.277+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:02:57.371+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:03:02.447+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:03:07.449+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:03:12.526+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:03:17.613+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:11:36.779+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:11:41.862+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:11:46.942+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:11:52.041+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:11:57.118+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:12:02.217+08:00"}, {"size": 6, "greeting": 0, "ts": "2026-07-14T23:12:07.221+08:00"}, {"size": 4, "greeting": 0, "ts": "2026-07-14T23:12:12.247+08:00"}, {"size": 3, "greeting": 0, "ts": "2026-07-14T23:12:17.252+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:12:22.338+08:00"}, {"size": 1, "greeting": 0, "ts": "2026-07-14T23:12:27.426+08:00"}];
+
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+  function drawLoad() {
+    const cv = document.getElementById('loadChart');
+    if (!cv) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth, H = 260;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const ctx = cv.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, H);
+
+    const pad = { l: 40, r: 16, t: 16, b: 28 };
+    const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+    const n = SERIES.length;
+
+    const gridC = cssVar('--grid'), inkSoft = cssVar('--ink-soft');
+    const signal = cssVar('--signal'), signalSoft = cssVar('--signal-soft');
+
+    if (n === 0) {
+      ctx.fillStyle = inkSoft; ctx.font = '13px ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('無 swarm_summary 資料 — 跑一次壓測即可產生', W / 2, H / 2);
+      return;
+    }
+
+    const maxSize = Math.max(5, ...SERIES.map(s => s.size));
+    const x = i => pad.l + (n <= 1 ? iw / 2 : (i / (n - 1)) * iw);
+    const y = v => pad.t + ih - (v / maxSize) * ih;
+
+    // y grid + labels
+    ctx.strokeStyle = gridC; ctx.fillStyle = inkSoft;
+    ctx.font = '11px ui-monospace, monospace'; ctx.textAlign = 'right';
+    const ticks = 4;
+    for (let t = 0; t <= ticks; t++) {
+      const val = Math.round(maxSize * t / ticks);
+      const yy = y(val);
+      ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(W - pad.r, yy); ctx.stroke();
+      ctx.fillText(val, pad.l - 6, yy + 4);
+    }
+    // target line at 30
+    if (maxSize >= 30 || true) {
+      const yy = y(30);
+      if (yy > pad.t && yy < pad.t + ih) {
+        ctx.save(); ctx.strokeStyle = signal; ctx.setLineDash([4, 4]); ctx.globalAlpha = 0.6;
+        ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(W - pad.r, yy); ctx.stroke();
+        ctx.restore();
+        ctx.fillStyle = signal; ctx.textAlign = 'left'; ctx.font = '10px ui-monospace, monospace';
+        ctx.fillText('目標 30', pad.l + 4, yy - 4);
+      }
+    }
+
+    // greeting fill (area)
+    ctx.beginPath();
+    ctx.moveTo(x(0), y(0));
+    SERIES.forEach((s, i) => ctx.lineTo(x(i), y(s.greeting)));
+    ctx.lineTo(x(n - 1), y(0)); ctx.closePath();
+    ctx.fillStyle = signalSoft; ctx.globalAlpha = 0.35; ctx.fill(); ctx.globalAlpha = 1;
+
+    // size line
+    ctx.beginPath();
+    SERIES.forEach((s, i) => (i ? ctx.lineTo(x(i), y(s.size)) : ctx.moveTo(x(i), y(s.size))));
+    ctx.strokeStyle = signal; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+
+    // endpoint dot
+    const last = SERIES[n - 1];
+    ctx.beginPath(); ctx.arc(x(n - 1), y(last.size), 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = signal; ctx.fill();
+  }
+
+  drawLoad();
+  let raf;
+  window.addEventListener('resize', () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(drawLoad); });
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  mq.addEventListener && mq.addEventListener('change', drawLoad);
+  new MutationObserver(drawLoad).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+</script>
