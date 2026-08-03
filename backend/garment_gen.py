@@ -20,7 +20,7 @@ import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageDraw
 
 try:
     from openai import OpenAI  # type: ignore
@@ -99,7 +99,55 @@ def _pil_to_data_url(pil: PILImage.Image) -> str:
     return f"data:image/png;base64,{b64}"
 
 
-def _remove_white_background(png_b64: str, tolerance: int = 18) -> str:
+def _get_shield_mask(
+    poly_norm: Optional[np.ndarray],
+    crop_box: Tuple[int, int, int, int],
+    img_w: int,
+    img_h: int,
+    target_size: int = 1024,
+) -> Optional[np.ndarray]:
+    """Create a boolean mask of target_size x target_size where the body polygon is.
+    Pixels inside this mask should never be made transparent.
+    """
+    if poly_norm is None or len(poly_norm) < 3:
+        return None
+
+    try:
+        mask = np.zeros((target_size, target_size), dtype=bool)
+        x1, y1, x2, y2 = crop_box
+        cw, ch = x2 - x1, y2 - y1
+        side = max(cw, ch)
+        if side <= 0:
+            return None
+
+        offset_x = (side - cw) // 2
+        offset_y = (side - ch) // 2
+        scale = target_size / side
+
+        # Map normalized poly coordinates to square coordinates
+        px = poly_norm * np.array([img_w, img_h], dtype=np.float32)
+        square_pts = []
+        for pt in px:
+            sx = int(((pt[0] - x1) + offset_x) * scale)
+            sy = int(((pt[1] - y1) + offset_y) * scale)
+            sx = max(0, min(target_size - 1, sx))
+            sy = max(0, min(target_size - 1, sy))
+            square_pts.append((sx, sy))
+
+        # Draw polygon using PIL
+        img_mask = PILImage.new("L", (target_size, target_size), 0)
+        draw = ImageDraw.Draw(img_mask)
+        draw.polygon(square_pts, fill=255)
+
+        # Convert to numpy boolean array
+        mask = np.array(img_mask) > 128
+        return mask
+    except Exception as e:
+        print(f"[garment_gen] failed to build shield mask: {e}")
+        return None
+
+
+def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Optional[np.ndarray] = None) -> str:
     """Flood-fill from the four corners turning near-white pixels transparent.
 
     Connected white regions touching any edge become alpha=0; white pixels
@@ -114,6 +162,16 @@ def _remove_white_background(png_b64: str, tolerance: int = 18) -> str:
         # Mask of "near-white" pixels
         rgb = arr[:, :, :3]
         near_white = np.all(rgb >= (255 - tolerance), axis=-1)
+
+        # Protect shielded pixels (e.g. white clothes / skin / shoes)
+        if shield_mask is not None:
+            if shield_mask.shape != near_white.shape:
+                shield_pil = PILImage.fromarray(shield_mask.astype(np.uint8) * 255).resize(
+                    (w, h), PILImage.NEAREST
+                )
+                shield_mask = np.array(shield_pil) > 128
+            near_white = near_white & ~shield_mask
+
         # BFS from the border so logos / interior white stay opaque
         from collections import deque
         visited = np.zeros((h, w), dtype=bool)
@@ -181,34 +239,29 @@ _NEGATIVE = (
     "(unless the scarf IS the outfit). "
     "ABSOLUTELY NO background: NO walls, NO bricks, NO tiles, NO floor, NO "
     "scenery, NO patterns behind the garment — everything outside the garment "
-    "silhouette must be pure solid white #FFFFFF, completely uniform."
+    "silhouette must be pure solid white #FFFFFF, completely uniform. "
+    "NO human skin texture, NO realistic rendering, NO 3D shadows, NO lighting gradients."
 )
 
 _BODY_PROMPT = (
-    "Convert this photograph into a LEGO minifigure body wearing this outfit "
-    "(NECK DOWN — NO head, NO face, NO neck).\n\n"
+    "Create a clean, premium LEGO minifigure torso and legs graphic based on the clothing in this photograph.\n\n"
 
-    "STRICT EXCLUSIONS:\n"
-    "- NO head, NO face, NO neck stud, NO collar opening showing skin.\n"
-    "- NO hands (each arm ends FLAT at the wrist — hands will be added later).\n"
-    "- NO feet / NO shoes (each leg ends FLAT at the ankle — feet will be added later).\n"
-    "- NO skin pixels anywhere; the outfit fully covers the visible body.\n\n"
+    "### MANDATORY EXCLUSIONS:\n"
+    "- NO head, NO face, NO neck stud, NO collar opening showing human skin.\n"
+    "- NO hands (each arm must end flat at the wrist).\n"
+    "- NO feet, NO shoes (each leg must end flat at the ankle).\n"
+    "- NO skin pixels anywhere; the clothing must fully cover the body.\n\n"
 
-    "Preserve EXACTLY the outfit's colour, knit/weave pattern, buttons, "
-    "collar shape, hood, drawstrings, jeans wash and distressing.\n\n"
+    "### MANDATORY PROPORTIONS:\n"
+    "- Torso: Perfect LEGO trapezoid shape (wider at the bottom, narrower at the top).\n"
+    "- Arms: Two short, straight arms attached at the top corners of the torso, angled outward at ~15 degrees. Sleeves matching the long/short sleeve style of the photo.\n"
+    "- Legs: Two separate rectangular LEGO legs standing straight with a clear gap between them.\n\n"
 
-    "MANDATORY LEGO minifigure proportions (front-facing, perfectly symmetric):\n"
-    "- Trapezoidal torso (wider at the bottom than the top), height ≈ width.\n"
-    "- Two short straight arms attached at the top corners of the torso, "
-    "angled outward ~15 degrees from vertical, length ≈ torso height. "
-    "Sleeve fabric matches the photo (long-sleeve or short-sleeve as seen).\n"
-    "- TWO separate rectangular legs below the torso with a CLEAR gap "
-    "between them. Both legs of equal length, ending flat at the ankle.\n\n"
-
-    "Style: cel-shaded flat vector illustration, crisp black outlines, "
-    "solid block colours. Centred, fills most of the canvas. "
-    "Pure solid white (#FFFFFF) background filling every empty pixel so it "
-    "can be keyed out. No shadows on the background. "
+    "### ART STYLE GUIDELINES:\n"
+    "- Flat 2D vector graphic pop-art illustration style, official LEGO cartoon design.\n"
+    "- Clean, bold, consistent black outlines around all parts.\n"
+    "- Pure, solid, vibrant colors matching the photo. No gradients, no gloss, no highlights.\n"
+    "- Perfectly centered on a pure solid white background (#FFFFFF) with absolutely no shadows, floor reflections, or background texture.\n\n"
     + _NEGATIVE
 )
 
@@ -323,54 +376,23 @@ _FULL_CHARACTER_NEGATIVE = (
 )
 
 _FULL_CHARACTER_PROMPT_TEMPLATE = (
-    "Convert this photograph into a COMPLETE LEGO minifigure illustration "
-    "(head + hair + face + torso + arms + hands + legs + feet — the full "
-    "character in a single image).\n\n"
+    "Create a complete premium LEGO minifigure illustration based on the person in this photograph.\n\n"
 
-    "DETECTED ATTRIBUTES (match faithfully):\n"
+    "### DETECTED CHARACTER ATTRIBUTES:\n"
     "{attrs}\n\n"
 
-    "MANDATORY POSE — for future skeletal rigging:\n"
-    "- Strict front view, character facing the viewer head-on, perfectly symmetric.\n"
-    "- Stand straight in a neutral T-pose-like stance: both arms hanging "
-    "naturally at the sides, angled outward ~15 degrees from vertical "
-    "(NOT raised, NOT crossed, NOT touching anything).\n"
-    "- Both legs straight, parallel, slightly apart with a visible gap.\n"
-    "- Head facing forward, no tilt. Neutral expression unless the photo "
-    "shows a clear smile.\n\n"
+    "### MANDATORY LEGO DESIGN RULES:\n"
+    "1. **Proportions & Pose**: Strict front-facing view, perfectly centered and symmetric. Neutral T-pose-like stance: arms angled ~15 degrees outward at the sides, legs standing straight and parallel with a clear vertical gap between them.\n"
+    "2. **Head & Face**: Smooth cylindrical LEGO-style head in the specified skin tone. Simple clean facial features: two glossy black dot eyes, clean eyebrows, and a pleasant simple mouth. Hair piece must sit cleanly on top of the head in the matching hair style and color.\n"
+    "3. **Torso & Outerwear**: Trapezoidal LEGO torso wearing the outfit. Ensure the torso garment is clean and uniform in color. Draw clear printed lines for shirts, zippers, buttons, or jacket collars. Hands must be classic yellow/flesh LEGO claw hands attached at the wrist.\n"
+    "4. **Legs & Pants**: Two separate rectangular LEGO legs of equal length in the matching pants color. Keep the pants uniform with no patchwork.\n"
+    "5. **Shoes & Footwear**: Mandatory distinct shoes at the bottom of each leg. Draw them as clean rectangular slabs (black, grey, or brown) slightly wider than the leg, with a clean horizontal seam line separating the shoe from the pants.\n\n"
 
-    "MANDATORY LEGO minifigure proportions:\n"
-    "- Yellow-style cylindrical head with simple cel-shaded face (two dot eyes, "
-    "small mouth, optional eyebrows). Head colour must match the detected "
-    "skin tone, NOT default yellow.\n"
-    "- Hair piece sits on top of the head, matching the detected hair colour "
-    "and style.\n"
-    "- Trapezoidal torso (wider at the bottom than the top), height ≈ width, "
-    "wearing the detected outfit. The torso garment MUST be ONE uniform "
-    "solid colour across the entire chest and back (only the collar / button "
-    "placket / cuffs may differ as thin trim lines). NO mid-garment patches, "
-    "NO random coloured squares, NO different-coloured pocket area.\n"
-    "- Collar / neckline is a single simple shape with ONE consistent colour, "
-    "either matching the top garment or slightly darker as a trim — never "
-    "multiple competing colours.\n"
-    "- Two short straight arms attached at the top corners of the torso, "
-    "sleeves matching the photo (long or short). Each sleeve is ONE uniform "
-    "colour matching the top garment.\n"
-    "- LEGO claw-style hands at the wrist ends, in the detected skin tone.\n"
-    "- Two separate rectangular legs with a clear visible gap between them, "
-    "wearing the detected lower garment. BOTH legs MUST be the exact same "
-    "uniform colour — NO patch, NO swatch, NO contrasting square anywhere "
-    "on the pants.\n"
-    "- MANDATORY visible footwear: at the bottom of EACH leg, draw a flat "
-    "LEGO shoe — a clearly distinct dark slab (dark grey / black / brown) "
-    "that is WIDER than the leg, with a thin horizontal seam line where "
-    "the shoe meets the leg. The shoe must be obviously a separate piece "
-    "from the leg, not just the leg ending. NEVER omit the shoes.\n\n"
-
-    "Style: cel-shaded flat vector illustration, crisp black outlines, "
-    "solid block colours, no gradients. Centred, fills most of the canvas. "
-    "Pure solid white (#FFFFFF) background filling every empty pixel "
-    "so it can be keyed out. No shadows under the figure.\n\n"
+    "### ART STYLE GUIDELINES:\n"
+    "- Cel-shaded flat vector illustration, premium minimalist pop-art concept style.\n"
+    "- Thick, clean, consistent black outlines around all body parts and details.\n"
+    "- Solid vibrant colors, flat design with minimal/no gradients and no realistic shadows.\n"
+    "- The character must be centered on a pure solid white background (#FFFFFF) with no shadows, text, or border lines.\n\n"
     + _FULL_CHARACTER_NEGATIVE
 )
 
@@ -451,13 +473,17 @@ def generate_full_character_png(
             rgb, body_poly_norm, pad_ratio=0.22, pad_ratio_x=0.30,
         )
         data_url = _pil_to_data_url(square)
+
+        # Generate shield mask to prevent eating white clothes/shoes
+        shield_mask = _get_shield_mask(body_poly_norm, (x1, y1, x2, y2), w, h, target_size=1024)
+
         prompt = _FULL_CHARACTER_PROMPT_TEMPLATE.format(
             attrs=_attr_lines(face_data, outfit_data)
         )
         b64 = _call_image_chat(data_url, prompt, model=model)
         if b64:
             if remove_bg:
-                b64 = _remove_white_background(b64)
+                b64 = _remove_white_background(b64, shield_mask=shield_mask)
             out["body_png"] = b64
             out["body_bbox"] = [x1 / w, y1 / h, x2 / w, y2 / h]
             out["ok"] = True
@@ -508,9 +534,13 @@ def generate_body_png(
             rgb, body_poly_norm, pad_ratio=0.08, pad_ratio_x=0.30,
         )
         data_url = _pil_to_data_url(square)
+
+        # Generate shield mask to prevent eating white clothes/shoes
+        shield_mask = _get_shield_mask(body_poly_norm, (x1, y1, x2, y2), w, h, target_size=1024)
+
         b64 = _call_image_chat(data_url, _BODY_PROMPT)
         if b64:
-            b64 = _remove_white_background(b64)
+            b64 = _remove_white_background(b64, shield_mask=shield_mask)
             out["body_png"] = b64
             out["body_bbox"] = [x1 / w, y1 / h, x2 / w, y2 / h]
             out["ok"] = True
@@ -531,40 +561,29 @@ def generate_body_png(
 # ─────────────────────────────────────────────────────────────────────────────
 
 _REFINE_PROMPT = (
-    "You are refining a LEGO minifigure illustration. You are given TWO images:\n"
+    "Refine this LEGO minifigure illustration. You are given TWO images:\n"
     "  • Image 1: the ORIGINAL photograph of the person (detail reference).\n"
-    "  • Image 2: a DRAFT LEGO minifigure illustration of that same person "
-    "(composition lock — pose, proportions, colours, background placement).\n\n"
+    "  • Image 2: a DRAFT LEGO minifigure illustration of that same person (composition lock — pose, proportions, colours, background placement).\n\n"
 
-    "TASK: produce an improved version of Image 2 with sharper, more refined "
-    "detail, while STRICTLY preserving Image 2's composition.\n\n"
+    "TASK: Produce a sharper, cleaner, premium version of Image 2. STRICTLY preserve the pose, proportions, layout, and white background of Image 2, while refining outlines and detail quality.\n\n"
 
-    "DETECTED ATTRIBUTES (must still match):\n"
+    "### DETECTED ATTRIBUTES (must match):\n"
     "{attrs}\n\n"
 
-    "STRICT PRESERVATION (do NOT change from Image 2):\n"
-    "- Overall pose: strict front view, T-pose-like stance, arms at ~15° outward, both legs straight with a visible gap.\n"
-    "- LEGO minifigure proportions and the position / size of head, torso, arms, legs, feet.\n"
-    "- The dominant garment colours (top, lower, hair, skin) from Image 2.\n"
-    "- Pure solid white (#FFFFFF) background filling every empty pixel.\n"
-    "- Flat cel-shaded vector style with crisp black outlines (NOT 3D, NOT photo).\n\n"
+    "### STRICT CONSTRAINTS (do NOT change from Image 2):\n"
+    "- Overall pose: Strict front view, arms at ~15° outward, both legs straight with a visible gap.\n"
+    "- LEGO proportions and the position/size of head, torso, arms, legs, and feet.\n"
+    "- Dominant garment colors from Image 2.\n"
+    "- Flat cel-shaded vector style with clean black outlines (NOT 3D, NOT photorealistic).\n"
+    "- Pure solid white (#FFFFFF) background.\n\n"
 
-    "IMPROVEMENTS TO MAKE (refine, do NOT redesign):\n"
-    "- Face: sharpen and cleanly redraw the two dot eyes, eyebrows, and mouth "
-    "as crisp simple shapes — symmetrical, clearly readable, no smudging.\n"
-    "- Hair: clean outline of the hair piece, clear boundary between hair and head, "
-    "consistent single hair colour matching Image 2.\n"
-    "- Top garment: tighten the silhouette and outline, ensure ONE uniform colour "
-    "across chest / back / sleeves (collar or thin trim line may be a slightly darker "
-    "shade — never random patches).\n"
-    "- Lower garment: same uniform-colour rule for both legs, no patches or swatches.\n"
-    "- Shoes: at the bottom of EACH leg draw a clearly distinct dark slab (dark grey / "
-    "black / brown) wider than the leg with a thin horizontal seam line above it. "
-    "NEVER omit the shoes.\n"
-    "- Black outlines: clean, uniform stroke width around every part.\n\n"
-
-    "Output: ONE refined image, same square aspect, same centred layout as Image 2, "
-    "pure white background.\n\n"
+    "### HIGH-QUALITY REFINEMENTS TO MAKE:\n"
+    "1. **Face & Eyes**: Symmetrical, cleanly redrawn facial features. Sharp dot eyes, perfect clean eyebrows and mouth. No smudging.\n"
+    "2. **Hair & Head**: Extremely clean outline of the hair piece sitting perfectly on the head, with a clear boundary. Consistent single hair color matching Image 2.\n"
+    "3. **Torso & Outerwear**: Crisp, tight garment silhouette and outlines. Uniform color across chest, back, and sleeves. Draw clean buttons, zippers, or pocket seams.\n"
+    "4. **Legs & Pants**: Tight rectangular leg outlines, uniform color for both legs.\n"
+    "5. **Shoes & Footwear**: Sharpen the rectangular dark shoe slabs (black, grey, or brown) slightly wider than the leg, with a clean horizontal seam line separating them from the pants. NEVER omit shoes.\n"
+    "6. **Line Art**: Ensure all outlines are clean, uniform, and sharp black vector-like strokes.\n\n"
     + _FULL_CHARACTER_NEGATIVE
 )
 
@@ -615,12 +634,16 @@ def generate_refine_character_png(
         )
         orig_url = _pil_to_data_url(square)
         base_url = f"data:image/png;base64,{base_b64}"
+
+        # Generate shield mask to prevent eating white clothes/shoes
+        shield_mask = _get_shield_mask(body_poly_norm, (x1, y1, x2, y2), w, h, target_size=1024)
+
         prompt = _REFINE_PROMPT.format(
             attrs=_attr_lines(face_data, outfit_data)
         )
         b64 = _call_image_chat_multi([orig_url, base_url], prompt, model=model)
         if b64:
-            b64 = _remove_white_background(b64)
+            b64 = _remove_white_background(b64, shield_mask=shield_mask)
             out["body_png"] = b64
             out["body_bbox"] = [x1 / w, y1 / h, x2 / w, y2 / h]
             out["ok"] = True

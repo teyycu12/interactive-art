@@ -14,8 +14,8 @@
 // ─── Tuning knobs ────────────────────────────────────────────────────────────
 const CAMERA_CORRECTION  = 1.18; // compensates for camera underexposure
 const CLUSTER_THRESHOLD  = 22;   // max per-edge RGB distance to merge cells
-const SAT_BOOST          = 2.2;  // saturation multiplier (HSL)
-const CONTRAST_L_MIN     = 0.32; // after stretch: darkest active cell → this luma
+const SAT_BOOST          = 1.6;  // saturation multiplier (HSL)
+const CONTRAST_L_MIN     = 0.20; // after stretch: darkest active cell → this luma
 const CONTRAST_L_MAX     = 0.82; // after stretch: brightest active cell → this luma
 const HAIR_CELL_DIST     = 40;   // cell filtered if within this RGB dist of hairColor
 const HAIR_SHIRT_MIN     = 35;   // skip hair filter when shirt≈hair (dark shirt + dark hair)
@@ -52,31 +52,61 @@ function drawLegoCharacter(person) {
     [rLegLeft + legW, legTop + legH], [rLegLeft, legTop + legH],
   ];
 
+  // ── Walking animation state ──────────────────────────────────────
+  const vx    = (person.vel && person.vel.x) || 0;
+  const vy    = (person.vel && person.vel.y) || 0;
+  const speed = Math.hypot(vx, vy);
+  const isWalking    = speed > 0.3;
+  const isMovingRight = vx >= 0;
+  if (isWalking) person.walkPhase = ((person.walkPhase || 0) + speed * 0.12);
+  const wp     = person.walkPhase || 0;
+  const swing  = isWalking ? Math.sin(wp) : 0;
+  const armDeg = 22 * swing;   // arm swing in degrees
+  const legDeg = 20 * swing;   // leg swing in degrees
+  const leftFront = isMovingRight; // left limbs closer to viewer when moving right
+  const bounce = isWalking ? Math.abs(Math.sin(wp)) * 3 * s : 0;
+
+  // Limb angles: arms counter-swing relative to same-side leg (natural gait)
+  // Positive rotation = clockwise in p5, pivot at limb top
+  const lArmDeg =  armDeg;  // left arm forward when swing > 0
+  const rArmDeg = -armDeg;  // right arm backward when swing > 0
+  const lLegDeg = -legDeg;  // left leg backward when swing > 0
+  const rLegDeg =  legDeg;  // right leg forward when swing > 0
+
   // ── Grid pipeline ────────────────────────────────────────────────
-  //   torso: hair-filter → cluster → enhance → bilateral symmetry
-  //   legs:  cluster → enhance  (no symmetry; mirrorX handles it per-leg)
   const clothGrid = person.clothGrid
     ? _makeSymmetric(_enhanceGrid(_clusterGrid(
         _filterHairCells(person.clothGrid, person.hairColor, person.innerColor)
       )))
     : null;
-  const lowerGrid = person.lowerGrid
+  // Leg grid only works with static (non-rotated) geometry; skip while walking
+  const lowerGrid = !isWalking && person.lowerGrid
     ? _enhanceGrid(_clusterGrid(
         _filterShirtFromLower(person.lowerGrid, person.innerColor, person.lowerColor)
       ))
     : null;
 
   // ── Solid colors for areas without grid data (arms, fallback) ───
-  const [br, bg, bb] = _enhanceSolid(person.innerColor);
-  const [lr, lg, lb] = _enhanceSolid(person.lowerColor);
-  const bodyColor = color(br, bg, bb);
-  const legColor  = color(lr, lg, lb);
-  // Detected skin tone (VLM), falls back to anime-default when unavailable
-  const skinColor = color(person.skinColor.r, person.skinColor.g, person.skinColor.b);
+  const [br, bg2, bb] = _enhanceSolid(person.innerColor);
+  const [lr, lg,  lb] = _enhanceSolid(person.lowerColor);
+  const bodyColor = color(br, bg2, bb);
+  const legColor  = color(lr, lg,  lb);
+  // Detected skin tone (VLM), falls back to default when unavailable
+  const skinColor = person.skinColor 
+    ? color(person.skinColor.r, person.skinColor.g, person.skinColor.b) 
+    : color(255, 204, 0);
 
-  // Adaptive outline: light if body is still dark after enhancement
-  const bodyOutline = _luma(br, bg, bb) < 0.42 ? color(205, 205, 205) : color(0);
-  const legOutline  = _luma(lr, lg, lb) < 0.42 ? color(205, 205, 205) : color(0);
+  const hasOuter  = person.outerType && person.outerType !== 'none' && person.outerColor;
+  const armSource = person.armColor || (hasOuter ? person.outerColor : person.innerColor);
+  const [ar, ag, ab] = _enhanceSolid(armSource);
+  const armColor  = color(ar, ag, ab);
+  // Darker variants for back limbs (depth illusion, same as boids_concept.html)
+  const armColorDk = color(Math.round(ar * 0.6), Math.round(ag * 0.6), Math.round(ab * 0.6));
+  const legColorDk = color(Math.round(lr * 0.6), Math.round(lg * 0.6), Math.round(lb * 0.6));
+
+  const armOutline  = _luma(ar, ag, ab) < 0.42 ? color(205, 205, 205) : color(0);
+  const bodyOutline = _luma(br, bg2, bb) < 0.42 ? color(205, 205, 205) : color(0);
+  const legOutline  = _luma(lr, lg,  lb) < 0.42 ? color(205, 205, 205) : color(0);
 
   strokeJoin(ROUND); strokeCap(ROUND);
   strokeWeight(2 * s);
@@ -168,114 +198,124 @@ function drawLegoCharacter(person) {
     return;
   }
 
-  // ══ PASS A – Solid fills ═══════════════════════════════════════
+  // ── Limb draw helpers (closures over geometry/colors above) ─────
 
-  fill(bodyColor); stroke(bodyOutline);
-  beginShape();
-  for (const [vx, vy] of torsoPoly) vertex(vx, vy);
-  endShape(CLOSE);
+  // Draw one arm: pivotX = shoulder X, deg = rotation in degrees,
+  // fc/oc = fill/outline colors, isLeft = left vs right geometry
+  const _drawArm = (pivotX, deg, fc, oc, isLeft) => {
+    push();
+    translate(pivotX, shldY);
+    rotate(radians(deg));
+    fill(fc); stroke(oc); rectMode(CORNER);
+    if (isLeft) {
+      rect(-aW, 0, aW, aL, 5 * s);
+      translate(-aW / 2, aL + 5 * s);
+    } else {
+      rect(0, 0, aW, aL, 5 * s);
+      translate(aW / 2, aL + 5 * s);
+    }
+    _legoHand(s, skinColor, oc);
+    pop();
+  };
 
-  fill(legColor); stroke(legOutline);
-  rect(lLegCx, legTop + legH / 2, legW, legH);
-  rect(rLegCx, legTop + legH / 2, legW, legH);
-  // Feet always solid legColor
-  rect(lLegCx, legTop + legH + footH / 2, legW + 2 * s, footH, 2 * s);
-  rect(rLegCx, legTop + legH + footH / 2, legW + 2 * s, footH, 2 * s);
+  // Draw one leg: pivotX = hip X, deg = rotation, fc/oc = fill/outline
+  const _drawLeg = (pivotX, deg, fc, oc) => {
+    push();
+    translate(pivotX, legTop);
+    rotate(radians(deg));
+    fill(fc); stroke(oc); rectMode(CENTER);
+    rect(0, legH / 2, legW, legH);
+    rect(0, legH + footH / 2, legW + 2 * s, footH, 2 * s);
+    pop();
+  };
 
-  // ══ PASS B – Sprite overlay (OpenAI) OR grid overlay (CV fallback) ═══
-
-  const upperSpriteReady = person.clothSprite && person.clothSprite.width > 0;
-  const lowerSpriteReady = person.lowerSprite && person.lowerSprite.width > 0;
-
-  if (upperSpriteReady) {
-    _drawClothSprite(drawingContext, torsoPoly, person.clothSprite.canvas || person.clothSprite.elt);
-  } else if (clothGrid) {
-    _drawClothGrid(drawingContext, torsoPoly, clothGrid);
-  }
-
-  if (lowerSpriteReady) {
-    // Sprite is a single PNG showing both legs; draw it once across the
-    // combined leg region (including the centre gap) so we don't double-render.
-    const spriteEl = person.lowerSprite.canvas || person.lowerSprite.elt;
-    const combinedLegsPoly = [
-      [lLegLeft,         legTop],
-      [rLegLeft + legW,  legTop],
-      [rLegLeft + legW,  legTop + legH],
-      [lLegLeft,         legTop + legH],
-    ];
-    _drawClothSprite(drawingContext, combinedLegsPoly, spriteEl);
-  } else if (lowerGrid) {
-    _drawClothGrid(drawingContext, lLegPoly, lowerGrid, true);
-    _drawClothGrid(drawingContext, rLegPoly, lowerGrid, false);
-  }
-
-  // ══ PASS C – Outlines on top of grid ══════════════════════════
-
-  noFill();
-  stroke(bodyOutline);
-  beginShape();
-  for (const [vx, vy] of torsoPoly) vertex(vx, vy);
-  endShape(CLOSE);
-  stroke(legOutline);
-  rect(lLegCx, legTop + legH / 2, legW, legH);
-  rect(rLegCx, legTop + legH / 2, legW, legH);
-
-  // ══ PASS D – Arms, head, face ══════════════════════════════════
-
-  // Pre-compute sprite slices for arms (used only when upper sprite is ready).
-  // Prompt asks for T-shape flat-lay: torso centred, sleeves to far left/right.
-  // → left arm samples the left ~25% of the sprite, right arm the right ~25%.
-  const upperSprEl = upperSpriteReady ? (person.clothSprite.canvas || person.clothSprite.elt) : null;
-  const sliceW = upperSprEl ? upperSprEl.width * 0.25 : 0;
-  const sliceH = upperSprEl ? upperSprEl.height : 0;
-  const rightSliceX = upperSprEl ? upperSprEl.width * 0.75 : 0;
-
+  // ── Apply body bounce, then draw in depth order ──────────────────
   push();
-  translate(-tTop / 2, shldY); rotate(radians(15));
-  rectMode(CORNER);
-  if (upperSprEl) {
-    // Texture-only fill, no opaque rect underneath
-    const armPoly = [[-aW, 0], [0, 0], [0, aL], [-aW, aL]];
-    _drawClothSpriteSlice(drawingContext, armPoly, upperSprEl, 0, 0, sliceW, sliceH);
-    noFill(); stroke(bodyOutline);
-    rect(-aW, 0, aW, aL, 5 * s);
-  } else {
-    fill(bodyColor); stroke(bodyOutline);
-    rect(-aW, 0, aW, aL, 5 * s);
-  }
-  translate(-aW / 2, aL + 5 * s);
-  _legoHand(s, skinColor, bodyOutline);
-  pop();
+  translate(0, -bounce);
 
-  push();
-  translate(tTop / 2, shldY); rotate(radians(-15));
-  rectMode(CORNER);
-  if (upperSprEl) {
-    const armPoly = [[0, 0], [aW, 0], [aW, aL], [0, aL]];
-    _drawClothSpriteSlice(drawingContext, armPoly, upperSprEl, rightSliceX, 0, sliceW, sliceH);
-    noFill(); stroke(bodyOutline);
-    rect(0, 0, aW, aL, 5 * s);
-  } else {
-    fill(bodyColor); stroke(bodyOutline);
-    rect(0, 0, aW, aL, 5 * s);
-  }
-  translate(aW / 2, aL + 5 * s);
-  _legoHand(s, skinColor, bodyOutline);
-  pop();
+  if (isWalking) {
+    // ── Depth-sorted walk: back arm → back leg → torso → front leg → front arm ──
 
+    if (leftFront) {
+      // Right side is back
+      _drawArm(tTop / 2, rArmDeg, armColorDk, armOutline, false);
+      _drawLeg(rLegCx,   rLegDeg, legColorDk, legOutline);
+    } else {
+      // Left side is back
+      _drawArm(-tTop / 2, lArmDeg, armColorDk, armOutline, true);
+      _drawLeg(lLegCx,    lLegDeg, legColorDk, legOutline);
+    }
+
+    // Torso
+    fill(bodyColor); stroke(bodyOutline);
+    beginShape();
+    for (const [px, py] of torsoPoly) vertex(px, py);
+    endShape(CLOSE);
+    if (clothGrid) _drawClothGrid(drawingContext, torsoPoly, clothGrid);
+    noFill(); stroke(bodyOutline);
+    beginShape();
+    for (const [px, py] of torsoPoly) vertex(px, py);
+    endShape(CLOSE);
+
+    if (leftFront) {
+      // Left side is front
+      _drawLeg(lLegCx,    lLegDeg, legColor, legOutline);
+      _drawArm(-tTop / 2, lArmDeg, armColor, armOutline, true);
+    } else {
+      // Right side is front
+      _drawLeg(rLegCx,   rLegDeg, legColor, legOutline);
+      _drawArm(tTop / 2, rArmDeg, armColor, armOutline, false);
+    }
+
+  } else {
+    // ── Static pose: original draw order (both legs behind torso) ───
+
+    fill(legColor); stroke(legOutline);
+    rect(lLegCx, legTop + legH / 2, legW, legH);
+    rect(rLegCx, legTop + legH / 2, legW, legH);
+    rect(lLegCx, legTop + legH + footH / 2, legW + 2 * s, footH, 2 * s);
+    rect(rLegCx, legTop + legH + footH / 2, legW + 2 * s, footH, 2 * s);
+
+    fill(bodyColor); stroke(bodyOutline);
+    beginShape();
+    for (const [px, py] of torsoPoly) vertex(px, py);
+    endShape(CLOSE);
+    if (clothGrid) _drawClothGrid(drawingContext, torsoPoly, clothGrid);
+    if (lowerGrid) {
+      _drawClothGrid(drawingContext, lLegPoly, lowerGrid, true);
+      _drawClothGrid(drawingContext, rLegPoly, lowerGrid, false);
+    }
+    noFill(); stroke(bodyOutline);
+    beginShape();
+    for (const [px, py] of torsoPoly) vertex(px, py);
+    endShape(CLOSE);
+    stroke(legOutline);
+    rect(lLegCx, legTop + legH / 2, legW, legH);
+    rect(rLegCx, legTop + legH / 2, legW, legH);
+
+    // Static arms at fixed angles
+    _drawArm(-tTop / 2,  15, armColor, armOutline, true);
+    _drawArm( tTop / 2, -15, armColor, armOutline, false);
+  }
+
+  // ── Head (always on top) ─────────────────────────────────────────
   fill(skinColor); stroke(0); rectMode(CENTER);
-  rect(0, -torsoH / 2 - 2 * s, 16 * s, 4 * s);
+  rect(0, -torsoH / 2 - 2 * s, 16 * s, 4 * s); // neck
+
+  push();
+  if (!isMovingRight) scale(-1, 1); // flip head to face movement direction
   rect(0, headY, headS * 1.1, headS, 8 * s);
   rect(0, headY - headS / 2 - 3 * s, 18 * s, 7 * s, 2 * s);
-
   fill(0); noStroke();
   circle(-7 * s, headY - 2 * s, 5 * s);
   circle( 7 * s, headY - 2 * s, 5 * s);
-
   noFill(); stroke(0); strokeWeight(2 * s);
   const smileW = (14 + (person.smileScore || 0) * 8) * s;
   const smileH = ( 8 + (person.smileScore || 0) * 4) * s;
   arc(0, headY + 7 * s, smileW, smileH, 0, PI);
+  pop();
+
+  pop(); // end bounce translate
 
   rectMode(CENTER);
 }
@@ -382,44 +422,72 @@ function _clusterGrid(grid) {
 }
 
 // 3. Contrast stretch + saturation boost (HSL)
-//    Camera correction applied first (×CAMERA_CORRECTION) so the stretch
-//    operates on perceptually correct values.
+//    Adaptive output range: wide-range grids (black+white mixed) keep both extremes;
+//    dark-dominant grids stay dark; light-dominant grids stay bright.
+//    Per-cell saturation: near-black cells kill camera blue-bias; near-white cells
+//    skip boost to avoid HSL near-white artefact (tiny colour diff → false vivid hue).
 function _enhanceGrid(grid) {
   if (!grid) return null;
   const active = grid.cells.filter(c => c.active);
   if (active.length === 0) return grid;
 
-  // Compute luma range of corrected active cells
-  let minL = 1, maxL = 0;
-  for (const c of active) {
-    const l = _luma(
-      Math.min(255, c.r * CAMERA_CORRECTION),
-      Math.min(255, c.g * CAMERA_CORRECTION),
-      Math.min(255, c.b * CAMERA_CORRECTION),
-    );
-    if (l < minL) minL = l;
-    if (l > maxL) maxL = l;
-  }
+  // Compute luma stats on corrected values
+  const corrLumas = active.map(c => _luma(
+    Math.min(255, c.r * CAMERA_CORRECTION),
+    Math.min(255, c.g * CAMERA_CORRECTION),
+    Math.min(255, c.b * CAMERA_CORRECTION),
+  ));
+  corrLumas.sort((a, b) => a - b);
+  const minL      = corrLumas[0];
+  const maxL      = corrLumas[corrLumas.length - 1];
+  const medianL   = corrLumas[Math.floor(corrLumas.length / 2)];
   const lumaRange = maxL - minL;
   const hasRange  = lumaRange > 0.03;
+
+  // Adaptive output range — preserves "black stays black, white stays white"
+  let outMin, outMax;
+  if (lumaRange > 0.40) {
+    // Wide range = dark + light coexist (e.g. black shirt under white cardigan):
+    // let both ends be close to their true values
+    outMin = 0.05; outMax = 0.90;
+  } else if (medianL < 0.30) {
+    // Predominantly dark (black jeans, dark shirt): stay in dark band
+    outMin = 0.06; outMax = 0.42;
+  } else if (medianL > 0.62) {
+    // Predominantly light (white/cream top): stay in bright band
+    outMin = 0.58; outMax = 0.92;
+  } else {
+    outMin = CONTRAST_L_MIN; outMax = CONTRAST_L_MAX;
+  }
 
   const cells = grid.cells.map(c => {
     if (!c.active) return c;
 
-    // Camera correction
+    // Pre-correction luma used to classify cell tone (camera doesn't change identity)
+    const origLuma = _luma(c.r, c.g, c.b);
+
     const cr = Math.min(255, c.r * CAMERA_CORRECTION);
     const cg = Math.min(255, c.g * CAMERA_CORRECTION);
     const cb = Math.min(255, c.b * CAMERA_CORRECTION);
-
     const { h, s, l } = _rgbToHsl(cr, cg, cb);
 
-    // Contrast stretch: remap luma into [CONTRAST_L_MIN, CONTRAST_L_MAX]
     const newL = hasRange
-      ? CONTRAST_L_MIN + ((l - minL) / lumaRange) * (CONTRAST_L_MAX - CONTRAST_L_MIN)
-      : (CONTRAST_L_MIN + CONTRAST_L_MAX) / 2; // uniform region → push to comfortable mid-tone
+      ? outMin + ((l - minL) / lumaRange) * (outMax - outMin)
+      : (outMin + outMax) / 2;
 
-    // Saturation boost — non-grays get vivid; near-achromatic stays neutral
-    const newS = Math.min(1.0, s * SAT_BOOST);
+    let newS;
+    if (origLuma < 0.15) {
+      // Near-black: camera blue-bias is noise — kill saturation so black stays black
+      newS = Math.min(s, 0.07);
+    } else if (origLuma > 0.60) {
+      // Near-white/cream: HSL near-white makes even tiny hue diff show as high S —
+      // skip boost entirely so wrinkle tints don't become vivid green patches
+      newS = s;
+    } else {
+      // Mid-tone colour: apply saturation boost for vibrancy
+      const satScale = Math.min(1.0, s / 0.22);
+      newS = Math.min(1.0, s * (1 + (SAT_BOOST - 1) * satScale));
+    }
 
     const [r, g, b] = _hslToRgb(h, newS, newL);
     return { ...c, r, g, b };
@@ -483,13 +551,27 @@ function _makeSymmetric(grid) {
 // ─── Solid-color enhancement (for arms / no-grid fallback) ───────────────────
 
 function _enhanceSolid({ r, g, b }) {
+  const origLuma = _luma(r, g, b);
   const cr = Math.min(255, r * CAMERA_CORRECTION);
   const cg = Math.min(255, g * CAMERA_CORRECTION);
   const cb = Math.min(255, b * CAMERA_CORRECTION);
   const { h, s, l } = _rgbToHsl(cr, cg, cb);
-  const newS = Math.min(1.0, s * SAT_BOOST);
-  // Push dark solids to a minimum visible lightness
-  const newL = Math.max(CONTRAST_L_MIN + 0.05, Math.min(CONTRAST_L_MAX - 0.05, l * 1.25));
+
+  let newS, newL;
+  if (origLuma < 0.12) {
+    // Near-black: stay dark, kill camera blue-bias
+    newS = Math.min(s, 0.07);
+    newL = Math.max(0.06, Math.min(0.38, l * 1.2));
+  } else if (origLuma > 0.60) {
+    // Near-white/cream: stay bright, no saturation boost
+    newS = s;
+    newL = Math.max(0.60, Math.min(0.93, l * 1.05));
+  } else {
+    // Mid-tone: boost saturation + push to comfortable visible range
+    const satScale = Math.min(1.0, s / 0.22);
+    newS = Math.min(1.0, s * (1 + (SAT_BOOST - 1) * satScale));
+    newL = Math.max(CONTRAST_L_MIN + 0.05, Math.min(CONTRAST_L_MAX - 0.05, l * 1.25));
+  }
   return _hslToRgb(h, newS, newL);
 }
 

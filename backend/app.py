@@ -4,6 +4,7 @@ import random
 import threading
 import time
 from typing import Any, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 # Load .env before importing modules that read env vars (vlm_module, garment_gen)
 try:
@@ -12,9 +13,6 @@ try:
     load_dotenv()  # also try CWD
 except ImportError:
     pass
-
-import eventlet
-import eventlet.tpool
 
 import numpy as np
 from flask import Flask, jsonify, request
@@ -60,7 +58,7 @@ except Exception:
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "personaflow-dev-secret"
-socketio = SocketIO(app, cors_allowed_origins="*", max_http_buffer_size=20 * 1024 * 1024)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", max_http_buffer_size=20 * 1024 * 1024)
 
 # VLM colour name → hex (used instead of CV colour sampling)
 _HAIR_HEX = {
@@ -99,17 +97,28 @@ _last_success_landmarks: Optional[list] = None
 _last_success_roi: Optional[Dict[str, Any]] = None
 _last_success_cloth_grid: Optional[Dict[str, Any]] = None
 _last_success_lower_grid: Optional[Dict[str, Any]] = None
+_last_success_arm_color:  Optional[Dict[str, Any]] = None
 _last_success_ts: Optional[float] = None
 
 # --- swarm state ---
-_swarm_chars: Dict[str, Any] = {}
+_swarm_chars: Dict[str, Any] = {
+    "system_bot": {
+        "id": "system_bot", "x": 500, "y": 500, "vx": 1, "vy": 1,
+        "upper": {"hex": "#FFFFFF"}, "lower": {"hex": "#444444"},
+        "outfit": {"inner_color": "#FF0000", "lower_color": "#0000FF"}
+    }
+}
 _swarm_lock = threading.Lock()
+
+# Thread pool for parallel VLM calls
+_executor = ThreadPoolExecutor(max_workers=4)
 
 
 def _merge_fallback_payload(features: Dict[str, Any]) -> Dict[str, Any]:
     global _last_success_upper, _last_success_lower, _last_success_upper_type, \
         _last_success_lower_type, _last_success_landmarks, _last_success_roi, \
-        _last_success_cloth_grid, _last_success_lower_grid, _last_success_ts
+        _last_success_cloth_grid, _last_success_lower_grid, _last_success_arm_color, \
+        _last_success_ts
 
     if features.get("ok") is True:
         _last_success_upper = features.get("upper")
@@ -120,6 +129,7 @@ def _merge_fallback_payload(features: Dict[str, Any]) -> Dict[str, Any]:
         _last_success_roi = features.get("roi")
         _last_success_cloth_grid = features.get("cloth_grid")
         _last_success_lower_grid = features.get("lower_grid")
+        _last_success_arm_color  = features.get("arm_color")
         _last_success_ts = time.time()
         return features
 
@@ -128,6 +138,7 @@ def _merge_fallback_payload(features: Dict[str, Any]) -> Dict[str, Any]:
         "error": features.get("error"),
         "upper": _last_success_upper,
         "lower": _last_success_lower,
+        "arm_color": _last_success_arm_color,
         "upper_type": _last_success_upper_type,
         "lower_type": _last_success_lower_type,
         "landmarks": _last_success_landmarks,
@@ -149,13 +160,15 @@ def health_check():
 @socketio.on("connect")
 def handle_connect():
     emit("server_message", {"message": "Connected to PersonaFlow backend."})
+    with _swarm_lock:
+        chars = list(_swarm_chars.values())
+    if chars:
+        emit("update_positions", {"characters": chars})
 
 
 @socketio.on("disconnect")
 def handle_disconnect():
-    sid = request.sid
-    with _swarm_lock:
-        _swarm_chars.pop(sid, None)
+    pass
 
 
 @socketio.on("client_event")
@@ -169,28 +182,33 @@ def handle_process_frame(payload):
         emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "opencv_missing"}))
         return
 
-    try:
-        img_str = payload.get("image")
-        if not img_str:
-            return
+    sid = request.sid
 
-        if img_str.startswith("data:image"):
-            img_str = img_str.split(",")[1]
+    def _process_in_background():
+        try:
+            img_str = payload.get("image")
+            if not img_str:
+                return
 
-        img_bytes = base64.b64decode(img_str)
-        np_arr = np.frombuffer(img_bytes, np.uint8)
-        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if img_str.startswith("data:image"):
+                img_str = img_str.split(",")[1]
 
-        if frame is not None:
-            features = get_clothing_features(frame, max_width=360)
-            result = _merge_fallback_payload(features)
-            if "ts" not in result:
-                result["ts"] = time.time()
-            emit("clothing_features", result)
-        else:
-            emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "frame_decode_failed"}))
-    except Exception as e:
-        emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "cv_exception", "message": str(e)}))
+            img_bytes = base64.b64decode(img_str)
+            np_arr = np.frombuffer(img_bytes, np.uint8)
+            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+            if frame is not None:
+                features = get_clothing_features(frame, max_width=360)
+                result = _merge_fallback_payload(features)
+                if "ts" not in result:
+                    result["ts"] = time.time()
+                socketio.emit("clothing_features", result, to=sid)
+            else:
+                socketio.emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "frame_decode_failed"}), to=sid)
+        except Exception as e:
+            socketio.emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "cv_exception", "message": str(e)}), to=sid)
+
+    _executor.submit(_process_in_background)
 
 
 @socketio.on("generate_avatar")
@@ -215,11 +233,11 @@ def handle_generate_avatar(payload):
 
     def _background():
         try:
-            # 並行執行兩個 VLM call（outfit + face），各自在 tpool 執行緒中運行
-            t_outfit   = eventlet.spawn(eventlet.tpool.execute, analyze_outfit, img_str)
-            t_face_vlm = eventlet.spawn(eventlet.tpool.execute, analyze_face,   img_str)
+            # Submit VLM analyses to ThreadPoolExecutor
+            fut_outfit   = _executor.submit(analyze_outfit, img_str)
+            fut_face_vlm = _executor.submit(analyze_face, img_str)
 
-            # 解碼影像 (同步，快速)
+            # Decode image
             img_b64 = img_str.split(",")[1] if img_str.startswith("data:image") else img_str
             img_bytes = base64.b64decode(img_b64)
             np_arr = np.frombuffer(img_bytes, np.uint8)
@@ -229,7 +247,7 @@ def handle_generate_avatar(payload):
             face_cv_result = {}
             rgb_full       = None
             body_poly      = None
-            t_garment      = None
+            fut_garment    = None
             if frame is not None:
                 cv_result      = get_clothing_features(frame, max_width=480)
                 face_cv_result = get_face_features(frame, max_width=480)
@@ -242,19 +260,17 @@ def handle_generate_avatar(payload):
                         print(f"[generate_avatar] poly prep failed: {ge}")
 
             # body_sprite mode: spawn generation in PARALLEL with VLM (no VLM context needed).
-            # full_character mode: must wait for VLM to inject face+outfit attrs into prompt.
             if mode == "body_sprite" and rgb_full is not None and body_poly is not None:
-                t_garment = eventlet.spawn(
-                    eventlet.tpool.execute,
+                fut_garment = _executor.submit(
                     generate_body_png,
                     rgb_full, body_poly,
                 )
 
-            # 等待 VLM 結果
-            vlm_result      = t_outfit.wait()
-            vlm_face_result = t_face_vlm.wait()
+            # Wait for VLM results with timeout (45s)
+            vlm_result      = fut_outfit.result(timeout=45)
+            vlm_face_result = fut_face_vlm.result(timeout=45)
 
-            # --- 服裝資料 ---
+            # --- clothing data ---
             outfit_data = vlm_result.get("outfit", {})
             if "upper" in cv_result and "hex" in cv_result["upper"]:
                 outfit_data["inner_color"] = cv_result["upper"]["hex"]
@@ -262,7 +278,6 @@ def handle_generate_avatar(payload):
                 outfit_data["lower_color"] = cv_result["lower"]["hex"]
 
             # Derive sleeve length from VLM outfit semantics — more reliable
-            # than cv_module's forearm-vs-shirt pixel-distance heuristic.
             _LONG_SLEEVE_OUTERS = {"blazer", "cardigan", "denim_jacket"}
             _LONG_SLEEVE_INNERS = {"button_up"}
             vlm_outer = (outfit_data.get("outer") or "none").lower()
@@ -270,13 +285,11 @@ def handle_generate_avatar(payload):
             if vlm_outer in _LONG_SLEEVE_OUTERS or vlm_inner in _LONG_SLEEVE_INNERS:
                 sleeve_kind = "long_sleeve"
             else:
-                # Fall back to cv heuristic if VLM gave us only a t-shirt label
                 sleeve_kind = cv_result.get("upper_type", "short_sleeve")
 
-            # --- 臉部資料 ---
+            # --- facial data ---
             face_data: dict = {}
 
-            # MediaPipe 只取幾何資訊（眼形、臉形、眉形）— 顏色改由 VLM 提供
             if face_cv_result.get("ok"):
                 face_data.update({
                     "face_shape":    face_cv_result["face_shape"],
@@ -286,7 +299,6 @@ def handle_generate_avatar(payload):
                     "lip_color":     face_cv_result.get("lip_color"),
                 })
 
-            # VLM 提供髮型 + 顏色（轉換為固定 hex）
             if vlm_face_result.get("ok") and "face" in vlm_face_result:
                 vf = vlm_face_result["face"]
                 face_data.update({
@@ -301,33 +313,31 @@ def handle_generate_avatar(payload):
             # --- Garment / character generation ---
             if mode == "full_character":
                 if rgb_full is not None and body_poly is not None:
-                    garment_result = eventlet.tpool.execute(
+                    fut_gen = _executor.submit(
                         generate_full_character_png,
                         rgb_full, body_poly, face_data, outfit_data,
                     )
+                    garment_result = fut_gen.result(timeout=45)
                 else:
                     garment_result = {"ok": False, "error": "no_body_poly"}
             elif mode == "full_character_refined":
-                # Two-pass: base (no bg-removal so white background still signals
-                # the model on pass 2) then refine. If refine fails, fall back to base.
                 if rgb_full is not None and body_poly is not None:
-                    base_result = eventlet.tpool.execute(
+                    fut_base = _executor.submit(
                         generate_full_character_png,
                         rgb_full, body_poly, face_data, outfit_data, False,
                     )
+                    base_result = fut_base.result(timeout=45)
                     if base_result.get("ok") and base_result.get("body_png"):
-                        refined = eventlet.tpool.execute(
+                        fut_ref = _executor.submit(
                             generate_refine_character_png,
                             base_result["body_png"], rgb_full, body_poly,
                             face_data, outfit_data,
                         )
+                        refined = fut_ref.result(timeout=45)
                         if refined.get("ok"):
-                            # refine reused the same crop, so bbox is identical
                             refined.setdefault("body_bbox", base_result.get("body_bbox"))
                             garment_result = refined
                         else:
-                            # Refine pass produced nothing — fall back to a
-                            # bg-removed version of the base draft.
                             print("[generate_avatar] refine failed, falling back to base")
                             base_cleaned = _gg_remove_white_background(base_result["body_png"])
                             garment_result = {
@@ -340,7 +350,7 @@ def handle_generate_avatar(payload):
                 else:
                     garment_result = {"ok": False, "error": "no_body_poly"}
             else:
-                garment_result = t_garment.wait() if t_garment is not None else {"ok": False}
+                garment_result = fut_garment.result(timeout=45) if fut_garment is not None else {"ok": False}
 
             socketio.emit("avatar_generated", {
                 "ok":    True,
@@ -349,11 +359,8 @@ def handle_generate_avatar(payload):
                 "cloth_grid": cv_result.get("cloth_grid"),
                 "lower_grid": cv_result.get("lower_grid"),
                 "face":  face_data or None,
-                # Sleeve length flag — lets frontend render bare arm in skin colour for short sleeves
                 "upper_type": sleeve_kind,
                 "lower_type": cv_result.get("lower_type", "shorts"),
-                # AI-generated sprite — same field for both modes; character_mode tells the
-                # frontend which renderer to use (sprite-as-body vs sprite-as-whole-figure).
                 "body_png":  garment_result.get("body_png"),
                 "body_bbox": garment_result.get("body_bbox"),
                 "garment_source": "openai" if garment_result.get("ok") else "grid",
@@ -363,7 +370,7 @@ def handle_generate_avatar(payload):
             print(f"[generate_avatar] error: {e}")
             socketio.emit("avatar_generated", {"ok": False, "error": str(e)}, to=sid)
 
-    socketio.start_background_task(_background)
+    threading.Thread(target=_background, daemon=True).start()
 
 
 @socketio.on("join_swarm")
@@ -382,9 +389,14 @@ def handle_join_swarm(payload):
             "lower": payload.get("lower", existing.get("lower")),
             "upper_type": payload.get("upper_type", existing.get("upper_type", "short_sleeve")),
             "lower_type": payload.get("lower_type", existing.get("lower_type", "shorts")),
+            "accessories": payload.get("accessories", existing.get("accessories", [])),
             "accessory": payload.get("accessory", existing.get("accessory", "none")),
+            "arm_color": payload.get("arm_color", existing.get("arm_color")),
             "face": payload.get("face", existing.get("face")),
             "outfit": payload.get("outfit", existing.get("outfit")),
+            "body_png": payload.get("body_png", existing.get("body_png")),
+            "body_bbox": payload.get("body_bbox", existing.get("body_bbox")),
+            "character_mode": payload.get("character_mode", existing.get("character_mode", "body_sprite")),
         }
     emit("swarm_joined", {"id": char_id})
 
@@ -403,14 +415,14 @@ def handle_update_character(payload):
         return
     with _swarm_lock:
         if char_id in _swarm_chars:
-            for k in ("upper", "lower", "upper_type", "lower_type", "accessory", "face", "outfit"):
+            for k in ("upper", "lower", "upper_type", "lower_type", "accessories", "accessory", "arm_color", "face", "outfit", "body_png", "body_bbox", "character_mode"):
                 if k in payload:
                     _swarm_chars[char_id][k] = payload[k]
 
 
 def _swarm_background():
     while True:
-        socketio.sleep(0.1)
+        time.sleep(0.1)
         with _swarm_lock:
             chars = list(_swarm_chars.values())
         if not chars:
@@ -424,8 +436,8 @@ def _swarm_background():
         socketio.emit("update_positions", {"characters": updated})
 
 
-socketio.start_background_task(_swarm_background)
+threading.Thread(target=_swarm_background, daemon=True).start()
 
 
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=5001, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
