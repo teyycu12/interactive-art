@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PersonaFlow Brick v2 合成幾何測試</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Noto Sans TC", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0d1117; color: #e6edf3; }
+    main { width: min(1080px, calc(100vw - 32px)); display: grid; grid-template-columns: minmax(320px, 640px) 1fr; gap: 24px; align-items: center; }
+    .stage { min-height: 720px; display: grid; place-items: center; border-radius: 28px; background: linear-gradient(#f7f8fa, #dfe3e8); overflow: hidden; }
+    .stage img { width: 100%; height: auto; display: block; }
+    .panel { padding: 26px; background: #161b22; border: 1px solid #30363d; border-radius: 18px; }
+    h1 { margin-top: 0; font-size: 24px; }
+    code { color: #79c0ff; }
+    li { margin: 10px 0; line-height: 1.5; }
+    .ok { color: #7ee787; }
+    .fail { color: #ff7b72; }
+    .variants { display: grid; gap: 8px; margin: 18px 0; }
+    button { padding: 10px 12px; border: 1px solid #3d4858; border-radius: 10px; background: #212936; color: #e6edf3; cursor: pointer; text-align: left; }
+    button:hover, button.active { border-color: #58a6ff; background: #26364b; }
+    @media (max-width: 860px) { main { grid-template-columns: 1fr; padding: 16px 0; } .stage { min-height: 560px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="stage" id="stage"><span id="status">正在建立合成角色…</span></div>
+    <section class="panel">
+      <h1>Brick v2 合成幾何測試</h1>
+      <p>本頁只檢查固定幾何與 UV，不使用真人照片、不呼叫 AI，也不寫入生成歷史。</p>
+      <ul>
+        <li>梯形軀幹使用真正表面 UV</li>
+        <li>C 形手與收窄手臂</li>
+        <li>寬腿、圓角鞋面與獨立鞋底</li>
+        <li>臉部印刷包覆圓柱頭部</li>
+        <li>髮型只保留掛點，等待策略選型</li>
+        <li>衣服與腿部不使用 <code>PlaneGeometry</code></li>
+      </ul>
+      <div class="variants" aria-label="合成服裝與體型測試">
+        <button class="active" data-variant="regular">一般體型・短袖・長褲</button>
+        <button data-variant="slim_shorts">纖細體型・無袖・短褲</button>
+        <button data-variant="hoodie_skirt">一般體型・帽T・裙子</button>
+        <button data-variant="broad_coat">寬體型・長大衣</button>
+      </div>
+      <p id="result"></p>
+    </section>
+  </main>
+
+  <script type="module">
+    const THREE = await import('https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js');
+    window.THREE = THREE;
+    await import('./brick-v2-model.js?v=20260803-hairline-skirt-v3');
+    await import('./brick3d-preview.js?v=20260803-hairline-skirt-v3');
+
+    function texture(draw, size = 512) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      const context = canvas.getContext('2d');
+      draw(context, size);
+      return canvas.toDataURL('image/png');
+    }
+
+    const face = texture((context) => {
+      context.clearRect(0, 0, 512, 512);
+      context.strokeStyle = '#121418'; context.fillStyle = '#121418'; context.lineWidth = 14; context.lineCap = 'round';
+      context.beginPath(); context.arc(178, 220, 20, 0, Math.PI * 2); context.fill();
+      context.beginPath(); context.arc(334, 220, 20, 0, Math.PI * 2); context.fill();
+      context.beginPath(); context.arc(256, 285, 86, 0.2, Math.PI - 0.2); context.stroke();
+      context.beginPath(); context.moveTo(142, 166); context.quadraticCurveTo(180, 145, 216, 164); context.stroke();
+      context.beginPath(); context.moveTo(296, 164); context.quadraticCurveTo(334, 145, 370, 166); context.stroke();
+    });
+    const torso = texture((context, size) => {
+      context.fillStyle = '#164d38'; context.fillRect(0, 0, size, size);
+      context.fillStyle = '#f2d85e';
+      context.beginPath(); context.moveTo(188, 0); context.lineTo(256, 75); context.lineTo(324, 0); context.closePath(); context.fill();
+      context.fillStyle = '#f7f8f4'; context.font = 'bold 190px system-ui'; context.textAlign = 'center'; context.fillText('9', 256, 350);
+      context.strokeStyle = '#0d2d23'; context.lineWidth = 14; context.strokeRect(8, 8, size - 16, size - 16);
+    });
+    const leftLeg = texture((context, size) => {
+      context.fillStyle = '#747b82'; context.fillRect(0, 0, size, size);
+      context.strokeStyle = '#d9dde0'; context.lineWidth = 9; context.beginPath(); context.moveTo(size * .72, 0); context.lineTo(size * .67, size); context.stroke();
+      context.strokeStyle = '#41474d'; context.lineWidth = 6; context.strokeRect(18, 18, size - 36, size - 36);
+    });
+    const rightLeg = texture((context, size) => {
+      context.fillStyle = '#747b82'; context.fillRect(0, 0, size, size);
+      context.strokeStyle = '#d9dde0'; context.lineWidth = 9; context.beginPath(); context.moveTo(size * .28, 0); context.lineTo(size * .33, size); context.stroke();
+      context.strokeStyle = '#41474d'; context.lineWidth = 6; context.strokeRect(18, 18, size - 36, size - 36);
+    });
+    const spec = {
+      schema_version: 3,
+      style_id: 'brick_v2',
+      style_spec_version: 3,
+      material_version: 1,
+      character_id: 'brick-v2-synthetic-fixture',
+      height_profile: 'medium',
+      skin_color: '#E8B25F',
+      hair: {
+        strategy: 'modular_parametric_3d',
+        style: 'long_wavy',
+        color: '#17191d',
+        part_position: 0.08,
+        wave_amount: 0.72,
+        side_length: 1.02,
+        back_length: 1.08,
+        volume: 1.04,
+      },
+      face: { expression: 'smile', glasses: false, beard: 'none' },
+      outfit: { upper_color: '#164d38', lower_color: '#747b82', shoe_color: '#F0F1EE' },
+      garment_geometry: {
+        grammar_version: 1,
+        upper_shell: 'canonical_torso',
+        outer_shell: 'none',
+        lower_shell: 'trousers',
+        legwear: 'covered',
+        sleeve_profile: 'short',
+        fit: 'regular',
+        attachments: [],
+        rule: 'deterministic_parts_only',
+      },
+      body_shape: { height_scale: 1, shoulder_width: 1, torso_width: 1, torso_depth: 1, limb_thickness: 1 },
+      textures: { face_decal: face, torso_front: torso, left_leg_front: leftLeg, right_leg_front: rightLeg },
+      quality: { ai_texture_status: 'enhanced', synthetic_fixture: true },
+    };
+
+    const variants = {
+      regular: {},
+      slim_shorts: {
+        body_shape: { ...spec.body_shape, torso_width: 0.92, shoulder_width: 0.94, limb_thickness: 0.95 },
+        garment_geometry: { ...spec.garment_geometry, sleeve_profile: 'sleeveless', lower_shell: 'shorts', legwear: 'bare', fit: 'slim' },
+      },
+      hoodie_skirt: {
+        garment_geometry: {
+          ...spec.garment_geometry,
+          sleeve_profile: 'long', outer_shell: 'hoodie', lower_shell: 'skirt', legwear: 'bare', attachments: ['hood', 'skirt_shell'],
+        },
+      },
+      broad_coat: {
+        body_shape: { ...spec.body_shape, torso_width: 1.08, shoulder_width: 1.06, torso_depth: 1.06, limb_thickness: 1.06 },
+        garment_geometry: {
+          ...spec.garment_geometry,
+          sleeve_profile: 'long', outer_shell: 'long_coat', fit: 'relaxed', attachments: ['coat_tail'],
+        },
+      },
+    };
+
+    async function renderVariant(name) {
+      const stage = document.getElementById('stage');
+      stage.replaceChildren(Object.assign(document.createElement('span'), { textContent: '正在建立合成角色…' }));
+      try {
+        const variant = variants[name] || variants.regular;
+        const variantSpec = {
+          ...spec,
+          ...variant,
+          body_shape: variant.body_shape || spec.body_shape,
+          garment_geometry: variant.garment_geometry || spec.garment_geometry,
+          character_id: `brick-v2-synthetic-${name}`,
+        };
+        const dataUrl = await window.PersonaFlowBrick3D.renderCharacter(variantSpec, { width: 640, height: 800 });
+        const image = new Image(); image.src = dataUrl; image.alt = `Brick v2 ${name} 合成角色`;
+        stage.replaceChildren(image);
+        document.getElementById('result').className = 'ok';
+        document.getElementById('result').textContent = `${name}：合成 CharacterSpec 已完成渲染。`;
+      } catch (error) {
+        stage.textContent = `渲染失敗：${error.message || error}`;
+        document.getElementById('result').className = 'fail';
+        document.getElementById('result').textContent = '合成幾何測試未通過。';
+      }
+    }
+
+    document.querySelectorAll('[data-variant]').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-variant]').forEach(item => item.classList.toggle('active', item === button));
+        renderVariant(button.dataset.variant);
+      });
+    });
+    await renderVariant('regular');
+  </script>
+</body>
+</html>

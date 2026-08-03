@@ -10,6 +10,9 @@ __pycache__/
 .env
 .env.local
 
+# Runtime metrics (never commit event telemetry)
+backend/logs/
+
 # Virtual environment
 .venv/
 venv/

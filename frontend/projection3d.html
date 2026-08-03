@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PersonaFlow · Brick World</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Noto Sans TC", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #070b14; }
+    #stage { position: fixed; inset: 0; }
+    #hud {
+      position: fixed; top: 18px; left: 20px; z-index: 3;
+      display: flex; gap: 10px; align-items: center; padding: 10px 14px;
+      color: #d9e7ff; background: rgba(7, 11, 20, .72);
+      border: 1px solid rgba(130, 170, 255, .24); border-radius: 999px;
+      backdrop-filter: blur(14px); font-size: 13px; letter-spacing: .02em;
+    }
+    #dot { width: 8px; height: 8px; border-radius: 50%; background: #f5b942; box-shadow: 0 0 12px currentColor; }
+    #dot.online { background: #56e39f; }
+    #empty {
+      position: fixed; inset: 0; z-index: 2; display: grid; place-items: center;
+      pointer-events: none; color: #8190aa; font-size: clamp(18px, 2.2vw, 32px);
+      letter-spacing: .08em; transition: opacity .5s ease;
+    }
+    #empty.hidden { opacity: 0; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="stage" aria-label="PersonaFlow 3D 群體投影"></div>
+  <div id="hud"><span id="dot"></span><span id="status">連線中</span><span id="perf">0 FPS</span></div>
+  <div id="empty">等待第一位角色進入世界</div>
+
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
+    window.THREE = THREE;
+    await import('./brick-v2-model.js?v=20260803-hairline-skirt-v3');
+
+    const BACKEND_URL = 'http://127.0.0.1:5001';
+    const stage = document.getElementById('stage');
+    const statusEl = document.getElementById('status');
+    const dotEl = document.getElementById('dot');
+    const perfEl = document.getElementById('perf');
+    const emptyEl = document.getElementById('empty');
+    const entities = new Map();
+    const pendingEntities = new Map();
+    const textureCache = new Map();
+    const clock = new THREE.Clock();
+    const focusId = new URLSearchParams(location.search).get('focus');
+    let pendingTextureLoads = 0;
+    let focusReadyAt = 0;
+    let focusSnapshotSaved = false;
+
+    let renderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        powerPreference: 'high-performance',
+        preserveDrawingBuffer: Boolean(focusId),
+        alpha: Boolean(focusId),
+      });
+    } catch (error) {
+      statusEl.textContent = 'WebGL 無法啟動，請使用 2D 備援';
+      throw error;
+    }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+    stage.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = focusId ? null : new THREE.Color(0x070b14);
+    scene.fog = focusId ? null : new THREE.Fog(0x070b14, 28, 52);
+
+    const camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, .1, 100);
+    camera.position.set(0, focusId ? 4.65 : 22, focusId ? 12.8 : 30);
+    camera.lookAt(0, focusId ? 2.70 : 2.5, 0);
+
+    scene.add(new THREE.HemisphereLight(0xbed8ff, 0x172033, 2.1));
+    const key = new THREE.DirectionalLight(0xffead2, 4.2);
+    key.position.set(-12, 22, 14);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.left = -26; key.shadow.camera.right = 26;
+    key.shadow.camera.top = 18; key.shadow.camera.bottom = -18;
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(0x6b8cff, 2.2);
+    rim.position.set(14, 10, -10);
+    scene.add(rim);
+
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(58, 34),
+      new THREE.MeshStandardMaterial({ color: 0x11192a, roughness: .72, metalness: .08 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -.02;
+    floor.receiveShadow = true;
+    floor.visible = !focusId;
+    scene.add(floor);
+
+    const grid = new THREE.GridHelper(58, 29, 0x294265, 0x18263d);
+    grid.position.y = .015;
+    grid.material.opacity = .22;
+    grid.material.transparent = true;
+    grid.visible = !focusId;
+    scene.add(grid);
+
+    const shared = {
+      head: new THREE.CylinderGeometry(.72, .72, 1.15, 12),
+      torso: new THREE.BoxGeometry(1.65, 1.85, .72),
+      limb: new THREE.BoxGeometry(.48, 1.55, .5),
+      leg: new THREE.BoxGeometry(.62, 1.55, .68),
+      foot: new THREE.BoxGeometry(.68, .38, 1.0),
+      hand: new THREE.SphereGeometry(.34, 10, 7),
+      eye: new THREE.SphereGeometry(.075, 8, 6),
+      hairCap: new THREE.SphereGeometry(.76, 12, 6, 0, Math.PI * 2, 0, Math.PI * .55),
+    };
+    const MAX_CHARACTERS = 128;
+    const handInstances = new THREE.InstancedMesh(
+      shared.hand,
+      new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: .32, clearcoat: .4 }),
+      MAX_CHARACTERS * 2
+    );
+    const footInstances = new THREE.InstancedMesh(
+      shared.foot,
+      new THREE.MeshPhysicalMaterial({ color: 0x151a22, roughness: .38, clearcoat: .28 }),
+      MAX_CHARACTERS * 2
+    );
+    handInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    footInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    handInstances.castShadow = footInstances.castShadow = true;
+    handInstances.count = footInstances.count = 0;
+    scene.add(handInstances, footInstances);
+    const freeInstanceSlots = Array.from({ length: MAX_CHARACTERS }, (_, index) => index);
+    const hiddenMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
+
+    function safeColor(value, fallback) {
+      return /^#[0-9a-f]{6}$/i.test(String(value || '')) ? value : fallback;
+    }
+
+    function plastic(color, roughness = .28) {
+      return new THREE.MeshPhysicalMaterial({
+        color: safeColor(color, '#808080'), roughness, metalness: .02,
+        clearcoat: .42, clearcoatRoughness: .2,
+      });
+    }
+
+    function solidTexture(color) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 8;
+      const context = canvas.getContext('2d');
+      context.fillStyle = safeColor(color, '#808080');
+      context.fillRect(0, 0, 8, 8);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    }
+
+    function materialTexture(source, fallback) {
+      if (!source || !source.startsWith('data:image/')) return solidTexture(fallback);
+      if (textureCache.has(source)) return textureCache.get(source);
+      pendingTextureLoads++;
+      const settle = () => { pendingTextureLoads = Math.max(0, pendingTextureLoads - 1); };
+      const texture = new THREE.TextureLoader().load(source, settle, undefined, settle);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      textureCache.set(source, texture);
+      return texture;
+    }
+
+    function mesh(geometry, material, parent, { x = 0, y = 0, z = 0 } = {}) {
+      const result = new THREE.Mesh(geometry, material);
+      result.position.set(x, y, z);
+      result.castShadow = true;
+      result.receiveShadow = true;
+      parent.add(result);
+      return result;
+    }
+
+    class BrickCharacter {
+      constructor(spec) {
+        this.spec = spec;
+        this.root = new THREE.Group();
+        this.visual = new THREE.Group();
+        this.root.add(this.visual);
+        this.target = new THREE.Vector3();
+        this.velocity = new THREE.Vector2();
+        this.state = 'ROAMING';
+        this.phase = Math.random() * Math.PI * 2;
+        this.instanceSlot = freeInstanceSlots.length ? freeInstanceSlots.shift() : 0;
+
+        const outfit = spec.outfit || {};
+        const face = spec.face || {};
+        const skin = plastic(spec.skin_color || '#FFD0A8', .32);
+        const upper = plastic(outfit.upper_color || '#607D8B');
+        const lower = plastic(outfit.lower_color || '#263238');
+        const hair = plastic(spec.hair?.color || '#3B2314', .36);
+        const ink = plastic('#111318', .4);
+        const shape = spec.body_shape || {};
+        const bounded = (value, lowerBound, upperBound, fallback = 1) => {
+          const number = Number(value);
+          return Number.isFinite(number) ? Math.max(lowerBound, Math.min(upperBound, number)) : fallback;
+        };
+        const heightScale = bounded(
+          shape.height_scale,
+          .85,
+          1.15,
+          { short: .9, medium: 1, tall: 1.1 }[spec.height_profile] || 1,
+        );
+        const shoulderScale = bounded(shape.shoulder_width, .85, 1.15);
+        const torsoWidth = bounded(shape.torso_width, .85, 1.15);
+        const torsoDepth = bounded(shape.torso_depth, .9, 1.1);
+        const limbThickness = bounded(shape.limb_thickness, .88, 1.12);
+        this.visual.scale.y = heightScale;
+
+        this.torso = mesh(shared.torso, upper, this.visual, { y: 3.28 });
+        this.torso.scale.set(torsoWidth, 1, torsoDepth);
+        const torsoTexture = materialTexture(spec.textures?.torso_front, outfit.upper_color);
+        const decalMaterial = new THREE.MeshStandardMaterial({
+          map: torsoTexture, roughness: .32, metalness: .01, transparent: false,
+        });
+        this.torsoDecal = mesh(new THREE.PlaneGeometry(1.55, 1.72), decalMaterial, this.visual, {
+          y: 3.28, z: .366,
+        });
+        this.torsoDecal.scale.x = torsoWidth;
+        this.torsoDecal.position.z = .366 * torsoDepth + .003;
+
+        this.head = mesh(shared.head, skin, this.visual, { y: 4.95 });
+        if (spec.textures?.face_decal) {
+          const faceTexture = materialTexture(spec.textures.face_decal, spec.skin_color);
+          const faceDecalMaterial = new THREE.MeshStandardMaterial({
+            map: faceTexture, roughness: .3, metalness: .01,
+            transparent: true, alphaTest: .06, depthWrite: false,
+          });
+          this.faceDecal = mesh(
+            new THREE.PlaneGeometry(1.12, .9),
+            faceDecalMaterial,
+            this.visual,
+            { y: 4.96, z: .704 },
+          );
+        } else {
+          const eyeLeft = mesh(shared.eye, ink, this.visual, { x: -.25, y: 5.03, z: .69 });
+          const eyeRight = mesh(shared.eye, ink, this.visual, { x: .25, y: 5.03, z: .69 });
+          eyeLeft.scale.z = eyeRight.scale.z = .45;
+          const mouth = new THREE.Mesh(
+            new THREE.TorusGeometry(.19, .035, 5, 16, face.expression === 'smile' ? Math.PI : Math.PI * .55),
+            ink
+          );
+          mouth.position.set(0, 4.78, .7);
+          mouth.rotation.z = face.expression === 'smile' ? 0 : Math.PI * .22;
+          this.visual.add(mouth);
+        }
+
+        this.addHair(spec.hair?.style || 'short', hair);
+        if (face.glasses) this.addGlasses(ink);
+        if (face.beard && face.beard !== 'none') {
+          const beard = mesh(new THREE.BoxGeometry(.62, .22, .05), hair, this.visual, { y: 4.68, z: .69 });
+          beard.rotation.z = 0;
+        }
+
+        this.leftArm = new THREE.Group();
+        this.rightArm = new THREE.Group();
+        this.leftArm.position.set(-1.02 * shoulderScale, 3.86, 0);
+        this.rightArm.position.set(1.02 * shoulderScale, 3.86, 0);
+        this.visual.add(this.leftArm, this.rightArm);
+        const leftArmMesh = mesh(shared.limb, upper, this.leftArm, { y: -.72 });
+        const rightArmMesh = mesh(shared.limb, upper, this.rightArm, { y: -.72 });
+        leftArmMesh.scale.x = leftArmMesh.scale.z = limbThickness;
+        rightArmMesh.scale.x = rightArmMesh.scale.z = limbThickness;
+        this.leftHandMarker = new THREE.Object3D();
+        this.rightHandMarker = new THREE.Object3D();
+        this.leftHandMarker.position.y = -1.62;
+        this.rightHandMarker.position.y = -1.62;
+        this.leftArm.add(this.leftHandMarker);
+        this.rightArm.add(this.rightHandMarker);
+        const skinInstanceColor = new THREE.Color(safeColor(spec.skin_color, '#FFD0A8'));
+        handInstances.setColorAt(this.instanceSlot * 2, skinInstanceColor);
+        handInstances.setColorAt(this.instanceSlot * 2 + 1, skinInstanceColor);
+        handInstances.instanceColor.needsUpdate = true;
+        this.leftArm.rotation.z = -.14;
+        this.rightArm.rotation.z = .14;
+
+        this.leftLeg = new THREE.Group();
+        this.rightLeg = new THREE.Group();
+        this.leftLeg.position.set(-.38 * torsoWidth, 2.34, 0);
+        this.rightLeg.position.set(.38 * torsoWidth, 2.34, 0);
+        this.visual.add(this.leftLeg, this.rightLeg);
+        const leftLegMesh = mesh(shared.leg, lower, this.leftLeg, { y: -.72 });
+        const rightLegMesh = mesh(shared.leg, lower, this.rightLeg, { y: -.72 });
+        leftLegMesh.scale.x = leftLegMesh.scale.z = limbThickness;
+        rightLegMesh.scale.x = rightLegMesh.scale.z = limbThickness;
+        this.leftFootMarker = new THREE.Object3D();
+        this.rightFootMarker = new THREE.Object3D();
+        this.leftFootMarker.position.set(0, -1.64, .15);
+        this.rightFootMarker.position.set(0, -1.64, .15);
+        this.leftLeg.add(this.leftFootMarker);
+        this.rightLeg.add(this.rightFootMarker);
+        handInstances.count = footInstances.count = Math.max(
+          handInstances.count, Math.min(MAX_CHARACTERS * 2, this.instanceSlot * 2 + 2)
+        );
+
+        const leftLegTexture = materialTexture(
+          spec.textures?.left_leg_front || spec.textures?.legs_front,
+          outfit.lower_color,
+        );
+        const rightLegTexture = materialTexture(
+          spec.textures?.right_leg_front || spec.textures?.legs_front,
+          outfit.lower_color,
+        );
+        const leftLegDecalMat = new THREE.MeshStandardMaterial({ map: leftLegTexture, roughness: .34 });
+        const rightLegDecalMat = new THREE.MeshStandardMaterial({ map: rightLegTexture, roughness: .34 });
+        mesh(new THREE.PlaneGeometry(.55, 1.4), leftLegDecalMat, this.leftLeg, { y: -.72, z: .345 });
+        mesh(new THREE.PlaneGeometry(.55, 1.4), rightLegDecalMat, this.rightLeg, { y: -.72, z: .345 });
+      }
+
+      addHair(style, material) {
+        if (style === 'bald') return;
+        mesh(shared.hairCap, material, this.visual, { y: 5.48 });
+        if (['long', 'bob', 'wave'].includes(style)) {
+          mesh(new THREE.BoxGeometry(1.48, style === 'long' ? 1.35 : .72, .34), material, this.visual, {
+            y: style === 'long' ? 4.95 : 5.15, z: -.48,
+          });
+        }
+        if (style === 'bun') mesh(new THREE.SphereGeometry(.38, 10, 8), material, this.visual, { y: 6.05, z: -.2 });
+        if (style === 'ponytail') mesh(new THREE.SphereGeometry(.34, 10, 8), material, this.visual, { y: 5.25, z: -.8 });
+      }
+
+      addGlasses(material) {
+        for (const x of [-.25, .25]) {
+          const lens = new THREE.Mesh(new THREE.TorusGeometry(.18, .035, 5, 12), material);
+          lens.position.set(x, 5.02, .72);
+          this.visual.add(lens);
+        }
+        mesh(new THREE.BoxGeometry(.16, .04, .04), material, this.visual, { y: 5.02, z: .72 });
+      }
+
+      update(delta, elapsed) {
+        this.root.position.lerp(this.target, Math.min(1, delta * 6));
+        const moving = this.velocity.length() > .08;
+        this.phase += delta * (moving ? 7 : 2);
+        if (moving) {
+          const desired = Math.atan2(this.velocity.x, this.velocity.y);
+          const angle = Math.atan2(Math.sin(desired - this.root.rotation.y), Math.cos(desired - this.root.rotation.y));
+          this.root.rotation.y += angle * Math.min(1, delta * 4);
+        }
+        const walk = moving && this.state !== 'GREETING' ? Math.sin(this.phase) * .38 : 0;
+        this.leftLeg.rotation.x = walk;
+        this.rightLeg.rotation.x = -walk;
+        this.leftArm.rotation.x = -walk * .72;
+        this.rightArm.rotation.x = this.state === 'GREETING'
+          ? Math.sin(elapsed * 7) * .35
+          : walk * .72;
+        this.rightArm.rotation.z = this.state === 'GREETING' ? 2.35 : .14;
+        this.visual.position.y = moving ? Math.abs(Math.sin(this.phase * 2)) * .06 : 0;
+        this.root.updateMatrixWorld(true);
+        const base = this.instanceSlot * 2;
+        handInstances.setMatrixAt(base, this.leftHandMarker.matrixWorld);
+        handInstances.setMatrixAt(base + 1, this.rightHandMarker.matrixWorld);
+        footInstances.setMatrixAt(base, this.leftFootMarker.matrixWorld);
+        footInstances.setMatrixAt(base + 1, this.rightFootMarker.matrixWorld);
+      }
+
+      hideInstances() {
+        const base = this.instanceSlot * 2;
+        handInstances.setMatrixAt(base, hiddenMatrix);
+        handInstances.setMatrixAt(base + 1, hiddenMatrix);
+        footInstances.setMatrixAt(base, hiddenMatrix);
+        footInstances.setMatrixAt(base + 1, hiddenMatrix);
+        if (!freeInstanceSlots.includes(this.instanceSlot)) freeInstanceSlots.push(this.instanceSlot);
+      }
+    }
+
+    class BrickV2Character {
+      static async create(spec) {
+        const root = await window.PersonaFlowBrickV2.buildCharacter(spec, renderer);
+        return new BrickV2Character(spec, root);
+      }
+
+      constructor(spec, root) {
+        this.spec = spec;
+        this.root = root;
+        this.visual = root.userData.visual;
+        const limbs = root.userData.limbs || {};
+        this.leftArm = limbs.leftArm;
+        this.rightArm = limbs.rightArm;
+        this.leftLeg = limbs.leftLeg;
+        this.rightLeg = limbs.rightLeg;
+        if (![this.leftArm, this.rightArm, this.leftLeg, this.rightLeg].every(Boolean)) {
+          throw new Error('brick_v2_animation_rig_missing');
+        }
+        this.target = new THREE.Vector3();
+        this.velocity = new THREE.Vector2();
+        this.state = 'ROAMING';
+        this.phase = Math.random() * Math.PI * 2;
+      }
+
+      update(delta, elapsed) {
+        this.root.position.lerp(this.target, Math.min(1, delta * 6));
+        const moving = this.velocity.length() > .08;
+        this.phase += delta * (moving ? 7 : 2);
+        if (moving) {
+          const desired = Math.atan2(this.velocity.x, this.velocity.y);
+          const angle = Math.atan2(
+            Math.sin(desired - this.root.rotation.y),
+            Math.cos(desired - this.root.rotation.y),
+          );
+          this.root.rotation.y += angle * Math.min(1, delta * 4);
+        }
+        const walk = moving && this.state !== 'GREETING' ? Math.sin(this.phase) * .38 : 0;
+        this.leftLeg.rotation.x = walk;
+        this.rightLeg.rotation.x = -walk;
+        this.leftArm.rotation.x = -walk * .72;
+        this.rightArm.rotation.x = this.state === 'GREETING'
+          ? Math.sin(elapsed * 7) * .35
+          : walk * .72;
+        this.rightArm.rotation.z = this.state === 'GREETING' ? 2.35 : -THREE.MathUtils.degToRad(7);
+        this.visual.position.y = moving ? Math.abs(Math.sin(this.phase * 2)) * .06 : 0;
+      }
+
+      hideInstances() {}
+
+      dispose() {
+        window.PersonaFlowBrickV2.disposeCharacter(this.root);
+      }
+    }
+
+    function validAiCharacterSpec(spec) {
+      if (!spec || !['brick_v1', 'brick_v2'].includes(spec.style_id) || spec.quality?.ai_texture_status !== 'enhanced') return false;
+      return ['face_decal', 'torso_front', 'left_leg_front', 'right_leg_front']
+        .every(key => String(spec.textures?.[key] || '').startsWith('data:image/'));
+    }
+
+    function removeEntity(id, entity) {
+      entity.avatar.hideInstances();
+      if (entity.avatar.dispose) entity.avatar.dispose();
+      scene.remove(entity.avatar.root);
+      entities.delete(id);
+    }
+
+    async function syncCharacter(character) {
+      let entity = entities.get(character.id);
+      if (!validAiCharacterSpec(character.character_spec)) {
+        if (entity) removeEntity(character.id, entity);
+        return false;
+      }
+      const incomingMaterialVersion = Number(character.character_spec?.material_version || 1);
+      if (entity && entity.materialVersion !== incomingMaterialVersion) {
+        removeEntity(character.id, entity);
+        entity = null;
+      }
+      if (!entity) {
+        let avatar;
+        if (character.character_spec.style_id === 'brick_v2') {
+          let pending = pendingEntities.get(character.id);
+          if (!pending) {
+            pending = BrickV2Character.create(character.character_spec);
+            pendingEntities.set(character.id, pending);
+          }
+          try {
+            avatar = await pending;
+          } finally {
+            pendingEntities.delete(character.id);
+          }
+        } else {
+          avatar = new BrickCharacter(character.character_spec);
+        }
+        entity = entities.get(character.id);
+        if (entity) {
+          if (avatar.dispose) avatar.dispose();
+          return true;
+        }
+        scene.add(avatar.root);
+        entity = { avatar, lastSeen: performance.now(), materialVersion: incomingMaterialVersion };
+        entities.set(character.id, entity);
+        if (focusId && character.id === focusId) focusReadyAt = performance.now();
+      }
+      entity.lastSeen = performance.now();
+      if (focusId) {
+        entity.avatar.target.set(0, 0, 0);
+        entity.avatar.velocity.set(0, 0);
+        entity.avatar.state = 'IDLE';
+        entity.avatar.root.rotation.y = 0;
+      } else {
+        entity.avatar.target.set((Number(character.x || 960) / 1920 - .5) * 42, 0, (Number(character.y || 540) / 1080 - .5) * 20);
+        entity.avatar.velocity.set(Number(character.vx || 0), Number(character.vy || 0));
+        entity.avatar.state = character.state || 'ROAMING';
+      }
+      return true;
+    }
+
+    const socket = io(BACKEND_URL, { transports: ['websocket'], reconnectionAttempts: 20 });
+    socket.on('connect', () => {
+      dotEl.classList.add('online');
+      statusEl.textContent = '3D 世界已連線';
+      socket.emit('get_swarm', {});
+    });
+    socket.on('disconnect', () => {
+      dotEl.classList.remove('online');
+      statusEl.textContent = '重新連線中';
+    });
+    socket.on('connect_error', () => {
+      dotEl.classList.remove('online');
+      statusEl.textContent = '後端未啟動';
+    });
+    socket.on('update_positions', async payload => {
+      const incoming = new Set();
+      const visibleCharacters = (payload.characters || []).filter(character => !focusId || character.id === focusId);
+      const accepted = await Promise.all(visibleCharacters.map(async character => {
+        try {
+          return await syncCharacter(character);
+        } catch (error) {
+          console.warn('3D character rejected', character.id, error);
+          return false;
+        }
+      }));
+      visibleCharacters.forEach((character, index) => {
+        if (accepted[index]) incoming.add(character.id);
+      });
+      for (const [id, entity] of entities) {
+        if (!incoming.has(id) && performance.now() - entity.lastSeen > 1500) {
+          removeEntity(id, entity);
+        }
+      }
+      emptyEl.classList.toggle('hidden', entities.size > 0);
+      statusEl.textContent = focusId
+        ? `3D 細節預覽 · ${entities.size ? '角色已載入' : '角色材質不完整或渲染失敗'}`
+        : `3D 世界已連線 · ${entities.size} 位有效角色`;
+    });
+
+    let frames = 0;
+    let fpsStarted = performance.now();
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = Math.min(clock.getDelta(), .05);
+      const elapsed = clock.elapsedTime;
+      for (const { avatar } of entities.values()) avatar.update(delta, elapsed);
+      handInstances.instanceMatrix.needsUpdate = true;
+      footInstances.instanceMatrix.needsUpdate = true;
+      renderer.render(scene, camera);
+      if (
+        focusId && !focusSnapshotSaved && entities.has(focusId)
+        && pendingTextureLoads === 0 && performance.now() - focusReadyAt > 900
+      ) {
+        focusSnapshotSaved = true;
+        try {
+          const bodyPng = renderer.domElement.toDataURL('image/png').split(',', 2)[1];
+          socket.emit('save_rendered_avatar', { request_id: focusId, body_png: bodyPng });
+          statusEl.textContent = '3D 細節預覽 · 快照已保存';
+        } catch (error) {
+          focusSnapshotSaved = false;
+          statusEl.textContent = '3D 細節預覽 · 快照保存失敗';
+          console.warn('3D snapshot failed', error);
+        }
+      }
+      frames++;
+      const now = performance.now();
+      if (now - fpsStarted >= 1000) {
+        perfEl.textContent = `${Math.round(frames * 1000 / (now - fpsStarted))} FPS`;
+        frames = 0;
+        fpsStarted = now;
+      }
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>

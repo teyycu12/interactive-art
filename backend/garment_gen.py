@@ -23,6 +23,11 @@ import numpy as np
 from PIL import Image as PILImage, ImageDraw
 
 try:
+    from backend.style_registry import GenerationStyle, get_style, register_style  # type: ignore
+except Exception:
+    from style_registry import GenerationStyle, get_style, register_style  # type: ignore
+
+try:
     from openai import OpenAI  # type: ignore
     _HAS_OPENAI = True
 except ImportError:
@@ -52,7 +57,10 @@ def _get_client() -> Optional["OpenAI"]:
             base_url = "https://openrouter.ai/api/v1"
             print(f"[garment_gen] detected OpenRouter key, using base_url={base_url}")
 
-    _client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
+    client_options = {"api_key": api_key, "timeout": 45.0, "max_retries": 0}
+    if base_url:
+        client_options["base_url"] = base_url
+    _client = OpenAI(**client_options)
     print(f"[garment_gen] client ready (base_url={base_url or 'openai-default'})")
     return _client
 
@@ -97,6 +105,85 @@ def _pil_to_data_url(pil: PILImage.Image) -> str:
     pil.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{b64}"
+
+
+def _crop_norm_region(rgb: np.ndarray, region: Optional[Dict[str, float]], size: int = 480) -> Optional[PILImage.Image]:
+    if not region:
+        return None
+    h, w = rgb.shape[:2]
+    x1 = max(0, min(w - 1, int(region.get("x1", 0) * w)))
+    y1 = max(0, min(h - 1, int(region.get("y1", 0) * h)))
+    x2 = max(x1 + 1, min(w, int(region.get("x2", 1) * w)))
+    y2 = max(y1 + 1, min(h, int(region.get("y2", 1) * h)))
+    crop = PILImage.fromarray(rgb[y1:y2, x1:x2].astype(np.uint8), mode="RGB")
+    crop.thumbnail((size, size), PILImage.LANCZOS)
+    canvas = PILImage.new("RGB", (size, size), "white")
+    canvas.paste(crop, ((size - crop.width) // 2, (size - crop.height) // 2))
+    return canvas
+
+
+def _build_detail_sheet(
+    rgb: np.ndarray,
+    regions: Optional[Dict[str, Any]],
+    names: Tuple[str, ...] = ("face", "upper_body", "lower_body", "feet"),
+) -> Optional[PILImage.Image]:
+    if not regions:
+        return None
+    sheet = PILImage.new("RGB", (1024, 1024), "white")
+    draw = ImageDraw.Draw(sheet)
+    placed = 0
+    for idx, name in enumerate(names):
+        crop = _crop_norm_region(rgb, regions.get(name), size=480)
+        if crop is None:
+            continue
+        x = 16 + (idx % 2) * 504
+        y = 16 + (idx // 2) * 504
+        sheet.paste(crop, (x, y))
+        draw.rectangle((x, y, x + 480, y + 480), outline=(40, 40, 40), width=3)
+        draw.rectangle((x, y, x + 150, y + 24), fill="white")
+        draw.text((x + 6, y + 5), name.replace("_", " ").upper(), fill=(0, 0, 0))
+        placed += 1
+    return sheet if placed else None
+
+
+def _canonical_lego_pose(size: int = 1024) -> PILImage.Image:
+    """Neutral reference geometry; appearance is intentionally generic."""
+    img = PILImage.new("RGB", (size, size), "white")
+    d = ImageDraw.Draw(img)
+    outline = (25, 25, 25)
+    fill = (190, 190, 190)
+    skin = (235, 205, 165)
+    # Head, trapezoid torso, arms, separated legs and distinct shoes.
+    d.rounded_rectangle((412, 105, 612, 290), radius=32, fill=skin, outline=outline, width=10)
+    d.polygon([(405, 305), (619, 305), (660, 600), (364, 600)], fill=fill, outline=outline)
+    d.polygon([(395, 325), (330, 350), (270, 590), (340, 610), (440, 360)], fill=fill, outline=outline)
+    d.polygon([(629, 325), (694, 350), (754, 590), (684, 610), (584, 360)], fill=fill, outline=outline)
+    d.rounded_rectangle((252, 575, 342, 665), radius=24, fill=skin, outline=outline, width=10)
+    d.rounded_rectangle((682, 575, 772, 665), radius=24, fill=skin, outline=outline, width=10)
+    d.rectangle((380, 600, 500, 875), fill=fill, outline=outline, width=10)
+    d.rectangle((524, 600, 644, 875), fill=fill, outline=outline, width=10)
+    d.rounded_rectangle((360, 855, 500, 925), radius=14, fill=(55, 55, 55), outline=outline, width=10)
+    d.rounded_rectangle((524, 855, 664, 925), radius=14, fill=(55, 55, 55), outline=outline, width=10)
+    return img
+
+
+def _merge_upper_refinement(base_b64: str, refined_b64: str, split: float = 0.64) -> str:
+    """Keep the base lower body exactly; feather only the refined upper region."""
+    base = PILImage.open(io.BytesIO(base64.b64decode(base_b64))).convert("RGBA")
+    refined = PILImage.open(io.BytesIO(base64.b64decode(refined_b64))).convert("RGBA").resize(base.size, PILImage.LANCZOS)
+    w, h = base.size
+    end = max(1, min(h, int(h * split)))
+    feather = max(8, int(h * 0.05))
+    mask = np.zeros((h, w), dtype=np.uint8)
+    solid_end = max(0, end - feather)
+    mask[:solid_end, :] = 255
+    if end > solid_end:
+        ramp = np.linspace(255, 0, end - solid_end, dtype=np.uint8)[:, None]
+        mask[solid_end:end, :] = ramp
+    merged = PILImage.composite(refined, base, PILImage.fromarray(mask, mode="L"))
+    buf = io.BytesIO()
+    merged.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
 def _get_shield_mask(
@@ -163,37 +250,41 @@ def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Opt
         rgb = arr[:, :, :3]
         near_white = np.all(rgb >= (255 - tolerance), axis=-1)
 
-        # Protect shielded pixels (e.g. white clothes / skin / shoes)
-        if shield_mask is not None:
-            if shield_mask.shape != near_white.shape:
-                shield_pil = PILImage.fromarray(shield_mask.astype(np.uint8) * 255).resize(
-                    (w, h), PILImage.NEAREST
-                )
-                shield_mask = np.array(shield_pil) > 128
-            near_white = near_white & ~shield_mask
+        # Do not subtract ``shield_mask`` here. The generated character is not
+        # guaranteed to align with the source-photo polygon, so the old shield
+        # could preserve a large white rectangle behind the character. Border
+        # connectivity already protects enclosed white garments and shoes.
+        # Keep the argument for compatibility with existing generation calls.
 
-        # BFS from the border so logos / interior white stay opaque
+        # Treat existing transparency as exterior too. Some stages add a
+        # transparent margin before this function runs, which otherwise leaves
+        # the old white canvas as an enclosed rectangle.
+        transparent = arr[:, :, 3] <= 5
+        exterior_candidate = near_white | transparent
+
+        # BFS from the border so logos / interior white stay opaque.
         from collections import deque
         visited = np.zeros((h, w), dtype=bool)
         q: deque = deque()
         for x in range(w):
             for y in (0, h - 1):
-                if near_white[y, x] and not visited[y, x]:
+                if exterior_candidate[y, x] and not visited[y, x]:
                     visited[y, x] = True
                     q.append((y, x))
         for y in range(h):
             for x in (0, w - 1):
-                if near_white[y, x] and not visited[y, x]:
+                if exterior_candidate[y, x] and not visited[y, x]:
                     visited[y, x] = True
                     q.append((y, x))
         while q:
             y, x = q.popleft()
             for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
                 ny, nx = y + dy, x + dx
-                if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx] and near_white[ny, nx]:
+                if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx] and exterior_candidate[ny, nx]:
                     visited[ny, nx] = True
                     q.append((ny, nx))
-        arr[visited, 3] = 0  # punch transparency
+        removed = visited & near_white
+        arr[removed, 3] = 0  # punch transparency
 
         # Soft alpha at the boundary: fade the 2-px ring around the cutout
         # so the polygon clip in the frontend doesn't show a hard white line.
@@ -203,8 +294,8 @@ def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Opt
             for dx in range(-2, 3):
                 if dy == 0 and dx == 0:
                     continue
-                shifted = np.roll(np.roll(visited, dy, axis=0), dx, axis=1)
-                boundary |= shifted & ~visited
+                shifted = np.roll(np.roll(removed, dy, axis=0), dx, axis=1)
+                boundary |= shifted & ~removed
         # For boundary pixels keep colour but halve alpha
         arr[boundary, 3] = (arr[boundary, 3].astype(int) // 2).astype(np.uint8)
 
@@ -248,13 +339,12 @@ _BODY_PROMPT = (
 
     "### MANDATORY EXCLUSIONS:\n"
     "- NO head, NO face, NO neck stud, NO collar opening showing human skin.\n"
-    "- NO hands (each arm must end flat at the wrist).\n"
+    "- NO arms, NO hands. The output starts at the shoulders and contains only torso and legs.\n"
     "- NO feet, NO shoes (each leg must end flat at the ankle).\n"
     "- NO skin pixels anywhere; the clothing must fully cover the body.\n\n"
 
     "### MANDATORY PROPORTIONS:\n"
     "- Torso: Perfect LEGO trapezoid shape (wider at the bottom, narrower at the top).\n"
-    "- Arms: Two short, straight arms attached at the top corners of the torso, angled outward at ~15 degrees. Sleeves matching the long/short sleeve style of the photo.\n"
     "- Legs: Two separate rectangular LEGO legs standing straight with a clear gap between them.\n\n"
 
     "### ART STYLE GUIDELINES:\n"
@@ -299,16 +389,25 @@ def _call_image_chat_multi(
     image_data_urls: List[str],
     prompt: str,
     model: Optional[str] = None,
-) -> Optional[str]:
+    generation_params: Optional[Dict[str, Any]] = None,
+    with_metadata: bool = False,
+) -> Any:
     """Call chat completions with one OR MORE input images + image-output.
 
     image_data_urls: list of data: URLs (PNG/JPEG base64). Order matters when
     the prompt refers to "Image 1 / Image 2" etc.
     model: explicit override; falls back to OUTFIT_GEN_MODEL.
     """
+    started_at = time.time()
+    t_start = time.perf_counter()
     client = _get_client()
     if client is None:
-        return None
+        empty = {
+            "image_b64": None,
+            "error": "openai_unavailable",
+            "api_usage": {"started_at": started_at, "duration_ms": 0, "error_code": "openai_unavailable"},
+        }
+        return empty if with_metadata else None
 
     if model is None:
         model = os.environ.get("OUTFIT_GEN_MODEL", "google/gemini-2.5-flash-image-preview").strip()
@@ -317,28 +416,75 @@ def _call_image_chat_multi(
     for url in image_data_urls:
         content.append({"type": "image_url", "image_url": {"url": url}})
 
+    requested_model = model
     try:
+        params = dict(generation_params or {})
+        for reserved in ("model", "messages", "modalities"):
+            params.pop(reserved, None)
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": content}],
             modalities=["image", "text"],
+            **params,
         )
     except Exception as e:
         print(f"[garment_gen] chat call failed (model={model}, n_images={len(image_data_urls)}): {e}")
         traceback.print_exc()
-        return None
+        failure = {
+            "image_b64": None,
+            "error": type(e).__name__,
+            "api_usage": {
+                "model": requested_model,
+                "started_at": started_at,
+                "duration_ms": int((time.perf_counter() - t_start) * 1000),
+                "error_code": type(e).__name__,
+            },
+        }
+        return failure if with_metadata else None
 
     try:
         msg = response.choices[0].message
     except Exception as e:
         print(f"[garment_gen] response shape unexpected: {e}; raw={response}")
-        return None
+        failure = {
+            "image_b64": None,
+            "error": "unexpected_response",
+            "api_usage": {
+                "model": requested_model,
+                "provider_request_id": getattr(response, "id", None),
+                "started_at": started_at,
+                "duration_ms": int((time.perf_counter() - t_start) * 1000),
+                "error_code": "unexpected_response",
+            },
+        }
+        return failure if with_metadata else None
 
     b64 = _extract_image_b64(msg)
     if not b64:
         snippet = str(msg)[:400]
         print(f"[garment_gen] no image in response. msg_preview={snippet}")
-    return b64
+    usage = getattr(response, "usage", None)
+    usage_data = usage.model_dump() if hasattr(usage, "model_dump") else (usage if isinstance(usage, dict) else {})
+    usage_data = usage_data or {}
+    prompt_details = usage_data.get("prompt_tokens_details") or {}
+    completion_details = usage_data.get("completion_tokens_details") or {}
+    cost_details = usage_data.get("cost_details") or {}
+    api_usage = {
+        "model": getattr(response, "model", None) or requested_model,
+        "provider_request_id": getattr(response, "id", None),
+        "started_at": started_at,
+        "duration_ms": int((time.perf_counter() - t_start) * 1000),
+        "prompt_tokens": usage_data.get("prompt_tokens"),
+        "completion_tokens": usage_data.get("completion_tokens"),
+        "total_tokens": usage_data.get("total_tokens"),
+        "image_tokens": completion_details.get("image_tokens"),
+        "cached_tokens": prompt_details.get("cached_tokens"),
+        "cost_usd": usage_data.get("cost"),
+        "upstream_cost_usd": cost_details.get("upstream_inference_cost"),
+        "error_code": None if b64 else "missing_image",
+    }
+    result = {"image_b64": b64, "error": None if b64 else "missing_image", "api_usage": api_usage}
+    return result if with_metadata else b64
 
 
 def _call_image_chat(image_data_url: str, prompt: str, model: Optional[str] = None) -> Optional[str]:
@@ -437,6 +583,10 @@ def generate_full_character_png(
     face_data: Optional[Dict[str, Any]] = None,
     outfit_data: Optional[Dict[str, Any]] = None,
     remove_bg: bool = True,
+    regions: Optional[Dict[str, Any]] = None,
+    style_id: str = "lego",
+    correction: Optional[str] = None,
+    model_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate ONE complete LEGO-minifigure sprite (head→feet, all-in-one).
 
@@ -459,8 +609,11 @@ def generate_full_character_png(
         return out
 
     h, w = rgb.shape[:2]
+    style = get_style(style_id)
     model = (
-        os.environ.get("FULL_CHARACTER_MODEL", "").strip()
+        (model_override or "").strip()
+        or style.model_overrides.get("full_character", "").strip()
+        or os.environ.get("FULL_CHARACTER_MODEL", "").strip()
         or os.environ.get("OUTFIT_GEN_MODEL", "").strip()
         or "google/gemini-2.5-flash-image-preview"
     )
@@ -477,10 +630,24 @@ def generate_full_character_png(
         # Generate shield mask to prevent eating white clothes/shoes
         shield_mask = _get_shield_mask(body_poly_norm, (x1, y1, x2, y2), w, h, target_size=1024)
 
-        prompt = _FULL_CHARACTER_PROMPT_TEMPLATE.format(
+        prompt = style.full_prompt_template.format(
             attrs=_attr_lines(face_data, outfit_data)
         )
-        b64 = _call_image_chat(data_url, prompt, model=model)
+        if correction:
+            prompt += "\n\n### REQUIRED CORRECTION\n" + correction
+        input_urls = [data_url]
+        detail_sheet = _build_detail_sheet(rgb, regions)
+        if detail_sheet is not None:
+            input_urls.append(_pil_to_data_url(detail_sheet))
+        input_urls.append(_pil_to_data_url(_canonical_lego_pose()))
+        prompt += "\n\nImage 1 is the source person. Image 2 (when present) is a close-up reference sheet. The final image is a neutral LEGO pose reference; copy only its complete front-facing geometry, including both shoes."
+        api_result = _call_image_chat_multi(
+            input_urls, prompt, model=model,
+            generation_params=dict(style.generation_params.get("full_character", {})),
+            with_metadata=True,
+        )
+        out["api_usage"] = api_result.get("api_usage")
+        b64 = api_result.get("image_b64")
         if b64:
             if remove_bg:
                 b64 = _remove_white_background(b64, shield_mask=shield_mask)
@@ -490,6 +657,7 @@ def generate_full_character_png(
             bg_note = "bg removed" if remove_bg else "raw (bg kept)"
             print(f"[garment_gen] full-character OK ({len(b64)} b64 chars, {bg_note})")
         else:
+            out["error"] = api_result.get("error") or "generation_failed"
             print("[garment_gen] full-character failed (no image in response)")
     except Exception as e:
         print(f"[garment_gen] full-character error: {e}")
@@ -503,6 +671,9 @@ def generate_full_character_png(
 def generate_body_png(
     rgb: np.ndarray,
     body_poly_norm: Optional[np.ndarray],
+    *,
+    style_id: str = "lego",
+    correction: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate ONE full-body LEGO-minifigure sprite (neck down).
 
@@ -538,7 +709,18 @@ def generate_body_png(
         # Generate shield mask to prevent eating white clothes/shoes
         shield_mask = _get_shield_mask(body_poly_norm, (x1, y1, x2, y2), w, h, target_size=1024)
 
-        b64 = _call_image_chat(data_url, _BODY_PROMPT)
+        style = get_style(style_id)
+        prompt = style.body_prompt
+        if correction:
+            prompt += "\n\n### REQUIRED CORRECTION\n" + correction
+        body_model = style.model_overrides.get("body") or None
+        api_result = _call_image_chat_multi(
+            [data_url], prompt, model=body_model,
+            generation_params=dict(style.generation_params.get("body", {})),
+            with_metadata=True,
+        )
+        out["api_usage"] = api_result.get("api_usage")
+        b64 = api_result.get("image_b64")
         if b64:
             b64 = _remove_white_background(b64, shield_mask=shield_mask)
             out["body_png"] = b64
@@ -546,6 +728,7 @@ def generate_body_png(
             out["ok"] = True
             print(f"[garment_gen] body OK ({len(b64)} b64 chars, bg removed)")
         else:
+            out["error"] = api_result.get("error") or "generation_failed"
             print("[garment_gen] body failed (no image in response)")
     except Exception as e:
         print(f"[garment_gen] body error: {e}")
@@ -581,11 +764,20 @@ _REFINE_PROMPT = (
     "1. **Face & Eyes**: Symmetrical, cleanly redrawn facial features. Sharp dot eyes, perfect clean eyebrows and mouth. No smudging.\n"
     "2. **Hair & Head**: Extremely clean outline of the hair piece sitting perfectly on the head, with a clear boundary. Consistent single hair color matching Image 2.\n"
     "3. **Torso & Outerwear**: Crisp, tight garment silhouette and outlines. Uniform color across chest, back, and sleeves. Draw clean buttons, zippers, or pocket seams.\n"
-    "4. **Legs & Pants**: Tight rectangular leg outlines, uniform color for both legs.\n"
-    "5. **Shoes & Footwear**: Sharpen the rectangular dark shoe slabs (black, grey, or brown) slightly wider than the leg, with a clean horizontal seam line separating them from the pants. NEVER omit shoes.\n"
-    "6. **Line Art**: Ensure all outlines are clean, uniform, and sharp black vector-like strokes.\n\n"
+    "4. **Upper-body Line Art**: Ensure the head, hair, arms, and torso outlines are clean, uniform, and sharp black vector-like strokes.\n"
+    "5. **Locked Lower Body**: Do not redesign, repaint, move, crop, or regenerate the hips, legs, feet, or shoes from Image 2.\n\n"
     + _FULL_CHARACTER_NEGATIVE
 )
+
+
+register_style(GenerationStyle(
+    style_id="lego",
+    body_prompt=_BODY_PROMPT,
+    full_prompt_template=_FULL_CHARACTER_PROMPT_TEMPLATE,
+    refine_prompt=_REFINE_PROMPT,
+    negative_prompt=_NEGATIVE + _FULL_CHARACTER_NEGATIVE,
+    supported_modes=frozenset({"body_sprite", "full_character"}),
+))
 
 
 def generate_refine_character_png(
@@ -594,12 +786,14 @@ def generate_refine_character_png(
     body_poly_norm: Optional[np.ndarray],
     face_data: Optional[Dict[str, Any]] = None,
     outfit_data: Optional[Dict[str, Any]] = None,
+    regions: Optional[Dict[str, Any]] = None,
+    style_id: str = "lego",
 ) -> Dict[str, Any]:
     """Pass 2 of the refined pipeline.
 
     Takes the (non-bg-removed) base PNG from generate_full_character_png plus
-    the original photo, and asks the model to sharpen face / hair / garment /
-    shoes detail while preserving the base's composition. Returns the same
+    the original photo, and asks the model to sharpen face / hair / upper-body
+    detail while preserving the base's lower body. Returns the same
     schema as generate_full_character_png.
     """
     out: Dict[str, Any] = {"ok": False}
@@ -617,8 +811,10 @@ def generate_refine_character_png(
         return out
 
     h, w = rgb.shape[:2]
+    style = get_style(style_id)
     model = (
-        os.environ.get("REFINE_CHARACTER_MODEL", "").strip()
+        style.model_overrides.get("refine", "").strip()
+        or os.environ.get("REFINE_CHARACTER_MODEL", "").strip()
         or os.environ.get("FULL_CHARACTER_MODEL", "").strip()
         or os.environ.get("OUTFIT_GEN_MODEL", "").strip()
         or "google/gemini-2.5-flash-image-preview"
@@ -638,17 +834,31 @@ def generate_refine_character_png(
         # Generate shield mask to prevent eating white clothes/shoes
         shield_mask = _get_shield_mask(body_poly_norm, (x1, y1, x2, y2), w, h, target_size=1024)
 
-        prompt = _REFINE_PROMPT.format(
+        prompt = style.refine_prompt.format(
             attrs=_attr_lines(face_data, outfit_data)
         )
-        b64 = _call_image_chat_multi([orig_url, base_url], prompt, model=model)
+        detail_sheet = _build_detail_sheet(rgb, regions, names=("face", "upper_body"))
+        inputs = [orig_url]
+        if detail_sheet is not None:
+            inputs.append(_pil_to_data_url(detail_sheet))
+        inputs.append(base_url)
+        prompt += "\n\nRefine only the head, hair, face, and upper torso. The lower body and shoes will be kept from the draft and must not be redesigned."
+        api_result = _call_image_chat_multi(
+            inputs, prompt, model=model,
+            generation_params=dict(style.generation_params.get("refine", {})),
+            with_metadata=True,
+        )
+        out["api_usage"] = api_result.get("api_usage")
+        b64 = api_result.get("image_b64")
         if b64:
+            b64 = _merge_upper_refinement(base_b64, b64)
             b64 = _remove_white_background(b64, shield_mask=shield_mask)
             out["body_png"] = b64
             out["body_bbox"] = [x1 / w, y1 / h, x2 / w, y2 / h]
             out["ok"] = True
             print(f"[garment_gen] refine OK ({len(b64)} b64 chars, bg removed)")
         else:
+            out["error"] = api_result.get("error") or "generation_failed"
             print("[garment_gen] refine failed (no image in response)")
     except Exception as e:
         print(f"[garment_gen] refine error: {e}")

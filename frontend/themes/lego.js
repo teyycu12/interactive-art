@@ -1,35 +1,23 @@
-// PersonaFlow – LEGO character theme
-//
-// Color pipeline per frame:
-//   1. _filterHairCells()   – remove grid cells that match person.hairColor
-//   2. _clusterGrid()       – BFS region growing (threshold 22) → average each cluster
-//                             Lower threshold than before: preserves real pattern edges
-//                             while still smoothing lighting noise.
-//   3. _enhanceGrid()       – per-grid contrast stretch (luma range → [L_MIN, L_MAX])
-//                             + saturation boost (HSL).  Makes subtle differences pop.
-//   4. _makeSymmetric()     – mirror-average left↔right halves of the torso grid so
-//                             the pattern reads as clean bilateral symmetry on the body.
-//   5. Camera correction    – baked into _enhanceGrid (×CAMERA_CORRECTION before HSL).
+// PersonaFlow – legacy solid-colour／full-character p5.js theme.
+// Formal brick_ai_texture results are rendered exclusively by Three.js.
 
 // ─── Tuning knobs ────────────────────────────────────────────────────────────
 const CAMERA_CORRECTION  = 1.18; // compensates for camera underexposure
-const CLUSTER_THRESHOLD  = 22;   // max per-edge RGB distance to merge cells
 const SAT_BOOST          = 1.6;  // saturation multiplier (HSL)
 const CONTRAST_L_MIN     = 0.20; // after stretch: darkest active cell → this luma
 const CONTRAST_L_MAX     = 0.82; // after stretch: brightest active cell → this luma
-const HAIR_CELL_DIST     = 40;   // cell filtered if within this RGB dist of hairColor
-const HAIR_SHIRT_MIN     = 35;   // skip hair filter when shirt≈hair (dark shirt + dark hair)
-const SHIRT_CELL_DIST    = 45;   // lower-body cell filtered if within this dist of shirt color
-const SHIRT_PANTS_MIN    = 30;   // skip shirt filter when pants≈shirt (can't distinguish)
 
 // ─── Public entry point ──────────────────────────────────────────────────────
 
 function drawLegoCharacter(person) {
   const s = 1.5;
+  const usesProgrammaticRig = person.renderMode === 'body_sprite';
+  const torsoScaleY = usesProgrammaticRig ? (Number(person.heightProfile?.torso_scale_y) || 1) : 1;
+  const legScaleY = usesProgrammaticRig ? (Number(person.heightProfile?.leg_scale_y) || 1) : 1;
 
   // ── Geometry ────────────────────────────────────────────────────
-  const tTop   = 38 * s, tBottom = 50 * s, torsoH = 50 * s;
-  const legW   = 21 * s, legH    = 38 * s, footH  = 10 * s, legGap = 2 * s;
+  const tTop   = 38 * s, tBottom = 50 * s, torsoH = 50 * s * torsoScaleY;
+  const legW   = 21 * s, legH    = 38 * s * legScaleY, footH  = 10 * s, legGap = 2 * s;
   const aW     = 13 * s, aL      = 40 * s;
   const shldY  = -torsoH / 2 + 3 * s;
   const headS  = 35 * s;
@@ -73,20 +61,7 @@ function drawLegoCharacter(person) {
   const lLegDeg = -legDeg;  // left leg backward when swing > 0
   const rLegDeg =  legDeg;  // right leg forward when swing > 0
 
-  // ── Grid pipeline ────────────────────────────────────────────────
-  const clothGrid = person.clothGrid
-    ? _makeSymmetric(_enhanceGrid(_clusterGrid(
-        _filterHairCells(person.clothGrid, person.hairColor, person.innerColor)
-      )))
-    : null;
-  // Leg grid only works with static (non-rotated) geometry; skip while walking
-  const lowerGrid = !isWalking && person.lowerGrid
-    ? _enhanceGrid(_clusterGrid(
-        _filterShirtFromLower(person.lowerGrid, person.innerColor, person.lowerColor)
-      ))
-    : null;
-
-  // ── Solid colors for areas without grid data (arms, fallback) ───
+  // ── Solid colors for the legacy renderer ────────────────────────
   const [br, bg2, bb] = _enhanceSolid(person.innerColor);
   const [lr, lg,  lb] = _enhanceSolid(person.lowerColor);
   const bodyColor = color(br, bg2, bb);
@@ -251,7 +226,6 @@ function drawLegoCharacter(person) {
     beginShape();
     for (const [px, py] of torsoPoly) vertex(px, py);
     endShape(CLOSE);
-    if (clothGrid) _drawClothGrid(drawingContext, torsoPoly, clothGrid);
     noFill(); stroke(bodyOutline);
     beginShape();
     for (const [px, py] of torsoPoly) vertex(px, py);
@@ -280,11 +254,6 @@ function drawLegoCharacter(person) {
     beginShape();
     for (const [px, py] of torsoPoly) vertex(px, py);
     endShape(CLOSE);
-    if (clothGrid) _drawClothGrid(drawingContext, torsoPoly, clothGrid);
-    if (lowerGrid) {
-      _drawClothGrid(drawingContext, lLegPoly, lowerGrid, true);
-      _drawClothGrid(drawingContext, rLegPoly, lowerGrid, false);
-    }
     noFill(); stroke(bodyOutline);
     beginShape();
     for (const [px, py] of torsoPoly) vertex(px, py);
@@ -625,4 +594,19 @@ function _legoHand(s, col, outlineColor) {
   for (let a = 180; a <= 360; a += 10) vertex(rOut * cos(radians(a)), rOut * sin(radians(a)));
   for (let a = 360; a >= 180; a -= 10) vertex(rIn  * cos(radians(a)), rIn  * sin(radians(a)));
   endShape(CLOSE);
+}
+
+if (window.PersonaFlowThemes) {
+  window.PersonaFlowThemes.register('lego', {
+    draw: drawLegoCharacter,
+    baseFootAnchor: 109.5,
+    footAnchor(person) {
+      const modeOne = person.renderMode === 'body_sprite';
+      const torso = modeOne ? (Number(person.heightProfile?.torso_scale_y) || 1) : 1;
+      const legs = modeOne ? (Number(person.heightProfile?.leg_scale_y) || 1) : 1;
+      return (25 * 1.5 * torso) + (38 * 1.5 * legs) + (10 * 1.5);
+    },
+    accessoryOptions: { hatY: -96, handYBoost: 22 },
+    supportedModes: ['body_sprite', 'full_character'],
+  });
 }

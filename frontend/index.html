@@ -16,50 +16,120 @@
         display: block;
       }
       #mode-selector {
-        position: absolute;
-        top: 20px;
-        right: 280px;
-        background: #21262d;
-        border: 1px solid #30363d;
-        border-radius: 6px;
-        padding: 10px 14px;
+        position: fixed;
+        top: 118px;
+        left: 32px;
+        width: 280px;
+        background: linear-gradient(180deg, #1c2430, #161b22);
+        border: 2px solid #388bfd;
+        border-radius: 14px;
+        padding: 18px;
         color: #c9d1d9;
         font-family: system-ui, sans-serif;
-        font-size: 13px;
-        z-index: 10;
+        font-size: 14px;
+        z-index: 30;
         display: flex;
         flex-direction: column;
-        gap: 4px;
-        max-width: 260px;
+        gap: 10px;
+        box-shadow: 0 14px 40px #0008;
       }
       #mode-selector .title {
-        color: #8b949e;
-        font-size: 11px;
-        margin-bottom: 2px;
+        color: #f0f6fc;
+        font-size: 18px;
+        font-weight: 800;
+        margin-bottom: 3px;
       }
       #mode-selector label {
         cursor: pointer;
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid #30363d;
+        border-radius: 9px;
+        background: #0d1117aa;
+        transition: border-color .15s, background .15s;
+      }
+      #mode-selector label:has(input:checked) {
+        border-color: #58a6ff;
+        background: #1f6feb2b;
+      }
+      #mode-selector label strong,
+      #mode-selector label small { display: block; }
+      #mode-selector label strong { color: #f0f6fc; font-size: 14px; }
+      #mode-selector label small { color: #8b949e; font-size: 11px; margin-top: 3px; line-height: 1.35; }
+      #mode-selector .hint { color: #8b949e; font-size: 11px; line-height: 1.4; }
+      #mode-selector input[type="radio"] {
+        width: 18px;
+        height: 18px;
+        flex: 0 0 auto;
       }
       #mode-selector input[type="radio"] {
         accent-color: #58a6ff;
+      }
+      @media (max-width: 1279px) {
+        #mode-selector {
+          top: 86px;
+          left: 20px;
+          width: calc(100vw - 40px);
+          padding: 10px 12px;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 7px;
+        }
+        #mode-selector .title, #mode-selector .hint { grid-column: 1 / -1; }
+        #mode-selector label { padding: 8px; min-width: 0; }
+        #mode-selector label strong { font-size: 12px; }
+        #mode-selector label small { font-size: 10px; }
+      }
+      @media (max-height: 820px) {
+        #mode-selector {
+          top: 104px;
+          padding: 12px 16px;
+          gap: 6px;
+        }
+        #mode-selector .title { font-size: 16px; }
+        #mode-selector label { padding: 8px 10px; }
+        #mode-selector label small { margin-top: 1px; line-height: 1.2; }
+      }
+      #dev-history-link {
+        position: fixed;
+        right: 20px;
+        bottom: 20px;
+        z-index: 20;
+        padding: 9px 12px;
+        border: 1px solid #30363d;
+        border-radius: 7px;
+        background: #21262d;
+        color: #58a6ff;
+        font: 13px system-ui, sans-serif;
+        text-decoration: none;
       }
     </style>
   </head>
   <body>
     <div id="mode-selector">
-      <span class="title">生成模式</span>
-      <label><input type="radio" name="genMode" value="body_sprite" checked> 上下身偵測（穩定、快）</label>
-      <label><input type="radio" name="genMode" value="full_character"> 全人物生成（細節豐富、較慢）</label>
-      <label><input type="radio" name="genMode" value="full_character_refined"> 全人物 + 精修（最精緻、最慢）</label>
+      <span class="title">選擇生成模式</span>
+      <span class="hint">目前為開發比較階段，請使用相同照片測試各模式。</span>
+      <label><input type="radio" name="genMode" value="brick_ai_texture" checked><span><strong>正式模式｜AI 材質 3D 角色</strong><small>固定物種幾何＋AI 臉部與服裝材質</small></span></label>
+      <label><input type="radio" name="genMode" value="full_character"><span><strong>實驗模式｜完整生成</strong><small>遠端生成完整人物，速度較慢</small></span></label>
     </div>
+    <a id="dev-history-link" href="dev.html?v=20260803-blind-review-v2">生成歷史／成本／盲評</a>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/p5@1.9.3/lib/p5.min.js"></script>
-    <script src="./character.js"></script>
-    <script src="./themes/lego.js"></script>
-    <script src="./socket.js"></script>
-    <script src="./sketch.js"></script>
+    <script src="./character.js?v=20260718"></script>
+    <script src="./themes/registry.js?v=20260718"></script>
+    <script src="./themes/lego.js?v=20260803-no-cloth-grid"></script>
+    <script src="./socket.js?v=20260718-final-render"></script>
+    <script type="module">
+      window.PersonaFlowBrick3DReady = (async () => {
+        const THREE = await import('https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js');
+        window.THREE = THREE;
+        await import('./brick-v2-model.js?v=20260803-hairline-skirt-v3');
+        await import('./brick3d-preview.js?v=20260803-hairline-skirt-v3');
+        return window.PersonaFlowBrick3D;
+      })();
+    </script>
+    <script src="./sketch.js?v=20260803-no-cloth-grid"></script>
   </body>
 </html>

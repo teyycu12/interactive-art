@@ -5,9 +5,8 @@ import google.generativeai as genai
 from typing import Dict, Any
 
 _API_KEY = os.environ.get("GEMINI_API_KEY")
-if not _API_KEY:
-    raise RuntimeError("GEMINI_API_KEY not set — add it to your .env file")
-genai.configure(api_key=_API_KEY)
+if _API_KEY:
+    genai.configure(api_key=_API_KEY)
 
 def analyze_outfit(base64_image: str) -> Dict[str, Any]:
     """
@@ -31,14 +30,17 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
         }
         
         prompt = """
-        You are a fashion analyst for a 2D avatar system.
+        You are a fashion analyst for a fixed-species 3D brick avatar system.
         Analyze the clothing the person is wearing in the image and output a JSON object describing the outfit components.
         
         The JSON MUST have the following structure and use exactly these keys and specific values:
         {
-            "outer": "blazer" | "denim_jacket" | "cardigan" | "none",
-            "inner": "tshirt" | "vneck" | "button_up",
-            "lower": "jeans" | "pleated_skirt" | "suit_pants" | "shorts",
+            "outer": "none" | "vest" | "blazer" | "denim_jacket" | "cardigan" | "hoodie" | "long_coat",
+            "inner": "tank_top" | "tshirt" | "vneck" | "button_up" | "sweater" | "dress",
+            "lower": "jeans" | "pleated_skirt" | "straight_skirt" | "suit_pants" | "shorts" | "dress",
+            "sleeve_length": "sleeveless" | "short" | "long",
+            "fit": "slim" | "regular" | "relaxed",
+            "legwear": "covered" | "bare" | "tights" | "leggings",
             "inner_color": "#HEXCODE",
             "outer_color": "#HEXCODE" (or null if none),
             "lower_color": "#HEXCODE",
@@ -51,7 +53,7 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
         Respond ONLY with the JSON object, no markdown formatting like ```json or other text.
         """
         
-        response = model.generate_content([prompt, image_part])
+        response = model.generate_content([prompt, image_part], request_options={"timeout": 40})
         
         text_resp = response.text.strip()
         # Clean up in case the model returns markdown code blocks despite instructions
@@ -81,6 +83,9 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
                 "inner_color": "#FFFFFF",
                 "outer_color": None,
                 "lower_color": "#336699",
+                "sleeve_length": "short",
+                "fit": "regular",
+                "legwear": "covered",
                 "has_pattern": False
             }
         }
@@ -137,7 +142,7 @@ skin_tone guide (judge by face, not lighting):
 
 Respond ONLY with the JSON object, no markdown fences."""
 
-        response = model.generate_content([prompt, image_part])
+        response = model.generate_content([prompt, image_part], request_options={"timeout": 40})
         text = response.text.strip()
         if "```" in text:
             parts = text.split("```")
