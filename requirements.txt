@@ -15,7 +15,9 @@ numpy
 pillow                 # generate_avatar 影像解碼
 pillow-heif            # iPhone HEIC/HEIF 照片支援
 
-# AI 生成（M2）
+# AI 生成與排版（M2 / M6）
 google-generativeai    # Gemini：服裝 / 臉部特徵分類
 openai                 # OpenRouter 相容 fallback client（見 vlm_module）
 requests
+qrcode[pil]            # M6 集體記憶大合照 QR Code 下載產生
+
