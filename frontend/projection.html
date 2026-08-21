@@ -83,6 +83,8 @@ class Vec2 {
 const flock = [];
 const boidMap = {};   // charId → Boid
 let isPhotoTime = false;
+const USE_SERVER_POSITIONS = false; // 設為 true 啟用伺服器座標權威插值
+let _lastUpdatePositionsTs = performance.now();
 let pixiApp;
 
 // 背景尺寸（配合你的背景圖調整）
@@ -513,6 +515,8 @@ class Boid {
     this.acc = new Vec2(0, 0);
     this.charId = charId;
     this.photoTarget = null;
+    this.serverTarget = null;
+    this.serverState = 'ROAMING';
     this.walkTimer   = Math.random() * 200 + 100;
     this.restTimer   = 0;
     this.turnCooldown = 0;
@@ -554,7 +558,21 @@ class Boid {
 
     const isTurning = this.turnCooldown > 0;
 
-    if (isPhotoTime && this.photoTarget) {
+    if (USE_SERVER_POSITIONS && this.serverTarget) {
+      const diff = Vec2.sub(this.serverTarget, this.pos);
+      const dist = diff.mag();
+      if (dist > 1.0) {
+        this.vel = diff.mult(0.15);
+        this.pos.add(this.vel);
+      } else {
+        this.pos.x = this.serverTarget.x;
+        this.pos.y = this.serverTarget.y;
+        this.vel.mult(0);
+      }
+      if (this.serverState === 'GREETING' && this.turnCooldown <= 0) {
+        this.startGreeting(null);
+      }
+    } else if (isPhotoTime && this.photoTarget) {
       const diff = Vec2.sub(this.photoTarget, this.pos);
       if (diff.mag() > 2) {
         this.vel = diff.normalize().mult(3.5);
@@ -773,7 +791,10 @@ function _spawnBoid(charId, topColor, botColor, armColor, accList, clothGrid, lo
 
 function initSocket() {
   try {
-    socket = io(BACKEND_URL, { reconnectionAttempts: 10 });
+    socket = io(BACKEND_URL, {
+      transports: ['websocket'],
+      reconnectionAttempts: 10,
+    });
 
     socket.on('connect', () => {
       statusEl.textContent = `已連線 Socket.io ✓ (${socket.id})`;
@@ -830,7 +851,14 @@ function initSocket() {
             boidMap[char.id].characterDisplay.updateLowerGrid(char.lower_grid || null);
           }
         }
+        if (boidMap[char.id]) {
+          boidMap[char.id].serverTarget = new Vec2((char.x / 1920) * pixiApp.screen.width, (char.y / 1080) * pixiApp.screen.height);
+          boidMap[char.id].serverState = char.state || 'ROAMING';
+        }
       }
+
+      _lastUpdatePositionsTs = performance.now();
+      statusEl.style.color = '';
 
       // Live status: show how many characters are on the wall
       const n = Object.keys(boidMap).length;
@@ -886,6 +914,10 @@ function initPixi() {
   // Start socket and game loop immediately — no waiting for assets
   initSocket();
   pixiApp.ticker.add(() => {
+    if (performance.now() - _lastUpdatePositionsTs > 2500 && Object.keys(boidMap).length > 0) {
+      statusEl.textContent = '⚠️ 伺服器訊號中斷 (超過 2 秒未收到更新)';
+      statusEl.style.color = '#ff6b6b';
+    }
     flock.forEach(b => b.update());
     pixiApp.stage.children.sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
   });
