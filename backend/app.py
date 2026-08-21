@@ -3,7 +3,7 @@ import os
 import random
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 # Load .env before importing modules that read env vars (vlm_module, garment_gen)
@@ -15,8 +15,8 @@ except ImportError:
     pass
 
 import numpy as np
-from flask import Flask, jsonify, request
-from flask_socketio import SocketIO, emit
+from flask import Flask, jsonify, request, send_from_directory
+from flask_socketio import SocketIO, emit, join_room, leave_room
 
 try:
     import cv2  # type: ignore
@@ -39,11 +39,23 @@ except Exception:
     from event_logger import log_event, Timer  # type: ignore
 
 try:
+    from backend.swarm_snapshot import save_snapshot, load_snapshot  # type: ignore
+    from backend.photo_composer import compose_group_photo  # type: ignore
+    from backend.bot_simulator import inject_bots, remove_bots  # type: ignore
+    from backend.circuit_breaker import gemini_breaker, image_gen_breaker  # type: ignore
+except Exception:
+    from swarm_snapshot import save_snapshot, load_snapshot  # type: ignore
+    from photo_composer import compose_group_photo  # type: ignore
+    from bot_simulator import inject_bots, remove_bots  # type: ignore
+    from circuit_breaker import gemini_breaker, image_gen_breaker  # type: ignore
+
+try:
     from backend.vlm_module import analyze_outfit, analyze_face
     from backend.face_module import get_face_features
 except Exception:
     from vlm_module import analyze_outfit, analyze_face
     from face_module import get_face_features
+
 
 try:
     from backend.garment_gen import (  # type: ignore
@@ -105,18 +117,51 @@ _last_success_lower_grid: Optional[Dict[str, Any]] = None
 _last_success_arm_color:  Optional[Dict[str, Any]] = None
 _last_success_ts: Optional[float] = None
 
-# --- swarm state ---
-_swarm_chars: Dict[str, Any] = {
-    "system_bot": {
-        "id": "system_bot", "x": 500, "y": 500, "vx": 1, "vy": 1,
-        "upper": {"hex": "#FFFFFF"}, "lower": {"hex": "#444444"},
-        "outfit": {"inner_color": "#FF0000", "lower_color": "#0000FF"}
+_PHOTOS_DIR = os.path.join(os.path.dirname(__file__), "photos")
+os.makedirs(_PHOTOS_DIR, exist_ok=True)
+
+# 啟動時自動還原快照（若有），否則預設 system_bot
+_restored_chars = load_snapshot()
+if _restored_chars:
+    _swarm_chars: Dict[str, Any] = _restored_chars
+else:
+    _swarm_chars: Dict[str, Any] = {
+        "system_bot": {
+            "id": "system_bot", "room": "default", "x": 500, "y": 500, "vx": 1, "vy": 1,
+            "upper": {"hex": "#FFFFFF"}, "lower": {"hex": "#444444"},
+            "outfit": {"inner_color": "#FF0000", "lower_color": "#0000FF"}
+        }
     }
-}
+
+# 支援 AUTO_BOTS 環境變數在啟動時自動注入指定數量之虛擬角色
+_auto_bots_count = int(os.environ.get("AUTO_BOTS", "0"))
+if _auto_bots_count > 0:
+    inject_bots(_swarm_chars, count=_auto_bots_count)
+
 _swarm_lock = threading.Lock()
+
+# --- swarm 容量上限（inject_bots 為公開控制事件，需防止資源耗盡）---
+# swarm 每 0.1s tick 做 O(n^2) 計算並廣播整包資料，總量必須設硬上限。
+MAX_SWARM_SIZE = int(os.environ.get("MAX_SWARM_SIZE", "300"))
+MAX_BOTS_PER_INJECT = int(os.environ.get("MAX_BOTS_PER_INJECT", "100"))
 
 # Thread pool for parallel VLM calls
 _executor = ThreadPoolExecutor(max_workers=4)
+
+# --- 熔斷器橋接 ---
+# vlm_module / gemini_gen 的函式會吞掉例外並回傳 {"ok": False, ...}，
+# 熔斷器只認得例外，因此包一層把「回傳失敗」轉成例外，讓失敗被計數。
+class _ExternalCallFailed(Exception):
+    """外部 API 回傳失敗結果（非例外）時用來觸發熔斷器計數。"""
+    pass
+
+
+def _raise_on_failure(func, *args, **kwargs):
+    result = func(*args, **kwargs)
+    if isinstance(result, dict) and result.get("ok") is False:
+        raise _ExternalCallFailed(result.get("error", "external call returned ok=False"))
+    return result
+
 
 # --- generate_avatar 併發控制（第 8 節風險：多人同時拍照單點瓶頸）---
 # 同時最多跑 GEN_MAX_CONCURRENT 個生成流程，超過的排隊等待，
@@ -169,6 +214,12 @@ def _merge_fallback_payload(features: Dict[str, Any]) -> Dict[str, Any]:
 @app.route("/health", methods=["GET"])
 def health_check():
     return jsonify({"status": "ok", "service": "PersonaFlow backend"})
+
+
+@app.route("/photos/<path:filename>", methods=["GET"])
+def serve_photo(filename):
+    return send_from_directory(_PHOTOS_DIR, filename)
+
 
 
 @socketio.on("connect")
@@ -291,8 +342,16 @@ def handle_generate_avatar(payload):
 
             # Submit VLM analyses to ThreadPoolExecutor (parallel)
             _vlm_start = time.perf_counter()
-            fut_outfit   = _executor.submit(analyze_outfit, img_str)
-            fut_face_vlm = _executor.submit(analyze_face, img_str)
+            # 經由熔斷器呼叫：外部 API 連續失敗時快速失敗並回傳 fallback，
+            # 避免 executor 執行緒持續被無效等待卡住。
+            fut_outfit   = _executor.submit(
+                gemini_breaker.call, _raise_on_failure, analyze_outfit, img_str,
+                fallback={"ok": False, "error": "circuit_open"},
+            )
+            fut_face_vlm = _executor.submit(
+                gemini_breaker.call, _raise_on_failure, analyze_face, img_str,
+                fallback={"ok": False, "error": "circuit_open"},
+            )
 
             # Ultra-robust base64 image decoding
             frame = None
@@ -390,8 +449,10 @@ def handle_generate_avatar(payload):
             # body_sprite mode: spawn generation in PARALLEL with VLM (no VLM context needed).
             if mode == "body_sprite" and rgb_full is not None and body_poly is not None:
                 fut_garment = _executor.submit(
-                    generate_body_png,
+                    image_gen_breaker.call,
+                    _raise_on_failure, generate_body_png,
                     rgb_full, body_poly,
+                    fallback={"ok": False, "error": "circuit_open"},
                 )
 
             # Wait for VLM results
@@ -453,8 +514,10 @@ def handle_generate_avatar(payload):
                 _progress("generating", 35, "正在生成 LEGO 全人物...")
                 if rgb_full is not None and body_poly is not None:
                     fut_gen = _executor.submit(
-                        generate_full_character_png,
+                        image_gen_breaker.call,
+                        _raise_on_failure, generate_full_character_png,
                         rgb_full, body_poly, face_data, outfit_data,
+                        fallback={"ok": False, "error": "circuit_open"},
                     )
                     garment_result = fut_gen.result(timeout=120)
                 else:
@@ -464,16 +527,20 @@ def handle_generate_avatar(payload):
                 _progress("generating", 35, "正在生成 LEGO 全人物（第一階段）...")
                 if rgb_full is not None and body_poly is not None:
                     fut_base = _executor.submit(
-                        generate_full_character_png,
+                        image_gen_breaker.call,
+                        _raise_on_failure, generate_full_character_png,
                         rgb_full, body_poly, face_data, outfit_data, False,
+                        fallback={"ok": False, "error": "circuit_open"},
                     )
                     base_result = fut_base.result(timeout=120)
                     if base_result.get("ok") and base_result.get("body_png"):
                         _progress("refining", 60, "正在精修細節（第二階段）...")
                         fut_ref = _executor.submit(
-                            generate_refine_character_png,
+                            image_gen_breaker.call,
+                            _raise_on_failure, generate_refine_character_png,
                             base_result["body_png"], rgb_full, body_poly,
                             face_data, outfit_data,
+                            fallback={"ok": False, "error": "circuit_open"},
                         )
                         refined = fut_ref.result(timeout=120)
                         if refined.get("ok"):
@@ -541,11 +608,13 @@ def handle_generate_avatar(payload):
 @socketio.on("join_swarm")
 def handle_join_swarm(payload):
     char_id = payload.get("id") or request.sid
+    room = payload.get("room", "default")
     with _swarm_lock:
         existing = _swarm_chars.get(char_id, {})
         _swarm_chars[char_id] = {
             **existing,
             "id": char_id,
+            "room": room,
             "x": float(payload.get("x", 960)),
             "y": float(payload.get("y", 540)),
             "vx": existing.get("vx", random.uniform(-1.0, 1.0)),
@@ -564,8 +633,9 @@ def handle_join_swarm(payload):
             "character_mode": payload.get("character_mode", existing.get("character_mode", "body_sprite")),
         }
         total = len(_swarm_chars)
-    emit("swarm_joined", {"id": char_id})
-    log_event("join_swarm", pid=char_id,
+    join_room(room)
+    emit("swarm_joined", {"id": char_id, "room": room})
+    log_event("join_swarm", pid=char_id, room=room,
               x=float(payload.get("x", 960)), y=float(payload.get("y", 540)),
               character_mode=payload.get("character_mode", "body_sprite"),
               swarm_size=total)
@@ -588,7 +658,7 @@ def handle_update_character(payload):
     changed = []
     with _swarm_lock:
         if char_id in _swarm_chars:
-            for k in ("upper", "lower", "upper_type", "lower_type", "accessories", "accessory", "arm_color", "face", "outfit", "body_png", "body_bbox", "character_mode"):
+            for k in ("upper", "lower", "upper_type", "lower_type", "accessories", "accessory", "arm_color", "face", "outfit", "body_png", "body_bbox", "character_mode", "room"):
                 if k in payload:
                     _swarm_chars[char_id][k] = payload[k]
                     changed.append(k)
@@ -597,36 +667,144 @@ def handle_update_character(payload):
 
 
 @socketio.on("get_swarm")
-def handle_get_swarm(_payload=None):
-    # 投影牆 / 互動端連上後主動索取一次目前全體狀態，
-    # 免得要等下一個 0.1s tick 才有畫面（見 5.2 事件表 get_swarm）。
+def handle_get_swarm(payload=None):
+    payload = payload or {}
+    room = payload.get("room")
+    with _swarm_lock:
+        if room:
+            chars = [c for c in _swarm_chars.values() if c.get("room", "default") == room]
+        else:
+            chars = list(_swarm_chars.values())
+    emit("update_positions", {"characters": chars})
+    log_event("get_swarm", pid=request.sid, room=room, swarm_size=len(chars))
+
+
+@socketio.on("trigger_photo")
+def handle_trigger_photo(payload=None):
+    """
+    大合照合成觸發事件 (M6 核心)。
+    收集在場角色、進行智慧排版合成高解析度圖片與 QR Code，並廣播 photo_ready。
+    """
+    payload = payload or {}
+    room = payload.get("room", "default")
+    with _swarm_lock:
+        chars = [c for c in _swarm_chars.values() if c.get("room", "default") == room]
+        if not chars and room == "default":
+            chars = list(_swarm_chars.values())
+
+    host = request.host if request else "127.0.0.1:5001"
+    photo_url_base = f"http://{host}/photos"
+    res = compose_group_photo(chars, photo_url_base=photo_url_base)
+
+    if res.get("ok") and "photo_bytes" in res:
+        photo_filename = f"{res['photo_id']}.png"
+        photo_filepath = os.path.join(_PHOTOS_DIR, photo_filename)
+        try:
+            with open(photo_filepath, "wb") as pf:
+                pf.write(res["photo_bytes"])
+        except Exception as pe:
+            print(f"[trigger_photo] Failed to save photo file: {pe}")
+
+    log_event("group_photo_composed", photo_id=res.get("photo_id"), count=len(chars), room=room)
+    socketio.emit("photo_ready", {
+        "ok": res.get("ok", False),
+        "photo_id": res.get("photo_id"),
+        "photo_url": res.get("photo_url"),
+        "photo_b64": res.get("photo_b64"),
+        "qr_b64": res.get("qr_b64"),
+        "character_count": len(chars),
+        "room": room,
+    })
+
+
+@socketio.on("inject_bots")
+def handle_inject_bots(payload=None):
+    payload = payload or {}
+    # 這是任何已連線客戶端都能觸發的控制端事件，且 swarm 計算為 O(n^2)，
+    # 因此必須驗證 count 並限制總量，避免單一請求讓背景迴圈卡死服務。
+    try:
+        count = int(payload.get("count", 10))
+    except (TypeError, ValueError):
+        emit("inject_bots_rejected", {"reason": "invalid_count"})
+        return
+    if count <= 0:
+        emit("inject_bots_rejected", {"reason": "invalid_count"})
+        return
+
+    count = min(count, MAX_BOTS_PER_INJECT)
+    room = payload.get("room", "default")
+    with _swarm_lock:
+        available = MAX_SWARM_SIZE - len(_swarm_chars)
+        count = min(count, max(0, available))
+        if count == 0:
+            emit("inject_bots_rejected", {
+                "reason": "swarm_full",
+                "max_swarm_size": MAX_SWARM_SIZE,
+            })
+            return
+        bot_ids = inject_bots(_swarm_chars, count=count)
+        for bid in bot_ids:
+            if bid in _swarm_chars:
+                _swarm_chars[bid]["room"] = room
+        total = len(_swarm_chars)
+    log_event("inject_bots", count=count, total=total, room=room)
     with _swarm_lock:
         chars = list(_swarm_chars.values())
-    emit("update_positions", {"characters": chars})
-    log_event("get_swarm", pid=request.sid, swarm_size=len(chars))
+    socketio.emit("update_positions", {"characters": chars})
+
+
+@socketio.on("remove_bots")
+def handle_remove_bots(_payload=None):
+    with _swarm_lock:
+        removed = remove_bots(_swarm_chars)
+        total = len(_swarm_chars)
+    log_event("remove_bots", removed=removed, total=total)
+    with _swarm_lock:
+        chars = list(_swarm_chars.values())
+    socketio.emit("update_positions", {"characters": chars})
+
+
+@socketio.on("save_snapshot")
+def handle_save_snapshot(_payload=None):
+    with _swarm_lock:
+        ok = save_snapshot(_swarm_chars)
+    emit("snapshot_saved", {"ok": ok})
 
 
 # 上一個 tick 處於 GREETING 狀態的角色集合，用來只 log「新發生」的相遇，
 # 避免每 0.1s tick 對持續靠近中的角色重複寫 log 灌爆檔案。
 _prev_greeting: set = set()
 _last_summary_ts: float = 0.0
+_last_snapshot_ts: float = 0.0
 
 
 def _swarm_background():
-    global _prev_greeting, _last_summary_ts
+    global _prev_greeting, _last_summary_ts, _last_snapshot_ts
     while True:
         time.sleep(0.1)
         with _swarm_lock:
             chars = list(_swarm_chars.values())
         if not chars:
             continue
-        updated = update_swarm_state(chars)
+
+        # 依 room 分組計算：不同展區的角色不應互相避讓、對齊或觸發 GREETING，
+        # 位置事件也只送給對應 room 的投影端。
+        by_room: Dict[str, List[Dict[str, Any]]] = {}
+        for c in chars:
+            by_room.setdefault(c.get("room", "default"), []).append(c)
+
+        updated: List[Dict[str, Any]] = []
+        for room_name, room_chars in by_room.items():
+            room_updated = update_swarm_state(room_chars)
+            socketio.emit("update_positions",
+                          {"characters": room_updated}, room=room_name)
+            updated.extend(room_updated)
+
         with _swarm_lock:
             for c in updated:
                 cid = c["id"]
                 if cid in _swarm_chars:
                     _swarm_chars[cid].update(c)
-        socketio.emit("update_positions", {"characters": updated})
 
         # --- 相遇事件：只記錄本 tick 新進入 GREETING 的角色 ---
         now_greeting = {c["id"] for c in updated if c.get("state") == "GREETING"}
@@ -635,15 +813,21 @@ def _swarm_background():
             log_event("character_encounter", pid=cid, swarm_size=len(updated))
         _prev_greeting = now_greeting
 
-        # --- 移動彙總：每 5 秒記錄一次在場人數與相遇數，作為承載量觀測 ---
+        # --- 移動彙總與定時快照（每 5s 彙總、每 30s 快照持久化）---
         now = time.time()
         if now - _last_summary_ts >= 5.0:
             _last_summary_ts = now
             log_event("swarm_summary", swarm_size=len(updated),
                       greeting_count=len(now_greeting))
 
+        if now - _last_snapshot_ts >= 30.0:
+            _last_snapshot_ts = now
+            with _swarm_lock:
+                save_snapshot(_swarm_chars)
+
 
 threading.Thread(target=_swarm_background, daemon=True).start()
+
 
 
 if __name__ == "__main__":
