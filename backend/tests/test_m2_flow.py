@@ -111,6 +111,48 @@ class M2FlowTests(unittest.TestCase):
         self.assertEqual(event["character_mode"], "full_character")
         self.assertTrue(event["ok"])
 
+    def test_measured_skin_and_hair_survive_instead_of_snapping_to_a_palette(self):
+        # The VLM's skin palette has 6 entries and its hair palette 8, so
+        # routing measured colour through them collapsed distinct people onto
+        # the same hex. CV measures the actual pixels and now wins.
+        measured = {
+            "ok": True, "face_shape": "oval", "eye_shape": "almond",
+            "eyebrow_style": "straight", "smile_score": 0.7,
+            "lip_color": "#B4675E", "skin_tone": "#C98A5F",
+            "hair_color": "#2E1B10", "eye_color": "#5B3A21",
+        }
+        with patch.object(app_module, "get_face_features", return_value=measured), patch.object(
+            app_module, "generate_full_character_png",
+            return_value={"ok": True, "body_png": _avatar_png()},
+        ) as generator:
+            self._emit("full_character", "skin-measured")
+            _received(self.client)
+
+        face_data = generator.call_args[0][2]
+        self.assertEqual(face_data["skin_tone"], "#C98A5F")
+        self.assertEqual(face_data["hair_color"], "#2E1B10")
+        self.assertEqual(face_data["eye_color"], "#5B3A21")
+        self.assertNotIn(face_data["skin_tone"], app_module._SKIN_HEX.values())
+        self.assertEqual(face_data["color_source"]["skin_tone"], "cv_measured")
+
+    def test_vlm_palette_is_the_fallback_when_the_face_is_not_measurable(self):
+        with patch.dict(app_module.os.environ, {"FULL_MODE_VLM_ENABLED": "1"}), patch.object(
+            app_module, "get_face_features", return_value={"ok": False}
+        ), patch.object(
+            app_module, "analyze_face",
+            return_value={"ok": True, "face": {"skin_tone": "dark", "hair_color": "black"}},
+        ), patch.object(
+            app_module, "generate_full_character_png",
+            return_value={"ok": True, "body_png": _avatar_png()},
+        ) as generator:
+            self._emit("full_character", "skin-fallback")
+            _received(self.client)
+
+        face_data = generator.call_args[0][2]
+        self.assertEqual(face_data["skin_tone"], app_module._SKIN_HEX["dark"])
+        self.assertEqual(face_data["hair_color"], app_module._HAIR_HEX["black"])
+        self.assertNotIn("color_source", face_data)
+
     def test_camera_generation_requires_valid_height_station(self):
         invalid_height = {**_cv_result(), "height_class": None, "height_measurement_valid": False}
         with patch.object(app_module, "get_clothing_features", return_value=invalid_height), patch.object(

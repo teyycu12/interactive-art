@@ -901,15 +901,10 @@ def handle_generate_avatar(payload):
             # --- facial data ---
             face_data: dict = {}
 
-            if face_cv_result.get("ok"):
-                face_data.update({
-                    "face_shape":    face_cv_result["face_shape"],
-                    "eye_shape":     face_cv_result["eye_shape"],
-                    "eyebrow_style": face_cv_result["eyebrow_style"],
-                    "smile_score":   face_cv_result["smile_score"],
-                    "lip_color":     face_cv_result.get("lip_color"),
-                })
-
+            # VLM classifies (hair style, beard); CV measures (colour). Garment
+            # colour already works this way, and routing skin and hair through
+            # the VLM's 6- and 8-entry palettes quantised away exactly the
+            # individual difference the character is supposed to preserve.
             if vlm_face_result.get("ok") and "face" in vlm_face_result:
                 vf = vlm_face_result["face"]
                 face_data.update({
@@ -920,6 +915,20 @@ def handle_generate_avatar(payload):
                     "has_beard":   vf.get("has_beard", False),
                     "beard_style": vf.get("beard_style", "none"),
                 })
+
+            if face_cv_result.get("ok"):
+                face_data.update({
+                    "face_shape":    face_cv_result["face_shape"],
+                    "eye_shape":     face_cv_result["eye_shape"],
+                    "eyebrow_style": face_cv_result["eyebrow_style"],
+                    "smile_score":   face_cv_result["smile_score"],
+                    "lip_color":     face_cv_result.get("lip_color"),
+                })
+                for key in ("skin_tone", "hair_color", "eye_color"):
+                    measured = face_cv_result.get(key)
+                    if measured:
+                        face_data[key] = measured
+                        face_data.setdefault("color_source", {})[key] = "cv_measured"
 
             height_class = cv_result.get("height_class")
             height_profile = get_height_profile(height_class) if height_class else None
