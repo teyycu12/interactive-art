@@ -7,21 +7,38 @@
 
   window.personaFlow = window.personaFlow || {};
 
-  const socket = io(backendUrl);
+  const socket = io(backendUrl, {
+    transports: ["websocket"],
+    reconnectionAttempts: 10,
+  });
   window.personaFlow.socket = socket;
   window.personaFlow.latestClothingFeatures = null;
   window.personaFlow.latestPositions = null;
   window.personaFlow.myCharId = null;
+  window.personaFlow.connected = false;
 
   socket.on("connect", () => {
-    console.log("[personaFlow] connected:", backendUrl);
+    console.log("[personaFlow] connected via websocket:", backendUrl);
+    window.personaFlow.connected = true;
     socket.emit("client_event", { type: "frontend_ready", ts: Date.now() });
-    // Re-join swarm on reconnect if user had already joined (socket SID changes on reconnect,
-    // so the backend removes the old character via handle_disconnect).
+    window.dispatchEvent(new CustomEvent("socket_connected", { detail: { sid: socket.id } }));
+    // Re-join swarm on reconnect if user had already joined
     if (window.personaFlow._lastJoinPayload) {
       console.log("[personaFlow] reconnected — re-joining swarm");
       socket.emit("join_swarm", window.personaFlow._lastJoinPayload);
     }
+  });
+
+  socket.on("disconnect", (reason) => {
+    console.warn("[personaFlow] disconnected:", reason);
+    window.personaFlow.connected = false;
+    window.dispatchEvent(new CustomEvent("socket_disconnected", { detail: { reason } }));
+  });
+
+  socket.on("connect_error", (err) => {
+    console.error("[personaFlow] connection error:", err);
+    window.personaFlow.connected = false;
+    window.dispatchEvent(new CustomEvent("socket_connect_error", { detail: { error: err } }));
   });
 
   socket.on("server_message", (data) => {

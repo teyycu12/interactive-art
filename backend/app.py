@@ -3,8 +3,14 @@ import os
 import random
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
+
+try:
+    from backend.config import config
+except ImportError:
+    from config import config
 
 # Load .env before importing modules that read env vars (vlm_module, garment_gen)
 try:
@@ -15,8 +21,29 @@ except ImportError:
     pass
 
 import numpy as np
-from flask import Flask, jsonify, request, send_from_directory
-from flask_socketio import SocketIO, emit, join_room, leave_room
+
+try:
+    from flask import Flask, jsonify, request, send_from_directory
+    from flask_socketio import SocketIO, emit, join_room, leave_room
+except ModuleNotFoundError:
+    Flask = None
+    jsonify = None
+    request = None
+    send_from_directory = None
+    SocketIO = None
+    emit = None
+    join_room = None
+    leave_room = None
+
+
+def _on_socket(event_name):
+    """安全裝飾器：在 SocketIO 未安裝的環境下不報錯，安裝時正常註冊 handler。"""
+    def decorator(fn):
+        if socketio is not None:
+            socketio.on(event_name)(fn)
+        return fn
+    return decorator
+
 
 try:
     import cv2  # type: ignore
@@ -26,17 +53,27 @@ except ModuleNotFoundError:
 try:
     from backend.cv_module import get_clothing_features  # type: ignore
 except Exception:
-    from cv_module import get_clothing_features  # type: ignore
+    try:
+        from cv_module import get_clothing_features  # type: ignore
+    except Exception:
+        get_clothing_features = None
 
 try:
     from backend.swarm_logic import update_swarm_state  # type: ignore
 except Exception:
-    from swarm_logic import update_swarm_state  # type: ignore
+    try:
+        from swarm_logic import update_swarm_state  # type: ignore
+    except Exception:
+        update_swarm_state = lambda chars: chars  # type: ignore
 
 try:
     from backend.event_logger import log_event, Timer  # type: ignore
 except Exception:
-    from event_logger import log_event, Timer  # type: ignore
+    try:
+        from event_logger import log_event, Timer  # type: ignore
+    except Exception:
+        log_event = lambda *a, **k: None  # type: ignore
+        Timer = None
 
 try:
     from backend.swarm_snapshot import save_snapshot, load_snapshot  # type: ignore
@@ -44,18 +81,31 @@ try:
     from backend.bot_simulator import inject_bots, remove_bots  # type: ignore
     from backend.circuit_breaker import gemini_breaker, image_gen_breaker  # type: ignore
 except Exception:
-    from swarm_snapshot import save_snapshot, load_snapshot  # type: ignore
-    from photo_composer import compose_group_photo  # type: ignore
-    from bot_simulator import inject_bots, remove_bots  # type: ignore
-    from circuit_breaker import gemini_breaker, image_gen_breaker  # type: ignore
+    try:
+        from swarm_snapshot import save_snapshot, load_snapshot  # type: ignore
+        from photo_composer import compose_group_photo  # type: ignore
+        from bot_simulator import inject_bots, remove_bots  # type: ignore
+        from circuit_breaker import gemini_breaker, image_gen_breaker  # type: ignore
+    except Exception:
+        save_snapshot = lambda *a, **k: False  # type: ignore
+        load_snapshot = lambda *a, **k: None  # type: ignore
+        compose_group_photo = lambda *a, **k: {"ok": False}  # type: ignore
+        inject_bots = lambda *a, **k: []  # type: ignore
+        remove_bots = lambda *a, **k: 0  # type: ignore
+        gemini_breaker = None
+        image_gen_breaker = None
 
 try:
     from backend.vlm_module import analyze_outfit, analyze_face
     from backend.face_module import get_face_features
 except Exception:
-    from vlm_module import analyze_outfit, analyze_face
-    from face_module import get_face_features
-
+    try:
+        from vlm_module import analyze_outfit, analyze_face
+        from face_module import get_face_features
+    except Exception:
+        analyze_outfit = lambda *a, **k: {"ok": False}
+        analyze_face = lambda *a, **k: {"ok": False}
+        get_face_features = lambda *a, **k: {"ok": False}
 
 try:
     from backend.garment_gen import (  # type: ignore
@@ -65,17 +115,37 @@ try:
         _remove_white_background as _gg_remove_white_background,
     )
 except Exception:
-    from garment_gen import (  # type: ignore
-        generate_body_png,
-        generate_full_character_png,
-        generate_refine_character_png,
-        _remove_white_background as _gg_remove_white_background,
-    )
+    try:
+        from garment_gen import (  # type: ignore
+            generate_body_png,
+            generate_full_character_png,
+            generate_refine_character_png,
+            _remove_white_background as _gg_remove_white_background,
+        )
+    except Exception:
+        generate_body_png = None
+        generate_full_character_png = None
+        generate_refine_character_png = None
+        _gg_remove_white_background = lambda img: img
 
 
-app = Flask(__name__)
-app.config["SECRET_KEY"] = "personaflow-dev-secret"
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", max_http_buffer_size=20 * 1024 * 1024)
+
+if Flask is not None:
+    app = Flask(__name__)
+    app.config["SECRET_KEY"] = "personaflow-dev-secret"
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", max_http_buffer_size=20 * 1024 * 1024)
+else:
+    app = None
+    socketio = None
+
+
+def _route(path, **kwargs):
+    def decorator(fn):
+        if app is not None:
+            app.route(path, **kwargs)(fn)
+        return fn
+    return decorator
+
 
 # VLM colour name → hex (used instead of CV colour sampling)
 _HAIR_HEX = {
@@ -105,17 +175,24 @@ _EYE_HEX = {
     "gray":       "#6B7A8D",
 }
 
-# --- single-user clothing feature state ---
-_last_success_upper: Optional[Dict[str, Any]] = None
-_last_success_lower: Optional[Dict[str, Any]] = None
-_last_success_upper_type: str = "short_sleeve"
-_last_success_lower_type: str = "shorts"
-_last_success_landmarks: Optional[list] = None
-_last_success_roi: Optional[Dict[str, Any]] = None
-_last_success_cloth_grid: Optional[Dict[str, Any]] = None
-_last_success_lower_grid: Optional[Dict[str, Any]] = None
-_last_success_arm_color:  Optional[Dict[str, Any]] = None
-_last_success_ts: Optional[float] = None
+# --- per-client clothing feature state (避免跨使用者污染) ---
+@dataclass
+class ClientLastSuccess:
+    upper: Optional[Dict[str, Any]] = None
+    lower: Optional[Dict[str, Any]] = None
+    upper_type: str = "short_sleeve"
+    lower_type: str = "shorts"
+    landmarks: Optional[list] = None
+    roi: Optional[Dict[str, Any]] = None
+    cloth_grid: Optional[Dict[str, Any]] = None
+    lower_grid: Optional[Dict[str, Any]] = None
+    arm_color: Optional[Dict[str, Any]] = None
+    last_success_ts: Optional[float] = None
+    updated_at: float = field(default_factory=time.time)
+
+
+_client_last_success: Dict[str, ClientLastSuccess] = {}
+_client_last_success_lock = threading.Lock()
 
 _PHOTOS_DIR = os.path.join(os.path.dirname(__file__), "photos")
 os.makedirs(_PHOTOS_DIR, exist_ok=True)
@@ -133,24 +210,21 @@ else:
         }
     }
 
-# 支援 AUTO_BOTS 環境變數在啟動時自動注入指定數量之虛擬角色
-_auto_bots_count = int(os.environ.get("AUTO_BOTS", "0"))
-if _auto_bots_count > 0:
-    inject_bots(_swarm_chars, count=_auto_bots_count)
+# 支援 AUTO_BOTS 設定在啟動時自動注入指定數量之虛擬角色
+if config.AUTO_BOTS > 0:
+    inject_bots(_swarm_chars, count=config.AUTO_BOTS)
 
 _swarm_lock = threading.Lock()
 
-# --- swarm 容量上限（inject_bots 為公開控制事件，需防止資源耗盡）---
-# swarm 每 0.1s tick 做 O(n^2) 計算並廣播整包資料，總量必須設硬上限。
-MAX_SWARM_SIZE = int(os.environ.get("MAX_SWARM_SIZE", "300"))
-MAX_BOTS_PER_INJECT = int(os.environ.get("MAX_BOTS_PER_INJECT", "100"))
+# --- swarm 容量上限 ---
+MAX_SWARM_SIZE = config.MAX_SWARM_SIZE
+MAX_BOTS_PER_INJECT = config.MAX_BOTS_PER_INJECT
 
-# Thread pool for parallel VLM calls
-_executor = ThreadPoolExecutor(max_workers=4)
+# Thread pools: 即時預覽專用 vs 生成流程專用（避免池資源競爭卡死）
+_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="preview_cv")
+_gen_executor = ThreadPoolExecutor(max_workers=config.GEN_MAX_CONCURRENT * 2, thread_name_prefix="avatar_gen")
 
 # --- 熔斷器橋接 ---
-# vlm_module / gemini_gen 的函式會吞掉例外並回傳 {"ok": False, ...}，
-# 熔斷器只認得例外，因此包一層把「回傳失敗」轉成例外，讓失敗被計數。
 class _ExternalCallFailed(Exception):
     """外部 API 回傳失敗結果（非例外）時用來觸發熔斷器計數。"""
     pass
@@ -163,66 +237,66 @@ def _raise_on_failure(func, *args, **kwargs):
     return result
 
 
-# --- generate_avatar 併發控制（第 8 節風險：多人同時拍照單點瓶頸）---
-# 同時最多跑 GEN_MAX_CONCURRENT 個生成流程，超過的排隊等待，
-# 避免多人瞬間拍照擠爆 ThreadPoolExecutor / Gemini 佇列造成全部卡死。
-# 排隊中的請求會收到 avatar_progress 告知前面還有幾個。
-_GEN_MAX_CONCURRENT = int(os.environ.get("GEN_MAX_CONCURRENT", "2"))
+# --- generate_avatar 併發控制 ---
+_GEN_MAX_CONCURRENT = config.GEN_MAX_CONCURRENT
 _gen_semaphore = threading.Semaphore(_GEN_MAX_CONCURRENT)
 _gen_waiting = 0                      # 目前排隊中（尚未取得 slot）的請求數
 _gen_waiting_lock = threading.Lock()
 
 
-def _merge_fallback_payload(features: Dict[str, Any]) -> Dict[str, Any]:
-    global _last_success_upper, _last_success_lower, _last_success_upper_type, \
-        _last_success_lower_type, _last_success_landmarks, _last_success_roi, \
-        _last_success_cloth_grid, _last_success_lower_grid, _last_success_arm_color, \
-        _last_success_ts
+def _merge_fallback_payload(features: Dict[str, Any], sid: Optional[str] = None) -> Dict[str, Any]:
+    client_key = sid or "default"
+    with _client_last_success_lock:
+        if client_key not in _client_last_success:
+            _client_last_success[client_key] = ClientLastSuccess()
+        state = _client_last_success[client_key]
 
-    if features.get("ok") is True:
-        _last_success_upper = features.get("upper")
-        _last_success_lower = features.get("lower")
-        _last_success_upper_type = features.get("upper_type", "short_sleeve")
-        _last_success_lower_type = features.get("lower_type", "shorts")
-        _last_success_landmarks = features.get("landmarks")
-        _last_success_roi = features.get("roi")
-        _last_success_cloth_grid = features.get("cloth_grid")
-        _last_success_lower_grid = features.get("lower_grid")
-        _last_success_arm_color  = features.get("arm_color")
-        _last_success_ts = time.time()
-        return features
+        if features.get("ok") is True:
+            state.upper = features.get("upper")
+            state.lower = features.get("lower")
+            state.upper_type = features.get("upper_type", "short_sleeve")
+            state.lower_type = features.get("lower_type", "shorts")
+            state.landmarks = features.get("landmarks")
+            state.roi = features.get("roi")
+            state.cloth_grid = features.get("cloth_grid")
+            state.lower_grid = features.get("lower_grid")
+            state.arm_color  = features.get("arm_color")
+            state.last_success_ts = time.time()
+            state.updated_at = time.time()
+            return features
 
-    return {
-        "ok": False,
-        "error": features.get("error"),
-        "upper": _last_success_upper,
-        "lower": _last_success_lower,
-        "arm_color": _last_success_arm_color,
-        "upper_type": _last_success_upper_type,
-        "lower_type": _last_success_lower_type,
-        "landmarks": _last_success_landmarks,
-        "roi": _last_success_roi,
-        "cloth_grid": _last_success_cloth_grid,
-        "lower_grid": _last_success_lower_grid,
-        "mask_stats": features.get("mask_stats", {}),
-        "fallback": _last_success_upper is not None,
-        "last_success_ts": _last_success_ts,
-        "ts": time.time(),
-    }
+        return {
+            "ok": False,
+            "error": features.get("error"),
+            "upper": state.upper,
+            "lower": state.lower,
+            "arm_color": state.arm_color,
+            "upper_type": state.upper_type,
+            "lower_type": state.lower_type,
+            "landmarks": state.landmarks,
+            "roi": state.roi,
+            "cloth_grid": state.cloth_grid,
+            "lower_grid": state.lower_grid,
+            "mask_stats": features.get("mask_stats", {}),
+            "fallback": state.upper is not None,
+            "last_success_ts": state.last_success_ts,
+            "ts": time.time(),
+        }
 
 
-@app.route("/health", methods=["GET"])
+
+@_route("/health", methods=["GET"])
 def health_check():
     return jsonify({"status": "ok", "service": "PersonaFlow backend"})
 
 
-@app.route("/photos/<path:filename>", methods=["GET"])
+@_route("/photos/<path:filename>", methods=["GET"])
 def serve_photo(filename):
     return send_from_directory(_PHOTOS_DIR, filename)
 
 
 
-@socketio.on("connect")
+@_on_socket("connect")
 def handle_connect():
     emit("server_message", {"message": "Connected to PersonaFlow backend."})
     log_event("connect", pid=request.sid)
@@ -232,7 +306,7 @@ def handle_connect():
         emit("update_positions", {"characters": chars})
 
 
-@socketio.on("disconnect")
+@_on_socket("disconnect")
 def handle_disconnect():
     # 斷線時只移除「這條連線自己就是角色本人」的情況：char_id == sid。
     # 互動端拍完照關分頁時，其角色 id 通常就是當時的 sid；投影牆連線斷開
@@ -243,21 +317,22 @@ def handle_disconnect():
         if sid in _swarm_chars:
             _swarm_chars.pop(sid, None)
             removed = True
+    with _client_last_success_lock:
+        _client_last_success.pop(sid, None)
     log_event("disconnect", pid=sid, removed_char=removed)
 
 
-@socketio.on("client_event")
+@_on_socket("client_event")
 def handle_client_event(payload):
     socketio.emit("server_message", {"message": "Event received", "payload": payload})
 
 
-@socketio.on("process_frame")
+@_on_socket("process_frame")
 def handle_process_frame(payload):
-    if cv2 is None:
-        emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "opencv_missing"}))
-        return
-
     sid = request.sid
+    if cv2 is None:
+        emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "opencv_missing"}, sid=sid))
+        return
 
     def _process_in_background():
         try:
@@ -274,19 +349,19 @@ def handle_process_frame(payload):
 
             if frame is not None:
                 features = get_clothing_features(frame, max_width=360)
-                result = _merge_fallback_payload(features)
+                result = _merge_fallback_payload(features, sid=sid)
                 if "ts" not in result:
                     result["ts"] = time.time()
                 socketio.emit("clothing_features", result, to=sid)
             else:
-                socketio.emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "frame_decode_failed"}), to=sid)
+                socketio.emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "frame_decode_failed"}, sid=sid), to=sid)
         except Exception as e:
-            socketio.emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "cv_exception", "message": str(e)}), to=sid)
+            socketio.emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "cv_exception", "message": str(e)}, sid=sid), to=sid)
 
     _executor.submit(_process_in_background)
 
 
-@socketio.on("generate_avatar")
+@_on_socket("generate_avatar")
 def handle_generate_avatar(payload):
     if cv2 is None:
         emit("avatar_generated", {"ok": False, "error": "opencv_missing"})
@@ -302,7 +377,7 @@ def handle_generate_avatar(payload):
     # Generation mode: "body_sprite" (existing, fast, just upper+lower)
     #                  "full_character" (new, slow, head→feet single image).
     # Frontend sends mode in payload; .env GENERATION_MODE is the default.
-    mode = (payload.get("mode") or os.environ.get("GENERATION_MODE", "body_sprite")).strip()
+    mode = (payload.get("mode") or config.GENERATION_MODE).strip()
     if mode not in {"body_sprite", "full_character", "full_character_refined"}:
         mode = "body_sprite"
 
@@ -320,35 +395,41 @@ def handle_generate_avatar(payload):
             socketio.emit("avatar_progress", {"stage": stage, "pct": pct, "detail": detail}, to=sid)
 
         global _gen_waiting
+        acquired_slot = False
 
         # --- 併發閘門：多人同時拍照時排隊，避免單點瓶頸卡死（第 8 節風險）---
-        acquired = _gen_semaphore.acquire(blocking=False)
-        if not acquired:
-            # 有人正在生成，本請求進入排隊；先告知前端排隊位置
-            with _gen_waiting_lock:
-                _gen_waiting += 1
-                ahead = _gen_waiting
-            _progress("queued", 2, f"生成中人數已滿，排隊中（前面還有 {ahead} 人）...")
-            log_event("generate_queued", pid=sid, ahead=ahead, mode=mode)
-            _queue_wait_start = time.perf_counter()
-            _gen_semaphore.acquire(blocking=True)  # 阻塞等到有 slot
-            with _gen_waiting_lock:
-                _gen_waiting -= 1
-            _timings["queue_wait_ms"] = round((time.perf_counter() - _queue_wait_start) * 1000.0, 1)
-
         try:
+            acquired = _gen_semaphore.acquire(blocking=False)
+            if not acquired:
+                # 有人正在生成，本請求進入排隊；先告知前端排隊位置
+                with _gen_waiting_lock:
+                    _gen_waiting += 1
+                    ahead = _gen_waiting
+                try:
+                    _progress("queued", 2, f"生成中人數已滿，排隊中（前面還有 {ahead} 人）...")
+                    log_event("generate_queued", pid=sid, ahead=ahead, mode=mode)
+                except Exception as pe:
+                    print(f"[generate_avatar] queue progress error: {pe}")
+                _queue_wait_start = time.perf_counter()
+                _gen_semaphore.acquire(blocking=True)  # 阻塞等到有 slot
+                with _gen_waiting_lock:
+                    _gen_waiting = max(0, _gen_waiting - 1)
+                _timings["queue_wait_ms"] = round((time.perf_counter() - _queue_wait_start) * 1000.0, 1)
+
+            acquired_slot = True
+
             print(f"[generate_avatar] Received request: mode={mode}, img_len={len(img_str) if img_str else 0}")
             _progress("analyzing", 5, "正在分析服裝與面部特徵...")
 
-            # Submit VLM analyses to ThreadPoolExecutor (parallel)
+            # Submit VLM analyses to dedicated generation executor (parallel)
             _vlm_start = time.perf_counter()
             # 經由熔斷器呼叫：外部 API 連續失敗時快速失敗並回傳 fallback，
             # 避免 executor 執行緒持續被無效等待卡住。
-            fut_outfit   = _executor.submit(
+            fut_outfit   = _gen_executor.submit(
                 gemini_breaker.call, _raise_on_failure, analyze_outfit, img_str,
                 fallback={"ok": False, "error": "circuit_open"},
             )
-            fut_face_vlm = _executor.submit(
+            fut_face_vlm = _gen_executor.submit(
                 gemini_breaker.call, _raise_on_failure, analyze_face, img_str,
                 fallback={"ok": False, "error": "circuit_open"},
             )
@@ -385,17 +466,7 @@ def handle_generate_avatar(payload):
                 frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
                 print(f"[generate_avatar] Robust Pillow decode successful: shape={frame.shape}")
             except Exception as e:
-                print(f"[generate_avatar] Robust decode failed: {e}")
-                # Dump diagnostic info
-                try:
-                    with open("backend/diagnostic_img_str.txt", "w") as df:
-                        df.write(f"img_str_len={len(img_str) if img_str else 0}\n")
-                        df.write(f"img_str_start={img_str[:2000] if img_str else 'None'}\n")
-                        df.write(f"img_str_end={img_str[-2000:] if img_str else 'None'}\n")
-                    print("[generate_avatar] Dumped diagnostic info to backend/diagnostic_img_str.txt")
-                except Exception as de_err:
-                    print(f"[generate_avatar] Failed to write diagnostic file: {de_err}")
-                
+                print(f"[generate_avatar] Robust Pillow decode failed (img_str_len={len(img_str) if img_str else 0}): {e}")
                 # Fallback to direct OpenCV decoding if PIL fails
                 try:
                     np_arr = np.frombuffer(img_bytes, np.uint8)
@@ -419,8 +490,8 @@ def handle_generate_avatar(payload):
 
                 # Parallelize CV calls — clothing + face run simultaneously
                 _cv_start = time.perf_counter()
-                fut_cv      = _executor.submit(get_clothing_features, frame, max_width=480)
-                fut_face_cv = _executor.submit(get_face_features, frame, max_width=480)
+                fut_cv      = _gen_executor.submit(get_clothing_features, frame, max_width=480)
+                fut_face_cv = _gen_executor.submit(get_face_features, frame, max_width=480)
 
                 cv_result      = fut_cv.result(timeout=30)
                 face_cv_result = fut_face_cv.result(timeout=30)
@@ -448,7 +519,7 @@ def handle_generate_avatar(payload):
 
             # body_sprite mode: spawn generation in PARALLEL with VLM (no VLM context needed).
             if mode == "body_sprite" and rgb_full is not None and body_poly is not None:
-                fut_garment = _executor.submit(
+                fut_garment = _gen_executor.submit(
                     image_gen_breaker.call,
                     _raise_on_failure, generate_body_png,
                     rgb_full, body_poly,
@@ -513,7 +584,7 @@ def handle_generate_avatar(payload):
             if mode == "full_character":
                 _progress("generating", 35, "正在生成 LEGO 全人物...")
                 if rgb_full is not None and body_poly is not None:
-                    fut_gen = _executor.submit(
+                    fut_gen = _gen_executor.submit(
                         image_gen_breaker.call,
                         _raise_on_failure, generate_full_character_png,
                         rgb_full, body_poly, face_data, outfit_data,
@@ -526,7 +597,7 @@ def handle_generate_avatar(payload):
             elif mode == "full_character_refined":
                 _progress("generating", 35, "正在生成 LEGO 全人物（第一階段）...")
                 if rgb_full is not None and body_poly is not None:
-                    fut_base = _executor.submit(
+                    fut_base = _gen_executor.submit(
                         image_gen_breaker.call,
                         _raise_on_failure, generate_full_character_png,
                         rgb_full, body_poly, face_data, outfit_data, False,
@@ -535,7 +606,7 @@ def handle_generate_avatar(payload):
                     base_result = fut_base.result(timeout=120)
                     if base_result.get("ok") and base_result.get("body_png"):
                         _progress("refining", 60, "正在精修細節（第二階段）...")
-                        fut_ref = _executor.submit(
+                        fut_ref = _gen_executor.submit(
                             image_gen_breaker.call,
                             _raise_on_failure, generate_refine_character_png,
                             base_result["body_png"], rgb_full, body_poly,
@@ -567,17 +638,18 @@ def handle_generate_avatar(payload):
             _progress("finalizing", 95, "正在完成...")
 
             is_full_mode = mode in ("full_character", "full_character_refined")
-            success = garment_result.get("ok", False) if is_full_mode else True
-            err_msg = garment_result.get("error") if not success else None
+            ai_gen_ok = bool(garment_result.get("ok", False))
+            can_render = ai_gen_ok if is_full_mode else True
+            err_msg = garment_result.get("error") if not ai_gen_ok else None
 
-            # 生成延遲落地（第 6 節指標：拍照完成→avatar_generated 回傳，目標中位數 < 5s）
+            # 生成延遲與真實成敗落地（第 6 節指標：誠實統計 AI 生成成敗）
             log_event("avatar_generated", pid=sid, latency_ms=_elapsed_ms(),
-                      mode=mode, ok=success, error=err_msg,
-                      garment_source=("openai" if garment_result.get("ok") else "grid"),
+                      mode=mode, ok=ai_gen_ok, error=err_msg,
+                      garment_source=("openai" if ai_gen_ok else "grid"),
                       **_timings)
 
             socketio.emit("avatar_generated", {
-                "ok":    success,
+                "ok":    can_render,
                 "error": err_msg,
                 "outfit": outfit_data,
                 "stencil": cv_result.get("stencil"),
@@ -598,16 +670,16 @@ def handle_generate_avatar(payload):
                       mode=mode, ok=False, error=str(e), **_timings)
             socketio.emit("avatar_generated", {"ok": False, "error": str(e)}, to=sid)
         finally:
-            # 無論成敗都要釋放 slot，讓排隊中的下一位進來
-            _gen_semaphore.release()
+            if acquired_slot:
+                _gen_semaphore.release()
 
 
     threading.Thread(target=_background, daemon=True).start()
 
 
-@socketio.on("join_swarm")
+@_on_socket("join_swarm")
 def handle_join_swarm(payload):
-    char_id = payload.get("id") or request.sid
+    char_id = payload.get("id") or (request.sid if request else None) or f"user_{int(time.time()*1000)}"
     room = payload.get("room", "default")
     with _swarm_lock:
         existing = _swarm_chars.get(char_id, {})
@@ -633,24 +705,26 @@ def handle_join_swarm(payload):
             "character_mode": payload.get("character_mode", existing.get("character_mode", "body_sprite")),
         }
         total = len(_swarm_chars)
-    join_room(room)
-    emit("swarm_joined", {"id": char_id, "room": room})
+    if join_room is not None:
+        join_room(room)
+    if emit is not None:
+        emit("swarm_joined", {"id": char_id, "room": room})
     log_event("join_swarm", pid=char_id, room=room,
               x=float(payload.get("x", 960)), y=float(payload.get("y", 540)),
               character_mode=payload.get("character_mode", "body_sprite"),
               swarm_size=total)
 
 
-@socketio.on("leave_swarm")
+@_on_socket("leave_swarm")
 def handle_leave_swarm(payload):
-    char_id = payload.get("id") or request.sid
+    char_id = payload.get("id") or (request.sid if request else None)
     with _swarm_lock:
         removed = _swarm_chars.pop(char_id, None) is not None
         total = len(_swarm_chars)
     log_event("leave_swarm", pid=char_id, removed=removed, swarm_size=total)
 
 
-@socketio.on("update_character")
+@_on_socket("update_character")
 def handle_update_character(payload):
     char_id = payload.get("id")
     if not char_id:
@@ -666,7 +740,7 @@ def handle_update_character(payload):
         log_event("update_character", pid=char_id, fields=",".join(changed))
 
 
-@socketio.on("get_swarm")
+@_on_socket("get_swarm")
 def handle_get_swarm(payload=None):
     payload = payload or {}
     room = payload.get("room")
@@ -675,11 +749,12 @@ def handle_get_swarm(payload=None):
             chars = [c for c in _swarm_chars.values() if c.get("room", "default") == room]
         else:
             chars = list(_swarm_chars.values())
-    emit("update_positions", {"characters": chars})
-    log_event("get_swarm", pid=request.sid, room=room, swarm_size=len(chars))
+    if emit is not None:
+        emit("update_positions", {"characters": chars})
+    log_event("get_swarm", pid=(request.sid if request else None), room=room, swarm_size=len(chars))
 
 
-@socketio.on("trigger_photo")
+@_on_socket("trigger_photo")
 def handle_trigger_photo(payload=None):
     """
     大合照合成觸發事件 (M6 核心)。
@@ -692,7 +767,7 @@ def handle_trigger_photo(payload=None):
         if not chars and room == "default":
             chars = list(_swarm_chars.values())
 
-    host = request.host if request else "127.0.0.1:5001"
+    host = request.host if request else f"127.0.0.1:{config.PORT}"
     photo_url_base = f"http://{host}/photos"
     res = compose_group_photo(chars, photo_url_base=photo_url_base)
 
@@ -706,18 +781,19 @@ def handle_trigger_photo(payload=None):
             print(f"[trigger_photo] Failed to save photo file: {pe}")
 
     log_event("group_photo_composed", photo_id=res.get("photo_id"), count=len(chars), room=room)
-    socketio.emit("photo_ready", {
-        "ok": res.get("ok", False),
-        "photo_id": res.get("photo_id"),
-        "photo_url": res.get("photo_url"),
-        "photo_b64": res.get("photo_b64"),
-        "qr_b64": res.get("qr_b64"),
-        "character_count": len(chars),
-        "room": room,
-    })
+    if socketio is not None:
+        socketio.emit("photo_ready", {
+            "ok": res.get("ok", False),
+            "photo_id": res.get("photo_id"),
+            "photo_url": res.get("photo_url"),
+            "photo_b64": res.get("photo_b64"),
+            "qr_b64": res.get("qr_b64"),
+            "character_count": len(chars),
+            "room": room,
+        })
 
 
-@socketio.on("inject_bots")
+@_on_socket("inject_bots")
 def handle_inject_bots(payload=None):
     payload = payload or {}
     # 這是任何已連線客戶端都能觸發的控制端事件，且 swarm 計算為 O(n^2)，
@@ -725,10 +801,12 @@ def handle_inject_bots(payload=None):
     try:
         count = int(payload.get("count", 10))
     except (TypeError, ValueError):
-        emit("inject_bots_rejected", {"reason": "invalid_count"})
+        if emit is not None:
+            emit("inject_bots_rejected", {"reason": "invalid_count"})
         return
     if count <= 0:
-        emit("inject_bots_rejected", {"reason": "invalid_count"})
+        if emit is not None:
+            emit("inject_bots_rejected", {"reason": "invalid_count"})
         return
 
     count = min(count, MAX_BOTS_PER_INJECT)
@@ -737,10 +815,11 @@ def handle_inject_bots(payload=None):
         available = MAX_SWARM_SIZE - len(_swarm_chars)
         count = min(count, max(0, available))
         if count == 0:
-            emit("inject_bots_rejected", {
-                "reason": "swarm_full",
-                "max_swarm_size": MAX_SWARM_SIZE,
-            })
+            if emit is not None:
+                emit("inject_bots_rejected", {
+                    "reason": "swarm_full",
+                    "max_swarm_size": MAX_SWARM_SIZE,
+                })
             return
         bot_ids = inject_bots(_swarm_chars, count=count)
         for bid in bot_ids:
@@ -750,10 +829,11 @@ def handle_inject_bots(payload=None):
     log_event("inject_bots", count=count, total=total, room=room)
     with _swarm_lock:
         chars = list(_swarm_chars.values())
-    socketio.emit("update_positions", {"characters": chars})
+    if socketio is not None:
+        socketio.emit("update_positions", {"characters": chars})
 
 
-@socketio.on("remove_bots")
+@_on_socket("remove_bots")
 def handle_remove_bots(_payload=None):
     with _swarm_lock:
         removed = remove_bots(_swarm_chars)
@@ -761,14 +841,16 @@ def handle_remove_bots(_payload=None):
     log_event("remove_bots", removed=removed, total=total)
     with _swarm_lock:
         chars = list(_swarm_chars.values())
-    socketio.emit("update_positions", {"characters": chars})
+    if socketio is not None:
+        socketio.emit("update_positions", {"characters": chars})
 
 
-@socketio.on("save_snapshot")
+@_on_socket("save_snapshot")
 def handle_save_snapshot(_payload=None):
     with _swarm_lock:
         ok = save_snapshot(_swarm_chars)
-    emit("snapshot_saved", {"ok": ok})
+    if emit is not None:
+        emit("snapshot_saved", {"ok": ok})
 
 
 # 上一個 tick 處於 GREETING 狀態的角色集合，用來只 log「新發生」的相遇，
@@ -796,15 +878,19 @@ def _swarm_background():
         updated: List[Dict[str, Any]] = []
         for room_name, room_chars in by_room.items():
             room_updated = update_swarm_state(room_chars)
-            socketio.emit("update_positions",
-                          {"characters": room_updated}, room=room_name)
+            if socketio is not None:
+                socketio.emit("update_positions",
+                              {"characters": room_updated}, room=room_name)
             updated.extend(room_updated)
 
+        _BOIDS_KEYS = ("x", "y", "vx", "vy", "state", "greeting_ticks")
         with _swarm_lock:
             for c in updated:
                 cid = c["id"]
                 if cid in _swarm_chars:
-                    _swarm_chars[cid].update(c)
+                    for k in _BOIDS_KEYS:
+                        if k in c:
+                            _swarm_chars[cid][k] = c[k]
 
         # --- 相遇事件：只記錄本 tick 新進入 GREETING 的角色 ---
         now_greeting = {c["id"] for c in updated if c.get("state") == "GREETING"}
@@ -826,9 +912,12 @@ def _swarm_background():
                 save_snapshot(_swarm_chars)
 
 
-threading.Thread(target=_swarm_background, daemon=True).start()
-
+if socketio is not None:
+    threading.Thread(target=_swarm_background, daemon=True).start()
 
 
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=5001, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
+    if socketio is not None and app is not None:
+        socketio.run(app, host=config.HOST, port=config.PORT, debug=config.DEBUG, use_reloader=False, allow_unsafe_werkzeug=True)
+    else:
+        print("[PersonaFlow] Flask or Flask-SocketIO is missing. Please run: pip install -r requirements.txt")

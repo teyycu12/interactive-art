@@ -1,11 +1,6 @@
 // PersonaFlow – character component definitions
 // Loaded as a plain <script> before sketch.js; all symbols are global.
 
-const STATES = {
-  ROAMING: 'ROAMING',
-  GREETING: 'GREETING',
-};
-
 const ACCESSORIES_LIST = [
   { value: 'none', label: '— None —' },
   { value: 'bouquet', label: '💐 Bouquet' },

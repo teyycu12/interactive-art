@@ -512,20 +512,20 @@ function setup() {
     }
     for (const c of chars) {
       if (!swarmPersons[c.id]) {
-        const p = new Person(0, 0);
-        if (c.outfit) {
-          p.updateFromVLM(c.outfit, null);
-        } else {
-          if (c.upper?.hex) p.innerColor = hexToRgb(c.upper.hex);
-          if (c.lower?.hex) p.lowerColor = hexToRgb(c.lower.hex);
-          p.lowerType = c.lower_type === 'long_pants' ? 'jeans' : 'shorts';
-        }
-        if (c.face) p.updateFace(c.face);
-        if (Array.isArray(c.accessories)) p.accessories = c.accessories;
-        else if (c.accessory && c.accessory !== 'none') p.accessories = [c.accessory];
-        swarmPersons[c.id] = p;
+        swarmPersons[c.id] = new Person(0, 0);
       }
       const p = swarmPersons[c.id];
+      if (c.outfit) {
+        p.updateFromVLM(c.outfit, null);
+      } else {
+        if (c.upper?.hex) p.innerColor = hexToRgb(c.upper.hex);
+        if (c.lower?.hex) p.lowerColor = hexToRgb(c.lower.hex);
+        p.lowerType = c.lower_type === 'long_pants' ? 'jeans' : 'shorts';
+      }
+      if (c.face) p.updateFace(c.face);
+      if (Array.isArray(c.accessories)) p.accessories = c.accessories;
+      else if (c.accessory && c.accessory !== 'none') p.accessories = [c.accessory];
+
       const newX = c.x / 1920 * width;
       const newY = c.y / 1080 * height;
       // Compute velocity from position delta for walking animation
@@ -1094,67 +1094,3 @@ function _drawClothGrid(ctx, poly, grid, mirrorX = false) {
   ctx.restore();
 }
 
-// ─────────────────────────────────────────
-//  CLOTH SPRITE RENDERER  (OpenAI-generated PNG)
-//  Draws the sprite scaled to the polygon's bounding box, clipped to the
-//  polygon shape so it follows the character silhouette.
-// ─────────────────────────────────────────
-function _drawClothSprite(ctx, poly, img, mirrorX = false) {
-  if (!img || !img.width || !img.height) return;
-
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const [px, py] of poly) {
-    if (px < minX) minX = px;
-    if (py < minY) minY = py;
-    if (px > maxX) maxX = px;
-    if (py > maxY) maxY = py;
-  }
-  const bw = maxX - minX;
-  const bh = maxY - minY;
-  if (bw <= 0 || bh <= 0) return;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(poly[0][0], poly[0][1]);
-  for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
-  ctx.closePath();
-  ctx.clip();
-
-  if (mirrorX) {
-    ctx.translate(minX + bw, minY);
-    ctx.scale(-1, 1);
-    ctx.drawImage(img, 0, 0, bw, bh);
-  } else {
-    ctx.drawImage(img, minX, minY, bw, bh);
-  }
-
-  ctx.restore();
-}
-
-// ─────────────────────────────────────────
-//  CLOTH SPRITE SLICE — draw a sub-region (UV source rect) of the sprite,
-//  fitted to the polygon's bounding box and clipped to its outline.
-//  Used so LEGO arms get the cardigan's sleeve texture instead of solid colour.
-// ─────────────────────────────────────────
-function _drawClothSpriteSlice(ctx, poly, img, sx, sy, sw, sh) {
-  if (!img || !img.width || !img.height) return;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const [px, py] of poly) {
-    if (px < minX) minX = px;
-    if (py < minY) minY = py;
-    if (px > maxX) maxX = px;
-    if (py > maxY) maxY = py;
-  }
-  const bw = maxX - minX;
-  const bh = maxY - minY;
-  if (bw <= 0 || bh <= 0) return;
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(poly[0][0], poly[0][1]);
-  for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
-  ctx.closePath();
-  ctx.clip();
-  ctx.drawImage(img, sx, sy, sw, sh, minX, minY, bw, bh);
-  ctx.restore();
-}
