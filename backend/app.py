@@ -222,7 +222,11 @@ MAX_BOTS_PER_INJECT = config.MAX_BOTS_PER_INJECT
 
 # Thread pools: 即時預覽專用 vs 生成流程專用（避免池資源競爭卡死）
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="preview_cv")
-_gen_executor = ThreadPoolExecutor(max_workers=config.GEN_MAX_CONCURRENT * 2, thread_name_prefix="avatar_gen")
+# *4 的來源：單一生成流程尖峰同時佔用 4 個 worker —— 2 個 VLM 任務提交後
+# 尚未 await（要到取 VLM 結果那行才 await），此時又提交 2 個 CV 任務。
+# 若只給 *2，兩個並行流程的 4 個 VLM 任務會佔滿整池，CV 任務在佇列裡
+# 空等並燒掉自己的 30s timeout —— 失敗原因與 CV 本身無關。
+_gen_executor = ThreadPoolExecutor(max_workers=config.GEN_MAX_CONCURRENT * 4, thread_name_prefix="avatar_gen")
 
 # --- 熔斷器橋接 ---
 class _ExternalCallFailed(Exception):
@@ -751,6 +755,15 @@ def handle_get_swarm(payload=None):
             chars = list(_swarm_chars.values())
     if emit is not None:
         emit("update_positions", {"characters": chars})
+
+    # 純觀看端（投影牆）只 emit get_swarm、不會 join_swarm，因此原本不在任何
+    # room 裡 —— 而 _swarm_background 的週期廣播是 room-scoped 的，導致它在
+    # 開頭兩次之後再也收不到更新（前端 watchdog 會因此永久誤報斷線）。
+    # 這裡把連線加入它要觀看的 room；不帶 room 時視為 default。
+    # 只影響「之後」收得到什麼，不改變本次回傳內容，故上面的語意保持不變。
+    if join_room is not None:
+        join_room(room or "default")
+
     log_event("get_swarm", pid=(request.sid if request else None), room=room, swarm_size=len(chars))
 
 

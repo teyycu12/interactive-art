@@ -85,6 +85,8 @@ const boidMap = {};   // charId → Boid
 let isPhotoTime = false;
 const USE_SERVER_POSITIONS = false; // 設為 true 啟用伺服器座標權威插值
 let _lastUpdatePositionsTs = performance.now();
+const STALE_THRESHOLD_MS = 2500;   // 超過此時間沒收到 update_positions 視為訊號中斷
+let _staleWarned = false;          // 避免每幀重寫 DOM，並支援恢復後自動回復狀態
 let pixiApp;
 
 // 背景尺寸（配合你的背景圖調整）
@@ -914,9 +916,19 @@ function initPixi() {
   // Start socket and game loop immediately — no waiting for assets
   initSocket();
   pixiApp.ticker.add(() => {
-    if (performance.now() - _lastUpdatePositionsTs > 2500 && Object.keys(boidMap).length > 0) {
-      statusEl.textContent = '⚠️ 伺服器訊號中斷 (超過 2 秒未收到更新)';
-      statusEl.style.color = '#ff6b6b';
+    // 訊號中斷偵測：門檻與文案共用同一常數，避免兩者漂移。
+    // 恢復收到更新後要能自動回復正常狀態，否則一次瞬斷就永久亮紅燈。
+    if (Object.keys(boidMap).length > 0) {
+      const stale = performance.now() - _lastUpdatePositionsTs > STALE_THRESHOLD_MS;
+      if (stale && !_staleWarned) {
+        _staleWarned = true;
+        statusEl.textContent = `⚠️ 伺服器訊號中斷 (超過 ${STALE_THRESHOLD_MS / 1000} 秒未收到更新)`;
+        statusEl.style.color = '#ff6b6b';
+      } else if (!stale && _staleWarned) {
+        _staleWarned = false;
+        statusEl.textContent = `已連線 Socket.io ✓ (${socket && socket.id ? socket.id : ''})`;
+        statusEl.style.color = '';
+      }
     }
     flock.forEach(b => b.update());
     pixiApp.stage.children.sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));

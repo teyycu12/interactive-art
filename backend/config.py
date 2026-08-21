@@ -37,6 +37,8 @@ class AppConfig:
     # 服務監聽
     HOST: str = os.environ.get("HOST", "0.0.0.0")
     PORT: int = _get_int("PORT", 5001)
+    # 預設 False：展場長時間運行不應開 debug（會洩漏 traceback 且效能較差）
+    DEBUG: bool = _get_bool("DEBUG", False)
 
     # M3 併發與蜂群設定
     GEN_MAX_CONCURRENT: int = max(1, _get_int("GEN_MAX_CONCURRENT", 2))
