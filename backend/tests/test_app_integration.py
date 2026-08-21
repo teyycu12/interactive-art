@@ -1,18 +1,14 @@
 import unittest
-
-try:
-    from backend.app import app, socketio, _swarm_chars, _swarm_lock
-    from backend.swarm_snapshot import save_snapshot, load_snapshot, clear_snapshot
-    from backend.bot_simulator import inject_bots, remove_bots
-    HAS_FLASK = True
-except ImportError:
-    HAS_FLASK = False
+from backend.app import app, _swarm_chars, _swarm_lock
+from backend.swarm_snapshot import save_snapshot, load_snapshot, clear_snapshot
+from backend.bot_simulator import inject_bots, remove_bots
 
 
-@unittest.skipUnless(HAS_FLASK, "Flask is not installed in current environment")
+@unittest.skipIf(app is None, "Flask not installed in current environment")
 class TestAppIntegration(unittest.TestCase):
     def setUp(self):
         self.app = app
+
         self.client = self.app.test_client()
 
     def test_health_endpoint(self):

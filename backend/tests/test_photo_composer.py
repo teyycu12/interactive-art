@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from backend.photo_composer import compose_group_photo, _draw_lego_character, _hex_to_rgb, Image
 
 
@@ -11,10 +12,11 @@ class TestPhotoComposer(unittest.TestCase):
         self.assertEqual(_hex_to_rgb(None), (200, 200, 200))
 
     def test_pil_missing_fallback(self):
-        if Image is None:
+        # 測試當 Pillow 缺失時的優雅降級回傳
+        with patch("backend.photo_composer.Image", None):
             res = compose_group_photo([])
             self.assertFalse(res["ok"])
-            self.assertIn("error", res)
+            self.assertEqual(res["error"], "Pillow (PIL) is not installed")
             self.assertIsNone(_draw_lego_character({"id": "c1"}))
 
     @unittest.skipIf(Image is None, "Pillow is not installed in current environment")
