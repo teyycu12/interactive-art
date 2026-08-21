@@ -4,7 +4,7 @@
 # Web / 通訊層（M3）
 Flask
 Flask-SocketIO
-python-socketio        # stress_test.py 的壓測 client 也用到
+python-socketio        # Flask-SocketIO 的 server transport 依賴
 websocket-client       # python-socketio 走 websocket transport 所需
 python-dotenv          # 讀取 .env 的 API 金鑰（見 .env.example）
 

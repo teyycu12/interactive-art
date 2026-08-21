@@ -155,7 +155,7 @@
 }
 ```
 > **相遇偵測內嵌在 `state` 欄位裡**，不是獨立事件。若 M7 v2 需要獨立相遇事件，
-> 後端已在事件 log 落地 `character_encounter`（見 §5），要廣播給前端只需在 tick 內加一行 emit。
+> 目前沒有現成的 `character_encounter` 記錄可用，需另外設計。
 
 ---
 
@@ -186,28 +186,7 @@
 
 ---
 
-## 5. 事件 log 落地（M3，供第 6 節效能量測）
-
-所有事件寫入 `backend/logs/events-YYYYMMDD.jsonl`（每日輪替，JSON lines）。詳見 `backend/event_logger.py`。
-
-| log 事件 | 關鍵欄位 | 用途 |
-|----------|---------|------|
-| `connect` / `disconnect` | `pid`, `removed_char` | 連線觀測 |
-| `join_swarm` / `leave_swarm` | `pid`, `swarm_size` | 承載量觀測 |
-| `update_character` | `pid`, `fields` | 更新記錄 |
-| `get_swarm` | `pid`, `swarm_size` | — |
-| `generate_queued` | `pid`, `ahead`, `mode` | 多人同拍時進入排隊（超過 `GEN_MAX_CONCURRENT`） |
-| `avatar_generated` | `latency_ms`, `cv_ms`, `vlm_ms`, `queue_wait_ms`, `ok`, `vlm_outfit_ok`, `vlm_face_ok` | **生成延遲分佈 + 失敗率 + 排隊等待**（第 6 節） |
-| `character_encounter` | `pid`, `swarm_size` | 相遇（只記新進入 GREETING，已去重） |
-| `swarm_summary` | `swarm_size`, `greeting_count` | 每 5s 一筆的承載量快照 |
-
-> **隱私**：log 一律**不落地影像**——`image`/`body_png`/`cloth_grid` 等大型/影像欄位由 `event_logger._sanitize` 自動移除。
-
-分析工具：`backend/analyze_log.py`（算出第 6 節指標表）｜壓測工具：`backend/stress_test.py`。
-
----
-
-## 6. 尚未實作、但已預留命名的事件（WP-B / M6 / M7）
+## 5. 尚未實作、但已預留命名的事件（WP-B / M6 / M7）
 
 | 規劃事件名 | 用途 | 依賴 |
 |-----------|------|------|
