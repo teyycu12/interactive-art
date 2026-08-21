@@ -7,9 +7,13 @@ survive any later re-render at a different resolution.
 
 The standard describes the *style language* only: material response, print
 weight, detail density, palette discipline and where shading is allowed to come
-from.  Per-person body variation (height, shoulder width, torso width, limb
-thickness) is handled by ``brick_v2_spec.BRICK_V2_SPEC["variation"]`` and does
-not change anything in this module.
+from.  Per-person variation (height, build, outfit, hair) is carried in the
+generation prompt and does not change anything in this module.
+
+The reference is a render, and ``full_character`` generation now produces the
+final image directly rather than textures for a separate renderer.  So the
+measured shading values here are a *target* for the generated sprite, not a
+budget it must stay under.
 
 Confidence markers on measurements:
 

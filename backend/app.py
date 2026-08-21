@@ -45,40 +45,26 @@ except Exception:
     from face_module import get_face_features
 
 try:
-    from backend.garment_gen import (  # type: ignore
-        generate_body_png,
-        generate_full_character_png,
-    )
+    from backend.garment_gen import generate_full_character_png  # type: ignore
 except Exception:
-    from garment_gen import (  # type: ignore
-        generate_body_png,
-        generate_full_character_png,
-    )
+    from garment_gen import generate_full_character_png  # type: ignore
 
 try:
     from backend.avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
-    from backend.ai_texture_gen import apply_ai_textures, generate_ai_character_textures  # type: ignore
     from backend.capture_quality import mean_landmark_displacement  # type: ignore
-    from backend.character_spec import active_character_style_id, build_character_spec, validate_character_spec  # type: ignore
-    from backend.brick_v2_spec import get_brick_v2_spec  # type: ignore
     from backend.generation_history import finish_run, get_detail_benchmark, get_run, get_summary, list_runs, mark_render_failure, output_directory, record_attempt, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
     from backend.blind_review import blind_payload, create_review_session, delete_review_sources, get_review_session, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
     from backend.height_profiles import classify_height, get_height_profile  # type: ignore
     from backend.metrics_logger import log_metric  # type: ignore
     from backend.style_registry import get_event_style_id, get_style  # type: ignore
-    from backend.style_family import get_style_family_spec  # type: ignore
 except Exception:
     from avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
-    from ai_texture_gen import apply_ai_textures, generate_ai_character_textures  # type: ignore
     from capture_quality import mean_landmark_displacement  # type: ignore
-    from character_spec import active_character_style_id, build_character_spec, validate_character_spec  # type: ignore
-    from brick_v2_spec import get_brick_v2_spec  # type: ignore
     from generation_history import finish_run, get_detail_benchmark, get_run, get_summary, list_runs, mark_render_failure, output_directory, record_attempt, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
     from blind_review import blind_payload, create_review_session, delete_review_sources, get_review_session, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
     from height_profiles import classify_height, get_height_profile  # type: ignore
     from metrics_logger import log_metric  # type: ignore
     from style_registry import get_event_style_id, get_style  # type: ignore
-    from style_family import get_style_family_spec  # type: ignore
 
 
 app = Flask(__name__)
@@ -126,25 +112,7 @@ _swarm_chars: Dict[str, Any] = {
         "upper": {"hex": "#FFFFFF"}, "lower": {"hex": "#444444"},
         "outfit": {"inner_color": "#FF0000", "lower_color": "#0000FF"},
         "height_class": "medium", "height_profile": get_height_profile("medium"),
-        "style_id": "brick_v1",
-        "character_spec": {
-            "schema_version": 2, "style_spec_version": 2,
-            "character_id": "system_bot", "style_id": "brick_v1",
-            "height_profile": "medium", "skin_color": "#FFD0A8",
-            "body_shape": {
-                "height_scale": 1.0, "shoulder_width": 1.0, "torso_width": 1.0,
-                "torso_depth": 1.0, "limb_thickness": 1.0, "confidence": 1.0,
-                "measurement": "system_default",
-            },
-            "hair": {"style": "short", "color": "#3B2314"},
-            "face": {"expression": "smile", "glasses": False, "beard": "none"},
-            "outfit": {
-                "upper_type": "tshirt", "lower_type": "pants", "outer_type": "none",
-                "upper_color": "#FFFFFF", "lower_color": "#444444", "arm_color": "#FFFFFF",
-            },
-            "textures": {},
-            "quality": {"capture_score": 1.0, "texture_confidence": 0.0, "fallback_used": True},
-        },
+        "character_mode": "full_character",
     }
 }
 _swarm_lock = threading.Lock()
@@ -241,7 +209,6 @@ def health_check():
         "status": "ok",
         "service": "PersonaFlow backend",
         "capture_protocol": CAPTURE_PROTOCOL_VERSION,
-        "character_style": active_character_style_id(),
     })
 
 
@@ -259,16 +226,6 @@ def api_branch():
     except Exception:
         branch = "unknown"
     return jsonify({"branch": branch})
-
-
-@app.route("/api/styles/brick_v1", methods=["GET"])
-def brick_style_family_contract():
-    return jsonify(get_style_family_spec())
-
-
-@app.route("/api/styles/brick_v2", methods=["GET"])
-def brick_v2_contract():
-    return jsonify(get_brick_v2_spec())
 
 
 def _with_output_url(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -764,26 +721,22 @@ def handle_generate_avatar(payload):
                     "height_class": live["trusted_height_class"],
                 }
 
-    # Public generation supports the fixed-species AI material path and keeps
-    # full-character generation as a research comparator. body_sprite is
-    # retired: old history remains readable, but new requests must not spend
-    # API budget on the visibly stitched legacy result.
-    mode = (payload.get("mode") or os.environ.get("GENERATION_MODE", "brick_ai_texture")).strip()
-    if mode == "body_sprite":
+    # full_character is the only live path: one AI image covers the whole
+    # figure. body_sprite and brick_ai_texture are retired -- old history stays
+    # readable, but new requests must not spend API budget on them.
+    mode = (payload.get("mode") or os.environ.get("GENERATION_MODE", "full_character")).strip()
+    if mode in {"body_sprite", "brick_ai_texture"}:
         emit("avatar_generated", {
             "ok": False,
             "is_final": True,
             "request_id": request_id,
-            "character_mode": "body_sprite",
+            "character_mode": mode,
             "error": "mode_retired",
-            "guidance": "AI 組合角色模式已退役，請重新整理頁面並使用 AI 材質 3D 角色。",
+            "guidance": "此生成模式已退役，請重新整理頁面後使用完整角色生成模式。",
         })
         return
-    brick_modes = {"brick_ai_texture"}
-    if mode not in {*brick_modes, "full_character"}:
-        mode = "brick_ai_texture"
-    if mode not in brick_modes and mode not in get_style(style_id).supported_modes:
-        mode = "brick_ai_texture"
+    if mode not in get_style(style_id).supported_modes:
+        mode = "full_character"
     _history_call(
         start_run, request_id, mode=mode, style_id=style_id,
         source_type=source_type, experiment_id=experiment_id,
@@ -819,11 +772,10 @@ def handle_generate_avatar(payload):
             _progress("received", 5, "照片已接收，準備分析人物特徵")
             vlm_start = time.perf_counter()
             _progress("analyzing", 12, "正在分析人體輪廓、服裝區域與色彩")
-            # Full-character image models already receive the source photo.
-            # Calling two extra VLM endpoints duplicated visual analysis and
-            # made full-image modes perform redundant visual analysis.
-            # Keep VLM only for texture/body modes unless explicitly re-enabled.
-            use_vlm = mode in {"brick_ai_texture", "body_sprite"} or os.environ.get("FULL_MODE_VLM_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+            # The full-character image model already receives the source photo,
+            # so the two extra VLM endpoints duplicate visual analysis. They stay
+            # off unless explicitly re-enabled.
+            use_vlm = os.environ.get("FULL_MODE_VLM_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
             fut_outfit = _vlm_executor.submit(analyze_outfit, img_str) if use_vlm else None
             fut_face_vlm = _vlm_executor.submit(analyze_face, img_str) if use_vlm else None
 
@@ -837,7 +789,6 @@ def handle_generate_avatar(payload):
             face_cv_result = {}
             rgb_full       = None
             body_poly      = None
-            fut_garment    = None
             cv_start = time.perf_counter()
             if frame is not None:
                 cv_result      = get_clothing_features(frame, max_width=480)
@@ -885,19 +836,12 @@ def handle_generate_avatar(payload):
                 cv_result["height_measurement_valid"] = True
                 cv_result["height_method"] = "fixed_station_temporal_segmentation"
 
-            # body_sprite mode: spawn generation in PARALLEL with VLM (no VLM context needed).
-            if mode == "body_sprite" and rgb_full is not None and body_poly is not None:
-                fut_garment = _generation_executor.submit(
-                    generate_body_png,
-                    rgb_full, body_poly,
-                    style_id=style_id,
-                )
             cv_ms = int((time.perf_counter() - cv_start) * 1000)
 
             # Wait for VLM results with timeout (45s)
             vlm_result = {"ok": False, "error": "disabled_for_full_mode", "outfit": {"outer": "none", "inner": "tshirt", "lower": "jeans", "has_pattern": False}}
             vlm_face_result = {"ok": False, "error": "disabled_for_full_mode", "face": {}}
-            vlm_timeout = 6 if mode in brick_modes else 45
+            vlm_timeout = 45
             vlm_deadline = time.monotonic() + vlm_timeout
             if fut_outfit is not None:
                 try:
@@ -1024,149 +968,7 @@ def handle_generate_avatar(payload):
 
             generation_start = time.perf_counter()
             base_generation_ms = None
-            if mode in brick_modes:
-                _progress("building_character", 68, "正在建立一致的 3D 積木角色材質")
-                character_spec = build_character_spec(
-                    request_id=request_id,
-                    cv_result=cv_result,
-                    face_data=face_data,
-                    outfit_data=outfit_data,
-                    accessories=payload.get("accessories") or [],
-                )
-                validation = validate_character_spec(character_spec)
-                fallback_used = bool((character_spec.get("quality") or {}).get("fallback_used"))
-                is_ai_mode = mode == "brick_ai_texture"
-                if is_ai_mode:
-                    character_spec = {
-                        **character_spec,
-                        "quality": {
-                            **(character_spec.get("quality") or {}),
-                            "ai_texture_status": "pending",
-                        },
-                    }
-                avatar_payload = _payload_for(
-                    {"ok": validation.get("passed", False)},
-                    stage="character_spec_base",
-                    is_final=not is_ai_mode,
-                    selected_mode=mode,
-                    validation=validation,
-                    retries=0,
-                    fallback=fallback_used,
-                    ok=validation.get("passed", False),
-                    error=None if validation.get("passed") else "character_spec_invalid",
-                )
-                avatar_payload.update({
-                    "character_spec": character_spec,
-                    "body_png": None,
-                    "garment_source": "ai_texture_pending" if is_ai_mode else "deterministic_texture",
-                    "style_id": character_spec.get("style_id", "brick_v1"),
-                })
-                socketio.emit("avatar_generated", avatar_payload, to=sid)
-                _progress(
-                    "base_ready" if is_ai_mode else "complete",
-                    70 if is_ai_mode else 100,
-                    "3D 基礎角色已建立，準備 AI 材質" if is_ai_mode else "3D 積木角色已建立",
-                )
-                generation_ms = int((time.perf_counter() - generation_start) * 1000)
-                final_status = "success" if validation.get("passed") else "failed"
-                final_stage = "character_spec"
-                final_validation = validation
-                final_error = None if validation.get("passed") else "character_spec_invalid"
-                if is_ai_mode:
-                    _progress("generating_texture", 74, "AI 正在繪製臉部與服裝高細節材質")
-                    ai_result = _await_generation(
-                        _generation_executor.submit(
-                            generate_ai_character_textures, img_str, character_spec
-                        ),
-                        timeout=55,
-                        error="ai_texture_timeout",
-                    )
-                    ai_validation = ai_result.get("validation") or {
-                        "passed": False,
-                        "errors": [ai_result.get("error") or "ai_texture_failed"],
-                        "warnings": [],
-                    }
-                    _record_generation_attempt("brick_texture", 0, ai_result, ai_validation)
-                    _progress("validating_texture", 94, "正在檢查材質版位、顏色與細節")
-                    if ai_result.get("ok") and ai_validation.get("passed"):
-                        final_spec = apply_ai_textures(character_spec, ai_result)
-                        final_status = "success"
-                        final_error = None
-                        final_source = "ai_texture"
-                        final_fallback = False
-                    else:
-                        final_spec = {
-                            **character_spec,
-                            "quality": {
-                                **(character_spec.get("quality") or {}),
-                                "ai_texture_status": "failed",
-                                "ai_texture_error": ai_result.get("error") or "ai_texture_validation_failed",
-                            },
-                        }
-                        final_status = "failed"
-                        final_error = ai_result.get("error") or "ai_texture_validation_failed"
-                        final_source = "ai_texture_failed"
-                        final_fallback = False
-                    final_payload = _payload_for(
-                        {"ok": final_status == "success"},
-                        stage="ai_texture",
-                        is_final=True,
-                        selected_mode=mode,
-                        validation=ai_validation,
-                        retries=0,
-                        fallback=final_fallback,
-                        ok=final_status == "success",
-                        error=None if final_status == "success" else final_error,
-                        guidance=None if final_status == "success" else "AI 材質未通過物種或細節檢查，請重新拍攝或稍後重試。",
-                    )
-                    final_payload.update({
-                        "character_spec": final_spec if final_status == "success" else None,
-                        "body_png": None,
-                        "garment_source": final_source,
-                        "style_id": final_spec.get("style_id", "brick_v1"),
-                        "ai_texture_status": (final_spec.get("quality") or {}).get("ai_texture_status"),
-                    })
-                    socketio.emit("avatar_generated", final_payload, to=sid)
-                    _progress(
-                        "complete" if final_status == "success" else "failed", 100,
-                        "AI 高細節材質已完成" if final_status == "success" else "AI 材質未通過檢查",
-                    )
-                    fallback_used = final_fallback
-                    final_stage = "ai_texture"
-                    final_validation = ai_validation
-
-            elif mode == "body_sprite":
-                _progress("generating", 42, "正在生成軀幹與雙腿圖像")
-                garment_result = _await_generation(fut_garment) if fut_garment is not None else {"ok": False, "error": "no_body_poly"}
-                garment_result = _prepare_generated(garment_result)
-                _progress("validating", 84, "正在檢查角色輪廓與下半身完整性")
-                validation = _validate(garment_result)
-                _record_generation_attempt("body", 0, garment_result, validation)
-                if max_retries and garment_result.get("ok") and not validation.get("passed") and rgb_full is not None and body_poly is not None:
-                    retry_count = 1
-                    correction = correction_for_validation(validation)
-                    garment_result = _await_generation(_generation_executor.submit(
-                        generate_body_png, rgb_full, body_poly, style_id=style_id, correction=correction
-                    ))
-                    garment_result = _prepare_generated(garment_result)
-                    validation = _validate(garment_result)
-                    _record_generation_attempt("body", 1, garment_result, validation)
-                if not validation.get("passed"):
-                    fallback_used = True
-                    garment_result = {"ok": False, "error": "grid_fallback"}
-                socketio.emit("avatar_generated", _payload_for(
-                    garment_result, stage="base", is_final=True, selected_mode="body_sprite",
-                    validation=validation, retries=retry_count, fallback=fallback_used,
-                ), to=sid)
-                _progress("complete", 100, "模式一角色處理完成")
-                base_generation_ms = int((time.perf_counter() - generation_start) * 1000)
-                final_status = "fallback" if fallback_used else "success"
-                final_stage = "base"
-                final_validation = validation
-                final_error = "grid_fallback" if fallback_used else None
-                final_output = garment_result.get("body_png")
-
-            elif mode == "full_character":
+            if mode == "full_character":
                 _progress("generating", 40, "正在生成完整角色，這通常是最久的階段")
                 if rgb_full is not None and body_poly is not None:
                     garment_result = _await_generation(_generation_executor.submit(
@@ -1299,12 +1101,11 @@ def handle_join_swarm(payload):
             "outfit": payload.get("outfit", existing.get("outfit")),
             "body_png": payload.get("body_png", existing.get("body_png")),
             "body_bbox": payload.get("body_bbox", existing.get("body_bbox")),
-            "character_spec": payload.get("character_spec", existing.get("character_spec")),
-            "character_mode": payload.get("character_mode", existing.get("character_mode", "body_sprite")),
+            "character_mode": payload.get("character_mode", existing.get("character_mode", "full_character")),
             "height_class": height_class,
             "height_profile": height_profile,
             "height_measurement_valid": True,
-            "style_id": payload.get("style_id", existing.get("style_id", "brick_v1")),
+            "style_id": payload.get("style_id", existing.get("style_id", "lego")),
         }
         snapshot = list(_swarm_chars.values())
     emit("swarm_joined", {"id": char_id})
@@ -1334,7 +1135,7 @@ def handle_update_character(payload):
         return
     with _swarm_lock:
         if char_id in _swarm_chars:
-            for k in ("upper", "lower", "upper_type", "lower_type", "accessories", "accessory", "arm_color", "face", "outfit", "body_png", "body_bbox", "character_spec", "character_mode", "height_class", "height_profile", "height_measurement_valid", "style_id"):
+            for k in ("upper", "lower", "upper_type", "lower_type", "accessories", "accessory", "arm_color", "face", "outfit", "body_png", "body_bbox", "character_mode", "height_class", "height_profile", "height_measurement_valid", "style_id"):
                 if k in payload:
                     _swarm_chars[char_id][k] = payload[k]
 
@@ -1353,7 +1154,7 @@ def _swarm_background():
                 if cid in _swarm_chars:
                     _swarm_chars[cid].update(c)
         lightweight = [
-            {key: value for key, value in character.items() if key not in {"body_png", "character_spec"}}
+            {key: value for key, value in character.items() if key != "body_png"}
             for character in updated
         ]
         socketio.emit("update_positions", {"characters": lightweight})

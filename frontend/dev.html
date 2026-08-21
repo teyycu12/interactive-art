@@ -62,7 +62,7 @@
   </style>
 </head>
 <body>
-  <header><div class="topline"><div><h1>生成歷史、成本與盲評</h1><span class="muted">PersonaFlow Research Console</span></div><nav><a href="index.html">主操作頁</a>　<a href="projection3d.html">3D投影牆</a></nav></div></header>
+  <header><div class="topline"><div><h1>生成歷史、成本與盲評</h1><span class="muted">PersonaFlow Research Console</span></div><nav><a href="index.html">主操作頁</a>　<a href="projection.html">投影牆</a></nav></div></header>
   <main>
     <p class="notice">一般生成不保存原始照片；只有明確匯入的評測縮圖會暫存在本機 gitignored 目錄，並可按實驗批次刪除。</p>
     <nav class="tabs" aria-label="操作台分頁">
@@ -84,7 +84,7 @@
         <div class="card"><span class="label">正式／舊版細節</span><strong class="value" id="detailParity">—</strong></div>
       </div>
       <div class="panel toolbar">
-        <select id="modeFilter" style="max-width:230px"><option value="">全部模式</option><option value="brick_ai_texture">正式 brick_ai_texture</option><option value="body_sprite">舊版 body_sprite</option><option value="full_character">舊版 full_character</option><option value="full_character_refined">舊版 refined</option><option value="external_import">外部匯入</option></select>
+        <select id="modeFilter" style="max-width:230px"><option value="">全部模式</option><option value="full_character">full_character</option><option value="brick_ai_texture">已退役 brick_ai_texture</option><option value="body_sprite">已退役 body_sprite</option><option value="full_character_refined">已退役 refined</option><option value="external_import">外部匯入</option></select>
         <input id="experimentFilter" placeholder="實驗ID（留空顯示全部）" style="max-width:260px">
         <input id="variantFilter" placeholder="variant（留空顯示全部）" style="max-width:230px">
         <button id="refreshHistory">重新整理</button><span class="muted" id="updated"></span>

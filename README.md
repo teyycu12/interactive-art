@@ -5,20 +5,28 @@ PersonaFlow 將參與者的全身影像轉譯為 LEGO 風格插畫角色，並�
 目前開發重點集中在 M1（攝影、人體與服裝特徵）及 M2（角色生成穩定度、品質與成本）。M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 renderer 的可擴充性。
 
 > [!WARNING]
-> **正式模式仍在研發嘗試中，尚未成功。** 目前 `brick_v2` 已完成合成幾何、資料契約、AI Atlas 規則、模組化髮型與部分服裝部件，但合成畫面的髮際線、部件接合和服裝輪廓仍在調整；尚未以新版管線重新完成真人 P01 材質生成，更未達到可展示或可宣稱與目標參考圖同等品質的程度。`brick_ai_texture` 是候選正式架構，不是已完成的正式功能。
+> **角色物種一致性尚未達成，不可對外展示。** 目前 `full_character` 能穩定產出構圖完整的角色，但不同人生成出來的畫風仍會漂移（線寬、明暗、五官畫法各不相同）。跨角色的物種一致性是現階段的核心研究問題，尚未解決。
+
+## 架構轉向（2026-08）
+
+固定 3D 幾何路線（`brick_ai_texture` / `brick_v1` / `brick_v2`）已**整條移除**。
+
+移除原因：該路線要求影像模型產出貼在固定 UV 上的材質圖集，但實測輸出的軀幹與腿部格是「浮在白底上的服裝型錄插畫」——完整衣服外輪廓加背景，貼到 3D 模型上完全不能看。這不是 prompt 措辭問題，而是模型難以理解 UV 貼圖這個概念。
+
+現行唯一路線是 `full_character`：模型一次畫出整隻角色，輸出即最終畫面，以 2D sprite 進入投影牆。
+
+**代價**：固定網格原本免費保證「兩隻手、兩條腿、比例一致」，現在要靠 prompt 與結構驗證去爭取。
 
 ## 目前研發判定
 
 | 項目 | 判定 | 說明 |
 |---|---|---|
 | 攝影、站位與 CV | 可開發測試 | 可取得人體、服裝區域、顏色與有限體型資訊，現場門檻仍需校正 |
-| `brick_v1` | 未達標 | 曾出現像素拼接、浮動貼紙、固定臉與物種割裂問題，不作為最終方向 |
-| `brick_v2` 固定物種 | 進行中 | 已重建肩寬腰窄軀幹、C形手、鞋、關節、真實表面 UV 與共用動畫骨架 |
-| 模組化 3D 髮型 A | 進行中 | 已選定並實作參數化髮殼、側髮、後髮、髮髻與馬尾；髮際線仍需視覺校正 |
-| 服裝與體型 | 進行中 | 已加入受限體型參數與固定服裝幾何文法；裙裝、帽T、大衣等仍需逐類驗證 |
-| AI 材質 Atlas | 尚待真人重測 | 新 validator 可拒絕完整衣服貼紙、背景與烘焙陰影，但尚未取得新版真人生成結果 |
-| Three.js 單人／投影 | 技術串接完成、視覺未驗收 | 共用 `brick_v2` builder、走路與揮手骨架已接通，尚未通過最終外觀與多人效能驗收 |
-| 正式對外展示 | **不可用** | 必須先通過合成視覺閘門、P01 手動生成、5人測試與盲評 |
+| `full_character` 構圖完整度 | 大致可用 | 比例正確、五官乾淨；多肢與缺鞋由 validator＋重試處理 |
+| **跨角色物種一致性** | **未解決（核心問題）** | 目前無風格參考圖，畫風只靠文字描述，因此必然漂移 |
+| 個體特徵保真 | 部分 | 服裝顏色走 CV 量測；膚色髮色仍被量化成 6–8 個桶 |
+| 物種漂移量測 | 建置中 | `style_fingerprint.fingerprint_spread` 是量化定義，正在接入生成管線 |
+| 正式對外展示 | **不可用** | 必須先解決物種一致性並通過真人盲評 |
 
 目前最重要的原則是：**測試通過只代表資料與程式契約沒有破壞，不代表角色視覺品質已成功。**
 
@@ -32,7 +40,7 @@ PersonaFlow 將參與者的全身影像轉譯為 LEGO 風格插畫角色，並�
 | 開發照片測試 | 可上傳本地照片，走與正式拍照相同的生成流程 |
 | 服裝色彩 | OpenCV 取得上身、下身及手臂色彩；CV 是色彩基準 |
 | 身高分級 | 固定攝影站下分類 `short / medium / tall`，只影響角色視覺比例與倍率 |
-| AI 角色生成 | `brick_ai_texture` 是研發主線但尚未成功；`full_character` 僅作研究比較，`body_sprite` 已退役 |
+| AI 角色生成 | `full_character` 為唯一路線；`brick_ai_texture` 與 `body_sprite` 已退役 |
 | 生成進度 | 後端回報接收、CV、生成、驗證、精修與完成等實際里程碑 |
 | 本機審查 | 規則 validator 檢查透明背景、構圖、碎裂、左右腿與鞋等結構問題 |
 | 生成歷史 | SQLite 保存每次 run／attempt、生成圖、耗時、token、成本與錯誤 |
@@ -42,7 +50,7 @@ PersonaFlow 將參與者的全身影像轉譯為 LEGO 風格插畫角色，並�
 
 ## 使用介面
 
-- 主操作頁提供 AI 材質3D主模式與完整生圖比較模式；已退役模式仍可在歷史頁辨識。
+- 主操作頁只提供 `full_character` 完整角色生成；已退役模式仍可在歷史頁辨識。
 - 攝影機預設關閉，可按按鈕自行啟用；也可直接使用「LOAD TEST PHOTO」上傳測試照片。
 - 正式生成時顯示階段式進度條。百分比代表流程里程碑，不是模型內部的精確剩餘時間。
 - 「生成歷史／成本」可檢視每次生圖、API request、耗時、token、費用與人工評分。
@@ -56,29 +64,24 @@ PersonaFlow 將參與者的全身影像轉譯為 LEGO 風格插畫角色，並�
 
 ## 生成模式
 
-### 候選正式模式（尚未成功）：`brick_ai_texture`
+### 唯一路線：`full_character`
 
-- 目標是以固定原創 3D 積木幾何、骨架、材質與燈光統一物種。
-- Pro image model 只生成臉、上衣與左右腿的固定 UV 材質。
-- AI 材質通過版位、顏色與細節檢查後才套用到 Three.js 角色。
-- 主操作頁直接使用 Three.js 讀取 `CharacterSpec` 與 AI Atlas，使用和投影牆一致的固定材質、相機及燈光。
-- 3D 預覽完成後可保存透明 PNG 到同一筆生成歷史，不再以 p5.js CV 色塊冒充正式結果。
-- 目前公開預設仍保留 `BRICK_CHARACTER_STYLE=brick_v1`，避免未驗收的 `brick_v2` 被誤當成成功結果。
-- `brick_v2` 僅能在合成 fixture 與開發旗標下測試；真人結果需要專案負責人手動生成並確認。
+- AI 一次產生完整角色（頭、髮、臉、身體、腿、鞋），輸出即最終畫面。
+- 送三張圖給模型：訪客照片（WHO）、CV 特寫拼版（WHO 細節）、程式繪製的姿勢參考（幾何）。
+- 結果經 `avatar_quality.py` 檢查透明背景、構圖、碎裂、左右腿與鞋；失敗回傳明確原因。
+- 以 2D sprite 進入 Boids 投影牆。
 
-目前失敗證據包括：舊 atlas 曾把完整衣服輪廓與背景畫進 UV、模型像尺寸不合的貼紙、髮型與頭部接合不自然，以及裙殼曾錯誤疊在長褲幾何上。這些問題正在逐項改成可驗證的幾何與資料規則，不能只靠 prompt 修飾。
+**已知缺口**：目前**沒有任何風格參考圖**送進模型，畫風完全只靠 prompt 文字描述，這是跨角色物種漂移的直接原因。
 
-### 已退役：`body_sprite`
+### 已退役
 
-- 舊流程由 AI 生成軀幹與雙腿，再拼接程式化頭、手臂、手與鞋。
-- 因臉部固定、畫風拼接且不符合物種統一研究方向，公開入口與新請求均已停用；舊紀錄保留。
+| 模式 | 退役原因 |
+|---|---|
+| `brick_ai_texture` | 模型無法產出可用的 UV 材質圖集，輸出是服裝型錄插畫而非布料裁切 |
+| `body_sprite` | 臉部固定、畫風拼接，不符合物種統一方向 |
+| `full_character_refined` | 兩段式精修的成本與延遲不划算 |
 
-### 實驗模式：`full_character`
-
-- AI 一次產生完整角色，用來和正式 3D 材質模式比較細節與成本。
-- 驗證失敗會回傳明確原因，不自動付費重生。
-
-`body_sprite`、`brick_v1` 快速備援與 `full_character_refined` 完整＋精修已從公開模式移除；舊歷史紀錄仍可在開發頁查看。
+新請求指定以上任一模式都會在付費呼叫前直接拒絕；舊歷史紀錄仍可在開發頁查看。
 
 ## 審查流程
 
@@ -209,10 +212,10 @@ SQLite 每次 attempt 可記錄：
 |---|---|---|
 | 感知層 | Python、MediaPipe、OpenCV | 姿勢、人體遮罩、服裝色彩、臉部與局部區域 |
 | 邏輯層 | Python、Flask、Flask-SocketIO | session 隔離、生成流程、驗證、歷史 API、Socket 通訊 |
-| 生成層 | OpenRouter、OpenAI-compatible SDK | 候選 AI 臉部／服裝印刷 Atlas 與完整角色比較實驗 |
+| 生成層 | OpenRouter、OpenAI-compatible SDK | 完整角色一次生成 |
 | 資料層 | SQLite、Rotating JSONL | 開發歷史、token／cost、人工審查及匿名 metrics |
-| 主畫面 | JavaScript、p5.js、Three.js、Socket.io | 攝影／上傳、進度條與候選 3D 角色預覽 |
-| 投影頁 | JavaScript、Three.js | 與單人預覽共用 `brick_v2` builder、材質、骨架、燈光及 Boids 座標 |
+| 主畫面 | JavaScript、p5.js、Socket.io | 攝影／上傳、進度條與角色預覽 |
+| 投影頁 | JavaScript、p5.js | 2D sprite 群聚投影與 Boids 座標 |
 
 後端使用 Flask-SocketIO 的 `threading` async mode。CV preview、VLM 與正式 image generation 使用不同 executor，避免即時預覽佇列阻塞正式生成。
 
@@ -225,12 +228,10 @@ PersonaFlow/
 │   ├── cv_module.py            # 人體、服裝色彩、輪廓與局部區域
 │   ├── face_module.py          # 本機臉部特徵
 │   ├── vlm_module.py           # 可選 Gemini 語意分析
-│   ├── garment_gen.py          # body／full／refine 生圖流程
-│   ├── ai_texture_gen.py        # 固定四格 AI 印刷 Atlas 生成、拆分與驗證
-│   ├── brick_v2_spec.py         # brick_v2 物種、比例、UV、材質與接合規格
-│   ├── brick_v2_atlas.py        # 拒絕衣服輪廓、背景污染與烘焙陰影
-│   ├── brick_v2_garment.py      # 衣物語意轉固定服裝幾何文法
-│   ├── character_spec.py        # CharacterSpec、受限體型與材質資料
+│   ├── garment_gen.py          # 完整角色生圖流程與 prompt 模板
+│   ├── style_base.py           # 從參考圖量出的風格標準（數值化）
+│   ├── style_fingerprint.py    # 風格指紋與跨角色漂移量測
+│   ├── style_normalizer.py     # 方向性明暗量測與正規化
 │   ├── avatar_quality.py       # 本機生成圖 validator
 │   ├── capture_quality.py      # 拍攝站位與穩定度規則
 │   ├── generation_history.py   # SQLite run／attempt／人工審查
@@ -242,11 +243,7 @@ PersonaFlow/
 ├── frontend/
 │   ├── index.html              # 主操作頁與生成模式選擇
 │   ├── dev.html                # 生成歷史、成本、圖片比較與人工審查
-│   ├── projection.html         # 投影頁
-│   ├── projection3d.html       # Three.js 群體投影與 brick_v2 動畫
-│   ├── brick-v2-model.js       # 共用 brick_v2 幾何、UV、髮型與服裝部件
-│   ├── brick3d-preview.js      # 單人透明背景 Three.js 預覽
-│   ├── brick-v2-fixture.html   # 不用真人／AI的合成體型與服裝視覺測試
+│   ├── projection.html         # 投影頁（2D sprite 群聚）
 │   ├── sketch.js               # p5.js 狀態、攝影、上傳、進度與渲染
 │   ├── character.js            # Person 角色資料與渲染接點
 │   ├── socket.js               # Socket.io client
@@ -254,7 +251,7 @@ PersonaFlow/
 │       ├── registry.js         # 前端 renderer registry
 │       └── lego.js             # LEGO renderer
 ├── PRD.md
-├── BRICK_V2_SPEC.md            # brick_v2 可執行視覺契約與開發閘門
+├── STYLE_BASE.md               # 基底風格標準（量測方法與數值）
 ├── EXTERNAL_AI_RESEARCH_BRIEF.md
 ├── AGENTS.md
 ├── TechStack.md
@@ -305,14 +302,11 @@ Start-Process 'http://127.0.0.1:8000/index.html'
 |---|---|---|
 | `OPENAI_API_KEY` | `sk-or-v1-...` | OpenRouter／OpenAI-compatible 金鑰 |
 | `OPENAI_BASE_URL` | OpenRouter 自動判定 | 可選 API base URL |
-| `OUTFIT_GEN_MODEL` | `google/gemini-3.1-flash-image-preview` | AI 組合角色模型 |
-| `FULL_CHARACTER_MODEL` | `google/gemini-3-pro-image-preview` | 模式二完整角色模型 |
-| `BRICK_TEXTURE_MODEL` | `google/gemini-3-pro-image-preview` | 正式模式固定 UV 材質模型 |
-| `BRICK_CHARACTER_STYLE` | `brick_v1` | 新請求使用的固定幾何版本；`brick_v2` 尚未驗收，勿作正式展示 |
-| `GENERATION_MODE` | `brick_ai_texture` | 後端預設模式；主頁可逐次選擇 |
+| `FULL_CHARACTER_MODEL` | `google/gemini-3-pro-image-preview` | 完整角色生成模型 |
+| `GENERATION_MODE` | `full_character` | 後端預設模式；目前唯一支援值 |
 | `GENERATION_MAX_RETRIES` | `0` | 自動付費重試次數，開發預設關閉 |
-| `FULL_MODE_VLM_ENABLED` | `0` | 是否讓完整角色模式額外呼叫服裝／臉部 VLM |
-| `GEMINI_API_KEY` | 空 | 正式／組合模式可選語意分析 |
+| `FULL_MODE_VLM_ENABLED` | `0` | 是否額外呼叫服裝／臉部 VLM（模型已看過原始照片，預設關閉）|
+| `GEMINI_API_KEY` | 空 | 可選語意分析 |
 | `CHARACTER_STYLE` | `lego` | 活動層級統一角色風格 |
 | `HEIGHT_SHORT_MAX_RATIO` | `0.72` | short／medium 分界 |
 | `HEIGHT_TALL_MIN_RATIO` | `0.84` | medium／tall 分界 |
@@ -330,7 +324,7 @@ Start-Process 'http://127.0.0.1:8000/index.html'
 | `clothing_features` | 後端 → 前端 | 色彩、landmarks、站位品質與身高 metadata |
 | `generate_avatar` | 前端 → 後端 | 正式生成，包含 `request_id`、mode、source type |
 | `generation_progress` | 後端 → 前端 | 真實流程里程碑與提示文字 |
-| `avatar_generated` | 後端 → 前端 | 基礎／AI 材質／完整角色結果與 validation |
+| `avatar_generated` | 後端 → 前端 | 完整角色結果與 validation |
 | `join_swarm` | 前端 → 後端 | 將角色加入投影牆 |
 | `update_character` | 前端 → 後端 | 更新角色配件與 metadata |
 | `update_positions` | 後端 → 前端 | 廣播 Boids 角色位置 |
@@ -346,35 +340,33 @@ python -m unittest discover -s backend\tests -v
 - M1 全身、visibility、腳尖出界、穩定度與 session 隔離。
 - 三段身高臨界值。
 - 生成圖透明背景、碰邊、碎裂、缺腿／缺鞋及白衣保護。
-- 模式二成功、失敗要求重拍且不回退模式一。
-- 被移除的舊模式會安全映射到正式模式，且不呼叫舊精修器。
+- 完整角色生成成功、失敗要求重拍且不自動付費重生。
+- 已退役模式在付費呼叫前被拒絕；未知模式安全回退到 `full_character`。
 - 真實進度里程碑事件。
 - SQLite token／cost 聚合與人工審查。
 - style registry 與 Socket metadata 保存。
 
-目前共有 73 項測試。這些測試涵蓋程式契約、資料介面、錯誤阻擋與部分幾何選型；**不代表 3D 外觀已通過人工視覺驗收。**
+目前共有 73 項測試。這些測試涵蓋程式契約、資料介面與錯誤阻擋；**不代表角色外觀已通過人工視覺驗收。**
 
 ## 已知限制與下一步
 
-- **正式模式尚未成功**：目前不得以測試數量、API成功回應或合成 fixture 取代真人視覺驗收。
-- **髮型瓶頸**：A方案以有限模組組合大量髮型，但髮際線、分線、瀏海與頭部交界仍容易像帽子；需先完成合成視角檢查，再測真人語意映射。
-- **服裝瓶頸**：一張 torso 貼圖不能表達裙擺、帽兜、大衣厚度或無袖輪廓。現改用有限服裝幾何文法，但每一類附件仍需驗證正面、45度、側面及動畫碰撞。
-- **體型瓶頸**：肩寬、軀幹寬深與肢體粗細只能作風格化相對差異；寬鬆衣物會干擾體型估算，因此服裝 fit 與 body shape 必須分開處理。
-- **AI Atlas瓶頸**：模型容易把完整衣服、背景與方向性陰影畫入 UV。新版 validator 已能攔截部分錯誤，但能否穩定產出合格印刷仍缺真人生成證據。
-- **人物精緻度瓶頸**：固定物種解決多手多腳與風格漂移，但臉、髮型、眼鏡、鬍鬚、領口、圖案與鞋款的個體辨識度仍未達標。
-- **效能瓶頸**：模組化髮型與個人貼圖會增加 draw calls、記憶體與載入時間；50／100人 FPS 尚未完成正式量測。
-- **視覺檢查工具限制**：目前主要以合成 fixture 與人工截圖迭代；沒有可連接的 Browser 分頁時，外觀不能只靠單元測試判定。
+- **物種一致性未解決（核心問題）**：目前沒有任何風格參考圖送進模型，畫風只由 prompt 文字描述決定，不同人之間的線寬、明暗與五官畫法必然漂移。
+- **prompt 與風格標準互相矛盾**：`garment_gen.py` 的 ART STYLE GUIDELINES 要求「扁平向量、無漸層、無陰影」，但 `style_base.py` 從參考圖量到的是 0.21–0.24 的立體明暗與光澤塑膠。兩者必須先對齊到同一個目標。
+- **幾何一致性失去免費保證**：移除固定 3D 網格後，「兩隻手、兩條腿、比例一致」要靠 prompt 與 `avatar_quality.py` 的結構檢查去爭取；多肢問題會回來。
+- **個體特徵部分流失**：服裝顏色走 CV 量測，但膚色髮色仍被 VLM 量化成 6–8 個桶，抹平個體差異。
+- **漂移無法量測**：`fingerprint_spread` 已寫好但尚未接入生成管線，目前沒有數字能回答「這批角色有多不一致」。
+- **效能瓶頸**：50／100人 FPS 尚未完成正式量測。
 - 拍攝品質閘門與身高門檻仍需固定攝影站實測校正。
 - 本機 validator 能判斷格式與部分結構，不能可靠判斷是否像本人或是否達到目標參考圖。
 
 ### 下一階段順序
 
-1. 先讓合成 fixture 的一般、短褲、裙裝、帽T與大衣在正面／45度／側面沒有錯誤接縫、穿透或多餘部件。
-2. 完成模組化髮型 A 的髮際線、短髮、長髮、捲髮、馬尾與髮髻視覺基準。
-3. 將 `BRICK_CHARACTER_STYLE=brick_v2` 只開在開發環境，驗證 CharacterSpec → Atlas → Three.js → 生成歷史的完整鏈路。
-4. 到需要真人 P01 AI 材質時停止於 `USER_MANUAL_GENERATION_REQUIRED`，由專案負責人手動生成並提供結果；系統不得自行假設成功。
-5. P01通過後才擴至 P02，再進行5位真人、每人1張照片的服裝／髮型／體型測試。
-6. 將結果納入 `dev.html` 生成歷史、成本與盲評，至少5位評分者完成後比較物種一致性、人物精緻度、成本與延遲。
-7. 最後才評估開啟正式模式及50／100人投影效能；任何一項未達門檻都維持「研發中」。
+1. **定案風格**：決定要光澤 3D 渲染感（對齊 `base_character.png`）還是扁平向量感，並把 `_FULL_CHARACTER_PROMPT_TEMPLATE` 的 ART STYLE GUIDELINES 改寫成一致。
+2. **量測落地**：把 `fingerprint_spread` 接到生成管線與 `dev.html`，用既有歷史輸出產出「改動前」的漂移基線。
+3. **修個體資訊流失**：膚色髮色改用 `face_module` 的量測 hex，VLM enum 降為 fallback。
+4. **參考圖條件化**：上傳同一畫風、不同角色的樂高風格參考圖，作為第四張輸入送進模型；同時加上抄襲偵測（第一輪只收 warning）。
+5. **幾何防護**：補上肢體數量與比例一致性檢查，接進既有的修正重試迴圈。
+6. 到需要真人生成時停止於 `USER_MANUAL_GENERATION_REQUIRED`，由專案負責人手動生成並提供結果；系統不得自行假設成功。
+7. 結果納入 `dev.html` 盲評，至少5位評分者完成後比較物種一致性、個體可分辨度、成本與延遲。
 
-更完整的產品規格與欄位定義請參考 [PRD.md](./PRD.md)，brick_v2 視覺契約請參考 [BRICK_V2_SPEC.md](./BRICK_V2_SPEC.md)，開發操作請參考 [AGENTS.md](./AGENTS.md)。
+更完整的產品規格與欄位定義請參考 [PRD.md](./PRD.md)，風格標準請參考 [STYLE_BASE.md](./STYLE_BASE.md)，開發操作請參考 [AGENTS.md](./AGENTS.md)。

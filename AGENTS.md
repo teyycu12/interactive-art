@@ -26,12 +26,12 @@
 │   ├── cv_module.py              # MediaPipe 人體、服裝色彩、區域與姿勢特徵
 │   ├── face_module.py            # 本機臉部特徵
 │   ├── vlm_module.py             # 雲端服裝、髮型與臉部語意辨識
-│   ├── character_spec.py         # CharacterSpec v2、程序化 WebP 材質與體型參數
-│   ├── style_family.py           # brick_v1 v2 物種、幾何、材質與渲染合約
 │   ├── style_registry.py         # 可擴充角色風格註冊表
-│   ├── ai_texture_gen.py         # AI 2×2 atlas、Style Anchor、切圖與合約驗證
-│   ├── garment_gen.py            # 舊版衣物／完整角色生成相容程式
-│   ├── avatar_quality.py         # 舊版透明角色圖完整性驗證
+│   ├── style_base.py             # 從參考圖量出的風格標準（數值化）
+│   ├── style_fingerprint.py      # 風格指紋與跨角色物種漂移量測
+│   ├── style_normalizer.py       # 方向性明暗量測與正規化
+│   ├── garment_gen.py            # 完整角色生成流程與 prompt 模板
+│   ├── avatar_quality.py         # 生成角色圖結構完整性驗證
 │   ├── capture_quality.py        # 拍攝品質、站位與穩定度判定
 │   ├── detail_quality.py         # 最終畫面細節指標
 │   ├── height_profiles.py        # short／medium／tall 身高校正
@@ -40,33 +40,27 @@
 │   ├── blind_review.py           # 外部結果匯入、原照縮圖與多人匿名盲評
 │   ├── metrics_logger.py         # 匿名流程指標與輪替紀錄
 │   ├── /models                   # MediaPipe／分割模型資產
-│   ├── /tools
-│   │   └── e2e_render_fixture.py # 3D 高細節材質測試資料注入
 │   ├── /tests                    # unittest：CV、生成、規格、歷史與盲評
 │   └── /logs                     # 執行期資料；gitignored，不提交版本庫
 │       ├── generation_history.sqlite3
 │       ├── /generated            # AI attempt 與最終角色快照
 │       └── /review_sources       # 經同意、去 EXIF 的評測縮圖，可批次刪除
 ├── /frontend
-│   ├── index.html                # 拍攝與正式模式主操作頁
+│   ├── index.html                # 拍攝與生成主操作頁
 │   ├── sketch.js                 # p5.js 畫面、狀態與拍攝流程
-│   ├── brick3d-preview.js        # CharacterSpec／AI Atlas 單角色 Three.js 預覽與快照
-│   ├── brick-v2-model.js         # brick_v2 梯形軀幹、C形手、真實UV與髮型掛點
-│   ├── brick-v2-fixture.html     # 不呼叫AI的 brick_v2 合成幾何預覽
 │   ├── character.js              # 2D 預覽角色資料與組件
 │   ├── socket.js                 # Socket.io 前後端事件橋接
-│   ├── projection3d.html         # 正式 Three.js 3D 群體投影
-│   ├── projection.html           # 舊 PixiJS／2D 備援投影
+│   ├── projection.html           # 2D sprite 群聚投影牆
 │   ├── dev.html                  # 生成歷史、成本、外部匯入與盲評操作台
 │   ├── /themes
-│   │   ├── lego.js               # 舊版 2D brick 主題相容渲染
+│   │   ├── lego.js               # LEGO 主題渲染
 │   │   └── registry.js           # 前端主題註冊表
 │   └── wedding_bg.png            # 投影背景素材
 ├── AGENTS.md                     # Agent 專案結構、規範與啟動方式
 ├── README.md                     # 安裝、設定、流程與使用說明
 ├── PRD.md                        # 產品需求與驗收定義
 ├── TechStack.md                  # 技術選型
-├── BRICK_V1.md                   # brick_v1 角色與材質規格
+├── STYLE_BASE.md                 # 基底風格標準與量測方法
 ├── EXTERNAL_AI_RESEARCH_BRIEF.md # 提供外部研究 AI 的研究任務說明
 ├── RESUME_PROJECT.md             # 專案接續與目前狀態
 └── requirements.txt              # Python 相依套件

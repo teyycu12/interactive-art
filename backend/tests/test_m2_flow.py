@@ -85,91 +85,39 @@ class M2FlowTests(unittest.TestCase):
             "request_id": request_id, "source_type": "upload",
         })
 
-    def test_retired_body_sprite_is_rejected_without_generation(self):
-        with patch.object(app_module, "generate_body_png") as generate:
-            self._emit("body_sprite", "body-1")
-            event = _received(self.client)[-1]
-        self.assertFalse(event["ok"])
-        self.assertEqual(event["request_id"], "body-1")
-        self.assertTrue(event["is_final"])
-        self.assertEqual(event["error"], "mode_retired")
-        generate.assert_not_called()
+    def test_retired_modes_are_rejected_without_spending_a_generation(self):
+        # body_sprite and brick_ai_texture both stitched a character from parts
+        # the renderer no longer has. Old history stays readable, but a new
+        # request for either must fail before any paid call.
+        for mode in ("body_sprite", "brick_ai_texture"):
+            with self.subTest(mode=mode):
+                with patch.object(app_module, "generate_full_character_png") as generate:
+                    self._emit(mode, f"retired-{mode}")
+                    event = _received(self.client)[-1]
+                self.assertFalse(event["ok"])
+                self.assertEqual(event["request_id"], f"retired-{mode}")
+                self.assertTrue(event["is_final"])
+                self.assertEqual(event["error"], "mode_retired")
+                generate.assert_not_called()
 
-    def test_removed_brick_v1_mode_maps_to_formal_ai_mode(self):
-        failed_ai = {
-            "ok": False, "error": "test_no_external_call",
-            "validation": {"passed": False, "errors": ["test"], "warnings": []},
-            "api_usage": {},
-        }
-        with patch.object(app_module, "generate_ai_character_textures", return_value=failed_ai), patch.object(
-            app_module, "generate_full_character_png"
-        ) as full_generator:
-            self._emit("brick_v1", "brick-1")
-            event = _received(self.client)[-1]
-        full_generator.assert_not_called()
-        self.assertFalse(event["ok"])
-        self.assertEqual(event["character_mode"], "brick_ai_texture")
-        self.assertEqual(event["style_id"], "brick_v1")
-        self.assertIsNone(event["body_png"])
-        self.assertIsNone(event["character_spec"])
-
-    def test_formal_ai_texture_mode_emits_base_then_enhanced_spec(self):
-        ai_result = {
-            "ok": True,
-            "model": "test-pro-image",
-            "textures": {
-                "face_decal": "data:image/webp;base64,face",
-                "torso_front": "data:image/webp;base64,torso",
-                "left_leg_front": "data:image/webp;base64,left",
-                "right_leg_front": "data:image/webp;base64,right",
-            },
-            "validation": {
-                "passed": True, "errors": [], "warnings": [], "detail_score": 0.91,
-            },
-            "api_usage": {"model": "test-pro-image"},
-        }
+    def test_unknown_mode_falls_back_to_full_character(self):
         with patch.object(
-            app_module, "generate_ai_character_textures", return_value=ai_result
-        ) as texture_generator, patch.object(
-            app_module, "generate_full_character_png"
-        ) as full_generator:
-            self._emit("brick_ai_texture", "brick-ai-1")
-            events = _received(self.client)
-        self.assertEqual([event["is_final"] for event in events], [False, True])
-        self.assertEqual(events[-1]["character_mode"], "brick_ai_texture")
-        self.assertEqual(events[-1]["garment_source"], "ai_texture")
-        self.assertEqual(events[-1]["ai_texture_status"], "enhanced")
-        self.assertEqual(events[-1]["character_spec"]["material_version"], 2)
-        self.assertIn("face_decal", events[-1]["character_spec"]["textures"])
-        texture_generator.assert_called_once()
-        full_generator.assert_not_called()
-
-    def test_formal_ai_texture_failure_is_not_a_finished_character(self):
-        failed = {
-            "ok": False,
-            "error": "atlas_validation_failed",
-            "validation": {
-                "passed": False, "errors": ["face_missing_detail"], "warnings": [],
-            },
-            "api_usage": {"model": "test-pro-image"},
-        }
-        with patch.object(app_module, "generate_ai_character_textures", return_value=failed):
-            self._emit("brick_ai_texture", "brick-ai-fallback")
-            events = _received(self.client)
-        final = events[-1]
-        self.assertFalse(final["ok"])
-        self.assertTrue(final["is_final"])
-        self.assertFalse(final["fallback_used"])
-        self.assertEqual(final["ai_texture_status"], "failed")
-        self.assertIsNone(final["character_spec"])
+            app_module, "generate_full_character_png",
+            return_value={"ok": True, "body_png": _avatar_png()},
+        ) as generate:
+            self._emit("brick_v1", "unknown-mode")
+            event = _received(self.client)[-1]
+        generate.assert_called_once()
+        self.assertEqual(event["character_mode"], "full_character")
+        self.assertTrue(event["ok"])
 
     def test_camera_generation_requires_valid_height_station(self):
         invalid_height = {**_cv_result(), "height_class": None, "height_measurement_valid": False}
         with patch.object(app_module, "get_clothing_features", return_value=invalid_height), patch.object(
-            app_module, "generate_ai_character_textures"
+            app_module, "generate_full_character_png"
         ) as generate:
             self.client.emit("generate_avatar", {
-                "image": _photo_data_url(), "mode": "brick_ai_texture",
+                "image": _photo_data_url(), "mode": "full_character",
                 "request_id": "height-invalid", "source_type": "camera",
             })
             event = _received(self.client)[-1]
@@ -238,49 +186,23 @@ class M2FlowTests(unittest.TestCase):
         self.assertIn("不需要更換照片", event["guidance"])
         self.assertNotIn("完整性檢查", event["guidance"])
 
-    def test_removed_refined_mode_maps_to_formal_mode(self):
-        failed_ai = {
-            "ok": False, "error": "test_no_external_call",
-            "validation": {"passed": False, "errors": ["test"], "warnings": []},
-            "api_usage": {},
-        }
-        with patch.object(app_module, "generate_ai_character_textures", return_value=failed_ai), patch.object(
-            app_module, "generate_full_character_png"
+    def test_removed_refined_mode_falls_back_to_full_character(self):
+        with patch.object(
+            app_module, "generate_full_character_png",
+            return_value={"ok": True, "body_png": _avatar_png()},
         ) as full_generator:
             self._emit("full_character_refined", "refine-1")
             events = _received(self.client)
-        self.assertEqual([event["stage"] for event in events], ["character_spec_base", "ai_texture"])
-        self.assertEqual([event["is_final"] for event in events], [False, True])
+        full_generator.assert_called_once()
+        self.assertTrue(events[-1]["is_final"])
         self.assertEqual({event["request_id"] for event in events}, {"refine-1"})
-        self.assertEqual(events[-1]["character_mode"], "brick_ai_texture")
-        full_generator.assert_not_called()
-
-    def test_removed_refined_mode_never_calls_old_generators(self):
-        failed_ai = {
-            "ok": False, "error": "test_no_external_call",
-            "validation": {"passed": False, "errors": ["test"], "warnings": []},
-            "api_usage": {},
-        }
-        with patch.object(app_module, "generate_ai_character_textures", return_value=failed_ai), patch.object(
-            app_module, "generate_full_character_png"
-        ) as full_generator:
-            self._emit("full_character_refined", "refine-fail")
-            events = _received(self.client)
-        self.assertEqual(len(events), 2)
-        self.assertTrue(events[1]["is_final"])
-        self.assertEqual(events[1]["ai_texture_status"], "failed")
-        full_generator.assert_not_called()
+        self.assertEqual(events[-1]["character_mode"], "full_character")
 
     def test_swarm_metadata_is_preserved_by_join_and_update(self):
-        character_spec = {
-            "schema_version": 1, "character_id": "metadata-test",
-            "style_id": "brick_v1", "textures": {"torso_front": "large-texture"},
-        }
         payload = {
             "id": "metadata-test", "height_class": "short", "height_measurement_valid": True,
             "height_profile": {"id": "short", "display_scale": 99}, "style_id": "lego",
             "body_png": "complete-character", "character_mode": "history_sprite",
-            "character_spec": character_spec,
         }
         self.client.emit("join_swarm", payload)
         self.client.emit("update_character", {"id": "metadata-test", "height_class": "tall"})
@@ -291,14 +213,12 @@ class M2FlowTests(unittest.TestCase):
         self.assertEqual(stored["body_png"], "complete-character")
         self.assertEqual(stored["character_mode"], "history_sprite")
         self.assertEqual(stored["style_id"], "lego")
-        self.assertEqual(stored["character_spec"], character_spec)
         self.client.get_received()
         self.client.emit("get_swarm", {})
         snapshots = [packet for packet in self.client.get_received() if packet["name"] == "update_positions"]
         characters = (snapshots[-1]["args"][0] if snapshots else {}).get("characters", [])
         restored = next(character for character in characters if character["id"] == "metadata-test")
         self.assertEqual(restored["body_png"], "complete-character")
-        self.assertEqual(restored["character_spec"], character_spec)
 
     def test_swarm_rejects_character_without_measured_height(self):
         self.client.emit("join_swarm", {"id": "invalid-height", "height_class": "medium"})

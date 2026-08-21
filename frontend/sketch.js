@@ -21,7 +21,7 @@ let lastFrameSent = 0;
 let latestFeatures = null;
 let frameSequence = 0;
 let activeAvatarRequestId = null;
-let activeGenerationMode = 'brick_ai_texture';
+let activeGenerationMode = 'full_character';
 let generationStartedAt = 0;
 let pendingRenderedSnapshot = null;
 const savedRenderedRequestIds = new Set();
@@ -69,7 +69,6 @@ class Person {
     this.clothSprite = null;  // p5.Image (legacy: upper-only)
     this.lowerSprite = null;  // p5.Image (legacy: lower-only)
     this.bodySprite  = null;  // p5.Image (NEW: full LEGO body, neck down)
-    this.brickPreviewImg = null; // Three.js CharacterSpec render for formal mode
 
     // Face / hair (defaults — overwritten by updateFace)
     this.armColor     = null;  // detected sleeve colour; overrides outerColor for arm rendering
@@ -85,10 +84,9 @@ class Person {
     this.hasBeard     = false;
     this.beardStyle   = 'none';
 
-    // Render mode — chosen at avatar-generation time. 'body_sprite' = upper+lower
-    // garment sprites + programmatic LEGO head/hands/feet. 'full_character' = single
-    // AI image covers the entire figure; programmatic parts skipped.
-    this.renderMode   = 'brick_ai_texture';
+    // 'full_character': one AI image covers the entire figure, so the
+    // programmatic LEGO parts are skipped entirely.
+    this.renderMode   = 'full_character';
     this.styleId      = DEFAULT_STYLE_ID;
     this.heightClass  = 'medium';
     this.heightProfile = { id: 'medium', display_scale: 1, torso_scale_y: 1, leg_scale_y: 1 };
@@ -100,7 +98,7 @@ class Person {
   }
 
   setRenderMode(mode) {
-    if (mode === 'brick_ai_texture' || mode === 'body_sprite' || mode === 'full_character') {
+    if (mode === 'full_character') {
       this.renderMode = mode;
     }
   }
@@ -417,7 +415,6 @@ function setup() {
     downloadBtn.style.display = 'none';
     retryBtn.style.display = 'none';
     joinProjectionBtn.style.display = 'none';
-    characters[0].brickPreviewImg = null;
   });
 
   joinProjectionBtn = createBtn('🌐 JOIN PROJECTION WALL', '#8250df', _joinSwarm);
@@ -487,8 +484,7 @@ function setup() {
         payload.stencil,
         null
       );
-      // body_sprite mode: sprite is just the torso+legs, overlaid with programmatic LEGO parts
-      // full_character mode: sprite is the entire figure (head→feet), programmatic parts skipped
+      // The sprite is the entire figure (head→feet); programmatic parts are skipped.
       characters[0].updateBodySprite(payload.body_png);
       // Sleeve length (from cv_module): drives bare-arm rendering in lego theme
       if (payload.upper_type) characters[0].upperKind = payload.upper_type;
@@ -497,14 +493,6 @@ function setup() {
       characters[0].styleId = payload.style_id || DEFAULT_STYLE_ID;
       characters[0].heightClass = payload.height_class || null;
       characters[0].heightProfile = payload.height_profile || null;
-      if (payload.is_final !== false && payload.character_mode === 'brick_ai_texture' && payload.character_spec) {
-        currentState = APP_STATES.PROCESSING;
-        generationProgress.stage = 'rendering_3d';
-        generationProgress.percent = 98;
-        generationProgress.message = '正在套用 AI 材質並建立 3D 預覽';
-        _renderBrickCharacterPreview(payload);
-        return;
-      }
       if (payload.is_final !== false && payload.request_id && !savedRenderedRequestIds.has(payload.request_id)) {
         pendingRenderedSnapshot = {
           requestId: payload.request_id,
@@ -834,9 +822,7 @@ function drawProcessingState() {
   const percent = constrain(generationProgress.displayPercent, 0, 100);
   const elapsed = generationStartedAt ? Math.floor((millis() - generationStartedAt) / 1000) : 0;
   const modeNames = {
-    brick_ai_texture: '正式模式｜AI 高細節 3D 角色',
-    body_sprite: '模式一｜組合角色',
-    full_character: '模式二｜完整生成',
+    full_character: '完整角色生成',
   };
   const milestones = [
     { p: 5, label: '接收照片' }, { p: 30, label: '分析特徵' },
@@ -916,17 +902,8 @@ function drawCustomizeState() {
   rect(person.x, stageY, stageW, stageH, 18);
   pop();
 
-  if (myAvatarData?.character_mode === 'brick_ai_texture' && person.brickPreviewImg) {
-    const preview = person.brickPreviewImg;
-    const fit = Math.min(stageW * 0.88 / preview.width, stageH * 0.92 / preview.height);
-    push();
-    imageMode(CENTER);
-    image(preview, person.x, stageY, preview.width * fit, preview.height * fit);
-    pop();
-  } else {
-    person.drawSelf(dynamicScale);
-    _maybeSaveRenderedAvatar(person);
-  }
+  person.drawSelf(dynamicScale);
+  _maybeSaveRenderedAvatar(person);
 
   // Accessory panel position
   const uiX = width/2 + 150;
@@ -944,9 +921,7 @@ function drawCustomizeState() {
   retryBtn.style.left = uiX + 'px';
   retryBtn.style.top = (uiY + 190) + 'px';
 
-  const projectionAssetReady = myAvatarData?.character_mode === 'brick_ai_texture'
-    ? !!myAvatarData?.character_spec
-    : (myAvatarData?.character_mode !== 'body_sprite' || !!myAvatarData?.projection_png);
+  const projectionAssetReady = !!myAvatarData?.body_png;
   joinProjectionBtn.style.display = myAvatarData?.height_measurement_valid && myAvatarData?.height_class && projectionAssetReady ? 'block' : 'none';
   joinProjectionBtn.style.left = uiX + 'px';
   joinProjectionBtn.style.top = (uiY + 250) + 'px';
@@ -1009,51 +984,6 @@ function _trimTransparentCanvas(source, padding = 8) {
   output.width = maxX - minX + 1; output.height = maxY - minY + 1;
   output.getContext('2d').drawImage(source, minX, minY, output.width, output.height, 0, 0, output.width, output.height);
   return output;
-}
-
-async function _renderBrickCharacterPreview(payload) {
-  const requestId = payload.request_id;
-  try {
-    const previewRenderer = window.PersonaFlowBrick3D
-      || (window.PersonaFlowBrick3DReady ? await window.PersonaFlowBrick3DReady : null);
-    if (!previewRenderer?.renderCharacter) throw new Error('three_preview_not_ready');
-    const dataUrl = await previewRenderer.renderCharacter(payload.character_spec, {
-      width: 640,
-      height: 800,
-    });
-    if (requestId !== activeAvatarRequestId) return;
-    await new Promise((resolve, reject) => {
-      loadImage(dataUrl, image => {
-        characters[0].brickPreviewImg = image;
-        resolve();
-      }, reject);
-    });
-    if (requestId !== activeAvatarRequestId) return;
-    const bodyPng = dataUrl.split(',', 2)[1];
-    myAvatarData = { ...payload, projection_png: bodyPng };
-    window.personaFlow?.socket?.emit('save_rendered_avatar', {
-      request_id: requestId,
-      body_png: bodyPng,
-    });
-    savedRenderedRequestIds.add(requestId);
-    pendingRenderedSnapshot = null;
-    generationProgress.stage = 'complete';
-    generationProgress.percent = 100;
-    generationProgress.message = 'AI 材質 3D 角色生成完成';
-    currentState = APP_STATES.CUSTOMIZE;
-  } catch (error) {
-    console.error('[brick3d-preview] render failed', error);
-    if (requestId !== activeAvatarRequestId) return;
-    window.personaFlow?.socket?.emit('render_avatar_failed', {
-      request_id: requestId,
-      error: error?.message || 'frontend_3d_render_failed',
-    });
-    myAvatarData = null;
-    generationProgress.stage = 'failed';
-    generationProgress.message = '3D 預覽建立失敗';
-    alert(`3D 預覽建立失敗：${error?.message || error}`);
-    currentState = APP_STATES.LIVE;
-  }
 }
 
 function _maybeSaveRenderedAvatar(person) {
@@ -1172,7 +1102,6 @@ function _requestAvatarGeneration(image, sourceType = 'camera') {
   if (!window.personaFlow?.socket || !image) return;
   activeAvatarRequestId = _newRequestId();
   activeGenerationMode = _getSelectedMode();
-  characters[0].brickPreviewImg = null;
   generationStartedAt = millis();
   generationProgress = {
     stage: 'queued', percent: 2, displayPercent: 0,
@@ -1394,7 +1323,7 @@ function _toggleCamera() {
 
 function _getSelectedMode() {
   const checked = document.querySelector('input[name="genMode"]:checked');
-  return checked ? checked.value : 'brick_ai_texture';
+  return checked ? checked.value : 'full_character';
 }
 
 function _drawSkeleton(landmarks, ix, iy, vw, vh) {
@@ -1547,7 +1476,7 @@ function _joinSwarm() {
     }
   }
 
-  const characterId = myAvatarData?.character_spec?.character_id || activeAvatarRequestId || undefined;
+  const characterId = activeAvatarRequestId || undefined;
   const payload = {
     id: characterId,
     x: 960, y: 540,
@@ -1561,18 +1490,13 @@ function _joinSwarm() {
     accessory:   p.accessories[0] || 'none',
     face:        myAvatarData?.face || null,
     outfit:      enhancedOutfit,
-    body_png:    myAvatarData?.character_mode === 'brick_ai_texture'
-      ? null
-      : (myAvatarData?.projection_png || myAvatarData?.body_png || null),
+    body_png:    myAvatarData?.projection_png || myAvatarData?.body_png || null,
     body_bbox:   myAvatarData?.body_bbox || null,
-    character_spec: myAvatarData?.character_spec || null,
-    character_mode: myAvatarData?.character_mode === 'brick_ai_texture'
-      ? 'brick_ai_texture'
-      : (myAvatarData?.projection_png ? 'full_character' : (myAvatarData?.character_mode || p.renderMode || 'full_character')),
+    character_mode: 'full_character',
     height_class: myAvatarData.height_class,
     height_profile: myAvatarData.height_profile,
     height_measurement_valid: true,
-    style_id: myAvatarData?.character_spec?.style_id || p.styleId || myAvatarData?.style_id || DEFAULT_STYLE_ID,
+    style_id: p.styleId || myAvatarData?.style_id || DEFAULT_STYLE_ID,
   };
 
   // ✅ FIX 1: Stay on CUSTOMIZE — don't switch currentState to SWARM.
@@ -1600,5 +1524,5 @@ function _joinSwarm() {
   // Open projection wall in a new tab after 300 ms so join_swarm reaches the
   // backend before projection.html's socket connects.
   const focusQuery = characterId ? `&focus=${encodeURIComponent(characterId)}` : '';
-  setTimeout(() => window.open(`projection3d.html?v=strict-ai-atlas${focusQuery}`, '_blank'), 300);
+  setTimeout(() => window.open(`projection.html?v=20260822-full-character${focusQuery}`, '_blank'), 300);
 }
