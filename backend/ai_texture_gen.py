@@ -31,6 +31,16 @@ except Exception:
     from brick_v2_spec import get_brick_v2_spec  # type: ignore
 
 try:
+    from backend.style_normalizer import directional_gradient, flatten_panels  # type: ignore
+except Exception:
+    from style_normalizer import directional_gradient, flatten_panels  # type: ignore
+
+try:
+    from backend.style_fingerprint import compare_to_base, panel_fingerprint  # type: ignore
+except Exception:
+    from style_fingerprint import compare_to_base, panel_fingerprint  # type: ignore
+
+try:
     from backend.garment_gen import _call_image_chat_multi  # type: ignore
 except Exception:
     from garment_gen import _call_image_chat_multi  # type: ignore
@@ -39,6 +49,10 @@ except Exception:
 ATLAS_SIZE = 1024
 PANEL_SIZE = ATLAS_SIZE // 2
 TEXTURE_SIZE = 512
+
+# Atlas quadrant order, shared by validation, normalization and splitting.
+PANEL_NAMES = ("face", "torso_front", "left_leg_front", "right_leg_front")
+PANEL_CELLS = ((0, 0), (1, 0), (0, 1), (1, 1))
 
 
 def _hex_rgb(value: Any, fallback: str) -> Tuple[int, int, int]:
@@ -220,12 +234,25 @@ def _registration_metrics(atlas: np.ndarray) -> Dict[str, float]:
     }
 
 
-def _lighting_gradient(panel: np.ndarray) -> float:
-    gray = cv2.cvtColor(panel, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-    smooth = cv2.GaussianBlur(gray, (0, 0), sigmaX=max(12.0, panel.shape[0] / 16.0))
-    left, right = float(np.mean(smooth[:, :smooth.shape[1] // 4])), float(np.mean(smooth[:, -smooth.shape[1] // 4:]))
-    top, bottom = float(np.mean(smooth[:smooth.shape[0] // 4])), float(np.mean(smooth[-smooth.shape[0] // 4:]))
-    return max(abs(left - right), abs(top - bottom))
+def normalize_atlas(atlas: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Flatten baked directional lighting out of the four print panels.
+
+    The renderer owns every light in the scene, so a panel that also carries a
+    key light doubles the shading and is what makes one character read as flat
+    2D and the next as heavily shaded.  Flattening is deterministic and costs
+    no regeneration; a panel that is still over budget afterwards is reported
+    as unfixable and fails validation.
+    """
+    corrected = atlas.copy()
+    panels = {name: _panel(atlas, col, row).copy()
+              for name, (col, row) in zip(PANEL_NAMES, PANEL_CELLS)}
+    flattened, report = flatten_panels(panels)
+    margin = 30
+    for name, (col, row) in zip(PANEL_NAMES, PANEL_CELLS):
+        x0, y0 = col * PANEL_SIZE + margin, row * PANEL_SIZE + margin
+        x1, y1 = (col + 1) * PANEL_SIZE - margin, (row + 1) * PANEL_SIZE - margin
+        corrected[y0:y1, x0:x1] = flattened[name]
+    return corrected, report
 
 
 def _decode_texture_data_url(value: Any) -> Optional[np.ndarray]:
@@ -260,7 +287,11 @@ def validate_ai_atlas(atlas: np.ndarray, character_spec: Dict[str, Any]) -> Dict
         _hex_rgb(outfit.get("lower_color"), "#263238"),
         _hex_rgb(outfit.get("lower_color"), "#263238"),
     ]
-    panels = [_panel(atlas, 0, 0), _panel(atlas, 1, 0), _panel(atlas, 0, 1), _panel(atlas, 1, 1)]
+    # Flatten first, judge second. Baked lighting that can be removed
+    # deterministically is not worth a paid regeneration; what survives the
+    # flatten is what the model actually got wrong.
+    atlas, normalization = normalize_atlas(atlas)
+    panels = [_panel(atlas, col, row) for col, row in PANEL_CELLS]
     errors = []
     warnings = []
     details = []
@@ -274,7 +305,7 @@ def validate_ai_atlas(atlas: np.ndarray, character_spec: Dict[str, Any]) -> Dict
         variation = float(np.std(gray))
         edge_ratio = float(np.count_nonzero(cv2.Canny(gray, 60, 140))) / float(gray.size)
         color_distance = _lab_distance(panel, color)
-        gradient = _lighting_gradient(panel)
+        gradient = directional_gradient(panel)
         if float(np.std(panel)) < 2.0 and index > 0:
             # Plain shirts and trousers are valid; keep this observable without
             # rejecting faithful solid-colour clothing.
@@ -283,7 +314,10 @@ def validate_ai_atlas(atlas: np.ndarray, character_spec: Dict[str, Any]) -> Dict
             errors.append(f"panel_{index}_color_mismatch")
         elif color_distance > 70:
             warnings.append(f"panel_{index}_color_shift")
-        if gradient > (0.17 if index == 0 else 0.20):
+        # Only lighting the flatten could not remove is a failure. The budget
+        # lives in style_base because the renderer already supplies 0.08-0.24
+        # of its own vertical shading on top of whatever the texture carries.
+        if not normalization["panels"][PANEL_NAMES[index]]["within_budget"]:
             errors.append(f"panel_{index}_baked_lighting")
         details.append({
             "variation": round(variation, 2),
@@ -312,6 +346,17 @@ def validate_ai_atlas(atlas: np.ndarray, character_spec: Dict[str, Any]) -> Dict
     torso_fidelity = _source_pattern_fidelity(panels[1], _decode_texture_data_url(textures.get("torso_front")))
     left_fidelity = _source_pattern_fidelity(panels[2], _decode_texture_data_url(textures.get("legs_front")))
     right_fidelity = _source_pattern_fidelity(panels[3], _decode_texture_data_url(textures.get("legs_front")))
+
+    # Style fingerprints: the first check in this pipeline that asks whether
+    # the panels speak the same visual language as the base standard, rather
+    # than only whether each panel is individually well formed.
+    style: Dict[str, Any] = {}
+    for index, name in enumerate(PANEL_NAMES):
+        fingerprint = panel_fingerprint(panels[index])
+        comparison = compare_to_base(fingerprint, name)
+        style[name] = {"fingerprint": fingerprint, "comparison": comparison}
+        errors.extend(comparison["violations"])
+        warnings.extend(comparison["observations"])
 
     v2_validation = None
     if character_spec.get("style_id") == "brick_v2":
@@ -342,6 +387,11 @@ def validate_ai_atlas(atlas: np.ndarray, character_spec: Dict[str, Any]) -> Dict
         "outfit_fidelity": round(outfit_fidelity, 3),
         "registration": {key: round(value, 3) for key, value in registration.items()},
         "panels": details,
+        "normalization": normalization,
+        "style": style,
+        "style_distance": round(
+            float(np.mean([style[name]["comparison"]["distance"] for name in PANEL_NAMES])), 4
+        ),
     }
     if v2_validation is not None:
         result["brick_v2_print"] = v2_validation
@@ -413,6 +463,9 @@ def generate_ai_character_textures(
             "validation": {"passed": False, "errors": ["invalid_atlas_image"], "warnings": []},
             "api_usage": response.get("api_usage") or {},
         }
+    # Normalize once here so the textures that ship are the same flattened
+    # panels validation judged, not the raw model output.
+    atlas, _ = normalize_atlas(atlas)
     validation = validate_ai_atlas(atlas, character_spec)
     if not validation["passed"]:
         return {

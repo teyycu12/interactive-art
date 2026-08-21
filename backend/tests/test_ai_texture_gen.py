@@ -41,11 +41,14 @@ def _valid_atlas():
     atlas[:512, :512] = (168, 208, 255)
     atlas[:512, 512:] = (180, 100, 40)
     atlas[512:, :] = (30, 30, 30)
-    cv2.circle(atlas, (205, 230), 22, (20, 20, 20), 10)
-    cv2.circle(atlas, (305, 230), 22, (20, 20, 20), 10)
-    cv2.ellipse(atlas, (256, 330), (75, 32), 0, 0, 180, (20, 20, 20), 10)
-    for y in range(90, 450, 50):
-        cv2.line(atlas, (560, y), (970, y), (210, 150, 90), 8)
+    # Line weights follow the measured base standard: a stroke around 6% of the
+    # panel width. The thin 8-10px strokes this fixture used before the
+    # standard existed now read as illustration line work, not toy print.
+    cv2.circle(atlas, (205, 230), 22, (20, 20, 20), 30)
+    cv2.circle(atlas, (305, 230), 22, (20, 20, 20), 30)
+    cv2.ellipse(atlas, (256, 330), (75, 32), 0, 0, 180, (20, 20, 20), 30)
+    for y in range(90, 450, 60):
+        cv2.line(atlas, (560, y), (970, y), (210, 150, 90), 26)
     cv2.rectangle(atlas, (0, 0), (ATLAS_SIZE - 1, ATLAS_SIZE - 1), (8, 8, 10), 20)
     cv2.rectangle(atlas, (494, 0), (530, ATLAS_SIZE), (8, 8, 10), -1)
     cv2.rectangle(atlas, (0, 494), (ATLAS_SIZE, 530), (8, 8, 10), -1)
@@ -93,15 +96,53 @@ class AiTextureTests(unittest.TestCase):
         self.assertFalse(validation["passed"])
         self.assertIn("face_missing_detail", validation["errors"])
 
-    def test_directional_baked_light_is_rejected(self):
+    def test_directional_baked_light_is_flattened_instead_of_rejected(self):
         atlas = _valid_atlas()
         gradient = np.linspace(0.45, 1.15, 494, dtype=np.float32)[None, :, None]
         atlas[20:494, 20:494] = np.clip(
             atlas[20:494, 20:494].astype(np.float32) * gradient[:, :474], 0, 255
         ).astype(np.uint8)
         validation = validate_ai_atlas(atlas, _spec())
+        face = validation["normalization"]["panels"]["face"]
+        # Removable lighting costs no paid regeneration; it is corrected and
+        # recorded, not failed.
+        self.assertGreater(face["gradient_before"], face["budget"])
+        self.assertLessEqual(face["gradient_after"], face["budget"])
+        self.assertIn("face", validation["normalization"]["corrected"])
+        self.assertNotIn("panel_0_baked_lighting", validation["errors"])
+
+    def test_every_panel_reports_its_shading_budget(self):
+        atlas = _valid_atlas()
+        validation = validate_ai_atlas(atlas, _spec())
+        # The fitted surface removes essentially any panel-scale directional
+        # imbalance, so "unfixable" is a defensive path rather than a common
+        # outcome. What must always hold is that every panel is measured and
+        # its verdict recorded, so a failure can never pass silently.
+        for name in ("face", "torso_front", "left_leg_front", "right_leg_front"):
+            metrics = validation["normalization"]["panels"][name]
+            self.assertIn("within_budget", metrics)
+            self.assertEqual(metrics["budget"], 0.06)
+            self.assertLessEqual(metrics["gradient_after"], metrics["gradient_before"])
+        self.assertEqual(validation["normalization"]["unfixable"], [])
+
+    def test_plain_trousers_are_not_a_style_violation(self):
+        atlas = _valid_atlas()
+        validation = validate_ai_atlas(atlas, _spec())
+        legs = validation["style"]["left_leg_front"]["comparison"]
+        self.assertEqual(legs["features"]["stroke_width_rel"]["skipped"], "no_print_to_measure")
+        self.assertEqual(legs["violations"], [])
+        self.assertIn("panel_2_solid", validation["warnings"])
+
+    def test_thin_illustration_line_work_fails_the_style_band(self):
+        atlas = _valid_atlas()
+        face = atlas[30:482, 30:482]
+        face[:] = (168, 208, 255)
+        cv2.circle(face, (175, 200), 20, (20, 20, 20), 3)
+        cv2.circle(face, (275, 200), 20, (20, 20, 20), 3)
+        cv2.ellipse(face, (226, 300), (75, 32), 0, 0, 180, (20, 20, 20), 3)
+        validation = validate_ai_atlas(atlas, _spec())
         self.assertFalse(validation["passed"])
-        self.assertIn("panel_0_baked_lighting", validation["errors"])
+        self.assertIn("face_stroke_width_rel_out_of_band", validation["errors"])
 
     def test_apply_ai_textures_increments_material_version(self):
         result = {

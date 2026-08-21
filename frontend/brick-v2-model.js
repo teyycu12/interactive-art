@@ -15,6 +15,30 @@
     return Number.isFinite(number) ? Math.max(low, Math.min(high, number)) : fallback;
   };
 
+  // Mirrors STYLE_BASE["materials"] in backend/style_base.py, measured from
+  // docs/style_reference/base_character.png. A single global roughness cannot
+  // reproduce the reference: its hair highlight is a sharp streak while the
+  // skin falls off broadly and the denim is almost matte. This spread is the
+  // largest visual gap between the render and the reference.
+  const SPECIES_MATERIALS = {
+    hair: { roughness: 0.18, clearcoat: 0.55 },
+    garment_print: { roughness: 0.22, clearcoat: 0.50 },
+    skin: { roughness: 0.34, clearcoat: 0.42 },
+    rubber: { roughness: 0.38, clearcoat: 0.30 },
+    denim: { roughness: 0.52, clearcoat: 0.12 },
+  };
+
+  function speciesMaterial(className, color) {
+    const preset = SPECIES_MATERIALS[className] || SPECIES_MATERIALS.skin;
+    return new THREE.MeshPhysicalMaterial({
+      color: safeColor(color, '#808080'),
+      roughness: preset.roughness,
+      metalness: 0.01,
+      clearcoat: preset.clearcoat,
+      clearcoatRoughness: 0.2,
+    });
+  }
+
   function plastic(color, roughness = 0.3) {
     return new THREE.MeshPhysicalMaterial({
       color: safeColor(color, '#808080'),
@@ -340,11 +364,11 @@
     const root = new THREE.Group();
     const visual = new THREE.Group();
     root.add(visual);
-    const skin = plastic(spec.skin_color || '#FFD0A8', 0.29);
-    const upper = plastic(outfit.upper_color || '#607D8B', 0.30);
-    const lower = plastic(outfit.lower_color || '#263238', 0.32);
-    const shoe = plastic(outfit.shoe_color || '#F2F2F0', 0.34);
-    const sole = plastic('#D7D9DA', 0.42);
+    const skin = speciesMaterial('skin', spec.skin_color || '#FFD0A8');
+    const upper = speciesMaterial('garment_print', outfit.upper_color || '#607D8B');
+    const lower = speciesMaterial('denim', outfit.lower_color || '#263238');
+    const shoe = speciesMaterial('rubber', outfit.shoe_color || '#F2F2F0');
+    const sole = speciesMaterial('rubber', '#D7D9DA');
     const heightScale = bounded(shape.height_scale, 0.90, 1.10);
     const torsoScale = bounded(shape.torso_width, 0.90, 1.10);
     const shoulderScale = bounded(shape.shoulder_width, 0.92, 1.08);
@@ -359,9 +383,9 @@
       loadTexture(spec.textures.right_leg_front, renderer),
       loadTexture(spec.textures.face_decal, renderer),
     ]);
-    const printMaterial = texture => new THREE.MeshStandardMaterial({
+    const printMaterial = (texture, className = 'garment_print') => new THREE.MeshStandardMaterial({
       map: texture,
-      roughness: 0.36,
+      roughness: (SPECIES_MATERIALS[className] || SPECIES_MATERIALS.garment_print).roughness,
       metalness: 0.0,
     });
 
@@ -382,7 +406,7 @@
     head.userData.part = 'head';
     const faceMaterial = new THREE.MeshStandardMaterial({
       map: faceTexture,
-      roughness: 0.35,
+      roughness: SPECIES_MATERIALS.skin.roughness,
       metalness: 0,
       transparent: true,
       alphaTest: 0.04,
@@ -466,7 +490,7 @@
       if (garment.lower_shell === 'shorts') {
         const shorts = mesh(
           roundedExtrudeGeometry(0.72 * limbScale, 0.64, 0.72, 0.07, 0.03),
-          [printMaterial(legTexture), lower], leg, { y: -0.31 },
+          [printMaterial(legTexture, 'denim'), lower], leg, { y: -0.31 },
         );
         const lowerLeg = mesh(
           roundedExtrudeGeometry(0.70 * limbScale, 0.76, 0.70, 0.07, 0.03),
@@ -484,7 +508,7 @@
       } else {
         const legMesh = mesh(
           roundedExtrudeGeometry(0.72 * limbScale, 1.38, 0.72, 0.07, 0.035),
-          [printMaterial(legTexture), lower], leg, { y: -0.73 },
+          [printMaterial(legTexture, 'denim'), lower], leg, { y: -0.73 },
         );
         legMesh.userData.part = legPart;
       }
@@ -501,10 +525,10 @@
     visual.add(hairMount);
     const hairMaterial = new THREE.MeshPhysicalMaterial({
       color: safeColor(spec.hair?.color, '#3B2314'),
-      roughness: 0.34,
+      roughness: SPECIES_MATERIALS.hair.roughness,
       metalness: 0.0,
-      clearcoat: 0.24,
-      clearcoatRoughness: 0.30,
+      clearcoat: SPECIES_MATERIALS.hair.clearcoat,
+      clearcoatRoughness: 0.18,
     });
     addModularHair(hairMount, spec.hair || {}, hairMaterial);
     root.userData.hairMount = hairMount;
