@@ -245,6 +245,22 @@ def health_check():
     })
 
 
+@app.route("/api/branch", methods=["GET"])
+def api_branch():
+    """Return the current git branch so the frontend can display it."""
+    import subprocess
+    try:
+        branch = subprocess.check_output(
+            ["git", "branch", "--show-current"],
+            cwd=os.path.dirname(__file__),
+            text=True,
+            timeout=3,
+        ).strip()
+    except Exception:
+        branch = "unknown"
+    return jsonify({"branch": branch})
+
+
 @app.route("/api/styles/brick_v1", methods=["GET"])
 def brick_style_family_contract():
     return jsonify(get_style_family_spec())
