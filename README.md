@@ -68,15 +68,27 @@ PersonaFlow/
 │   ├── face_module.py      # 面部特徵偵測
 │   ├── vlm_module.py       # Gemini VLM 服裝屬性分析
 │   ├── garment_gen.py      # 兩種模式的 AI 生圖入口
-│   └── swarm_logic.py      # Boids 群聚演算法
+│   ├── swarm_logic.py      # Boids 群聚演算法（含邊界轉向 / 打招呼持續）
+│   ├── event_logger.py     # 結構化事件 log 落地（JSON lines）
+│   ├── stress_test.py      # 承載量壓測工具
+│   ├── analyze_log.py      # 效能指標分析（延遲 / 失敗率）
+│   ├── bench_generate.py   # 生成延遲基準線量測
+│   ├── report_html.py      # HTML 效能報告產生器
+│   └── tests/              # 單元測試
+│       ├── test_swarm_logic.py
+│       └── test_event_logger.py
 ├── frontend/
-│   ├── index.html          # 模式選擇器 UI
+│   ├── index.html          # 互動端主頁（模式選擇器 UI）
+│   ├── projection.html     # 投影牆渲染（PixiJS）
 │   ├── sketch.js           # p5.js 主迴圈、狀態機
 │   ├── character.js        # Person 物件 / 渲染屬性
-│   ├── socket.js           # Socket.io 前後端通訊
+│   ├── socket.js           # Socket.io 前後端通訊（自動偵測 LAN）
 │   └── themes/lego.js      # LEGO 樂高風格渲染
+├── docs/m3/                # M3 交接文件與效能報告
+├── start.sh                # 一鍵啟動（後端 + 前端 + LAN IP 顯示）
 ├── .env.example            # 環境變數範本
 ├── requirements.txt
+├── INTERFACES.md           # Socket.io 事件與 payload 介面規格
 └── CLAUDE.md / PRD.md / TechStack.md
 ```
 
@@ -84,20 +96,30 @@ PersonaFlow/
 
 ## 🚀 快速啟動
 
-### 1. 後端
+### 一鍵啟動（推薦）
 
 ```bash
-cd backend
-pip install -r ../requirements.txt
-cp ../.env.example .env       # 填入你的 API key
-python app.py                 # 預設 http://0.0.0.0:5000
+pip install -r requirements.txt
+cp .env.example .env          # 填入你的 API key
+bash start.sh                 # 同時啟動後端 + 前端，顯示 LAN IP
 ```
 
-### 2. 前端
+啟動後終端會顯示 LAN IP，現場手機 / 平板直接用該 IP 連入互動端。
+
+### 分別啟動
 
 ```bash
-cd frontend
-npx live-server               # 預設 http://127.0.0.1:8080
+# 後端（Flask-SocketIO on :5001）
+python3 backend/app.py
+
+# 前端靜態伺服器（:8080）
+python3 -m http.server 8080 --directory frontend --bind 0.0.0.0
+```
+
+### 跑測試
+
+```bash
+python3 -m unittest discover -s backend/tests -p "test_*.py" -v
 ```
 
 ---

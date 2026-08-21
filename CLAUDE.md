@@ -22,14 +22,29 @@
 ```
 /PersonaFlow
 ├── /backend
-│   ├── app.py          # Flask 主程式、Socket 事件
-│   ├── cv_module.py    # MediaPipe 特徵提取（主色調 RGB/HEX、姿勢）
-│   └── swarm_logic.py  # Boids 群聚演算法（Separation / Alignment / Cohesion）
+│   ├── app.py              # Flask 主程式、Socket 事件、生成併發閘門
+│   ├── cv_module.py        # MediaPipe PoseLandmarker 特徵提取（網格色彩、body_poly）
+│   ├── face_module.py      # MediaPipe FaceLandmarker 臉部特徵
+│   ├── vlm_module.py       # Gemini VLM 服裝/臉部語意分類
+│   ├── garment_gen.py      # AI 生圖入口（body_sprite / full_character / refined）
+│   ├── swarm_logic.py      # Boids 群聚演算法（含邊界柔性轉向、打招呼持續）
+│   ├── event_logger.py     # 結構化事件 log 落地（JSON lines，隱私遮除影像）
+│   ├── stress_test.py      # 承載量壓測工具
+│   ├── analyze_log.py      # 效能指標分析（延遲 / 失敗率）
+│   ├── bench_generate.py   # 生成延遲基準線量測
+│   ├── report_html.py      # HTML 效能報告產生器
+│   └── tests/              # 單元測試
+│       ├── test_swarm_logic.py
+│       └── test_event_logger.py
 ├── /frontend
-│   ├── sketch.js       # p5.js 主渲染迴圈
-│   ├── character.js    # 角色組件定義、動態換色邏輯
-│   └── socket.js       # Socket.io 前後端通訊
-├── /assets             # 插畫組件（SVG/PNG）
+│   ├── index.html          # 互動端主頁
+│   ├── projection.html     # 投影牆渲染（PixiJS）
+│   ├── sketch.js           # p5.js 主渲染迴圈
+│   ├── character.js        # 角色組件定義、動態換色邏輯
+│   ├── socket.js           # Socket.io 前後端通訊（自動偵測 LAN）
+│   └── themes/lego.js      # LEGO 樂高風格渲染
+├── start.sh                # 一鍵啟動腳本
+├── INTERFACES.md           # Socket.io 事件與 payload 介面規格
 ├── PRD.md
 └── TechStack.md
 ```
@@ -39,9 +54,12 @@
 ## 核心演算法：Boids 群聚
 
 每個角色速度向量由以下三力加權合成：
-- **Separation（避障）**：遠離過近的鄰居
-- **Alignment（對齊）**：匹配鄰近角色的速度方向
-- **Cohesion（凝聚）**：往群體中心靠攏
+- **Separation（避障）**：遠離過近的鄰居（半徑 80px）
+- **Alignment（對齊）**：匹配鄰近角色的速度方向（半徑 150px）
+- **Cohesion（凝聚）**：往群體中心靠攏（半徑 200px）
+- **Boundary Steering（邊界轉向）**：接近螢幕邊緣時柔性推力轉向
+- **Wander（漫遊微力）**：隨機微力產生自然有機移動
+- **Greeting Hold（打招呼持續）**：兩角色距離 < 80px 觸發 GREETING，持續約 1.5 秒並減速
 
 實作位置：`backend/swarm_logic.py`，每 tick 輸出所有角色的新座標，透過 Socket.io 推送至前端。
 

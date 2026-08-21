@@ -686,7 +686,8 @@ class Boid {
 }
 
 // ─── 7. Socket.io 整合 ───────────────────────────────────────────────────────
-const BACKEND_URL = 'http://127.0.0.1:5001';
+const _host = window.location.hostname || '127.0.0.1';
+const BACKEND_URL = `http://${_host}:5001`;
 let socket = null;
 const statusEl = document.getElementById('status-line');
 

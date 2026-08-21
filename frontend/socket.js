@@ -1,6 +1,9 @@
 // Socket.io client bootstrap (non-module for compatibility with index.html).
 (function () {
-  const backendUrl = "http://127.0.0.1:5001";
+  // Auto-detect backend host: use current page hostname for LAN access (venue demo),
+  // fall back to localhost for local dev.
+  const host = window.location.hostname || "127.0.0.1";
+  const backendUrl = `http://${host}:5001`;
 
   window.personaFlow = window.personaFlow || {};
 

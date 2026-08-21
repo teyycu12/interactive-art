@@ -37,6 +37,20 @@ _BLOCKED_KEYS = {"image", "img", "img_str", "body_png", "stencil", "cloth_grid",
                  "lower_grid", "frame", "base64", "data"}
 
 
+def set_log_dir(path: str) -> None:
+    """設定 log 目錄（主要供測試時重定向至臨時資料夾使用）。"""
+    global _LOG_DIR, _current_fh, _current_date_str
+    with _lock:
+        if _current_fh is not None:
+            try:
+                _current_fh.close()
+            except Exception:
+                pass
+            _current_fh = None
+            _current_date_str = None
+        _LOG_DIR = path
+
+
 def _now_iso() -> str:
     return datetime.now(_TZ).isoformat(timespec="milliseconds")
 
@@ -56,6 +70,7 @@ def _ensure_fh():
         _current_fh = open(path, "a", encoding="utf-8")
         _current_date_str = date_str
     return _current_fh
+
 
 
 def _sanitize(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
