@@ -82,6 +82,16 @@
         <div class="card"><span class="label">已人工審查</span><strong class="value" id="reviewedCount">—</strong></div>
         <div class="card"><span class="label">人工通過率</span><strong class="value" id="reviewPassRate">—</strong></div>
         <div class="card"><span class="label">正式／舊版細節</span><strong class="value" id="detailParity">—</strong></div>
+        <div class="card"><span class="label">物種離散度<br><span class="muted" style="font-weight:400">線寬·軀幹</span></span><strong class="value" id="castDrift">—</strong></div>
+      </div>
+      <div class="panel" id="driftPanel" style="display:none">
+        <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+          <strong>跨角色物種漂移</strong>
+          <span class="muted">相對離散度 = 標準差／平均。越小代表越像同一個物種。</span>
+          <button id="backfillDrift" style="margin-left:auto">量測歷史紀錄</button>
+        </div>
+        <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>部位</th><th>樣本</th><th>方向性明暗</th><th>線寬</th><th>印刷佔比</th><th>邊緣密度</th><th>飽和度</th></tr></thead><tbody id="driftRows"></tbody></table></div>
+        <div class="muted" id="driftNote" style="margin-top:8px"></div>
       </div>
       <div class="panel toolbar">
         <select id="modeFilter" style="max-width:230px"><option value="">全部模式</option><option value="full_character">full_character</option><option value="brick_ai_texture">已退役 brick_ai_texture</option><option value="body_sprite">已退役 body_sprite</option><option value="full_character_refined">已退役 refined</option><option value="external_import">外部匯入</option></select>
@@ -135,11 +145,46 @@
     let currentRuns=[],sessions=[],blindState=null,lastResults=null;
     async function loadHistory(){
       const query=new URLSearchParams({limit:'500'});if($('modeFilter').value)query.set('mode',$('modeFilter').value);if($('experimentFilter').value.trim())query.set('experiment_id',$('experimentFilter').value.trim());if($('variantFilter').value.trim())query.set('variant_id',$('variantFilter').value.trim());
-      const [summary,runs,benchmark]=await Promise.all([api('/summary'),api(`/generations?${query}`),api('/detail-benchmark')]);currentRuns=runs.items||[];
+      const driftQuery=new URLSearchParams();if($('experimentFilter').value.trim())driftQuery.set('experiment_id',$('experimentFilter').value.trim());
+      const [summary,runs,benchmark,drift]=await Promise.all([api('/summary'),api(`/generations?${query}`),api('/detail-benchmark'),api(`/cast-drift?${driftQuery}`).catch(()=>null)]);currentRuns=runs.items||[];
       $('runCount').textContent=summary.run_count||0;$('apiCount').textContent=summary.api_call_count||0;$('cost').textContent=money(summary.cost_usd);$('tokens').textContent=Number(summary.total_tokens||0).toLocaleString();$('successRate').textContent=`${(Number(summary.success_rate||0)*100).toFixed(1)}%`;$('reviewedCount').textContent=summary.reviewed_count||0;$('reviewPassRate').textContent=summary.reviewed_count?`${(summary.review_pass_count/summary.reviewed_count*100).toFixed(1)}%`:'—';const parity=benchmark.paired_detail_ratio_median??benchmark.detail_parity_ratio;$('detailParity').textContent=parity==null?'待正式樣本':`${(parity*100).toFixed(0)}%`;
       $('historyRows').innerHTML=currentRuns.map(run=>`<tr data-id="${esc(run.request_id)}"><td>${new Date(run.created_at*1000).toLocaleString()}</td><td>${esc(run.mode)}</td><td><span class="pill">${esc(run.experiment_id||'未分組')}</span><br>${esc(run.comparison_id||'—')} · ${esc(run.variant_id||'—')}</td><td class="${esc(run.status)}">${esc(run.status)}</td><td>${run.detail_metrics?.detail_score==null?'—':Number(run.detail_metrics.detail_score).toFixed(3)}</td><td>${esc(run.review_verdict||'pending')}${run.overall_score?` · ${run.overall_score}/5`:''}</td><td>${duration(run.duration_ms)}</td><td>${run.api_call_count}</td><td>${run.token_reported?Number(run.total_tokens).toLocaleString():'未提供'}</td><td>${money(run.cost_usd)}</td><td>${esc((run.validation_errors||[]).join(', ')||'—')}</td></tr>`).join('')||'<tr><td colspan="11" class="muted">沒有符合條件的紀錄</td></tr>';
       document.querySelectorAll('#historyRows tr[data-id]').forEach(row=>row.onclick=()=>showHistoryDetail(row.dataset.id));$('updated').textContent=`更新 ${new Date().toLocaleTimeString()}`;
+      renderDrift(drift);
     }
+    const DRIFT_FEATURES=['directional_gradient','stroke_width_rel','mark_share','edge_density','saturation_median'];
+    const REGION_LABEL={face:'臉',garment_torso:'軀幹',denim_leg:'腿',shoe:'鞋'};
+    function spreadCell(stats){
+      if(!stats||stats.relative_spread==null)return '<td class="muted">—</td>';
+      const v=Number(stats.relative_spread);
+      // >0.30 reads as visibly different art styles side by side.
+      const colour=v>0.30?'#d73a49':(v>0.15?'#b08800':'#22863a');
+      return `<td style="color:${colour}">${v.toFixed(2)}</td>`;
+    }
+    function renderDrift(drift){
+      const panel=$('driftPanel');
+      if(!drift||!drift.regions){panel.style.display='none';$('castDrift').textContent='—';return}
+      panel.style.display='';
+      const rows=[],notes=new Set();
+      for(const [name,label] of Object.entries(REGION_LABEL)){
+        const region=drift.regions[name];
+        if(!region)continue;
+        if(region.directional_gradient_confound)notes.add(`${label}：${region.directional_gradient_confound}`);
+        if(!region.measurable){rows.push(`<tr><td>${label}</td><td>${region.characters||0}</td><td colspan="5" class="muted">樣本不足（需 2 個以上）</td></tr>`);continue}
+        const cells=DRIFT_FEATURES.map(f=>spreadCell(region.features?.[f])).join('');
+        rows.push(`<tr><td>${label}</td><td>${region.characters}</td>${cells}</tr>`);
+      }
+      $('driftRows').innerHTML=rows.join('')||'<tr><td colspan="7" class="muted">尚無可量測的角色</td></tr>';
+      $('driftNote').textContent=notes.size?`注意 — ${[...notes].join('；')}`:'';
+      const headline=drift.regions.garment_torso?.features?.stroke_width_rel?.relative_spread;
+      $('castDrift').textContent=headline==null?'—':Number(headline).toFixed(2);
+    }
+    $('backfillDrift').onclick=async()=>{
+      const button=$('backfillDrift');button.disabled=true;button.textContent='量測中…';
+      try{const result=await postJson('/cast-drift/backfill',{});button.textContent=`已量測 ${result.updated} 筆`;await loadHistory()}
+      catch(error){button.textContent=error.message}
+      finally{setTimeout(()=>{button.disabled=false;button.textContent='量測歷史紀錄'},2500)}
+    };
     async function showHistoryDetail(id){const run=await api(`/generations/${encodeURIComponent(id)}`),review=run.review||{};$('historyDetail').hidden=false;$('historyDetail').innerHTML=`<div class="split"><div><h2>${esc(run.mode)} · ${esc(run.status)}</h2>${run.output_url?`<div class="shot"><img src="${ORIGIN}${esc(run.output_url)}" alt="生成結果"></div>`:'<div class="empty">沒有保存最終圖</div>'}<p class="muted">Request ${esc(run.request_id)}</p></div><div><h3>實驗配對</h3><form id="metaForm" class="form-grid"><label>實驗ID<input name="experiment_id" value="${esc(run.experiment_id||'')}"></label><label>人物代碼<input name="comparison_id" value="${esc(run.comparison_id||'')}"></label><label>Variant<input name="variant_id" value="${esc(run.variant_id||'')}"></label><div class="wide actions"><button class="primary">保存配對</button><span id="metaStatus" class="muted"></span></div></form><h3>開發者快速審查</h3><form id="quickReview" class="form-grid"><label>判定<select name="verdict"><option value="pending">待審</option><option value="pass" ${review.verdict==='pass'?'selected':''}>通過</option><option value="fail" ${review.verdict==='fail'?'selected':''}>不通過</option></select></label>${['completeness','clothing_match','face_match','overall'].map(key=>scoreSelect(`${key}_score`,{completeness:'肢體完整',clothing_match:'服裝相似',face_match:'臉髮相似',overall:'整體效果'}[key]).replace(`value=\"${review[`${key}_score`]}\"`,`value=\"${review[`${key}_score`]}\" selected`)).join('')}<label class="wide">備註<textarea name="notes">${esc(review.notes||'')}</textarea></label><div class="wide actions"><button>保存快速審查</button><span id="quickStatus" class="muted"></span></div></form><h3>API attempts</h3><div class="table-wrap"><table><thead><tr><th>階段</th><th>模型</th><th>耗時</th><th>Token</th><th>成本</th><th>結果</th></tr></thead><tbody>${(run.attempts||[]).map(a=>`<tr><td>${esc(a.phase)}</td><td>${esc(a.model||'—')}</td><td>${duration(a.duration_ms)}</td><td>${a.total_tokens==null?'未提供':a.total_tokens}</td><td>${money(a.cost_usd)}</td><td>${a.ok?'OK':esc(a.error_code||'failed')}</td></tr>`).join('')}</tbody></table></div></div></div>`;
       $('metaForm').onsubmit=async event=>{event.preventDefault();try{await postJson(`/generations/${encodeURIComponent(id)}/experiment`,formObject(event.target));$('metaStatus').textContent='已保存';await loadHistory()}catch(error){$('metaStatus').textContent=error.message}};
       $('quickReview').onsubmit=async event=>{event.preventDefault();const body=formObject(event.target);['completeness_score','clothing_match_score','face_match_score','overall_score'].forEach(key=>body[key]=body[key]?Number(body[key]):null);try{await postJson(`/generations/${encodeURIComponent(id)}/review`,body);$('quickStatus').textContent='已保存';await loadHistory()}catch(error){$('quickStatus').textContent=error.message}};

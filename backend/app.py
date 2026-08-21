@@ -52,7 +52,7 @@ except Exception:
 try:
     from backend.avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
     from backend.capture_quality import mean_landmark_displacement  # type: ignore
-    from backend.generation_history import finish_run, get_detail_benchmark, get_run, get_summary, list_runs, mark_render_failure, output_directory, record_attempt, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
+    from backend.generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, list_runs, mark_render_failure, output_directory, record_attempt, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
     from backend.blind_review import blind_payload, create_review_session, delete_review_sources, get_review_session, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
     from backend.height_profiles import classify_height, get_height_profile  # type: ignore
     from backend.metrics_logger import log_metric  # type: ignore
@@ -60,7 +60,7 @@ try:
 except Exception:
     from avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
     from capture_quality import mean_landmark_displacement  # type: ignore
-    from generation_history import finish_run, get_detail_benchmark, get_run, get_summary, list_runs, mark_render_failure, output_directory, record_attempt, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
+    from generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, list_runs, mark_render_failure, output_directory, record_attempt, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
     from blind_review import blind_payload, create_review_session, delete_review_sources, get_review_session, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
     from height_profiles import classify_height, get_height_profile  # type: ignore
     from metrics_logger import log_metric  # type: ignore
@@ -453,6 +453,26 @@ def dev_generation_summary():
 @app.route("/api/dev/detail-benchmark", methods=["GET"])
 def dev_detail_benchmark():
     return jsonify(get_detail_benchmark())
+
+
+@app.route("/api/dev/cast-drift", methods=["GET"])
+def dev_cast_drift():
+    """Cross-character style drift: how far this cast is from one species."""
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        limit = 50
+    return jsonify(get_cast_drift(
+        experiment_id=(request.args.get("experiment_id") or None),
+        mode=(request.args.get("mode") or "full_character"),
+        limit=limit,
+    ))
+
+
+@app.route("/api/dev/cast-drift/backfill", methods=["POST"])
+def dev_cast_drift_backfill():
+    """Measure stored attempts that predate the fingerprint column."""
+    return jsonify({"updated": backfill_style_fingerprints()})
 
 
 @app.route("/api/dev/outputs/<path:filename>", methods=["GET"])

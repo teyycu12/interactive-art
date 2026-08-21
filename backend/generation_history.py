@@ -130,6 +130,8 @@ def init_history_db(db_path: Optional[Path] = None) -> None:
         }
         if "output_path" not in attempt_columns:
             connection.execute("ALTER TABLE generation_attempts ADD COLUMN output_path TEXT")
+        if "style_fingerprint" not in attempt_columns:
+            connection.execute("ALTER TABLE generation_attempts ADD COLUMN style_fingerprint TEXT")
         run_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(generation_runs)")
         }
@@ -209,8 +211,8 @@ def record_attempt(
                 started_at, duration_ms, ok, prompt_tokens, completion_tokens,
                 total_tokens, image_tokens, cached_tokens, cost_usd,
                 upstream_cost_usd, error_code, validation_errors,
-                validation_warnings, output_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                validation_warnings, output_path, style_fingerprint
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -232,6 +234,7 @@ def record_attempt(
                 _json_list(validation.get("errors")),
                 _json_list(validation.get("warnings")),
                 output_path,
+                _style_fingerprint_for_output(output_path),
             ),
         )
 
@@ -633,6 +636,106 @@ def _detail_metrics_for_output(output_path: Optional[str]) -> Optional[str]:
         )
     except Exception:
         return None
+
+
+def _style_fingerprint_for_output(output_path: Optional[str]) -> Optional[str]:
+    """Measure one stored sprite's style, for cross-character drift.
+
+    Kept separate from ``_detail_metrics_for_output``: detail metrics score a
+    single character's richness, this measures the style language so a *set* of
+    characters can be compared against each other.
+    """
+    if not output_path:
+        return None
+    try:
+        from backend.style_probe import sprite_fingerprint  # type: ignore
+    except Exception:
+        try:
+            from style_probe import sprite_fingerprint  # type: ignore
+        except Exception:
+            return None
+    try:
+        target = _OUTPUT_DIR / output_path
+        if not target.is_file():
+            return None
+        fingerprint = sprite_fingerprint(target.read_bytes())
+        if not fingerprint.get("valid"):
+            return None
+        return json.dumps(fingerprint, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return None
+
+
+def backfill_style_fingerprints(*, db_path: Optional[Path] = None) -> int:
+    """Measure historical attempts once so pre-change drift stays comparable."""
+    init_history_db(db_path)
+    updated = 0
+    with _db(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT id, output_path FROM generation_attempts
+            WHERE output_path IS NOT NULL AND style_fingerprint IS NULL
+            """
+        ).fetchall()
+        for row in rows:
+            fingerprint = _style_fingerprint_for_output(row["output_path"])
+            if not fingerprint:
+                continue
+            connection.execute(
+                "UPDATE generation_attempts SET style_fingerprint=? WHERE id=?",
+                (fingerprint, row["id"]),
+            )
+            updated += 1
+    return updated
+
+
+def get_cast_drift(
+    *,
+    experiment_id: Optional[str] = None,
+    mode: str = "full_character",
+    limit: int = 50,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Cross-character style drift over the most recent successful attempts."""
+    init_history_db(db_path)
+    try:
+        from backend.style_probe import cast_drift_by_region  # type: ignore
+    except Exception:
+        from style_probe import cast_drift_by_region  # type: ignore
+
+    clauses = ["a.style_fingerprint IS NOT NULL", "a.ok = 1"]
+    params: List[Any] = []
+    if mode:
+        clauses.append("r.mode = ?")
+        params.append(mode)
+    if experiment_id:
+        clauses.append("r.experiment_id = ?")
+        params.append(experiment_id)
+    params.append(int(max(2, limit)))
+
+    with _db(db_path) as connection:
+        rows = connection.execute(
+            f"""
+            SELECT a.style_fingerprint FROM generation_attempts a
+            JOIN generation_runs r ON r.request_id = a.request_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY a.started_at DESC LIMIT ?
+            """,
+            params,
+        ).fetchall()
+
+    fingerprints = []
+    for row in rows:
+        try:
+            fingerprints.append(json.loads(row["style_fingerprint"]))
+        except (TypeError, ValueError):
+            continue
+    return {
+        "mode": mode,
+        "experiment_id": experiment_id,
+        "characters": len(fingerprints),
+        "regions": cast_drift_by_region(fingerprints),
+    }
 
 
 def backfill_detail_metrics(*, db_path: Optional[Path] = None) -> int:

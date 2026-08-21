@@ -7,7 +7,9 @@ from unittest.mock import patch
 from PIL import Image, ImageDraw
 
 from backend.generation_history import (
+    backfill_style_fingerprints,
     finish_run,
+    get_cast_drift,
     get_detail_benchmark,
     get_run,
     get_summary,
@@ -17,6 +19,7 @@ from backend.generation_history import (
     save_review,
     start_run,
 )
+from backend.tests.test_style_probe import _sprite
 
 
 class GenerationHistoryTests(unittest.TestCase):
@@ -74,6 +77,59 @@ class GenerationHistoryTests(unittest.TestCase):
         self.assertEqual(benchmark["paired_detail_ratio_median"], 1.0)
         self.assertFalse(benchmark["target_met"])
         self.assertEqual(benchmark["minimum_paired_samples"], 5)
+
+    def test_recorded_attempts_carry_a_style_fingerprint_for_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "history.sqlite3"
+            with patch("backend.generation_history._OUTPUT_DIR", root / "generated"):
+                for index, stroke in enumerate((5, 9, 14)):
+                    request_id = f"drift-{index}"
+                    start_run(
+                        request_id, mode="full_character", style_id="lego",
+                        source_type="upload", experiment_id="drift-exp", db_path=db_path,
+                    )
+                    record_attempt(
+                        request_id, phase="full_character", attempt_index=0,
+                        result={"ok": True, "body_png": _sprite(stroke=stroke), "api_usage": {}},
+                        validation={"passed": True, "errors": [], "warnings": []},
+                        db_path=db_path,
+                    )
+                drift = get_cast_drift(experiment_id="drift-exp", db_path=db_path)
+
+        self.assertEqual(drift["characters"], 3)
+        torso = drift["regions"]["garment_torso"]
+        self.assertTrue(torso["measurable"])
+        self.assertGreater(torso["features"]["stroke_width_rel"]["relative_spread"], 0)
+
+    def test_backfill_measures_old_attempts_once_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "history.sqlite3"
+            with patch("backend.generation_history._OUTPUT_DIR", root / "generated"):
+                start_run(
+                    "backfill-1", mode="full_character", style_id="lego",
+                    source_type="upload", db_path=db_path,
+                )
+                # Simulate a row written before the column existed.
+                with patch(
+                    "backend.generation_history._style_fingerprint_for_output",
+                    return_value=None,
+                ):
+                    record_attempt(
+                        "backfill-1", phase="full_character", attempt_index=0,
+                        result={"ok": True, "body_png": _sprite(), "api_usage": {}},
+                        validation={"passed": True, "errors": [], "warnings": []},
+                        db_path=db_path,
+                    )
+                self.assertEqual(get_cast_drift(db_path=db_path)["characters"], 0)
+                first = backfill_style_fingerprints(db_path=db_path)
+                second = backfill_style_fingerprints(db_path=db_path)
+                measured = get_cast_drift(db_path=db_path)["characters"]
+
+        self.assertEqual(first, 1)
+        self.assertEqual(second, 0, "backfill must not re-measure rows it already filled")
+        self.assertEqual(measured, 1)
 
     def test_browser_composite_replaces_final_output_without_adding_api_call(self):
         with tempfile.TemporaryDirectory() as directory:
