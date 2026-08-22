@@ -5,7 +5,7 @@ PersonaFlow 集中式環境設定模組。
 
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -32,6 +32,22 @@ def _get_bool(key: str, default: bool) -> bool:
     return val.strip().lower() not in ("0", "false", "no", "off", "")
 
 
+_DEV_SECRET = "personaflow-dev-secret"
+
+
+def _get_origins(key: str, default: str) -> Any:
+    """CORS 來源：'*' 直接放行，否則拆成來源清單。
+
+    回傳 tuple 而非 list —— dataclass 不允許可變的預設值
+    （ValueError: mutable default ... use default_factory）。
+    呼叫端傳給 Flask-SocketIO 前再轉成 list。
+    """
+    raw = os.environ.get(key, default).strip()
+    if raw == "*" or not raw:
+        return "*"
+    return tuple(o.strip() for o in raw.split(",") if o.strip())
+
+
 @dataclass(frozen=True)
 class AppConfig:
     # 服務監聽
@@ -39,6 +55,10 @@ class AppConfig:
     PORT: int = _get_int("PORT", 5001)
     # 預設 False：展場長時間運行不應開 debug（會洩漏 traceback 且效能較差）
     DEBUG: bool = _get_bool("DEBUG", False)
+    # 未設定時退回開發用預設值並在啟動時警告（見 config 結尾）
+    SECRET_KEY: str = os.environ.get("SECRET_KEY", "") or "personaflow-dev-secret"
+    # "*" 或逗號分隔的來源清單；展場 LAN 事前無法列舉賓客 IP，故預設 "*"
+    CORS_ALLOWED_ORIGINS: Any = _get_origins("CORS_ALLOWED_ORIGINS", "*")
 
     # M3 併發與蜂群設定
     GEN_MAX_CONCURRENT: int = max(1, _get_int("GEN_MAX_CONCURRENT", 2))
@@ -58,3 +78,7 @@ class AppConfig:
 
 # 全域單例
 config = AppConfig()
+
+if config.SECRET_KEY == _DEV_SECRET:
+    print("[config] ⚠️  SECRET_KEY 使用開發預設值（此值已提交進版控）。"
+          "正式展演請於 .env 設定 SECRET_KEY。")

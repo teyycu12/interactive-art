@@ -171,8 +171,16 @@ if _DEGRADED:
 
 if Flask is not None:
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = "personaflow-dev-secret"
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", max_http_buffer_size=20 * 1024 * 1024)
+    # SECRET_KEY 原本是寫死並提交進版控的字串。展場雖是封閉 LAN，但金鑰進了
+    # 公開 repo 就等於沒有金鑰，且未來若要加活動身分驗證會直接建立在其上。
+    app.config["SECRET_KEY"] = config.SECRET_KEY
+    # CORS 預設維持 "*"：展場靠 LAN 讓賓客手機連進來，來源 IP 事前無法列舉。
+    # 需要收斂時用 CORS_ALLOWED_ORIGINS 逗號分隔指定。
+    _cors = (config.CORS_ALLOWED_ORIGINS if isinstance(config.CORS_ALLOWED_ORIGINS, str)
+             else list(config.CORS_ALLOWED_ORIGINS))
+    socketio = SocketIO(app, cors_allowed_origins=_cors,
+                        async_mode="threading",
+                        max_http_buffer_size=20 * 1024 * 1024)
 else:
     app = None
     socketio = None
