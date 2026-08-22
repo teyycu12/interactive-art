@@ -7,9 +7,12 @@
 
   window.personaFlow = window.personaFlow || {};
 
+  // 不設 reconnectionAttempts（預設 Infinity）：原本設 10 次，在預設退避下
+  // 約 45 秒就永久放棄，後端重啟只要久一點，前端就再也連不回來、必須手動
+  // 重新整理。退避上限 5 秒代表最多每 5 秒重試一次，成本可忽略。
   const socket = io(backendUrl, {
     transports: ["websocket"],
-    reconnectionAttempts: 10,
+    reconnectionDelayMax: 5000,
   });
   window.personaFlow.socket = socket;
   window.personaFlow.latestClothingFeatures = null;

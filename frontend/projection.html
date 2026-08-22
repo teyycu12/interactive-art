@@ -793,9 +793,12 @@ function _spawnBoid(charId, topColor, botColor, armColor, accList, clothGrid, lo
 
 function initSocket() {
   try {
+    // 不設 reconnectionAttempts（預設 Infinity）：投影牆無人看顧，原本設 10 次
+    // 在預設退避下約 45 秒就永久放棄 —— 後端重啟一次，整面牆就再也不會恢復，
+    // 且現場沒有人會去按重新整理。
     socket = io(BACKEND_URL, {
       transports: ['websocket'],
-      reconnectionAttempts: 10,
+      reconnectionDelayMax: 5000,
     });
 
     socket.on('connect', () => {

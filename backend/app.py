@@ -1,6 +1,7 @@
 import base64
 import os
 import random
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -45,6 +46,20 @@ def _on_socket(event_name):
     return decorator
 
 
+# --- 模組載入退化追蹤 ---
+# 下方的 import 採「backend.X → X → stub」三段式，前兩段是為了支援從 repo root
+# 或 backend/ 兩種啟動方式。但第三段的 stub 會讓功能靜默消失：例如
+# swarm_logic 若載入失敗，update_swarm_state 會變成原樣返回，Boids 完全不動
+# 卻沒有任何錯誤訊息。這裡確保每次退化都大聲說出來，並在啟動時彙總。
+_DEGRADED: List[str] = []
+
+
+def _degraded(feature: str, exc: BaseException) -> None:
+    _DEGRADED.append(feature)
+    print(f"[app] ⚠️  {feature} 載入失敗，已退化為 stub —— "
+          f"{type(exc).__name__}: {exc}", file=sys.stderr)
+
+
 try:
     import cv2  # type: ignore
 except ModuleNotFoundError:
@@ -55,7 +70,8 @@ try:
 except Exception:
     try:
         from cv_module import get_clothing_features  # type: ignore
-    except Exception:
+    except Exception as _e:
+        _degraded("cv_module.get_clothing_features（服裝特徵提取）", _e)
         get_clothing_features = None
 
 try:
@@ -63,7 +79,9 @@ try:
 except Exception:
     try:
         from swarm_logic import update_swarm_state  # type: ignore
-    except Exception:
+    except Exception as _e:
+        # 最嚴重的一項：Boids 完全停擺（角色不動、不觸發 GREETING、無相遇 log）
+        _degraded("swarm_logic.update_swarm_state（Boids 群聚演算法）", _e)
         update_swarm_state = lambda chars: chars  # type: ignore
 
 try:
@@ -71,7 +89,8 @@ try:
 except Exception:
     try:
         from event_logger import log_event, Timer  # type: ignore
-    except Exception:
+    except Exception as _e:
+        _degraded("event_logger（事件 log 落地，報告指標來源）", _e)
         log_event = lambda *a, **k: None  # type: ignore
         Timer = None
 
@@ -86,7 +105,10 @@ except Exception:
         from photo_composer import compose_group_photo  # type: ignore
         from bot_simulator import inject_bots, remove_bots  # type: ignore
         from circuit_breaker import gemini_breaker, image_gen_breaker  # type: ignore
-    except Exception:
+    except Exception as _e:
+        # 熔斷器變成 None 後，後續 .call() 會拋出難以理解的
+        # 'NoneType' object has no attribute 'call'，所以更需要在這裡講清楚
+        _degraded("swarm_snapshot / photo_composer / bot_simulator / circuit_breaker", _e)
         save_snapshot = lambda *a, **k: False  # type: ignore
         load_snapshot = lambda *a, **k: None  # type: ignore
         compose_group_photo = lambda *a, **k: {"ok": False}  # type: ignore
@@ -95,16 +117,27 @@ except Exception:
         gemini_breaker = None
         image_gen_breaker = None
 
+# vlm_module 與 face_module 必須分開 import：vlm_module 在缺少 GEMINI_API_KEY
+# 時會於 import 階段 raise，而 face_module 是純 MediaPipe、與 Gemini 無關。
+# 兩者原本共用同一個 try 區塊，導致沒設金鑰時臉部偵測也一起被停用。
 try:
     from backend.vlm_module import analyze_outfit, analyze_face
-    from backend.face_module import get_face_features
 except Exception:
     try:
         from vlm_module import analyze_outfit, analyze_face
-        from face_module import get_face_features
-    except Exception:
+    except Exception as _e:
+        # 常見原因：GEMINI_API_KEY 未設定（vlm_module 於 import 時即 raise）
+        _degraded("vlm_module（VLM 服裝分析）", _e)
         analyze_outfit = lambda *a, **k: {"ok": False}
         analyze_face = lambda *a, **k: {"ok": False}
+
+try:
+    from backend.face_module import get_face_features
+except Exception:
+    try:
+        from face_module import get_face_features
+    except Exception as _e:
+        _degraded("face_module（MediaPipe 臉部特徵）", _e)
         get_face_features = lambda *a, **k: {"ok": False}
 
 try:
@@ -122,11 +155,17 @@ except Exception:
             generate_refine_character_png,
             _remove_white_background as _gg_remove_white_background,
         )
-    except Exception:
+    except Exception as _e:
+        _degraded("garment_gen（AI 角色圖像生成）", _e)
         generate_body_png = None
         generate_full_character_png = None
         generate_refine_character_png = None
         _gg_remove_white_background = lambda img: img
+
+
+if _DEGRADED:
+    print(f"[app] ⚠️  共 {len(_DEGRADED)} 個模組以降級模式啟動，"
+          f"相關功能將無法運作：{', '.join(_DEGRADED)}", file=sys.stderr)
 
 
 
