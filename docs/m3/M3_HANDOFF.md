@@ -30,7 +30,7 @@
 | `backend/event_logger.py` | 新增 `set_log_dir()` 支援測試時重定向 log 目錄 |
 | `backend/tests/test_swarm_logic.py` | Boids 單元測試（邊界、漫遊、打招呼狀態機） |
 | `backend/tests/test_event_logger.py` | 事件 log 單元測試（隱私遮除、JSONL 格式、Timer） |
-| `backend/test_socket.py` | 重構為安全模組（缺少 python-socketio 時不崩潰） |
+| `backend/test_socket.py` | 重構為安全模組（缺少 python-socketio 時不崩潰）<br>※ 已由 `backend/e2e_smoke.py` 取代並移除，此列為 M3 當時的紀錄 |
 | `frontend/socket.js` | 後端連線位址改為動態偵測（支援 LAN 展示） |
 | `frontend/projection.html` | 同上，投影牆亦改為動態連線 |
 | `start.sh` | 一鍵啟動腳本（後端 + 前端 + LAN IP 顯示） |
