@@ -30,11 +30,39 @@ _current_date_str: Optional[str] = None
 _current_fh = None
 
 # 是否啟用（可用環境變數 EVENT_LOG_ENABLED=0 關閉，例如純渲染測試時）
-_ENABLED = os.environ.get("EVENT_LOG_ENABLED", "1") not in ("0", "false", "False", "")
+# 統一由 config 解析，避免此處與 config.py 對同一個變數有兩套判讀規則
+# （例如 "off" 曾在 config 是 False、在這裡是 True）。
+try:
+    from backend.config import config as _config  # type: ignore
+except ImportError:
+    try:
+        from config import config as _config  # type: ignore
+    except ImportError:
+        _config = None  # 離線 CLI 工具單獨 import 時允許沒有 config
+
+_ENABLED = (
+    _config.EVENT_LOG_ENABLED if _config is not None
+    else os.environ.get("EVENT_LOG_ENABLED", "1").strip().lower()
+    not in ("0", "false", "no", "off", "")
+)
 
 # 這些 key 一律不寫進 log（避免影像 / base64 落地）
 _BLOCKED_KEYS = {"image", "img", "img_str", "body_png", "stencil", "cloth_grid",
                  "lower_grid", "frame", "base64", "data"}
+
+
+def set_log_dir(path: str) -> None:
+    """設定 log 目錄（主要供測試時重定向至臨時資料夾使用）。"""
+    global _LOG_DIR, _current_fh, _current_date_str
+    with _lock:
+        if _current_fh is not None:
+            try:
+                _current_fh.close()
+            except Exception:
+                pass
+            _current_fh = None
+            _current_date_str = None
+        _LOG_DIR = path
 
 
 def _now_iso() -> str:
@@ -56,6 +84,7 @@ def _ensure_fh():
         _current_fh = open(path, "a", encoding="utf-8")
         _current_date_str = date_str
     return _current_fh
+
 
 
 def _sanitize(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:

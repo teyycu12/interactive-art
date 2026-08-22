@@ -14,7 +14,7 @@
 | 事件名 | 方向 | 觸發 handler | 用途 |
 |--------|------|-------------|------|
 | `connect` | Socket.io 內建 | `handle_connect` | 連線建立；若已有角色會立即回一次 `update_positions` |
-| `disconnect` | Socket.io 內建 | `handle_disconnect` | 斷線；**只移除 `char_id == sid` 的角色**（見 §4） |
+| `disconnect` | Socket.io 內建 | `handle_disconnect` | 斷線；**不移除角色**，僅更新 `last_seen`（見 §4） |
 | `process_frame` | 前端 → 後端 | `handle_process_frame` | 即時預覽用的 CV 特徵擷取（非正式生成） |
 | `clothing_features` | 後端 → 前端 | — | 回應 `process_frame`，含 fallback 旗標 |
 | `generate_avatar` | 前端 → 後端 | `handle_generate_avatar` | 觸發正式 CV+VLM+face 並行生成 |
@@ -103,7 +103,7 @@
 ### `join_swarm`（前端 → 後端）
 ```json
 {
-  "id": "字串id（省略則用 socket sid）",
+  "id": "字串id（省略則由後端配發 char_<uuid12>，不再使用 socket sid）",
   "x": 960, "y": 540,
   "upper": {...}, "lower": {...}, "arm_color": {...},
   "upper_type": "...", "lower_type": "...",
@@ -157,6 +157,45 @@
 > **相遇偵測內嵌在 `state` 欄位裡**，不是獨立事件。若 M7 v2 需要獨立相遇事件，
 > 後端已在事件 log 落地 `character_encounter`（見 §5），要廣播給前端只需在 tick 內加一行 emit。
 
+### `trigger_photo`（前端 → 後端）— 觸發集體記憶大合照 (M6)
+```json
+{
+  "room": "default"             // 可選，預設 "default"
+}
+```
+
+### `photo_ready`（後端 → 廣播所有前端）— 大合照合成完成
+```json
+{
+  "ok": true,
+  "photo_id": "photo_1771720000_12p",
+  "photo_url": "http://127.0.0.1:5001/photos/photo_1771720000_12p.png",
+  "photo_b64": "data:image/png;base64,...",
+  "qr_b64": "data:image/png;base64,...",
+  "character_count": 12,
+  "room": "default"
+}
+```
+
+### `inject_bots`（前端/控制台 → 後端）— 模擬機器人注入
+```json
+{
+  "count": 10,
+  "room": "default"
+}
+```
+
+### `remove_bots`（前端/控制台 → 後端）— 清除所有機器人
+```json
+{}
+```
+
+### `save_snapshot`（前端/控制台 → 後端）— 手動儲存快照
+```json
+{}
+```
+> 後端回傳 `snapshot_saved` `{ "ok": true }`。
+
 ---
 
 ## 3. VLM / CV 欄位覆蓋規則（原本隱含在程式碼、現正式文件化）
@@ -178,10 +217,21 @@
 
 ## 4. 連線生命週期與狀態一致性
 
-- **角色 id 策略**：`join_swarm` 可自帶 `id`；未帶則用該連線的 socket `sid`。
-- **斷線清理**：`disconnect` 只 `pop` `char_id == sid` 的角色——即「這條連線本人就是角色」的情況。
-  投影牆等純觀測連線斷開，**不會**誤刪別人加入的角色。
-- **重連**：前端 socket 重連後 sid 會變，後端已把舊角色移除；前端須用 `_lastJoinPayload` 重新 `join_swarm`（見 `frontend/socket.js`）。
+- **角色 id 策略**：`join_swarm` 可自帶 `id`；未帶則由後端配發 `char_<uuid12>`。
+  **id 刻意與連線 `sid` 脫鉤** —— 早期版本沿用 `sid`，導致賓客關掉分頁時角色隨之消失
+  （共創畫面只留得住「當下還開著頁面的人」），且 N 位賓客就需要 N 條長連線。
+- **斷線清理**：`disconnect` **不再移除任何角色**，僅更新 `last_seen`。
+  賓客關掉分頁不代表離開現場，作品不該因此少一個人。
+- **角色回收**：背景迴圈每 60 秒掃描一次，清除超過 `CHARACTER_TTL_SEC`
+  （預設 7200 秒）未更新的角色。設為 0 可停用。快照還原時會補上 `last_seen`，
+  否則缺該欄位的角色會被判定為「剛出現」而永不過期。
+- **重新連線**：前端把 `swarm_joined` 回傳的 id 存進 `sessionStorage`，重連時帶回
+  以認領同一角色，避免在牆上產生分身。
+- **多房間分流**：`join_swarm` / `get_swarm` / `trigger_photo` 支援 `room` 參數，實現多螢幕或展區隔離。
+  `get_swarm` 會將該連線加入指定 room（未指定則為 `default`）——
+  純觀看端（投影牆、壓測觀測器）只 emit `get_swarm`、不 `join_swarm`，
+  若不在此處加入 room，就收不到 `_swarm_background` 的 room-scoped 週期廣播。
+- **快照持久化**：背景每 30 秒自動儲存 `backend/data/swarm_snapshot.json`，伺服器重啟自動還原。
 - **狀態單一真相源**：`_swarm_chars`（`app.py`，`_swarm_lock` 保護）。所有讀寫都要持鎖。
 
 ---
@@ -193,9 +243,11 @@
 | log 事件 | 關鍵欄位 | 用途 |
 |----------|---------|------|
 | `connect` / `disconnect` | `pid`, `removed_char` | 連線觀測 |
-| `join_swarm` / `leave_swarm` | `pid`, `swarm_size` | 承載量觀測 |
+| `join_swarm` / `leave_swarm` | `pid`, `room`, `swarm_size` | 承載量觀測 |
 | `update_character` | `pid`, `fields` | 更新記錄 |
-| `get_swarm` | `pid`, `swarm_size` | — |
+| `get_swarm` | `pid`, `room`, `swarm_size` | — |
+| `group_photo_composed` | `photo_id`, `count`, `room` | M6 大合照生成記錄 |
+| `inject_bots` / `remove_bots` | `count`, `total`, `room` | Bot 模擬注入觀測 |
 | `generate_queued` | `pid`, `ahead`, `mode` | 多人同拍時進入排隊（超過 `GEN_MAX_CONCURRENT`） |
 | `avatar_generated` | `latency_ms`, `cv_ms`, `vlm_ms`, `queue_wait_ms`, `ok`, `vlm_outfit_ok`, `vlm_face_ok` | **生成延遲分佈 + 失敗率 + 排隊等待**（第 6 節） |
 | `character_encounter` | `pid`, `swarm_size` | 相遇（只記新進入 GREETING，已去重） |
@@ -207,12 +259,11 @@
 
 ---
 
-## 6. 尚未實作、但已預留命名的事件（WP-B / M6 / M7）
+## 6. 尚未實作、但已預留命名的事件（M7）
 
 | 規劃事件名 | 用途 | 依賴 |
 |-----------|------|------|
-| `trigger_photo` | 觸發大合照 | M6 |
-| `photo_ready` | 合照完成（含 QR） | M6 |
 | `character_encounter`（廣播版） | 相遇任務——已有 log，需加 emit 給前端 | M7 v2 |
 
 > 新增事件一律沿用 `動詞_名詞` snake_case，並回來更新本文件。
+

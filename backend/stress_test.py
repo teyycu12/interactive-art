@@ -114,8 +114,13 @@ class BroadcastObserver:
                 self.recv_times.append(now)
                 self.char_counts.append(len(chars))
 
-    def connect(self, url: str):
+    def connect(self, url: str, room: str = "default"):
         _connect(self.sio, url)
+        # 必須 emit get_swarm：背景迴圈的 update_positions 是 room-scoped 的
+        # （app.py 的 _swarm_background），純觀測連線若不加入 room，就只會收到
+        # handle_connect 當下那一次廣播，之後完全收不到 —— 壓測會因此永遠回報
+        # 「廣播樣本不足」而測不出任何數據。get_swarm 會把此連線加入該 room。
+        self.sio.emit("get_swarm", {"room": room})
 
     def stop(self):
         try:

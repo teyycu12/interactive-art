@@ -26,11 +26,20 @@ Thumbs.db
 *.suo
 *.user
 
-# M3 事件 log 落地（現場產生的資料，不進版控）
+# M3 事件 log 與快照 / 合照落地（現場產生的資料，不進版控）
 backend/logs/
+backend/data/
+backend/photos/
 *.jsonl
 backend.log
 
 # 執行期產生的暫存 / 診斷檔
 backend/diagnostic_img_str.txt
 stash.diff
+
+# 測試產出
+.pytest_cache/
+backend/test-results.xml
+.coverage
+htmlcov/
+

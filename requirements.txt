@@ -9,13 +9,19 @@ websocket-client       # python-socketio 走 websocket transport 所需
 python-dotenv          # 讀取 .env 的 API 金鑰（見 .env.example）
 
 # 感知層（M1）
-mediapipe
+# mediapipe 必須釘在 1.0 以下：1.0.1 在 macOS arm64 上初始化 Metal 失敗，
+# 以 absl CHECK 直接 abort() 整個行程（Pose 與 FaceLandmarker 皆然）。
+# 那是 C++ 層的 abort，Python 的 try/except 完全攔不到 —— 後端會整個死掉，
+# 連帶所有已連線的客戶端與投影牆。0.10.35 實測正常。
+mediapipe>=0.10.35,<1.0
 opencv-python
 numpy
 pillow                 # generate_avatar 影像解碼
 pillow-heif            # iPhone HEIC/HEIF 照片支援
 
-# AI 生成（M2）
+# AI 生成與排版（M2 / M6）
 google-generativeai    # Gemini：服裝 / 臉部特徵分類
 openai                 # OpenRouter 相容 fallback client（見 vlm_module）
 requests
+qrcode[pil]            # M6 集體記憶大合照 QR Code 下載產生
+

@@ -24,29 +24,16 @@ _TZ = timezone(timedelta(hours=8))
 _LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 
 
-def _load(paths):
-    events = []
-    for p in paths:
-        if not os.path.exists(p):
-            print(f"⚠️ 找不到 log 檔：{p}")
-            continue
-        with open(p, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if line:
-                    try:
-                        events.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
-    return events
 
 
-def _pct(vals, p):
-    if not vals:
-        return None
-    s = sorted(vals)
-    k = min(len(s) - 1, int(round((p / 100.0) * (len(s) - 1))))
-    return s[k]
+# _load / _pct 與 analyze_log 共用同一份實作。
+# 先前兩邊各有一份，且已經開始漂移：report_html 的版本會「靜默」吞掉格式錯誤的
+# log 行（except: pass），analyze_log 的版本則會指出是哪一行。報告若因日誌毀損
+# 而少算事件卻毫無提示，是最不該發生的事，故統一採用會出聲的那一份。
+try:
+    from backend.analyze_log import _load, _pct  # type: ignore
+except ImportError:
+    from analyze_log import _load, _pct  # type: ignore
 
 
 def _compute(events):

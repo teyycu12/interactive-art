@@ -73,18 +73,61 @@ function drawLegoCharacter(person) {
   const lLegDeg = -legDeg;  // left leg backward when swing > 0
   const rLegDeg =  legDeg;  // right leg forward when swing > 0
 
-  // ── Grid pipeline ────────────────────────────────────────────────
-  const clothGrid = person.clothGrid
-    ? _makeSymmetric(_enhanceGrid(_clusterGrid(
-        _filterHairCells(person.clothGrid, person.hairColor, person.innerColor)
-      )))
-    : null;
+  // ── Memoized Grid pipeline (每角色/特徵變更時才重算，非每幀重算) ────
+  // 這是前端唯一的效能熱點：單次 pipeline 約 2.2ms（32x40 = 1280 格，含
+  // flood-fill BFS + 膨脹 + HSL 轉換）。若每幀重算，30 個角色的每幀成本
+  // 約 65ms —— 上限僅約 15fps，遠低於 60fps 目標。
+  //
+  // ⚠️ 快取以「物件參照」判斷，不是內容雜湊。目前安全，因為 update_positions
+  //    每次都從 socket payload 指派全新陣列；但若日後改成就地修改 cells，
+  //    牆上會顯示舊顏色且毫無徵兆。相關性質已由
+  //    frontend/tests/lego_grid.test.js 固定下來。
+  let clothGrid = null;
+  if (person.clothGrid) {
+    const hairKey = person.hairColor ? `${person.hairColor.r},${person.hairColor.g},${person.hairColor.b}` : "";
+    const innerKey = person.innerColor ? `${person.innerColor.r},${person.innerColor.g},${person.innerColor.b}` : "";
+    if (
+      !person._cachedClothGrid ||
+      person._cachedClothGridRef !== person.clothGrid ||
+      person._cachedHairKey !== hairKey ||
+      person._cachedInnerKey !== innerKey
+    ) {
+      person._cachedClothGrid = _makeSymmetric(
+        _enhanceGrid(
+          _clusterGrid(
+            _filterHairCells(person.clothGrid, person.hairColor, person.innerColor)
+          )
+        )
+      );
+      person._cachedClothGridRef = person.clothGrid;
+      person._cachedHairKey = hairKey;
+      person._cachedInnerKey = innerKey;
+    }
+    clothGrid = person._cachedClothGrid;
+  }
+
   // Leg grid only works with static (non-rotated) geometry; skip while walking
-  const lowerGrid = !isWalking && person.lowerGrid
-    ? _enhanceGrid(_clusterGrid(
-        _filterShirtFromLower(person.lowerGrid, person.innerColor, person.lowerColor)
-      ))
-    : null;
+  let lowerGrid = null;
+  if (!isWalking && person.lowerGrid) {
+    const innerKey = person.innerColor ? `${person.innerColor.r},${person.innerColor.g},${person.innerColor.b}` : "";
+    const lowerKey = person.lowerColor ? `${person.lowerColor.r},${person.lowerColor.g},${person.lowerColor.b}` : "";
+    if (
+      !person._cachedLowerGrid ||
+      person._cachedLowerGridRef !== person.lowerGrid ||
+      person._cachedLowerInnerKey !== innerKey ||
+      person._cachedLowerKey !== lowerKey
+    ) {
+      person._cachedLowerGrid = _enhanceGrid(
+        _clusterGrid(
+          _filterShirtFromLower(person.lowerGrid, person.innerColor, person.lowerColor)
+        )
+      );
+      person._cachedLowerGridRef = person.lowerGrid;
+      person._cachedLowerInnerKey = innerKey;
+      person._cachedLowerKey = lowerKey;
+    }
+    lowerGrid = person._cachedLowerGrid;
+  }
 
   // ── Solid colors for areas without grid data (arms, fallback) ───
   const [br, bg2, bb] = _enhanceSolid(person.innerColor);
@@ -374,8 +417,9 @@ function _clusterGrid(grid) {
     const indices = [], queue = [seed];
     visited[seed] = 1;
 
-    while (queue.length > 0) {
-      const curr = queue.shift();
+    let qHead = 0;
+    while (qHead < queue.length) {
+      const curr = queue[qHead++];
       indices.push(curr);
       const cr = (curr / cols) | 0, cc = curr % cols;
       for (const [dr, dc] of [[-1,0],[1,0],[0,-1],[0,1]]) {
