@@ -10,10 +10,7 @@ from typing import Any, Dict, FrozenSet, Mapping
 @dataclass(frozen=True)
 class GenerationStyle:
     style_id: str
-    body_prompt: str
     full_prompt_template: str
-    refine_prompt: str
-    negative_prompt: str
     supported_modes: FrozenSet[str]
     model_overrides: Mapping[str, str] = field(default_factory=dict)
     generation_params: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)

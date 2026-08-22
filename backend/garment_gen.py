@@ -167,25 +167,6 @@ def _canonical_lego_pose(size: int = 1024) -> PILImage.Image:
     return img
 
 
-def _merge_upper_refinement(base_b64: str, refined_b64: str, split: float = 0.64) -> str:
-    """Keep the base lower body exactly; feather only the refined upper region."""
-    base = PILImage.open(io.BytesIO(base64.b64decode(base_b64))).convert("RGBA")
-    refined = PILImage.open(io.BytesIO(base64.b64decode(refined_b64))).convert("RGBA").resize(base.size, PILImage.LANCZOS)
-    w, h = base.size
-    end = max(1, min(h, int(h * split)))
-    feather = max(8, int(h * 0.05))
-    mask = np.zeros((h, w), dtype=np.uint8)
-    solid_end = max(0, end - feather)
-    mask[:solid_end, :] = 255
-    if end > solid_end:
-        ramp = np.linspace(255, 0, end - solid_end, dtype=np.uint8)[:, None]
-        mask[solid_end:end, :] = ramp
-    merged = PILImage.composite(refined, base, PILImage.fromarray(mask, mode="L"))
-    buf = io.BytesIO()
-    merged.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("utf-8")
-
-
 def _get_shield_mask(
     poly_norm: Optional[np.ndarray],
     crop_box: Tuple[int, int, int, int],
@@ -321,41 +302,6 @@ def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Opt
         return png_b64
 
 
-_NEGATIVE = (
-    "Strictly NO text, NO labels, NO numbers, NO measurement marks, "
-    "NO size tags, NO fabric callouts, NO arrows, NO design-sketch "
-    "annotations, NO logos added by you, NO watermarks, NO signatures. "
-    "ABSOLUTELY NO accessories: NO backpacks, NO bags, NO straps, NO necklaces, "
-    "NO jewellery, NO watches, NO sunglasses, NO hats, NO scarves "
-    "(unless the scarf IS the outfit). "
-    "ABSOLUTELY NO background: NO walls, NO bricks, NO tiles, NO floor, NO "
-    "scenery, NO patterns behind the garment — everything outside the garment "
-    "silhouette must be pure solid white #FFFFFF, completely uniform. "
-    "NO human skin texture, NO realistic rendering, NO 3D shadows, NO lighting gradients."
-)
-
-_BODY_PROMPT = (
-    "Create a clean, premium LEGO minifigure torso and legs graphic based on the clothing in this photograph.\n\n"
-
-    "### MANDATORY EXCLUSIONS:\n"
-    "- NO head, NO face, NO neck stud, NO collar opening showing human skin.\n"
-    "- NO arms, NO hands. The output starts at the shoulders and contains only torso and legs.\n"
-    "- NO feet, NO shoes (each leg must end flat at the ankle).\n"
-    "- NO skin pixels anywhere; the clothing must fully cover the body.\n\n"
-
-    "### MANDATORY PROPORTIONS:\n"
-    "- Torso: Perfect LEGO trapezoid shape (wider at the bottom, narrower at the top).\n"
-    "- Legs: Two separate rectangular LEGO legs standing straight with a clear gap between them.\n\n"
-
-    "### ART STYLE GUIDELINES:\n"
-    "- Flat 2D vector graphic pop-art illustration style, official LEGO cartoon design.\n"
-    "- Clean, bold, consistent black outlines around all parts.\n"
-    "- Pure, solid, vibrant colors matching the photo. No gradients, no gloss, no highlights.\n"
-    "- Perfectly centered on a pure solid white background (#FFFFFF) with absolutely no shadows, floor reflections, or background texture.\n\n"
-    + _NEGATIVE
-)
-
-
 def _extract_image_b64(message) -> Optional[str]:
     """Pull the base64 PNG out of an OpenRouter chat completion message.
     Tries the common response shapes used by image-output models."""
@@ -487,11 +433,6 @@ def _call_image_chat_multi(
     return result if with_metadata else b64
 
 
-def _call_image_chat(image_data_url: str, prompt: str, model: Optional[str] = None) -> Optional[str]:
-    """Single-image convenience wrapper around _call_image_chat_multi."""
-    return _call_image_chat_multi([image_data_url], prompt, model=model)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 #  FULL-CHARACTER MODE — generate the whole LEGO minifigure in one go
 # ─────────────────────────────────────────────────────────────────────────────
@@ -500,13 +441,15 @@ _FULL_CHARACTER_NEGATIVE = (
     "Strictly NO text, NO labels, NO numbers, NO measurement marks, "
     "NO size tags, NO fabric callouts, NO arrows, NO design-sketch annotations, "
     "NO watermarks, NO signatures. "
-    "ABSOLUTELY NO photo-realism, NO 3D render, NO ray tracing — keep the "
-    "flat cel-shaded LEGO illustration style. "
+    "The subject is a moulded plastic toy, never a real human: NO skin pores, "
+    "NO individual hair strands, NO fabric weave, NO cloth folds - every surface "
+    "is smooth moulded plastic. Equally, NO flat cel-shaded cartoon styling. "
     "NO side view, NO three-quarter angle, NO sitting pose, NO action pose, "
     "NO twisted torso. Stand strictly straight, facing the viewer. "
-    "ABSOLUTELY NO background: NO walls, NO floor, NO scenery, NO shadow, "
-    "NO patterns behind the character — every pixel outside the figure "
-    "must be pure solid white #FFFFFF, completely uniform. "
+    "ABSOLUTELY NO background: NO walls, NO floor, NO scenery, NO patterns, "
+    "and NO shadow, contact shadow or reflection cast onto the background - "
+    "every pixel outside the figure must be pure solid white #FFFFFF, completely "
+    "uniform. Shading ON the figure itself is required; see the art style rules. "
     "ABSOLUTELY NO random patches of differing colour on a garment, "
     "NO plaid/tartan/checkered squares unless the photo clearly shows them, "
     "NO patchwork, NO sewn-on badges, NO pocket stickers, NO logos, "
@@ -522,7 +465,7 @@ _FULL_CHARACTER_NEGATIVE = (
 )
 
 _FULL_CHARACTER_PROMPT_TEMPLATE = (
-    "Create a complete premium LEGO minifigure illustration based on the person in this photograph.\n\n"
+    "Create a complete premium LEGO minifigure product render based on the person in this photograph.\n\n"
 
     "### DETECTED CHARACTER ATTRIBUTES:\n"
     "{attrs}\n\n"
@@ -530,15 +473,29 @@ _FULL_CHARACTER_PROMPT_TEMPLATE = (
     "### MANDATORY LEGO DESIGN RULES:\n"
     "1. **Proportions & Pose**: Strict front-facing view, perfectly centered and symmetric. Neutral T-pose-like stance: arms angled ~15 degrees outward at the sides, legs standing straight and parallel with a clear vertical gap between them.\n"
     "2. **Head & Face**: Smooth cylindrical LEGO-style head in the specified skin tone. Simple clean facial features: two glossy black dot eyes, clean eyebrows, and a pleasant simple mouth. Hair piece must sit cleanly on top of the head in the matching hair style and color.\n"
-    "3. **Torso & Outerwear**: Trapezoidal LEGO torso wearing the outfit. Ensure the torso garment is clean and uniform in color. Draw clear printed lines for shirts, zippers, buttons, or jacket collars. Hands must be classic yellow/flesh LEGO claw hands attached at the wrist.\n"
+    "3. **Torso & Outerwear**: Trapezoidal LEGO torso wearing the outfit. Ensure the torso garment is clean and uniform in color. Draw clear printed lines for shirts, zippers, buttons, or jacket collars. Hands must be classic C-shaped claw hands attached at the wrist, in the same specified skin tone as the head.\n"
     "4. **Legs & Pants**: Two separate rectangular LEGO legs of equal length in the matching pants color. Keep the pants uniform with no patchwork.\n"
     "5. **Shoes & Footwear**: Mandatory distinct shoes at the bottom of each leg. Draw them as clean rectangular slabs (black, grey, or brown) slightly wider than the leg, with a clean horizontal seam line separating the shoe from the pants.\n\n"
 
-    "### ART STYLE GUIDELINES:\n"
-    "- Cel-shaded flat vector illustration, premium minimalist pop-art concept style.\n"
-    "- Thick, clean, consistent black outlines around all body parts and details.\n"
-    "- Solid vibrant colors, flat design with minimal/no gradients and no realistic shadows.\n"
-    "- The character must be centered on a pure solid white background (#FFFFFF) with no shadows, text, or border lines.\n\n"
+    "### ART STYLE GUIDELINES - GLOSSY MOULDED PLASTIC, NOT FLAT VECTOR:\n"
+    "- Render the figure as a physical moulded-plastic toy shot in a studio: smooth "
+    "surfaces with real material response, soft form shading and specular highlights. "
+    "This is a product render, not a flat illustration.\n"
+    "- **Lighting**: one large softbox above and IN FRONT of the figure. Brightness "
+    "falls off gently from top to bottom on every part. Left and right stay evenly lit "
+    "- no side light, no rim light, no coloured light.\n"
+    "- **Gloss order** (glossiest first, keep this ranking exactly): hair, with a tight "
+    "highlight streak; then printed garment surfaces; then skin, satin with one broad "
+    "soft highlight; then shoe rubber, duller; then denim, the most matte of all with "
+    "almost no highlight. Two materials must never read as equally shiny.\n"
+    "- **Print versus shading**: seams, hems, trim, stitching, wear, text and logos are "
+    "printed flat onto the surface and carry no light direction of their own. Every "
+    "highlight and shadow comes from the studio light on the plastic form.\n"
+    "- Hair plastic is a warm dark grey, never pure black.\n"
+    "- Let the plastic form and clean colour separation define edges, rather than a "
+    "uniform black cartoon outline drawn around every part.\n"
+    "- Center the figure on a pure solid white background (#FFFFFF). The figure is "
+    "shaded; the background is not. No text, no border lines.\n\n"
     + _FULL_CHARACTER_NEGATIVE
 )
 
@@ -668,202 +625,13 @@ def generate_full_character_png(
     return out
 
 
-def generate_body_png(
-    rgb: np.ndarray,
-    body_poly_norm: Optional[np.ndarray],
-    *,
-    style_id: str = "lego",
-    correction: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Generate ONE full-body LEGO-minifigure sprite (neck down).
-
-    body_poly_norm is a 4-point polygon (normalised 0..1) covering the
-    region from shoulders to feet with some horizontal slack for arms.
-
-    Returns dict with body_png (base64 PNG, transparent background) and
-    body_bbox (normalised xyxy) so the frontend can size/centre the sprite.
-    """
-    out: Dict[str, Any] = {"ok": False}
-
-    if _get_client() is None:
-        out["error"] = "openai_unavailable"
-        return out
-
-    if body_poly_norm is None or len(body_poly_norm) < 3:
-        out["error"] = "no_body_poly"
-        return out
-
-    h, w = rgb.shape[:2]
-    print(f"[garment_gen] start full-body (frame={w}x{h})")
-    t_start = time.perf_counter()
-
-    try:
-        # Wide horizontal pad so arms / hands are inside the crop; moderate
-        # vertical pad so the head is not cut off in the input (Nano Banana
-        # still needs context but the prompt forbids it from drawing a head).
-        square, (x1, y1, x2, y2) = _crop_square_padded(
-            rgb, body_poly_norm, pad_ratio=0.08, pad_ratio_x=0.30,
-        )
-        data_url = _pil_to_data_url(square)
-
-        # Generate shield mask to prevent eating white clothes/shoes
-        shield_mask = _get_shield_mask(body_poly_norm, (x1, y1, x2, y2), w, h, target_size=1024)
-
-        style = get_style(style_id)
-        prompt = style.body_prompt
-        if correction:
-            prompt += "\n\n### REQUIRED CORRECTION\n" + correction
-        body_model = style.model_overrides.get("body") or None
-        api_result = _call_image_chat_multi(
-            [data_url], prompt, model=body_model,
-            generation_params=dict(style.generation_params.get("body", {})),
-            with_metadata=True,
-        )
-        out["api_usage"] = api_result.get("api_usage")
-        b64 = api_result.get("image_b64")
-        if b64:
-            b64 = _remove_white_background(b64, shield_mask=shield_mask)
-            out["body_png"] = b64
-            out["body_bbox"] = [x1 / w, y1 / h, x2 / w, y2 / h]
-            out["ok"] = True
-            print(f"[garment_gen] body OK ({len(b64)} b64 chars, bg removed)")
-        else:
-            out["error"] = api_result.get("error") or "generation_failed"
-            print("[garment_gen] body failed (no image in response)")
-    except Exception as e:
-        print(f"[garment_gen] body error: {e}")
-        traceback.print_exc()
-
-    elapsed = time.perf_counter() - t_start
-    print(f"[garment_gen] body done in {elapsed:.2f}s, ok={out['ok']}")
-    return out
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 #  REFINE MODE — pass 2 on top of generate_full_character_png
 # ─────────────────────────────────────────────────────────────────────────────
 
-_REFINE_PROMPT = (
-    "Refine this LEGO minifigure illustration. You are given TWO images:\n"
-    "  • Image 1: the ORIGINAL photograph of the person (detail reference).\n"
-    "  • Image 2: a DRAFT LEGO minifigure illustration of that same person (composition lock — pose, proportions, colours, background placement).\n\n"
-
-    "TASK: Produce a sharper, cleaner, premium version of Image 2. STRICTLY preserve the pose, proportions, layout, and white background of Image 2, while refining outlines and detail quality.\n\n"
-
-    "### DETECTED ATTRIBUTES (must match):\n"
-    "{attrs}\n\n"
-
-    "### STRICT CONSTRAINTS (do NOT change from Image 2):\n"
-    "- Overall pose: Strict front view, arms at ~15° outward, both legs straight with a visible gap.\n"
-    "- LEGO proportions and the position/size of head, torso, arms, legs, and feet.\n"
-    "- Dominant garment colors from Image 2.\n"
-    "- Flat cel-shaded vector style with clean black outlines (NOT 3D, NOT photorealistic).\n"
-    "- Pure solid white (#FFFFFF) background.\n\n"
-
-    "### HIGH-QUALITY REFINEMENTS TO MAKE:\n"
-    "1. **Face & Eyes**: Symmetrical, cleanly redrawn facial features. Sharp dot eyes, perfect clean eyebrows and mouth. No smudging.\n"
-    "2. **Hair & Head**: Extremely clean outline of the hair piece sitting perfectly on the head, with a clear boundary. Consistent single hair color matching Image 2.\n"
-    "3. **Torso & Outerwear**: Crisp, tight garment silhouette and outlines. Uniform color across chest, back, and sleeves. Draw clean buttons, zippers, or pocket seams.\n"
-    "4. **Upper-body Line Art**: Ensure the head, hair, arms, and torso outlines are clean, uniform, and sharp black vector-like strokes.\n"
-    "5. **Locked Lower Body**: Do not redesign, repaint, move, crop, or regenerate the hips, legs, feet, or shoes from Image 2.\n\n"
-    + _FULL_CHARACTER_NEGATIVE
-)
-
 
 register_style(GenerationStyle(
     style_id="lego",
-    body_prompt=_BODY_PROMPT,
     full_prompt_template=_FULL_CHARACTER_PROMPT_TEMPLATE,
-    refine_prompt=_REFINE_PROMPT,
-    negative_prompt=_NEGATIVE + _FULL_CHARACTER_NEGATIVE,
-    supported_modes=frozenset({"body_sprite", "full_character"}),
+    supported_modes=frozenset({"full_character"}),
 ))
-
-
-def generate_refine_character_png(
-    base_b64: str,
-    rgb: np.ndarray,
-    body_poly_norm: Optional[np.ndarray],
-    face_data: Optional[Dict[str, Any]] = None,
-    outfit_data: Optional[Dict[str, Any]] = None,
-    regions: Optional[Dict[str, Any]] = None,
-    style_id: str = "lego",
-) -> Dict[str, Any]:
-    """Pass 2 of the refined pipeline.
-
-    Takes the (non-bg-removed) base PNG from generate_full_character_png plus
-    the original photo, and asks the model to sharpen face / hair / upper-body
-    detail while preserving the base's lower body. Returns the same
-    schema as generate_full_character_png.
-    """
-    out: Dict[str, Any] = {"ok": False}
-
-    if _get_client() is None:
-        out["error"] = "openai_unavailable"
-        return out
-
-    if body_poly_norm is None or len(body_poly_norm) < 3:
-        out["error"] = "no_body_poly"
-        return out
-
-    if not base_b64:
-        out["error"] = "no_base_image"
-        return out
-
-    h, w = rgb.shape[:2]
-    style = get_style(style_id)
-    model = (
-        style.model_overrides.get("refine", "").strip()
-        or os.environ.get("REFINE_CHARACTER_MODEL", "").strip()
-        or os.environ.get("FULL_CHARACTER_MODEL", "").strip()
-        or os.environ.get("OUTFIT_GEN_MODEL", "").strip()
-        or "google/gemini-2.5-flash-image-preview"
-    )
-    print(f"[garment_gen] start refine pass (frame={w}x{h}, model={model})")
-    t_start = time.perf_counter()
-
-    try:
-        # Same crop params as generate_full_character_png so the original photo
-        # we feed in lines up with the base draft.
-        square, (x1, y1, x2, y2) = _crop_square_padded(
-            rgb, body_poly_norm, pad_ratio=0.22, pad_ratio_x=0.30,
-        )
-        orig_url = _pil_to_data_url(square)
-        base_url = f"data:image/png;base64,{base_b64}"
-
-        # Generate shield mask to prevent eating white clothes/shoes
-        shield_mask = _get_shield_mask(body_poly_norm, (x1, y1, x2, y2), w, h, target_size=1024)
-
-        prompt = style.refine_prompt.format(
-            attrs=_attr_lines(face_data, outfit_data)
-        )
-        detail_sheet = _build_detail_sheet(rgb, regions, names=("face", "upper_body"))
-        inputs = [orig_url]
-        if detail_sheet is not None:
-            inputs.append(_pil_to_data_url(detail_sheet))
-        inputs.append(base_url)
-        prompt += "\n\nRefine only the head, hair, face, and upper torso. The lower body and shoes will be kept from the draft and must not be redesigned."
-        api_result = _call_image_chat_multi(
-            inputs, prompt, model=model,
-            generation_params=dict(style.generation_params.get("refine", {})),
-            with_metadata=True,
-        )
-        out["api_usage"] = api_result.get("api_usage")
-        b64 = api_result.get("image_b64")
-        if b64:
-            b64 = _merge_upper_refinement(base_b64, b64)
-            b64 = _remove_white_background(b64, shield_mask=shield_mask)
-            out["body_png"] = b64
-            out["body_bbox"] = [x1 / w, y1 / h, x2 / w, y2 / h]
-            out["ok"] = True
-            print(f"[garment_gen] refine OK ({len(b64)} b64 chars, bg removed)")
-        else:
-            out["error"] = api_result.get("error") or "generation_failed"
-            print("[garment_gen] refine failed (no image in response)")
-    except Exception as e:
-        print(f"[garment_gen] refine error: {e}")
-        traceback.print_exc()
-
-    elapsed = time.perf_counter() - t_start
-    print(f"[garment_gen] refine done in {elapsed:.2f}s, ok={out['ok']}")
-    return out
