@@ -133,6 +133,15 @@ except Exception:
         analyze_face = lambda *a, **k: {"ok": False}
 
 try:
+    from backend.avatar_pipeline import (  # type: ignore
+        decode_frame, build_outfit_data, infer_sleeve_kind, build_face_data,
+    )
+except ImportError:
+    from avatar_pipeline import (  # type: ignore
+        decode_frame, build_outfit_data, infer_sleeve_kind, build_face_data,
+    )
+
+try:
     from backend.face_module import get_face_features
 except Exception:
     try:
@@ -195,33 +204,7 @@ def _route(path, **kwargs):
     return decorator
 
 
-# VLM colour name → hex (used instead of CV colour sampling)
-_HAIR_HEX = {
-    "black":       "#1C1008",
-    "dark_brown":  "#3B2314",
-    "brown":       "#6B3A2A",
-    "light_brown": "#A0602A",
-    "blonde":      "#D4A843",
-    "red":         "#A0391A",
-    "gray":        "#888888",
-    "white":       "#E8E0D8",
-}
-_SKIN_HEX = {
-    "fair":   "#FFE5D0",
-    "light":  "#FFD0A8",
-    "medium": "#D4956A",
-    "tan":    "#C08040",
-    "brown":  "#8D5524",
-    "dark":   "#4A2912",
-}
-_EYE_HEX = {
-    "dark_brown": "#3B1C12",
-    "brown":      "#7A4A28",
-    "hazel":      "#8B6914",
-    "green":      "#4A7A50",
-    "blue":       "#4472A8",
-    "gray":       "#6B7A8D",
-}
+# 顏色名稱 → hex 的對照表已移至 avatar_pipeline（連同使用它們的 build_face_data）
 
 # --- per-client clothing feature state (避免跨使用者污染) ---
 @dataclass
@@ -495,47 +478,10 @@ def handle_generate_avatar(payload):
             )
 
             # Ultra-robust base64 image decoding
-            frame = None
-            try:
-                # Extract clean base64 data
-                img_b64 = img_str.split(",")[1] if img_str.startswith("data:image") else img_str
-                # Very important: replace spaces with pluses (transports often decode + to space)
-                img_b64 = img_b64.replace(" ", "+")
-                
-                # Enforce correct base64 padding
-                missing_padding = len(img_b64) % 4
-                if missing_padding:
-                    img_b64 += "=" * (4 - missing_padding)
-
-                img_bytes = base64.b64decode(img_b64)
-                
-                # Register HEIF/HEIC support (iPhone photos) before opening
-                try:
-                    from pillow_heif import register_heif_opener
-                    register_heif_opener()
-                except ImportError:
-                    pass
-                
-                import io
-                from PIL import Image
-                pil_img = Image.open(io.BytesIO(img_bytes))
-                if pil_img.mode != "RGB":
-                    pil_img = pil_img.convert("RGB")
-                
-                # Convert PIL (RGB) to OpenCV (BGR)
-                frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-                print(f"[generate_avatar] Robust Pillow decode successful: shape={frame.shape}")
-            except Exception as e:
-                print(f"[generate_avatar] Robust Pillow decode failed (img_str_len={len(img_str) if img_str else 0}): {e}")
-                # Fallback to direct OpenCV decoding if PIL fails
-                try:
-                    np_arr = np.frombuffer(img_bytes, np.uint8)
-                    frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                except Exception as e2:
-                    print(f"[generate_avatar] OpenCV fallback decode also failed: {e2}")
-
+            frame, _decode_err = decode_frame(img_str)
             if frame is None:
-                print("[generate_avatar] ERROR: All decoding methods failed to parse the frame!")
+                print(f"[generate_avatar] 影像解碼失敗 "
+                      f"(img_str_len={len(img_str) if img_str else 0}): {_decode_err}")
             else:
                 print(f"[generate_avatar] Frame decoded successfully: shape={frame.shape}")
 
@@ -597,48 +543,12 @@ def handle_generate_avatar(payload):
 
             _progress("analyzing", 30, "VLM 分析完成")
 
-            # --- clothing data ---
-            outfit_data = vlm_result.get("outfit", {})
-            if cv_result and isinstance(cv_result, dict) and "upper" in cv_result and "hex" in cv_result["upper"]:
-                outfit_data["inner_color"] = cv_result["upper"]["hex"]
-            if cv_result and isinstance(cv_result, dict) and "lower" in cv_result and "hex" in cv_result["lower"]:
-                outfit_data["lower_color"] = cv_result["lower"]["hex"]
+            # --- clothing data ---（純邏輯見 avatar_pipeline，已有單元測試）
+            outfit_data = build_outfit_data(vlm_result, cv_result)
+            sleeve_kind = infer_sleeve_kind(outfit_data, cv_result)
 
-            # Derive sleeve length from VLM outfit semantics — more reliable
-            _LONG_SLEEVE_OUTERS = {"blazer", "cardigan", "denim_jacket"}
-            _LONG_SLEEVE_INNERS = {"button_up"}
-            vlm_outer = (outfit_data.get("outer") or "none").lower()
-            vlm_inner = (outfit_data.get("inner") or "tshirt").lower()
-            if vlm_outer in _LONG_SLEEVE_OUTERS or vlm_inner in _LONG_SLEEVE_INNERS:
-                sleeve_kind = "long_sleeve"
-            else:
-                sleeve_kind = cv_result.get("upper_type", "short_sleeve") if (cv_result and isinstance(cv_result, dict)) else "short_sleeve"
-
-            # --- facial data ---
-            face_data: dict = {}
-
-            if face_cv_result and isinstance(face_cv_result, dict) and face_cv_result.get("ok"):
-                face_data.update({
-                    "face_shape":    face_cv_result["face_shape"],
-                    "eye_shape":     face_cv_result["eye_shape"],
-                    "eyebrow_style": face_cv_result["eyebrow_style"],
-                    "smile_score":   face_cv_result["smile_score"],
-                    "lip_color":     face_cv_result.get("lip_color"),
-                })
-
-            if vlm_face_result.get("ok") and "face" in vlm_face_result:
-                vf = vlm_face_result["face"]
-                face_data.update({
-                    "hair_style":  vf.get("hair_style", "short_straight"),
-                    "hair_color":  _HAIR_HEX.get(vf.get("hair_color",  "dark_brown"), "#3B2314"),
-                    "hair_color_name": vf.get("hair_color", "dark_brown"),
-                    "skin_tone":   _SKIN_HEX.get(vf.get("skin_tone",   "light"),      "#FFD0A8"),
-                    "skin_tone_name": vf.get("skin_tone", "light"),
-                    "eye_color":   _EYE_HEX.get( vf.get("eye_color",   "brown"),      "#7A4A28"),
-                    "eye_color_name": vf.get("eye_color", "brown"),
-                    "has_beard":   vf.get("has_beard", False),
-                    "beard_style": vf.get("beard_style", "none"),
-                })
+            # --- facial data ---（純邏輯見 avatar_pipeline，已有單元測試）
+            face_data: dict = build_face_data(face_cv_result, vlm_face_result)
 
             # --- Garment / character generation ---
             if mode == "full_character":
