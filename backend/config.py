@@ -66,6 +66,9 @@ class AppConfig:
     MAX_BOTS_PER_INJECT: int = max(1, _get_int("MAX_BOTS_PER_INJECT", 100))
     AUTO_BOTS: int = max(0, _get_int("AUTO_BOTS", 0))
     EVENT_LOG_ENABLED: bool = _get_bool("EVENT_LOG_ENABLED", True)
+    # 角色多久沒有更新就自動清場（秒）。0 表示不過期。
+    # 角色已與連線脫鉤（見 handle_join_swarm），因此需要 TTL 作為回收機制。
+    CHARACTER_TTL_SEC: int = max(0, _get_int("CHARACTER_TTL_SEC", 7200))
 
     # M2 生成模式與金鑰
     GENERATION_MODE: str = os.environ.get("GENERATION_MODE", "body_sprite").strip()

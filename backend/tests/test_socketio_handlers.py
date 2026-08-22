@@ -85,6 +85,51 @@ class TestSocketIOHandlers(unittest.TestCase):
         )
         self.assertEqual(pos_events[0]["args"][0]["characters"][0]["id"], "probe")
 
+    def test_character_persists_after_disconnect(self):
+        """賓客關掉分頁後，角色必須留在場上。
+
+        回歸測試：角色 id 原本沿用 socket sid，handle_disconnect 會把
+        sid 對應的角色 pop 掉 —— 賓客拍完照關分頁，作品就少一個人。
+        這同時也是承載量問題：若角色綁在連線上，N 位賓客就需要 N 條長連線，
+        而傳輸層約 50 條就會開始崩潰。
+        """
+        c = socketio.test_client(app)
+        c.emit("join_swarm", {"x": 100, "y": 100,
+                              "upper": {"hex": "#ABCDEF"},
+                              "lower": {"hex": "#123456"}})
+        joined = [m for m in c.get_received() if m["name"] == "swarm_joined"]
+        self.assertEqual(len(joined), 1)
+        char_id = joined[0]["args"][0]["id"]
+
+        with _swarm_lock:
+            self.assertIn(char_id, _swarm_chars)
+
+        c.disconnect()
+
+        with _swarm_lock:
+            self.assertIn(char_id, _swarm_chars,
+                          "角色在連線中斷後消失了")
+
+    def test_rejoin_with_same_id_does_not_duplicate(self):
+        """帶著原本的 id 重新連線應認領同一個角色，而不是產生分身。"""
+        c1 = socketio.test_client(app)
+        c1.emit("join_swarm", {"x": 1, "y": 1, "upper": {"hex": "#111111"}})
+        char_id = [m for m in c1.get_received()
+                   if m["name"] == "swarm_joined"][0]["args"][0]["id"]
+        c1.disconnect()
+
+        with _swarm_lock:
+            before = len(_swarm_chars)
+
+        c2 = socketio.test_client(app)
+        c2.emit("join_swarm", {"id": char_id, "x": 2, "y": 2,
+                               "upper": {"hex": "#222222"}})
+        c2.disconnect()
+
+        with _swarm_lock:
+            self.assertEqual(len(_swarm_chars), before, "重新連線產生了分身")
+            self.assertEqual(_swarm_chars[char_id]["upper"]["hex"], "#222222")
+
     def test_inject_and_remove_bots_events(self):
         self.client.emit("inject_bots", {"count": 4, "room": "default"})
         with _swarm_lock:

@@ -4,6 +4,7 @@ import random
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
@@ -247,6 +248,12 @@ os.makedirs(_PHOTOS_DIR, exist_ok=True)
 # 啟動時自動還原快照（若有），否則預設 system_bot
 _restored_chars = load_snapshot()
 if _restored_chars:
+    # 補上 last_seen：TTL 掃描以 c.get("last_seen", now) 判斷，缺這個欄位的
+    # 角色會被永遠視為「剛剛才出現」而不會過期。舊快照或早期版本寫入的角色
+    # 都沒有這個欄位，不補的話會在場上不死不滅。此處讓它們從啟動時重新計時。
+    _now = time.time()
+    for _c in _restored_chars.values():
+        _c.setdefault("last_seen", _now)
     _swarm_chars: Dict[str, Any] = _restored_chars
 else:
     _swarm_chars: Dict[str, Any] = {
@@ -365,9 +372,11 @@ def handle_disconnect():
     sid = request.sid
     removed = False
     with _swarm_lock:
+        # 角色已與連線脫鉤（id 是 char_<uuid>，不是 sid），因此斷線不再移除
+        # 任何角色 —— 賓客關掉分頁不代表離開現場，作品不該因此少一個人。
+        # 舊版角色 id 沿用 sid，這裡保留相容處理：改為續命而非刪除。
         if sid in _swarm_chars:
-            _swarm_chars.pop(sid, None)
-            removed = True
+            _swarm_chars[sid]["last_seen"] = time.time()
     with _client_last_success_lock:
         _client_last_success.pop(sid, None)
     log_event("disconnect", pid=sid, removed_char=removed)
@@ -730,7 +739,10 @@ def handle_generate_avatar(payload):
 
 @_on_socket("join_swarm")
 def handle_join_swarm(payload):
-    char_id = payload.get("id") or (request.sid if request else None) or f"user_{int(time.time()*1000)}"
+    # 角色 id 必須與連線 id 脫鉤：沿用 sid 會讓角色在賓客關掉分頁時一起消失
+    # （sid 每次連線都不同）。前端會把 swarm_joined 回傳的 id 存進 sessionStorage，
+    # 重新連線時帶回來認領同一個角色，避免產生分身。
+    char_id = payload.get("id") or f"char_{uuid.uuid4().hex[:12]}"
     room = payload.get("room", "default")
     with _swarm_lock:
         existing = _swarm_chars.get(char_id, {})
@@ -754,6 +766,7 @@ def handle_join_swarm(payload):
             "body_png": payload.get("body_png", existing.get("body_png")),
             "body_bbox": payload.get("body_bbox", existing.get("body_bbox")),
             "character_mode": payload.get("character_mode", existing.get("character_mode", "body_sprite")),
+            "last_seen": time.time(),
         }
         total = len(_swarm_chars)
     if join_room is not None:
@@ -918,10 +931,11 @@ def handle_save_snapshot(_payload=None):
 _prev_greeting: set = set()
 _last_summary_ts: float = 0.0
 _last_snapshot_ts: float = 0.0
+_last_ttl_sweep_ts: float = 0.0
 
 
 def _swarm_background():
-    global _prev_greeting, _last_summary_ts, _last_snapshot_ts
+    global _prev_greeting, _last_summary_ts, _last_snapshot_ts, _last_ttl_sweep_ts
     while True:
         time.sleep(0.1)
         with _swarm_lock:
@@ -970,6 +984,20 @@ def _swarm_background():
             _last_snapshot_ts = now
             with _swarm_lock:
                 save_snapshot(_swarm_chars)
+
+        # --- TTL 清場 ---
+        # 角色不再隨連線消失（見 handle_disconnect），因此需要另一個回收機制，
+        # 否則長時間運行或跨場次會無限累積直到撞上 MAX_SWARM_SIZE。
+        if config.CHARACTER_TTL_SEC > 0 and now - _last_ttl_sweep_ts >= 60.0:
+            _last_ttl_sweep_ts = now
+            cutoff = now - config.CHARACTER_TTL_SEC
+            with _swarm_lock:
+                stale = [cid for cid, c in _swarm_chars.items()
+                         if c.get("last_seen", now) < cutoff]
+                for cid in stale:
+                    _swarm_chars.pop(cid, None)
+            if stale:
+                log_event("character_ttl_expired", count=len(stale))
 
 
 if socketio is not None:

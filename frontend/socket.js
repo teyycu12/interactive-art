@@ -28,6 +28,10 @@
     // Re-join swarm on reconnect if user had already joined
     if (window.personaFlow._lastJoinPayload) {
       console.log("[personaFlow] reconnected — re-joining swarm");
+      try {
+        const saved = sessionStorage.getItem("personaFlow.charId");
+        if (saved) window.personaFlow._lastJoinPayload.id = saved;
+      } catch (e) { /* sessionStorage 不可用時照舊送出 */ }
       socket.emit("join_swarm", window.personaFlow._lastJoinPayload);
     }
   });
@@ -55,6 +59,15 @@
 
   socket.on("swarm_joined", (payload) => {
     window.personaFlow.myCharId = payload.id;
+    // 角色 id 已與連線 id 脫鉤，重新連線時要帶回同一個 id 認領原本的角色，
+    // 否則會在牆上多出一個分身。sessionStorage 的範圍剛好是「這個分頁」，
+    // 與一位賓客一次參與的生命週期一致。
+    try {
+      sessionStorage.setItem("personaFlow.charId", payload.id);
+    } catch (e) { /* 無痕模式等情境下不可用，略過即可 */ }
+    if (window.personaFlow._lastJoinPayload) {
+      window.personaFlow._lastJoinPayload.id = payload.id;
+    }
     console.log("[personaFlow] swarm_joined:", payload.id);
   });
 
