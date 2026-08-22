@@ -26,6 +26,51 @@ except ImportError:
     qrcode = None  # type: ignore
 
 
+# --- 中文字型解析 ---
+# Pillow 的預設點陣字型沒有中日韓字符，draw.text() 不指定 font 時，合照上的
+# 中文標題、時間資訊與 QR 說明文字會全部變成豆腐框（□□□）。合照是賓客掃碼
+# 帶回家的最終成品，文字不可讀等於這個功能沒做完，因此在此建立字型後備鏈。
+_FONT_CANDIDATES = [
+    "/System/Library/Fonts/PingFang.ttc",                      # macOS 現代預設
+    "/System/Library/Fonts/STHeiti Medium.ttc",                # macOS 後備
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",              # macOS 後備
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # Debian/Ubuntu
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",            # 常見於精簡容器
+    "C:\\Windows\\Fonts\\msjh.ttc",                          # Windows 微軟正黑
+]
+_font_cache: Dict[int, Any] = {}
+
+
+def _cjk_font(size: int):
+    """取得可顯示中文的字型；找不到時退回預設字型（會是豆腐框，但不會崩潰）。"""
+    if ImageFont is None:
+        return None
+    if size in _font_cache:
+        return _font_cache[size]
+
+    font = None
+    for path in _FONT_CANDIDATES:
+        if not os.path.exists(path):
+            continue
+        try:
+            font = ImageFont.truetype(path, size)
+            break
+        except Exception:
+            continue
+
+    if font is None:
+        print("[photo_composer] 找不到中文字型，合照文字將顯示為豆腐框。"
+              "Linux 請安裝 fonts-noto-cjk。")
+        try:
+            font = ImageFont.load_default()
+        except Exception:
+            return None
+
+    _font_cache[size] = font
+    return font
+
+
 def _hex_to_rgb(hex_str: Optional[str], default: Tuple[int, int, int] = (200, 200, 200)) -> Tuple[int, int, int]:
     """將 Hex 顏色字串轉為 RGB tuple。"""
     if not hex_str or not isinstance(hex_str, str):
@@ -233,7 +278,7 @@ def _create_qr_image(url: str, size: int = 160) -> Image.Image:
     badge = Image.new("RGB", (size, size), (255, 255, 255))
     draw = ImageDraw.Draw(badge)
     draw.rectangle([2, 2, size - 3, size - 3], outline=(60, 60, 60), width=2)
-    draw.text((10, size // 2 - 10), "Scan for Photo", fill=(0, 0, 0))
+    draw.text((10, size // 2 - 10), "Scan for Photo", fill=(0, 0, 0), font=_cjk_font(14))
     return badge
 
 
@@ -280,7 +325,7 @@ def compose_group_photo(
     total = len(characters)
     if total == 0:
         # 空合照提示
-        draw.text((width // 2 - 150, height // 2), "目前尚無在場角色", fill=(200, 200, 200, 255))
+        draw.text((width // 2 - 150, height // 2), "目前尚無在場角色", fill=(200, 200, 200, 255), font=_cjk_font(28))
     else:
         # 決定行數 (Rows): 1~7 角色 1 行; 8~18 角色 2 行; 19~36 角色 3 行; 37+ 角色 4 行
         if total <= 7:
@@ -324,10 +369,10 @@ def compose_group_photo(
     draw.rectangle([0, 0, width, 90], fill=(10, 12, 22, 220))
     draw.line([(0, 90), (width, 90)], fill=(255, 215, 0, 160), width=2)
     # 標題文字
-    draw.text((60, 26), title, fill=(255, 255, 255, 255))
+    draw.text((60, 26), title, fill=(255, 255, 255, 255), font=_cjk_font(26))
     date_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
     meta_text = f"時間：{date_str}   在場人數：{total} 人   ID：{photo_id}"
-    draw.text((60, 58), meta_text, fill=(160, 180, 210, 255))
+    draw.text((60, 58), meta_text, fill=(160, 180, 210, 255), font=_cjk_font(16))
 
     # 4. 右下角 QR Code 紀念印章
     qr_size = 140
@@ -335,7 +380,7 @@ def compose_group_photo(
     qr_bg = Image.new("RGBA", (qr_size + 24, qr_size + 50), (255, 255, 255, 240))
     qr_draw = ImageDraw.Draw(qr_bg)
     qr_bg.paste(qr_img, (12, 10))
-    qr_draw.text((16, qr_size + 16), "掃描下載合照", fill=(20, 20, 20, 255))
+    qr_draw.text((16, qr_size + 16), "掃描下載合照", fill=(20, 20, 20, 255), font=_cjk_font(18))
 
     badge_x = width - qr_size - 60
     badge_y = height - qr_size - 80
