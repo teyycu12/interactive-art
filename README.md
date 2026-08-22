@@ -52,7 +52,7 @@
 | 層級 | 技術 | 職責 |
 |---|---|---|
 | 感知層 | Python + MediaPipe / OpenCV | 服裝色調、輪廓、姿勢、面部特徵 |
-| 邏輯層 | Python + Flask-SocketIO + eventlet | CV 數據處理、Boids 演算法、Socket 通訊 |
+| 邏輯層 | Python + Flask-SocketIO（threading 模式） | CV 數據處理、Boids 演算法、Socket 通訊 |
 | 生成層 | OpenRouter (Google Nano Banana 系列) | image-to-image 樂高化 |
 | 渲染層 | JavaScript + p5.js + Socket.io | 角色動態渲染、群體互動 |
 
@@ -67,23 +67,29 @@ PersonaFlow/
 │   ├── cv_module.py        # MediaPipe 姿勢 / 色塊網格擷取
 │   ├── face_module.py      # 面部特徵偵測
 │   ├── vlm_module.py       # Gemini VLM 服裝屬性分析
-│   ├── garment_gen.py      # 兩種模式的 AI 生圖入口
+│   ├── garment_gen.py      # 三種模式的 AI 生圖入口
+│   ├── avatar_pipeline.py  # generate_avatar 的純資料處理（可單獨測試）
+│   ├── config.py           # 集中式環境設定（型別轉換與驗證）
 │   ├── swarm_logic.py      # Boids 群聚演算法（含邊界轉向 / 打招呼持續）
+│   ├── swarm_snapshot.py   # swarm 狀態持久化，重啟自動還原
+│   ├── photo_composer.py   # M6 大合照合成（排版、QR、中文字型後備鏈）
+│   ├── bot_simulator.py    # 壓測用虛擬角色注入 / 移除
+│   ├── circuit_breaker.py  # 外部 API 熔斷器與退避重試
 │   ├── event_logger.py     # 結構化事件 log 落地（JSON lines）
+│   ├── e2e_smoke.py        # 端到端煙霧測試（對真的跑起來的後端）
 │   ├── stress_test.py      # 承載量壓測工具
 │   ├── analyze_log.py      # 效能指標分析（延遲 / 失敗率）
 │   ├── bench_generate.py   # 生成延遲基準線量測
 │   ├── report_html.py      # HTML 效能報告產生器
-│   └── tests/              # 單元測試
-│       ├── test_swarm_logic.py
-│       └── test_event_logger.py
+│   └── tests/              # 單元測試（125 個，pytest）
 ├── frontend/
 │   ├── index.html          # 互動端主頁（模式選擇器 UI）
 │   ├── projection.html     # 投影牆渲染（PixiJS）
 │   ├── sketch.js           # p5.js 主迴圈、狀態機
-│   ├── character.js        # Person 物件 / 渲染屬性
+│   ├── character.js        # class Character（角色模型）+ 組件繪製
 │   ├── socket.js           # Socket.io 前後端通訊（自動偵測 LAN）
-│   └── themes/lego.js      # LEGO 樂高風格渲染
+│   ├── themes/lego.js      # LEGO 樂高風格渲染（含格柵記憶化）
+│   └── tests/              # 前端測試（Node 內建執行器）
 ├── docs/m3/                # M3 交接文件與效能報告
 ├── start.sh                # 一鍵啟動（後端 + 前端 + LAN IP 顯示）
 ├── .env.example            # 環境變數範本
@@ -126,6 +132,9 @@ pip install -r requirements.txt -r requirements-dev.txt
 
 # 執行
 cd backend && pytest tests/
+
+# 前端測試（Node 內建執行器，無需 npm 安裝）
+node --test frontend/tests/
 ```
 
 Flask 與 Pillow 缺少時，photo_composer 合成測試與 socket handler 測試會 **skip
@@ -155,5 +164,5 @@ Flask 與 Pillow 缺少時，photo_composer 合成測試與 socket handler 測�
 
 - 角色骨架／IK 繫結（`Person.skeleton` 已預留欄位）
 - 動畫狀態機（`Person.animState` 已預留欄位）
-- 大合照輸出 + QR Code（Node + Canvas API）
+- ~~大合照輸出 + QR Code~~（M6 已完成；改以 Python + Pillow 實作，見 photo_composer.py）
 - 從生成圖反推 landmark 以套用骨架動畫

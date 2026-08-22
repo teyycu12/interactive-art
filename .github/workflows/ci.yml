@@ -35,6 +35,17 @@ jobs:
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         pip install -r requirements-dev.txt
 
+    # 前端沒有建置流程，也沒有 npm 相依 —— 直接用 Node 內建的測試執行器。
+    # 涵蓋的是 draw() 迴圈裡的格柵記憶化：單次 pipeline 約 2.2ms，若快取失效，
+    # 30 個角色的每幀成本會達 65ms（約 15fps），遠低於 60fps 目標。
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Run frontend tests
+      run: node --test frontend/tests/
+
     - name: Run Pytest Suite
       run: |
         cd backend

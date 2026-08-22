@@ -165,6 +165,9 @@ cd backend && pytest tests/
 # 端到端煙霧測試（需後端已啟動）
 python backend/e2e_smoke.py
 
+# 前端測試（Node 內建執行器，無需 npm 安裝）
+node --test frontend/tests/
+
 # 前端（用 Live Server 或 Node）
 cd frontend
 npx live-server

@@ -74,6 +74,14 @@ function drawLegoCharacter(person) {
   const rLegDeg =  legDeg;  // right leg forward when swing > 0
 
   // ── Memoized Grid pipeline (每角色/特徵變更時才重算，非每幀重算) ────
+  // 這是前端唯一的效能熱點：單次 pipeline 約 2.2ms（32x40 = 1280 格，含
+  // flood-fill BFS + 膨脹 + HSL 轉換）。若每幀重算，30 個角色的每幀成本
+  // 約 65ms —— 上限僅約 15fps，遠低於 60fps 目標。
+  //
+  // ⚠️ 快取以「物件參照」判斷，不是內容雜湊。目前安全，因為 update_positions
+  //    每次都從 socket payload 指派全新陣列；但若日後改成就地修改 cells，
+  //    牆上會顯示舊顏色且毫無徵兆。相關性質已由
+  //    frontend/tests/lego_grid.test.js 固定下來。
   let clothGrid = null;
   if (person.clothGrid) {
     const hairKey = person.hairColor ? `${person.hairColor.r},${person.hairColor.g},${person.hairColor.b}` : "";
