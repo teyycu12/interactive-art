@@ -37,3 +37,9 @@ backend.log
 backend/diagnostic_img_str.txt
 stash.diff
 
+# 測試產出
+.pytest_cache/
+backend/test-results.xml
+.coverage
+htmlcov/
+

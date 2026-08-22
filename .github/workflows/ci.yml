@@ -27,10 +27,40 @@ jobs:
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest pytest-cov
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install -r requirements-dev.txt
 
     - name: Run Pytest Suite
       run: |
         cd backend
-        pytest tests/ -v
+        pytest tests/ -v --junitxml=test-results.xml
+
+    # 多個測試在缺少 Flask / Pillow 時會 skip 而非失敗（例如 photo_composer
+    # 的合成測試、socketio handler 測試）。若相依安裝出問題，CI 會顯示綠燈
+    # 但其實什麼都沒測到 —— 綠燈卻沒測到比紅燈更危險。
+    # requirements.txt 已包含這些套件，因此在 CI 裡出現 skip 一律視為失敗。
+    - name: Fail if any test was skipped
+      run: |
+        cd backend
+        python - <<'PY'
+        import sys, xml.etree.ElementTree as ET
+
+        root = ET.parse("test-results.xml").getroot()
+        suites = root.iter("testsuite") if root.tag == "testsuites" else [root]
+
+        skipped = []
+        for suite in suites:
+            for case in suite.iter("testcase"):
+                for sk in case.findall("skipped"):
+                    skipped.append(
+                        f"{case.get('classname')}.{case.get('name')}: "
+                        f"{sk.get('message', 'no reason given')}"
+                    )
+
+        if skipped:
+            print(f"CI 中有 {len(skipped)} 個測試被 skip —— 相依套件可能未正確安裝：")
+            for line in skipped:
+                print(f"  - {line}")
+            sys.exit(1)
+        print("沒有測試被 skip，全部實際執行。")
+        PY

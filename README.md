@@ -118,9 +118,19 @@ python3 -m http.server 8080 --directory frontend --bind 0.0.0.0
 
 ### 跑測試
 
+測試使用 pytest（`backend/tests/conftest.py` 提供 fixture，unittest 已無法 discover）。
+
 ```bash
-python3 -m unittest discover -s backend/tests -p "test_*.py" -v
+# 首次安裝測試相依
+pip install -r requirements.txt -r requirements-dev.txt
+
+# 執行
+cd backend && pytest tests/
 ```
+
+Flask 與 Pillow 缺少時，photo_composer 合成測試與 socket handler 測試會 **skip
+而非失敗** —— 看到 skip 代表環境沒裝齊、那些路徑實際沒被測到。兩者都在
+`requirements.txt` 裡，CI 也會在出現任何 skip 時直接失敗。
 
 ---
 

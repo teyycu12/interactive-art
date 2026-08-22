@@ -1,0 +1,12 @@
+# PersonaFlow 開發／測試相依套件
+# 安裝：pip install -r requirements.txt -r requirements-dev.txt
+#
+# 執行測試：
+#   cd backend && pytest tests/
+#
+# 注意：測試需要 Flask 與 Pillow 才會完整執行 —— 缺少時多個測試會被 skip
+# 而非失敗（例如 photo_composer 的合成測試），CI 會顯示綠燈但實際沒測到。
+# 兩者都在 requirements.txt 裡，請確保一併安裝。
+
+pytest
+pytest-cov
