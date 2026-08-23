@@ -3,7 +3,21 @@
 ## 專案概述
 將實體穿著透過視覺識別技術數位化，轉譯為插畫角色，並在公共空間中透過群體演算法生成集體共創視覺圖。
 
-**期中審查截止日：2025/5/7** ⚠️ 此日期已過期（版控紀錄顯示開發持續至 2026/8），請更新為實際期限
+**本專案已與 PersonaFlow2（Node.js 互動層）整合**，合成單一展場作品。
+依 v4.0 計畫書決議：**PF2 為主幹**，本專案的 CV/VLM/生圖管線退為角色資產生成服務。
+
+**校內實測期限：2026/9/30**
+
+### 兩套系統並存，不要混淆
+
+| | 整合版（主線） | 2D 備援（保留，不要刪） |
+|---|---|---|
+| 互動層 | `server/`（Node.js + ws） | `backend/app.py`（Flask + Socket.io） |
+| 前端 | `public/`（controller / screen / host） | `frontend/`（p5.js + PixiJS） |
+| 群聚 | `server/` 的 M2 α 仲裁 + Boids | `backend/swarm_logic.py` |
+| 啟動 | `npm start` + `python backend/service.py` | `bash start.sh` |
+
+備援版是「3D 若來不及，仍能完成實測」的保險，整套測試都還在跑，**請勿刪除**。
 
 ---
 
@@ -12,9 +26,10 @@
 | 層級 | 技術 | 職責 |
 |------|------|------|
 | 感知層 | Python + MediaPipe / OpenCV | 服裝色調、輪廓、姿勢提取 |
-| 邏輯層 | Python + Flask | CV 數據處理、Boids 演算法、Socket 通訊 |
-| 渲染層 | JavaScript + p5.js + Socket.io | 角色動態渲染、群體互動 |
-| 輸出層 | Node.js + Canvas API | 大合照生成、QR Code |
+| 生成層 | Python + Gemini / 生圖 API | 去背人偶圖生成、切片成三張貼圖 |
+| 互動層 | Node.js + ws | α 仲裁共治、任務、配對、問答、計分、社交圖譜 |
+| 渲染層 | Canvas2D（3D/Three.js 為進行中的重寫） | 角色與場景呈現 |
+| 輸出層 | Python + Pillow | 大合照生成、QR Code |
 
 ---
 
@@ -41,7 +56,10 @@
 │   ├── bench_generate.py   # 生成延遲基準線量測
 │   ├── report_html.py      # HTML 效能報告產生器
 │   ├── pytest.ini          # 測試設定（testpaths / pythonpath）
-│   └── tests/              # 單元測試（106 個，pytest；conftest.py 提供 fixture）
+│   ├── service.py          # ★ 角色資產生成 HTTP 服務（整合版用，只綁 127.0.0.1）
+│   ├── slicer.py           # ★ 生成圖正規化 + 切成 head/torso/legs 三張貼圖
+│   ├── validate_cuts.py    # ★ 切片比例穩定度驗證工具（計畫書 §3.3 驗收項）
+│   └── tests/              # 單元測試（170 個，pytest；conftest.py 提供 fixture）
 ├── /frontend
 │   ├── index.html          # 互動端主頁
 │   ├── projection.html     # 投影牆渲染（PixiJS）
@@ -49,13 +67,34 @@
 │   ├── character.js        # class Character（角色模型）+ 組件繪製、動態換色
 │   ├── socket.js           # Socket.io 前後端通訊（自動偵測 LAN）
 │   └── themes/lego.js      # LEGO 樂高風格渲染
-├── start.sh                # 一鍵啟動腳本
+├── /server                 # ★ PF2 互動層（Node.js）
+│   ├── index.js            # Gateway：靜態服務、WebSocket、/api/generate 代理、TLS
+│   ├── arbiter.js          # α 權重仲裁與速度合成
+│   ├── boids.js state.js   # 群聚引擎與狀態矩陣
+│   ├── missions.js pairing.js quiz.js scores.js socialgraph.js
+│   └── persistence.js scheduler.js ratelimit.js config.js
+├── /shared                 # ★ 前後端共用的單一事實來源
+│   ├── protocol.js         # 事件名、節流頻率、場域尺寸
+│   ├── avatars.js          # 捏臉素材 + CV 角色驗證 + CV_CUTS 切片比例
+│   └── scene.js            # 場景障礙物佈局
+├── /public                 # ★ 整合版前端
+│   ├── controller/         # 手機端：拍照生成 / 捏臉（備援）、搖桿、任務
+│   ├── screen/             # 大螢幕
+│   ├── host/               # 主辦端控制台
+│   └── assets/gen/         # 生成貼圖落地處（gitignore，每場重新產生）
+├── /test                   # ★ Node 單元測試（188 個，node --test）
+├── /scripts
+│   ├── e2e.mjs             # ★ 端對端測試（87 項，會自行啟動伺服器）
+│   ├── make-cert.sh        # ★ 現場用 TLS 憑證產生
+│   └── scene-preview.mjs   # 場景離線預覽
+├── /docs                   # 所有規格與設計文件（PRD、TechStack、INTERFACES、SPEC…）
+├── start.sh                # 2D 備援版一鍵啟動
+├── package.json            # ★ Node 相依與指令
 ├── requirements.txt        # 執行相依（mediapipe 已釘 <1.0，原因見下）
-├── requirements-dev.txt    # 測試相依（pytest）
-├── INTERFACES.md           # Socket.io 事件與 payload 介面規格
-├── PRD.md
-└── TechStack.md
+└── requirements-dev.txt    # 測試相依（pytest）
 ```
+
+> ★ 為整合後新增。文件已全數移入 `docs/`，根目錄只留 README 與本檔。
 
 ---
 
@@ -138,7 +177,7 @@ gevent.exceptions.LoopExit: This operation would block forever
 **已知代價**：Werkzeug 開發伺服器 + threading 在約 50 條並行 WebSocket 連線
 時會開始崩潰（伺服器 log 出現 WebSocket 幀被當成 HTTP 解析的 400 錯誤）。
 目前的因應方式是**降低所需連線數**而非提高上限：角色 id 已與連線脫鉤，
-賓客關掉分頁角色仍留在場上（見 INTERFACES.md §4），因此同時在線數只取決於
+賓客關掉分頁角色仍留在場上（見 docs/INTERFACES.md §4），因此同時在線數只取決於
 「正在拍照的人 + 投影牆」，不隨賓客總數成長。
 
 ### ⚠️ 投影牆目前不使用後端座標
@@ -152,23 +191,63 @@ gevent.exceptions.LoopExit: This operation would block forever
 
 ## 常用指令
 
+### 整合版（主線）
+
 ```bash
-# 後端啟動
-cd backend
-pip install -r requirements.txt          # 注意：mediapipe 已釘 <1.0，見下方
-python app.py
+# 一次安裝
+npm install
+pip install -r requirements.txt requirements-dev.txt   # mediapipe 已釘 <1.0，見下方
 
-# 跑測試（需另裝開發相依）
-pip install -r requirements-dev.txt
-cd backend && pytest tests/
+# 啟動：兩個行程
+npm start                          # 互動層，印出大螢幕/手機/主辦端三個網址
+python backend/service.py          # 角色生成服務（127.0.0.1:5055）
 
-# 端到端煙霧測試（需後端已啟動）
-python backend/e2e_smoke.py
+# 現場要用手機相機就必須有 HTTPS（getUserMedia 的硬性要求）
+bash scripts/make-cert.sh
+TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start
 
-# 前端測試（Node 內建執行器，無需 npm 安裝）
-node --test frontend/tests/
+# 測試
+npm test                           # Node 單元測試（188）
+npm run test:e2e                   # 端對端，會自行啟動伺服器（87）
+cd backend && pytest tests/        # Python（170）
 
-# 前端（用 Live Server 或 Node）
-cd frontend
-npx live-server
+# 切片比例驗證（計畫書 §3.3 的 R1 驗收項）
+python backend/validate_cuts.py --sprites samples/ --sheet report.png
+python backend/validate_cuts.py --photos photos/ --out samples/
 ```
+
+### 2D 備援版
+
+```bash
+bash start.sh                      # 後端 5001 + 前端 8080
+python backend/e2e_smoke.py        # 煙霧測試（需後端已啟動）
+node --test frontend/tests/        # 前端測試
+```
+
+> **埠號**：備援版後端佔用 5001，生成服務刻意改用 5055，兩者可並存。
+
+---
+
+## 整合後的注意事項
+
+### 切片比例是跨語言耦合
+
+`backend/slicer.py` 的 `CUTS` 與 `shared/avatars.js` 的 `CV_CUTS` 必須完全一致 ——
+一邊照比例切、一邊照比例疊回去。對不上時角色會脖子錯位或腿被壓扁，
+**而且兩邊都不會報錯**。`backend/tests/test_slicer.py` 有測試直接比對兩邊數值。
+
+### 貼圖走 URL，不走 base64
+
+30 人的貼圖若內嵌進 `STAGE_ROSTER`，名冊訊息會膨脹到現場無線網路難以負荷。
+`roster()` 只在名冊變動時廣播，`snapshot()` 每幀 30Hz 只送座標 —— 這個分離要維持。
+
+### 連線角色不可中途轉換
+
+`CLIENT_JOIN` / `SCREEN_HELLO` / `HOST_AUTH` 三者互斥，已在 `server/index.js`
+加上守衛。拿掉任何一個都會讓 agent 的 `disconnectedAt` 永遠是 null，
+`AGENT_TTL` 不回收，反覆操作即可耗盡 120 人上限。端對端測試有回歸防護。
+
+### 掃描失敗一律降級，不擋人進場
+
+相機權限被拒、非安全情境、生成失敗、生成服務未啟動 —— 全部退回捏臉流程。
+捏臉是刻意保留的備援路徑，**不要移除**。

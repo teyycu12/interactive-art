@@ -1,7 +1,40 @@
 # PersonaFlow · 數位轉譯角色空間互動系統
 
 將實體穿著透過視覺識別技術數位化，轉譯為樂高風格插畫角色，並透過群體演算法在公共空間中生成集體共創視覺圖。
+
 ---
+
+## 📌 整合現況
+
+本專案已與 **PersonaFlow2**（Node.js 互動層）整合為單一展場作品。
+依 v4.0 計畫書決議：PF2 為主幹，本專案的 CV/VLM/生圖管線退為**角色資產生成服務**。
+
+| | 整合版（主線） | 2D 備援（保留） |
+|---|---|---|
+| 互動層 | `server/` — α 仲裁共治、任務、配對、問答、計分、社交圖譜 | `backend/app.py` |
+| 前端 | `public/` — 手機控制器 / 大螢幕 / 主辦端 | `frontend/` |
+| 啟動 | `npm start` + `python backend/service.py` | `bash start.sh` |
+| 測試 | 188 單元 + 87 端對端 + 170 Python | 同左（共用） |
+
+**參與者有兩條入場路徑**：拍照掃描生成角色，或模組捏臉。
+掃描失敗（相機權限被拒、非 HTTPS、生成服務未啟動）一律降級回捏臉，不會擋人進場。
+
+```bash
+npm install && pip install -r requirements.txt
+npm start                     # 互動層，印出三個網址
+python backend/service.py     # 角色生成服務（127.0.0.1:5055）
+```
+
+> **現場要用手機相機必須有 HTTPS** —— `getUserMedia` 在 `http://192.168.x.x` 上會被瀏覽器直接拒絕。
+> 執行 `bash scripts/make-cert.sh` 產生憑證後，以
+> `TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start` 啟動。
+
+完整說明見 [CLAUDE.md](CLAUDE.md) 與 [docs/](docs/)。
+
+---
+
+## 以下為 2D 備援版說明
+
 
 ## ✨ 核心功能
 
@@ -90,12 +123,15 @@ PersonaFlow/
 │   ├── socket.js           # Socket.io 前後端通訊（自動偵測 LAN）
 │   ├── themes/lego.js      # LEGO 樂高風格渲染（含格柵記憶化）
 │   └── tests/              # 前端測試（Node 內建執行器）
-├── docs/m3/                # M3 交接文件與效能報告
-├── start.sh                # 一鍵啟動（後端 + 前端 + LAN IP 顯示）
+├── docs/                   # 所有規格與設計文件
+│   ├── INTERFACES.md       # Socket.io 事件與 payload 介面規格
+│   ├── PRD.md TechStack.md TECHNICAL_ARCHITECTURE.md
+│   ├── README-PersonaFlow2.md TECH-PersonaFlow2.md SPEC-v3.html SPEC-v4.html
+│   └── m3/                 # M3 交接文件與效能報告
+├── start.sh                # 2D 備援版一鍵啟動（後端 + 前端 + LAN IP 顯示）
 ├── .env.example            # 環境變數範本
 ├── requirements.txt
-├── INTERFACES.md           # Socket.io 事件與 payload 介面規格
-└── CLAUDE.md / PRD.md / TechStack.md
+└── CLAUDE.md               # 專案說明（含整合後的注意事項）
 ```
 
 ---

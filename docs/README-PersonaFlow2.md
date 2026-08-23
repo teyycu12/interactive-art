@@ -1,6 +1,6 @@
 # PersonaFlow（眾影鏈結）
 
-實體活動場域的雙層半自主參與式互動系統。技術規格見 [.TECH](.TECH)。
+實體活動場域的雙層半自主參與式互動系統。技術規格見 [TECH-PersonaFlow2.md](TECH-PersonaFlow2.md)。
 
 ## 目前進度
 

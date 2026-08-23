@@ -223,7 +223,7 @@ def main() -> int:
     src.add_argument("--sprites", help="已生成的人偶圖資料夾（去背 PNG）")
     src.add_argument("--photos", help="原始照片資料夾，先送進生成服務再驗")
     ap.add_argument("--out", default="samples", help="--photos 模式下生成結果的存放位置")
-    ap.add_argument("--service", default="http://127.0.0.1:5001/generate", help="生成服務網址")
+    ap.add_argument("--service", default="http://127.0.0.1:5055/generate", help="生成服務網址")
     ap.add_argument("--sheet", help="輸出對照圖的路徑（PNG）")
     args = ap.parse_args()
 

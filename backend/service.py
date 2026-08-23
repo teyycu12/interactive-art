@@ -241,7 +241,9 @@ def _generate():
 
 if __name__ == "__main__":
     os.makedirs(ASSET_DIR, exist_ok=True)
-    port = int(os.environ.get("VISION_PORT", "5001"))
+    # 刻意避開 5001：start.sh 會把 2D 備援版的 app.py 起在那個埠，
+    # 同時跑兩者時會直接衝突。
+    port = int(os.environ.get("VISION_PORT", "5055"))
     # 只綁 127.0.0.1：對外一律由 Node 端統一出口（同源，順帶避開 HTTPS
     # 混合內容），本服務不需要、也不應該直接暴露在場館網路上。
     print(f"[vision] 角色資產生成服務 http://127.0.0.1:{port}  貼圖輸出 → {ASSET_DIR}")
