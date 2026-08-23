@@ -19,6 +19,9 @@ import time
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
+from pathlib import Path
+
+import cv2
 import numpy as np
 from PIL import Image as PILImage, ImageDraw
 
@@ -167,6 +170,76 @@ def _canonical_lego_pose(size: int = 1024) -> PILImage.Image:
     return img
 
 
+_STYLE_SHEET_WIDTH = 1024
+_STYLE_SHEET_COLUMNS = 3
+_STYLE_SHEET_CELL_ASPECT = 1.5  # the curated sets are framed 2:3 portrait
+_STYLE_REFERENCE_ROOT = Path(__file__).resolve().parents[1] / "docs" / "style_reference"
+_STYLE_SHEET_SUFFIXES = {".png", ".webp"}
+
+_style_sheet_cache: Dict[str, Optional[PILImage.Image]] = {}
+
+
+def _build_style_reference_sheet(set_id: str) -> Optional[PILImage.Image]:
+    """Pack a curated set's full-body references into one sheet.
+
+    No cell labels are drawn here, unlike ``_build_detail_sheet``.  That sheet
+    labels its cells because its crops come from the visitor and the model has to
+    know which body part each one is.  This sheet is read holistically as one
+    visual language, so a label would buy nothing and cost a great deal: it would
+    put readable glyphs into the reference image, which is the single strongest
+    copy vector and the exact thing the set is curated to exclude.
+    """
+    directory = _STYLE_REFERENCE_ROOT / set_id
+    if not directory.is_dir():
+        return None
+    paths = sorted(
+        path for path in directory.glob("full_body_*")
+        if path.suffix.lower() in _STYLE_SHEET_SUFFIXES
+    )
+    if not paths:
+        return None
+
+    columns = min(_STYLE_SHEET_COLUMNS, len(paths))
+    cell_w = _STYLE_SHEET_WIDTH // columns
+    cell_h = int(cell_w * _STYLE_SHEET_CELL_ASPECT)
+    rows = -(-len(paths) // columns)
+    sheet = PILImage.new("RGB", (_STYLE_SHEET_WIDTH, cell_h * rows), (254, 254, 253))
+
+    for index, path in enumerate(paths):
+        try:
+            figure = PILImage.open(path).convert("RGB")
+        except Exception as exc:
+            print(f"[garment_gen] style reference {path.name} unreadable: {exc}")
+            continue
+        figure.thumbnail((cell_w, cell_h), PILImage.LANCZOS)
+        row, column = divmod(index, columns)
+        # Centre a short final row rather than leaving it hanging to the left,
+        # so no figure reads as more important than the others.
+        in_row = min(columns, len(paths) - row * columns)
+        left = (_STYLE_SHEET_WIDTH - in_row * cell_w) // 2 + column * cell_w
+        sheet.paste(figure, (left + (cell_w - figure.width) // 2,
+                             row * cell_h + (cell_h - figure.height) // 2))
+    return sheet
+
+
+def _style_reference_sheet() -> Optional[PILImage.Image]:
+    """The active style sheet, or None when the switch is off or the set is absent.
+
+    ``STYLE_REFERENCE_MODE=off`` rolls the send back to the three-image shape for
+    a controlled comparison; a missing set degrades to the same thing rather than
+    failing the generation.
+    """
+    if os.environ.get("STYLE_REFERENCE_MODE", "sheet").strip().lower() != "sheet":
+        return None
+    set_id = os.environ.get("STYLE_REFERENCE_SET", "").strip() or "2026q3_owner_curated"
+    if set_id not in _style_sheet_cache:
+        sheet = _build_style_reference_sheet(set_id)
+        _style_sheet_cache[set_id] = sheet
+        detail = f"{sheet.width}x{sheet.height}" if sheet else "not found, sending without it"
+        print(f"[garment_gen] style reference set '{set_id}': {detail}")
+    return _style_sheet_cache[set_id]
+
+
 def _get_shield_mask(
     poly_norm: Optional[np.ndarray],
     crop_box: Tuple[int, int, int, int],
@@ -213,6 +286,51 @@ def _get_shield_mask(
     except Exception as e:
         print(f"[garment_gen] failed to build shield mask: {e}")
         return None
+
+
+# Sized against what must survive, not against what we want gone. A shoe that
+# renders a few pixels clear of the leg above it is roughly 0.5-1.5% of the
+# figure, and erasing one would manufacture the very fault
+# ``missing_bottom_left`` exists to catch. A painted ground shadow is an order
+# of magnitude smaller, so the cutoff sits below the shoe and above the shadow.
+ISLAND_KEEP_RATIO = 0.005
+
+
+def _drop_detached_islands(arr: np.ndarray, keep_ratio: float = ISLAND_KEEP_RATIO) -> np.ndarray:
+    """Erase opaque islands too small to be part of the figure.
+
+    The white cut above only reaches *white* reachable from the border, so a
+    shadow the model painted beside the feet survives it: the blob is grey, and
+    the flood fill has nothing to travel through.  ``validate_avatar_png`` does
+    not catch it either -- its ``fragmented_foreground`` gate fires at
+    ``main_component_ratio < 0.75``, tuned for a severed limb, while a 2% blob
+    leaves the ratio near 0.97 and passes silently.
+
+    Deleting is deliberate, rather than routing this into the retry loop: a
+    stray blob is free to erase and expensive to re-roll, and the retry loop
+    should stay reserved for faults the model can actually fix from a text note.
+
+    This runs before the tight crop below, because an island out beside the feet
+    widens the opaque bounding box and shifts the whole figure off centre.
+    """
+    opaque = (arr[:, :, 3] > 5).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(opaque, connectivity=8)
+    if count <= 2:  # background plus at most one component: nothing detached
+        return arr
+
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    main = int(np.argmax(areas)) + 1
+    cutoff = float(stats[main, cv2.CC_STAT_AREA]) * keep_ratio
+    dropped = 0
+    for label in range(1, count):
+        if label == main or float(stats[label, cv2.CC_STAT_AREA]) >= cutoff:
+            continue
+        arr[labels == label, 3] = 0
+        dropped += 1
+    if dropped:
+        print(f"[garment_gen] erased {dropped} detached island(s) smaller than "
+              f"{keep_ratio:.1%} of the figure")
+    return arr
 
 
 def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Optional[np.ndarray] = None) -> str:
@@ -266,6 +384,8 @@ def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Opt
                     q.append((ny, nx))
         removed = visited & near_white
         arr[removed, 3] = 0  # punch transparency
+
+        arr = _drop_detached_islands(arr)
 
         # Soft alpha at the boundary: fade the 2-px ring around the cutout
         # so the polygon clip in the frontend doesn't show a hard white line.
@@ -331,6 +451,22 @@ def _extract_image_b64(message) -> Optional[str]:
     return None
 
 
+def _provider_message(exc: Exception) -> str:
+    """The provider's own sentence, without the SDK wrapper around it.
+
+    ``str(exc)`` on an API error is the whole serialised body -- status line,
+    nested metadata, user id -- which hides the part a human needs (how many
+    credits short the request was).
+    """
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        inner = body.get("error") if isinstance(body.get("error"), dict) else body
+        message = inner.get("message") if isinstance(inner, dict) else None
+        if message:
+            return str(message)
+    return str(exc)
+
+
 def _call_image_chat_multi(
     image_data_urls: List[str],
     prompt: str,
@@ -374,16 +510,25 @@ def _call_image_chat_multi(
             **params,
         )
     except Exception as e:
-        print(f"[garment_gen] chat call failed (model={model}, n_images={len(image_data_urls)}): {e}")
-        traceback.print_exc()
+        # 402 is a billing state, not a crash. The provider reserves budget
+        # against max_tokens before the call, so the request is refused at the
+        # door in under two seconds and no retry can succeed until the balance
+        # moves. A stack trace for it buries the one line that says why.
+        if getattr(e, "status_code", None) == 402:
+            code = "insufficient_credits"
+            print(f"[garment_gen] provider refused the call, out of credits: {_provider_message(e)}")
+        else:
+            code = type(e).__name__
+            print(f"[garment_gen] chat call failed (model={model}, n_images={len(image_data_urls)}): {e}")
+            traceback.print_exc()
         failure = {
             "image_b64": None,
-            "error": type(e).__name__,
+            "error": code,
             "api_usage": {
                 "model": requested_model,
                 "started_at": started_at,
                 "duration_ms": int((time.perf_counter() - t_start) * 1000),
-                "error_code": type(e).__name__,
+                "error_code": code,
             },
         }
         return failure if with_metadata else None
@@ -471,11 +616,11 @@ _FULL_CHARACTER_PROMPT_TEMPLATE = (
     "{attrs}\n\n"
 
     "### MANDATORY LEGO DESIGN RULES:\n"
-    "1. **Proportions & Pose**: Strict front-facing view, perfectly centered and symmetric. Neutral T-pose-like stance: arms angled ~15 degrees outward at the sides, legs standing straight and parallel with a clear vertical gap between them.\n"
+    "1. **Proportions & Pose**: Strict front-facing view, perfectly centered and symmetric. Neutral stance: arms angled ~15 degrees outward at the sides, legs straight and parallel. When the lower body is trousered or bare, leave a clear vertical gap between the legs; a one-piece garment reaching below the hip closes that gap instead.\n"
     "2. **Head & Face**: Smooth cylindrical LEGO-style head in the specified skin tone. Simple clean facial features: two glossy black dot eyes, clean eyebrows, and a pleasant simple mouth. Hair piece must sit cleanly on top of the head in the matching hair style and color.\n"
-    "3. **Torso & Outerwear**: Trapezoidal LEGO torso wearing the outfit. Ensure the torso garment is clean and uniform in color. Draw clear printed lines for shirts, zippers, buttons, or jacket collars. Hands must be classic C-shaped claw hands attached at the wrist, in the same specified skin tone as the head.\n"
-    "4. **Legs & Pants**: Two separate rectangular LEGO legs of equal length in the matching pants color. Keep the pants uniform with no patchwork.\n"
-    "5. **Shoes & Footwear**: Mandatory distinct shoes at the bottom of each leg. Draw them as clean rectangular slabs (black, grey, or brown) slightly wider than the leg, with a clean horizontal seam line separating the shoe from the pants.\n\n"
+    "3. **Torso & Outerwear**: Trapezoidal LEGO torso wearing the outfit. Each individual garment piece is one clean uniform colour, but the torso may carry SEVERAL pieces at once - an open jacket over a shirt, a collar, a scarf - and those pieces keep their own separate colours and overlap each other with real visible thickness. Draw clear printed lines for shirts, zippers, buttons, or jacket collars. Hands must be classic C-shaped claw hands attached at the wrist, in the same specified skin tone as the head.\n"
+    "4. **Lower Body**: Follow what the person actually wears. Trousers or shorts become two separate rectangular LEGO legs of equal length in that garment's colour. A dress, skirt, robe or long coat instead becomes ONE continuous moulded piece running unbroken from the waist to its hem with no vertical split, and the bare legs continue below that hem in the person's own skin tone. Keep each piece uniform in colour with no patchwork.\n"
+    "5. **Shoes & Footwear**: Mandatory distinct shoes at the bottom of each leg. Draw them as clean rectangular slabs (black, grey, or brown) slightly wider than the leg, with a clean horizontal seam line separating the shoe from the leg or trouser above it.\n\n"
 
     "### ART STYLE GUIDELINES - GLOSSY MOULDED PLASTIC, NOT FLAT VECTOR:\n"
     "- Render the figure as a physical moulded-plastic toy shot in a studio: smooth "
@@ -498,6 +643,72 @@ _FULL_CHARACTER_PROMPT_TEMPLATE = (
     "shaded; the background is not. No text, no border lines.\n\n"
     + _FULL_CHARACTER_NEGATIVE
 )
+
+
+_ROLE_PERSON = (
+    "the source person. This is WHO the figure is: their face, their skin tone, "
+    "their hair, their actual garments and their actual colours."
+)
+_ROLE_DETAIL = "close-up crops of that same person. Same authority as Image 1, detail only."
+_ROLE_POSE = (
+    "a neutral pose reference. Copy its stance, its proportions and its body-part "
+    "count: front-facing, arms at the sides, two legs, two shoes. It is drawn in "
+    "trousers, so its lower-body silhouette is only correct for a trousered "
+    "person - the actual lower-body shape follows the source person's garment. Its "
+    "colours and blank surfaces carry no meaning."
+)
+_ROLE_STYLE = (
+    "a style reference sheet of DIFFERENT characters rendered in the target style. "
+    "This sheet is the PRIMARY authority on how anything is built and finished: how "
+    "the plastic catches light, how tight the specular highlights are, the gloss "
+    "ordering between materials, how seams and hems are printed flat with no light "
+    "of their own, how edges come from clean colour separation rather than drawn "
+    "outlines, the discipline of large uniform colour fields, and how this species "
+    "constructs a garment - a one-piece garment moulded as a single unbroken flare "
+    "with bare legs below its hem, one layer overlapping another with real "
+    "thickness. Where a design rule above and this sheet disagree about surface, "
+    "material, finish or garment construction, FOLLOW THE SHEET. Pose, body-part "
+    "count and which garments the figure wears are not the sheet's to decide."
+)
+
+_STYLE_SHEET_FIREWALL = (
+    "CRITICAL - the style sheet decides HOW things are made, never WHO the figure is "
+    "or WHAT it wears. Not one colour, pattern, print, hairstyle, hair colour, skin "
+    "tone, face or accessory from it may appear in the output, and never the specific "
+    "garment a sheet character happens to wear. Which garments the figure wears, and "
+    "in which colours, comes only from the source person. If the source person wears "
+    "a red jacket and every character on the sheet wears blue, the output jacket is "
+    "red. Take the construction and the craft from the sheet; take the content from "
+    "the person."
+)
+
+
+def _compose_inputs(
+    person_url: str,
+    detail_sheet: Optional[PILImage.Image],
+    style_sheet: Optional[PILImage.Image],
+) -> Tuple[List[str], str]:
+    """Pair every attachment with its role, numbered from what is actually sent.
+
+    Numbering is derived from the list rather than written by hand so the prompt
+    can never name an image the model did not receive.  The previous wording
+    hard-coded the pose reference as "the final image"; adding the style sheet
+    would have silently redirected that sentence onto the style sheet, telling the
+    model to copy the reference characters' geometry.
+    """
+    parts: List[Tuple[str, str]] = [(person_url, _ROLE_PERSON)]
+    if detail_sheet is not None:
+        parts.append((_pil_to_data_url(detail_sheet), _ROLE_DETAIL))
+    parts.append((_pil_to_data_url(_canonical_lego_pose()), _ROLE_POSE))
+    if style_sheet is not None:
+        parts.append((_pil_to_data_url(style_sheet), _ROLE_STYLE))
+
+    text = "\n\n### HOW TO USE THE INPUT IMAGES\n" + "\n".join(
+        f"Image {index}: {role}" for index, (_, role) in enumerate(parts, 1)
+    )
+    if style_sheet is not None:
+        text += "\n\n" + _STYLE_SHEET_FIREWALL
+    return [url for url, _ in parts], text
 
 
 def _attr_lines(face_data: Optional[Dict[str, Any]], outfit_data: Optional[Dict[str, Any]]) -> str:
@@ -592,12 +803,12 @@ def generate_full_character_png(
         )
         if correction:
             prompt += "\n\n### REQUIRED CORRECTION\n" + correction
-        input_urls = [data_url]
-        detail_sheet = _build_detail_sheet(rgb, regions)
-        if detail_sheet is not None:
-            input_urls.append(_pil_to_data_url(detail_sheet))
-        input_urls.append(_pil_to_data_url(_canonical_lego_pose()))
-        prompt += "\n\nImage 1 is the source person. Image 2 (when present) is a close-up reference sheet. The final image is a neutral LEGO pose reference; copy only its complete front-facing geometry, including both shoes."
+        input_urls, role_text = _compose_inputs(
+            data_url,
+            _build_detail_sheet(rgb, regions),
+            _style_reference_sheet(),
+        )
+        prompt += role_text
         api_result = _call_image_chat_multi(
             input_urls, prompt, model=model,
             generation_params=dict(style.generation_params.get("full_character", {})),

@@ -37,3 +37,13 @@ backend.log
 # 執行期產生的暫存 / 診斷檔
 backend/diagnostic_img_str.txt
 stash.diff
+
+# Style reference sets: the image files stay out of version control until the
+# set's PROVENANCE.md records a licence that permits redistribution. Git keeps
+# whatever is pushed forever, so this decision only exists before the first
+# push. PROVENANCE.md itself is tracked; base_character.png predates this rule
+# and is already tracked, so it is unaffected.
+docs/style_reference/**/*.png
+docs/style_reference/**/*.webp
+docs/style_reference/**/*.jpg
+docs/style_reference/**/*.jpeg
