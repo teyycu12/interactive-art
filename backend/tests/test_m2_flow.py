@@ -68,6 +68,7 @@ class M2FlowTests(unittest.TestCase):
             patch.object(app_module, "analyze_face", return_value={"ok": True, "face": {}}),
             patch.object(app_module, "log_metric"),
             patch.object(app_module, "start_run"),
+            patch.object(app_module, "save_input_photo"),
             patch.object(app_module, "record_attempt"),
             patch.object(app_module, "finish_run"),
         ]

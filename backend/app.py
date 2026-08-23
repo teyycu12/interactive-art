@@ -52,7 +52,7 @@ except Exception:
 try:
     from backend.avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
     from backend.capture_quality import mean_landmark_displacement  # type: ignore
-    from backend.generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, list_runs, mark_render_failure, output_directory, record_attempt, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
+    from backend.generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, input_directory, list_runs, mark_render_failure, output_directory, record_attempt, save_input_photo, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
     from backend.blind_review import blind_payload, create_review_session, delete_review_sources, get_review_session, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
     from backend.height_profiles import classify_height, get_height_profile  # type: ignore
     from backend.metrics_logger import log_metric  # type: ignore
@@ -60,7 +60,7 @@ try:
 except Exception:
     from avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
     from capture_quality import mean_landmark_displacement  # type: ignore
-    from generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, list_runs, mark_render_failure, output_directory, record_attempt, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
+    from generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, input_directory, list_runs, mark_render_failure, output_directory, record_attempt, save_input_photo, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
     from blind_review import blind_payload, create_review_session, delete_review_sources, get_review_session, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
     from height_profiles import classify_height, get_height_profile  # type: ignore
     from metrics_logger import log_metric  # type: ignore
@@ -135,8 +135,20 @@ _CONNECTION_GENERATION_ERRORS = {
     "APIConnectionError", "APITimeoutError", "generation_timeout", "refine_timeout",
 }
 _RATE_LIMIT_GENERATION_ERRORS = {"RateLimitError"}
+# Kept apart from the rate-limit and config sets because the remedy differs: the
+# request never reached the model, and waiting or retrying cannot clear it.
+_CREDIT_GENERATION_ERRORS = {"insufficient_credits"}
 _CONFIG_GENERATION_ERRORS = {
     "AuthenticationError", "PermissionDeniedError", "openai_unavailable",
+}
+
+# Only OpenRouter models that support chat-completions image output work here
+# (see .env.example). The client picks from this same list, so an unlisted
+# value is treated as unset rather than forwarded to the provider unchecked.
+_ALLOWED_FULL_CHARACTER_MODELS = {
+    "google/gemini-3-pro-image-preview",
+    "google/gemini-2.5-flash-image-preview",
+    "google/gemini-3.1-flash-image",
 }
 
 
@@ -157,6 +169,14 @@ def _generation_failure_details(result: Dict[str, Any], validation: Dict[str, An
             "kind": "input",
             "error": error,
             "guidance": "無法從照片擷取完整人物範圍，請確認頭頂、雙腿與雙腳都在畫面內後重新拍攝。",
+        }
+    if error in _CREDIT_GENERATION_ERRORS:
+        return {
+            "status": "service_error",
+            "kind": "billing",
+            "error": error,
+            "guidance": "生圖服務餘額不足，請求在送出前就被擋下。這不是照片問題，"
+                        "重試也不會成功；請先為 OpenRouter 帳戶加值後再生成。",
         }
     if error in _CONNECTION_GENERATION_ERRORS:
         guidance = "生圖服務連線失敗；照片已通過拍攝分析，不需要更換照片，請稍後用同一張照片重試。"
@@ -232,6 +252,9 @@ def _with_output_url(item: Dict[str, Any]) -> Dict[str, Any]:
     result = dict(item)
     result["output_url"] = (
         f"/api/dev/outputs/{result['output_path']}" if result.get("output_path") else None
+    )
+    result["input_url"] = (
+        f"/api/dev/inputs/{result['input_path']}" if result.get("input_path") else None
     )
     return result
 
@@ -480,6 +503,11 @@ def dev_generation_output(filename):
     return send_from_directory(str(output_directory()), filename)
 
 
+@app.route("/api/dev/inputs/<path:filename>", methods=["GET"])
+def dev_generation_input(filename):
+    return send_from_directory(str(input_directory()), filename)
+
+
 @socketio.on("save_rendered_avatar")
 def handle_save_rendered_avatar(payload):
     """Persist the final browser-rendered character used by the developer history."""
@@ -709,6 +737,8 @@ def handle_generate_avatar(payload):
     source_type = str(payload.get("source_type") or "camera").strip().lower()
     if source_type not in {"upload", "camera"}:
         source_type = "camera"
+    requested_model = str(payload.get("model") or "").strip()
+    model_override = requested_model if requested_model in _ALLOWED_FULL_CHARACTER_MODELS else None
     try:
         fingerprint_b64 = img_str.split(",", 1)[1] if img_str.startswith("data:image") else img_str
         comparison_id = hashlib.sha256(base64.b64decode(fingerprint_b64)).hexdigest()[:20]
@@ -762,6 +792,7 @@ def handle_generate_avatar(payload):
         source_type=source_type, experiment_id=experiment_id,
         comparison_id=comparison_id, variant_id=variant_id,
     )
+    _history_call(save_input_photo, request_id, img_str)
 
     def _background():
         total_start = time.perf_counter()
@@ -1002,7 +1033,7 @@ def handle_generate_avatar(payload):
                 if rgb_full is not None and body_poly is not None:
                     garment_result = _await_generation(_generation_executor.submit(
                         generate_full_character_png, rgb_full, body_poly, face_data, outfit_data,
-                        True, regions, style_id,
+                        True, regions, style_id, model_override=model_override,
                     ))
                 else:
                     garment_result = {"ok": False, "error": "no_body_poly"}
@@ -1016,6 +1047,7 @@ def handle_generate_avatar(payload):
                     garment_result = _await_generation(_generation_executor.submit(
                         generate_full_character_png, rgb_full, body_poly, face_data, outfit_data,
                         True, regions, style_id, correction_for_validation(validation),
+                        model_override=model_override,
                     ))
                     garment_result = _prepare_generated(garment_result)
                     validation = _validate(garment_result)

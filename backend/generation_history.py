@@ -1,14 +1,15 @@
 """SQLite-backed development history for M2 generation experiments.
 
-The source photograph is intentionally never persisted.  Only generated
-sprites, request metadata, validation results, latency, token counts and the
-provider-reported cost are retained under the gitignored ``backend/logs``
-directory.
+Generated sprites, a resized/EXIF-stripped copy of the source photo, request
+metadata, validation results, latency, token counts and the provider-reported
+cost are retained under the gitignored ``backend/logs`` directory so history
+entries can be compared against their input photo later.
 """
 
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import re
@@ -19,10 +20,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
+from PIL import Image, ImageOps
+
 
 _LOG_DIR = Path(__file__).resolve().parent / "logs"
 _DB_PATH = _LOG_DIR / "generation_history.sqlite3"
 _OUTPUT_DIR = _LOG_DIR / "generated"
+_INPUT_DIR = _LOG_DIR / "inputs"
 
 
 def _connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -77,7 +81,8 @@ def init_history_db(db_path: Optional[Path] = None) -> None:
                 guidance TEXT,
                 output_path TEXT,
                 detail_metrics TEXT,
-                external_metadata TEXT
+                external_metadata TEXT,
+                input_path TEXT
             );
 
             CREATE TABLE IF NOT EXISTS generation_attempts (
@@ -151,6 +156,8 @@ def init_history_db(db_path: Optional[Path] = None) -> None:
             connection.execute("ALTER TABLE generation_runs ADD COLUMN metadata_source TEXT NOT NULL DEFAULT 'api_reported'")
         if "external_metadata" not in run_columns:
             connection.execute("ALTER TABLE generation_runs ADD COLUMN external_metadata TEXT")
+        if "input_path" not in run_columns:
+            connection.execute("ALTER TABLE generation_runs ADD COLUMN input_path TEXT")
 
 
 def start_run(
@@ -237,6 +244,47 @@ def record_attempt(
                 _style_fingerprint_for_output(output_path),
             ),
         )
+
+
+def _decode_input_image(image_data_url: str) -> Image.Image:
+    raw_b64 = image_data_url.split(",", 1)[1] if image_data_url.startswith("data:image") else image_data_url
+    image = Image.open(io.BytesIO(base64.b64decode(raw_b64)))
+    image.load()
+    return ImageOps.exif_transpose(image).convert("RGB")
+
+
+def save_input_photo(
+    request_id: str,
+    image_data_url: Optional[str],
+    *,
+    db_path: Optional[Path] = None,
+) -> Optional[str]:
+    """Persist a resized, EXIF-stripped copy of the source photo for history comparison."""
+    if not image_data_url or os.environ.get("DEV_HISTORY_SAVE_INPUTS", "1").lower() in {"0", "false", "no"}:
+        return None
+    init_history_db(db_path)
+    filename = None
+    try:
+        image = _decode_input_image(image_data_url)
+        image.thumbnail((640, 640), Image.Resampling.LANCZOS)
+        safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", request_id)[:96]
+        _INPUT_DIR.mkdir(parents=True, exist_ok=True)
+        filename = f"{safe_id}.webp"
+        image.save(_INPUT_DIR / filename, "WEBP", quality=78, method=5)
+        with _db(db_path) as connection:
+            connection.execute(
+                "UPDATE generation_runs SET input_path=? WHERE request_id=?",
+                (filename, request_id),
+            )
+    except Exception:
+        if filename:
+            (_INPUT_DIR / filename).unlink(missing_ok=True)
+        return None
+    return filename
+
+
+def input_directory() -> Path:
+    return _INPUT_DIR
 
 
 def _save_generated_output(request_id: str, stage: str, png_b64: Optional[str]) -> Optional[str]:
@@ -431,7 +479,12 @@ def list_runs(
                    COALESCE(SUM(a.total_tokens), 0) AS total_tokens,
                    COALESCE(SUM(a.image_tokens), 0) AS image_tokens,
                    COALESCE(SUM(a.cost_usd), 0.0) AS cost_usd,
-                   MAX(CASE WHEN a.total_tokens IS NOT NULL THEN 1 ELSE 0 END) AS token_reported
+                   MAX(CASE WHEN a.total_tokens IS NOT NULL THEN 1 ELSE 0 END) AS token_reported,
+                   (
+                       SELECT a2.model FROM generation_attempts a2
+                       WHERE a2.request_id = r.request_id AND a2.model IS NOT NULL
+                       ORDER BY a2.ok DESC, a2.id DESC LIMIT 1
+                   ) AS model
             FROM generation_runs r
             LEFT JOIN generation_attempts a ON a.request_id=r.request_id
             LEFT JOIN generation_reviews rv ON rv.request_id=r.request_id

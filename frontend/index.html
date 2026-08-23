@@ -15,82 +15,55 @@
       canvas {
         display: block;
       }
-      #mode-selector {
+      #model-selector {
         position: fixed;
         top: 118px;
         left: 32px;
-        width: 280px;
-        background: linear-gradient(180deg, #1c2430, #161b22);
-        border: 2px solid #388bfd;
-        border-radius: 14px;
-        padding: 18px;
+        width: 240px;
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        padding: 16px;
         color: #c9d1d9;
         font-family: system-ui, sans-serif;
-        font-size: 14px;
+        font-size: 13px;
         z-index: 30;
         display: flex;
         flex-direction: column;
-        gap: 10px;
-        box-shadow: 0 14px 40px #0008;
+        gap: 8px;
+        box-sizing: border-box;
       }
-      #mode-selector .title {
+      #model-selector.in-frame {
+        justify-content: flex-start;
+      }
+      #model-selector .title {
         color: #f0f6fc;
-        font-size: 18px;
+        font-size: 16px;
         font-weight: 800;
-        margin-bottom: 3px;
       }
-      #mode-selector label {
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 12px;
+      #model-selector .hint { color: #8b949e; font-size: 11px; line-height: 1.4; }
+      #model-selector select {
+        width: 100%;
+        padding: 9px 10px;
+        border-radius: 8px;
         border: 1px solid #30363d;
-        border-radius: 9px;
-        background: #0d1117aa;
-        transition: border-color .15s, background .15s;
-      }
-      #mode-selector label:has(input:checked) {
-        border-color: #58a6ff;
-        background: #1f6feb2b;
-      }
-      #mode-selector label strong,
-      #mode-selector label small { display: block; }
-      #mode-selector label strong { color: #f0f6fc; font-size: 14px; }
-      #mode-selector label small { color: #8b949e; font-size: 11px; margin-top: 3px; line-height: 1.35; }
-      #mode-selector .hint { color: #8b949e; font-size: 11px; line-height: 1.4; }
-      #mode-selector input[type="radio"] {
-        width: 18px;
-        height: 18px;
-        flex: 0 0 auto;
-      }
-      #mode-selector input[type="radio"] {
-        accent-color: #58a6ff;
+        background: #0d1117;
+        color: #c9d1d9;
+        font-size: 13px;
       }
       @media (max-width: 1279px) {
-        #mode-selector {
+        #model-selector {
           top: 86px;
           left: 20px;
-          width: calc(100vw - 40px);
-          padding: 10px 12px;
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 7px;
+          width: min(280px, calc(100vw - 40px));
+          padding: 12px 14px;
         }
-        #mode-selector .title, #mode-selector .hint { grid-column: 1 / -1; }
-        #mode-selector label { padding: 8px; min-width: 0; }
-        #mode-selector label strong { font-size: 12px; }
-        #mode-selector label small { font-size: 10px; }
       }
       @media (max-height: 820px) {
-        #mode-selector {
+        #model-selector {
           top: 104px;
-          padding: 12px 16px;
-          gap: 6px;
+          padding: 12px 14px;
         }
-        #mode-selector .title { font-size: 16px; }
-        #mode-selector label { padding: 8px 10px; }
-        #mode-selector label small { margin-top: 1px; line-height: 1.2; }
       }
       #dev-history-link {
         position: fixed;
@@ -108,12 +81,17 @@
     </style>
   </head>
   <body>
-    <div id="mode-selector">
-      <span class="title">生成模式</span>
-      <span class="hint">完整角色生成：一次 AI 呼叫產出整隻角色。</span>
-      <label><input type="radio" name="genMode" value="full_character" checked><span><strong>完整角色生成</strong><small>遠端生成完整人物，約需 25–30 秒</small></span></label>
+    <div id="model-selector">
+      <span class="title">生成模型</span>
+      <span class="hint">選擇生成角色圖片的 AI 模型，會影響品質、速度與費用。</span>
+      <select id="modelSelect">
+        <option value="">伺服器預設</option>
+        <option value="google/gemini-3-pro-image-preview">Gemini 3 Pro（高品質，較慢）</option>
+        <option value="google/gemini-2.5-flash-image-preview">Gemini 2.5 Flash（較快）</option>
+        <option value="google/gemini-3.1-flash-image">Gemini 3.1 Flash（較快）</option>
+      </select>
     </div>
-    <a id="dev-history-link" href="dev.html?v=20260803-blind-review-v2">生成歷史／成本／盲評</a>
+    <a id="dev-history-link" href="dev.html?v=20260823-history-accordion">生成歷史</a>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/p5@1.9.3/lib/p5.min.js"></script>
     <script src="./character.js?v=20260718"></script>

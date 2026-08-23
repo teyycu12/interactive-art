@@ -13,8 +13,10 @@ from backend.generation_history import (
     get_detail_benchmark,
     get_run,
     get_summary,
+    list_runs,
     mark_render_failure,
     record_attempt,
+    save_input_photo,
     save_rendered_output,
     save_review,
     start_run,
@@ -46,6 +48,67 @@ class GenerationHistoryTests(unittest.TestCase):
         self.assertEqual(run["stage"], "frontend_3d_render")
         self.assertEqual(run["error_code"], "ai_texture_load_failed")
         self.assertIsNone(run["output_path"])
+
+    def test_input_photo_is_saved_and_exposed_on_the_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "history.sqlite3"
+            photo = Image.new("RGB", (600, 800), (10, 120, 200))
+            buffer = io.BytesIO()
+            photo.save(buffer, "PNG")
+            data_url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+            with patch("backend.generation_history._INPUT_DIR", root / "inputs"):
+                start_run(
+                    "with-input-1", mode="full_character", style_id="lego",
+                    source_type="upload", db_path=db_path,
+                )
+                filename = save_input_photo("with-input-1", data_url, db_path=db_path)
+                run = get_run("with-input-1", db_path=db_path)
+                self.assertTrue((root / "inputs" / filename).is_file())
+
+        self.assertEqual(run["input_path"], filename)
+
+    def test_input_photo_saving_can_be_disabled_via_env_var(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "history.sqlite3"
+            photo = Image.new("RGB", (100, 100), (10, 120, 200))
+            buffer = io.BytesIO()
+            photo.save(buffer, "PNG")
+            data_url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+            with patch("backend.generation_history._INPUT_DIR", root / "inputs"):
+                start_run(
+                    "disabled-input-1", mode="full_character", style_id="lego",
+                    source_type="upload", db_path=db_path,
+                )
+                with patch.dict("os.environ", {"DEV_HISTORY_SAVE_INPUTS": "0"}):
+                    self.assertIsNone(save_input_photo("disabled-input-1", data_url, db_path=db_path))
+                self.assertFalse((root / "inputs").exists())
+
+    def test_history_surfaces_the_model_from_the_successful_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "history.sqlite3"
+            start_run(
+                "model-visible-1", mode="full_character", style_id="lego",
+                source_type="upload", db_path=db_path,
+            )
+            record_attempt(
+                "model-visible-1", phase="full_character", attempt_index=0,
+                result={"ok": False, "error": "RateLimitError", "api_usage": {"model": "primary-model"}},
+                db_path=db_path,
+            )
+            record_attempt(
+                "model-visible-1", phase="full_character", attempt_index=1,
+                result={"ok": True, "api_usage": {"model": "fallback-model"}},
+                db_path=db_path,
+            )
+            run = list_runs(db_path=db_path)[0]
+
+        # The retry that actually produced the character matters more than
+        # whichever attempt happened to run last.
+        self.assertEqual(run["model"], "fallback-model")
 
     def test_same_photo_runs_are_paired_for_detail_parity(self):
         with tempfile.TemporaryDirectory() as directory:

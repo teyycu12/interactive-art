@@ -51,50 +51,50 @@ class Person {
     this.y = y;
 
     // Walking animation state (used by lego.js drawLegoCharacter)
-    this.vel       = { x: 0, y: 0 };
+    this.vel = { x: 0, y: 0 };
     this.walkPhase = 0;
 
     // Clothing
     this.innerColor = { r: 200, g: 200, b: 200 };
     this.outerColor = null;
     this.lowerColor = { r: 100, g: 100, b: 100 };
-    this.innerType  = 'tshirt';
-    this.outerType  = 'none';
-    this.lowerType  = 'shorts';
-    this.upperKind  = 'short_sleeve';   // 'short_sleeve' | 'long_sleeve' — drives bare-arm rendering
+    this.innerType = 'tshirt';
+    this.outerType = 'none';
+    this.lowerType = 'shorts';
+    this.upperKind = 'short_sleeve';   // 'short_sleeve' | 'long_sleeve' — drives bare-arm rendering
     this.stencilImg = null;
     this.accessories = [];
-    this.alpha      = 255;
+    this.alpha = 255;
     // Legacy image sprites are retained only for full-character history compatibility.
     this.clothSprite = null;  // p5.Image (legacy: upper-only)
     this.lowerSprite = null;  // p5.Image (legacy: lower-only)
-    this.bodySprite  = null;  // p5.Image (NEW: full LEGO body, neck down)
+    this.bodySprite = null;  // p5.Image (NEW: full LEGO body, neck down)
 
     // Face / hair (defaults — overwritten by updateFace)
-    this.armColor     = null;  // detected sleeve colour; overrides outerColor for arm rendering
-    this.skinColor    = { r: 255, g: 224, b: 196 };
-    this.hairColor    = { r: 45,  g: 35,  b: 30  };
-    this.eyeColor     = { r: 55,  g: 35,  b: 20  }; // dark brown default
-    this.lipColor     = { r: 220, g: 110, b: 110 };
-    this.hairStyle    = 'short_straight';
-    this.faceShape    = 'oval';
-    this.eyeShape     = 'almond';
+    this.armColor = null;  // detected sleeve colour; overrides outerColor for arm rendering
+    this.skinColor = { r: 255, g: 224, b: 196 };
+    this.hairColor = { r: 45, g: 35, b: 30 };
+    this.eyeColor = { r: 55, g: 35, b: 20 }; // dark brown default
+    this.lipColor = { r: 220, g: 110, b: 110 };
+    this.hairStyle = 'short_straight';
+    this.faceShape = 'oval';
+    this.eyeShape = 'almond';
     this.eyebrowStyle = 'normal';
-    this.smileScore   = 0.0;
-    this.hasBeard     = false;
-    this.beardStyle   = 'none';
+    this.smileScore = 0.0;
+    this.hasBeard = false;
+    this.beardStyle = 'none';
 
     // 'full_character': one AI image covers the entire figure, so the
     // programmatic LEGO parts are skipped entirely.
-    this.renderMode   = 'full_character';
-    this.styleId      = DEFAULT_STYLE_ID;
-    this.heightClass  = 'medium';
+    this.renderMode = 'full_character';
+    this.styleId = DEFAULT_STYLE_ID;
+    this.heightClass = 'medium';
     this.heightProfile = { id: 'medium', display_scale: 1, torso_scale_y: 1, leg_scale_y: 1 };
 
     // Forward-compat slots for future skeletal rigging (out of scope here, but
     // populated by a downstream pipeline so themes/animation can read them).
-    this.skeleton     = null;   // { joints: [...], bones: [...] }
-    this.animState    = 'idle'; // 'idle' | 'walking' | 'greeting' | ...
+    this.skeleton = null;   // { joints: [...], bones: [...] }
+    this.animState = 'idle'; // 'idle' | 'walking' | 'greeting' | ...
   }
 
   setRenderMode(mode) {
@@ -136,16 +136,16 @@ class Person {
     if (!face) return;
     // Use VLM-detected skin tone (head + hands + bare arms render in this colour)
     if (face.skin_tone) this.skinColor = hexToRgb(face.skin_tone);
-    if (face.hair_color)    this.hairColor    = hexToRgb(face.hair_color);
-    if (face.eye_color)     this.eyeColor     = hexToRgb(face.eye_color);
-    if (face.lip_color)     this.lipColor     = hexToRgb(face.lip_color);
-    if (face.hair_style)    this.hairStyle    = face.hair_style;
-    if (face.face_shape)    this.faceShape    = face.face_shape;
-    if (face.eye_shape)     this.eyeShape     = face.eye_shape;
+    if (face.hair_color) this.hairColor = hexToRgb(face.hair_color);
+    if (face.eye_color) this.eyeColor = hexToRgb(face.eye_color);
+    if (face.lip_color) this.lipColor = hexToRgb(face.lip_color);
+    if (face.hair_style) this.hairStyle = face.hair_style;
+    if (face.face_shape) this.faceShape = face.face_shape;
+    if (face.eye_shape) this.eyeShape = face.eye_shape;
     if (face.eyebrow_style) this.eyebrowStyle = face.eyebrow_style;
-    if (face.smile_score  !== undefined) this.smileScore = face.smile_score;
-    if (face.has_beard    !== undefined) this.hasBeard   = face.has_beard;
-    if (face.beard_style)   this.beardStyle   = face.beard_style;
+    if (face.smile_score !== undefined) this.smileScore = face.smile_score;
+    if (face.has_beard !== undefined) this.hasBeard = face.has_beard;
+    if (face.beard_style) this.beardStyle = face.beard_style;
   }
 
   drawSelf(scaleFactor = 1.2) {
@@ -167,9 +167,9 @@ class Person {
     }
 
     // Build p5 color objects from instance state
-    const sc  = color(this.skinColor.r,  this.skinColor.g,  this.skinColor.b);
-    const hc  = color(this.hairColor.r,  this.hairColor.g,  this.hairColor.b);
-    const ec  = this.eyeColor;   // kept as {r,g,b} for _drawEyes
+    const sc = color(this.skinColor.r, this.skinColor.g, this.skinColor.b);
+    const hc = color(this.hairColor.r, this.hairColor.g, this.hairColor.b);
+    const ec = this.eyeColor;   // kept as {r,g,b} for _drawEyes
     // lc (lip color) used inline below via this.lipColor
     const iColor = color(this.innerColor.r, this.innerColor.g, this.innerColor.b);
     const lColor = color(this.lowerColor.r, this.lowerColor.g, this.lowerColor.b);
@@ -184,17 +184,17 @@ class Person {
     // 2. Legs
     fill(sc); noStroke();
     rect(-18, 20, 12, 60, 6);
-    rect(  6, 20, 12, 60, 6);
+    rect(6, 20, 12, 60, 6);
     stroke('#5a3a29'); strokeWeight(2);
 
     // 3. Lower body
     fill(lColor);
     if (this.lowerType === 'jeans' || this.lowerType === 'suit_pants' || this.lowerType === 'long_pants') {
       rect(-20, 20, 16, 55, 2, 2, 5, 5);
-      rect(  4, 20, 16, 55, 2, 2, 5, 5);
+      rect(4, 20, 16, 55, 2, 2, 5, 5);
     } else if (this.lowerType === 'shorts') {
       rect(-20, 20, 16, 20, 2);
-      rect(  4, 20, 16, 20, 2);
+      rect(4, 20, 16, 20, 2);
     } else if (this.lowerType === 'pleated_skirt' || this.lowerType === 'skirt') {
       quad(-25, 15, 25, 15, 40, 40, -40, 40);
       fill(this.lowerColor.r * 0.85, this.lowerColor.g * 0.85, this.lowerColor.b * 0.85);
@@ -226,7 +226,7 @@ class Person {
       drawingContext.save();
       drawingContext.beginPath();
       drawingContext.moveTo(-20, -40); drawingContext.lineTo(20, -40);
-      drawingContext.lineTo(25, 20);  drawingContext.lineTo(-25, 20);
+      drawingContext.lineTo(25, 20); drawingContext.lineTo(-25, 20);
       drawingContext.clip();
       tint(255, 220);
       image(this.stencilImg, 0, -10, 40, 40);
@@ -239,17 +239,17 @@ class Person {
       const oColor = color(this.outerColor.r, this.outerColor.g, this.outerColor.b);
       fill(oColor);
       if (this.outerType === 'blazer' || this.outerType === 'cardigan') {
-        beginShape(); vertex(-22,-42); vertex(0,-15); vertex(-5,22); vertex(-27,22); endShape(CLOSE);
-        beginShape(); vertex( 22,-42); vertex(0,-15); vertex( 5,22); vertex( 27,22); endShape(CLOSE);
+        beginShape(); vertex(-22, -42); vertex(0, -15); vertex(-5, 22); vertex(-27, 22); endShape(CLOSE);
+        beginShape(); vertex(22, -42); vertex(0, -15); vertex(5, 22); vertex(27, 22); endShape(CLOSE);
         if (this.outerType === 'blazer') {
-          fill(this.outerColor.r*0.9, this.outerColor.g*0.9, this.outerColor.b*0.9);
-          triangle(-20,-40, 0,-15, -12,-25);
-          triangle( 20,-40, 0,-15,  12,-25);
+          fill(this.outerColor.r * 0.9, this.outerColor.g * 0.9, this.outerColor.b * 0.9);
+          triangle(-20, -40, 0, -15, -12, -25);
+          triangle(20, -40, 0, -15, 12, -25);
         }
       } else if (this.outerType === 'denim_jacket') {
-        rect(-27,-42, 22, 60, 4); rect(5,-42, 22, 60, 4);
-        stroke(200,150,50,100); strokeWeight(2);
-        line(-16,-42,-16,18); line(16,-42,16,18);
+        rect(-27, -42, 22, 60, 4); rect(5, -42, 22, 60, 4);
+        stroke(200, 150, 50, 100); strokeWeight(2);
+        line(-16, -42, -16, 18); line(16, -42, 16, 18);
         stroke('#5a3a29'); strokeWeight(4);
       }
     }
@@ -265,8 +265,8 @@ class Person {
       rect(-7, 0, 14, longSleeve ? 45 : 18, 4, 4, 2, 2);
       pop();
     };
-    _arm(-20,  PI/6);
-    _arm( 20, -PI/6);
+    _arm(-20, PI / 6);
+    _arm(20, -PI / 6);
 
     // 8. Head & neck
     fill(sc);
@@ -275,7 +275,7 @@ class Person {
     // Ears — at face edge, same style as reference arc(85,225,...) / arc(315,225,...)
     stroke('#5a3a29'); strokeWeight(2);
     arc(-50, -62, 22, 28, HALF_PI, PI + HALF_PI);
-    arc( 50, -62, 22, 28, -HALF_PI, HALF_PI);
+    arc(50, -62, 22, 28, -HALF_PI, HALF_PI);
 
     // Chibi face — round, wide cheeks
     beginShape();
@@ -291,8 +291,8 @@ class Person {
     noStroke();
     fill(255, 99, 71, 90);
     ellipse(-36, -47, 28, 12);
-    ellipse( 36, -47, 28, 12);
-    
+    ellipse(36, -47, 28, 12);
+
     // 10. Eyes (shape + color aware, from character.js)
     _drawEyes(this.eyeShape, ec);
 
@@ -301,8 +301,8 @@ class Person {
 
     // 12. Mouth (smile-score driven)
     noFill(); stroke('#5a3a29'); strokeWeight(2);
-    const smileW = 7  + this.smileScore * 10;
-    const smileH = 4  + this.smileScore * 8;
+    const smileW = 7 + this.smileScore * 10;
+    const smileH = 4 + this.smileScore * 8;
     arc(0, -40, smileW, smileH, 0, PI);
 
     // 13. Lip tint
@@ -376,11 +376,11 @@ function createAccessoryPanel() {
   }
 
   return {
-    values:   () => Array.from(selected),
-    show:     () => { panel.style.display = 'flex'; },
-    hide:     () => { panel.style.display = 'none'; },
+    values: () => Array.from(selected),
+    show: () => { panel.style.display = 'flex'; },
+    hide: () => { panel.style.display = 'none'; },
     position: (x, y) => { panel.style.left = x + 'px'; panel.style.top = y + 'px'; },
-    reset:    () => {
+    reset: () => {
       selected.clear();
       for (const b of Object.values(buttons)) {
         b.style.background = '#21262d';
@@ -401,11 +401,11 @@ function setup() {
   characters.push(new Person(0, 0));
 
   accessoryPanel = createAccessoryPanel();
-  
+
   downloadBtn = createBtn('💾 DOWNLOAD AVATAR', '#2ea043', () => {
     saveCanvas('PersonaFlow_Avatar', 'png');
   });
-  
+
   retryBtn = createBtn('🔄 RETRY', '#da3633', () => {
     currentState = APP_STATES.LIVE;
     isDetecting = cameraEnabled;
@@ -510,9 +510,13 @@ function setup() {
       generationProgress.message = payload.guidance || payload.error || '生成未通過檢查';
       console.error("Avatar Gen Failed", payload.error);
       const reason = payload.guidance || payload.error || 'unknown_error';
-      const title = payload.error_kind === 'service'
-        ? '生圖服務暫時無法完成請求。'
-        : '生成結果需要重新拍攝或上傳。';
+      // Billing is split out from 'service' because "暫時" would be a lie: the
+      // request never reached the model and waiting changes nothing.
+      const title = payload.error_kind === 'billing'
+        ? '生圖服務餘額不足，請求未送出。'
+        : payload.error_kind === 'service'
+          ? '生圖服務暫時無法完成請求。'
+          : '生成結果需要重新拍攝或上傳。';
       alert(title + "\n\n原因：" + reason);
       currentState = APP_STATES.LIVE;
     }
@@ -559,12 +563,12 @@ function setup() {
 
 function draw() {
   background('#0d1117');
-  const modeSelector = document.getElementById('mode-selector');
-  if (modeSelector) {
-    if (currentState === APP_STATES.LIVE) modeSelector.style.removeProperty('display');
-    else modeSelector.style.display = 'none';
+  const modelSelector = document.getElementById('model-selector');
+  if (modelSelector) {
+    if (currentState === APP_STATES.LIVE) modelSelector.style.removeProperty('display');
+    else modelSelector.style.display = 'none';
   }
-  
+
   // Grid
   stroke('#161b22'); strokeWeight(1);
   for (let x = 0; x < width; x += 40) line(x, 0, x, height);
@@ -588,41 +592,46 @@ function _getLiveLayout() {
   const btnH = 36;
   const desktop = width >= 1280;
   const compactColumns = !desktop && width >= 800;
-  const modeRect = document.getElementById('mode-selector')?.getBoundingClientRect();
-  const headerH = desktop ? 80 : Math.max(80, Math.ceil(modeRect?.bottom || 80) + 4);
-  const leftSidebarW = desktop ? 300 : 0;
+  const modelPanelW = desktop ? 260 : 0; // model-selector column, reserved INSIDE the frame
   const rightSidebarW = desktop ? 300 : 0;
   const colorPreviewW = 130;
 
-  const panelW = width - margin * 2;
-  const panelH = height - headerH - margin * 2;
+  // The frame's top boundary sits just below the LOAD TEST PHOTO button
+  // (top-right) rather than a guessed fixed height, so it never overlaps it.
+  // The frame spans the full width; the model-selector, camera, colour
+  // preview and status panel are all columns laid out inside that one
+  // boundary, so they read as one group instead of the selector floating
+  // outside it.
+  const loadBtnBottom = loadPhotoBtn?.getBoundingClientRect()?.bottom;
+  const frameY = Math.ceil(loadBtnBottom || 60) + pad;
+  const frameX = margin;
+  const frameW = width - frameX - margin;
+  const frameH = height - frameY - margin;
 
-  // On desktop the mode controls and live indicators have dedicated columns.
-  // On smaller screens the indicators become a compact overlay, so no panel
-  // is ever pushed below the viewport.
-  const contentLeft = margin + leftSidebarW + pad;
-  const desktopStatusX = margin + panelW - rightSidebarW + pad;
+  const contentLeft = frameX + pad + (modelPanelW ? modelPanelW + pad : 0);
+  const desktopStatusX = frameX + frameW - pad - rightSidebarW;
   const desktopColorX = desktopStatusX - pad - colorPreviewW;
   const desktopVideoRight = desktopColorX - pad;
   const compactColumnStatusW = 230;
-  const panelInnerW = panelW - pad * 2;
+  const frameInnerW = frameW - pad * 2;
   const availW = desktop
     ? Math.max(260, desktopVideoRight - contentLeft)
     : compactColumns
-      ? Math.max(260, panelInnerW - colorPreviewW - compactColumnStatusW - pad * 2)
-      : Math.max(260, panelInnerW);
-  const availH = Math.max(220, panelH - pad * 3 - btnH);
-  const aspect = 3 / 4; // h/w for 640×480
-
-  let vidW = Math.min(1280, availW);
+      ? Math.max(260, frameInnerW - colorPreviewW - compactColumnStatusW - pad * 2)
+      : Math.max(260, frameInnerW);
+  const availH = Math.max(220, frameH - pad * 3 - btnH);
+  // Portrait: a standing figure needs height, not the landscape width the raw
+  // 640×480 capture is shaped for. Fill the available height first so the
+  // camera box grows tall instead of being capped by a fixed max width.
+  const aspect = 4 / 3; // h/w
+  let vidW = Math.min(availW, availH / aspect);
   let vidH = vidW * aspect;
-  if (vidH > availH) { vidH = availH; vidW = vidH / aspect; }
 
   const compactGroupW = vidW + colorPreviewW + compactColumnStatusW + pad * 2;
   const imgX = compactColumns
-    ? margin + pad + Math.max(0, (panelInnerW - compactGroupW) / 2)
+    ? frameX + pad + Math.max(0, (frameInnerW - compactGroupW) / 2)
     : Math.max(contentLeft, contentLeft + (availW - vidW) / 2);
-  const imgY = headerH + margin + pad;
+  const imgY = frameY + pad;
   const btnX = imgX + vidW / 2 - btnW / 2;
   const btnY = imgY + vidH + pad;
   const compactColorGap = 12;
@@ -631,18 +640,18 @@ function _getLiveLayout() {
   const compactStatusW = Math.min(300, Math.max(230, compactStatusMaxW));
   const statusLayout = desktop
     ? {
-        x: desktopStatusX,
-        y: imgY,
-        w: rightSidebarW - pad * 2,
-        h: Math.min(282, Math.max(220, panelH - pad * 2)),
-      }
+      x: desktopStatusX,
+      y: imgY,
+      w: rightSidebarW - pad * 2,
+      h: Math.max(220, availH),
+    }
     : compactColumns
       ? {
-          x: imgX + vidW + pad + colorPreviewW + pad,
-          y: imgY,
-          w: compactColumnStatusW,
-          h: Math.min(282, Math.max(220, panelH - pad * 2)),
-        }
+        x: imgX + vidW + pad + colorPreviewW + pad,
+        y: imgY,
+        w: compactColumnStatusW,
+        h: Math.max(220, availH),
+      }
       : {
         x: compactSplit ? imgX + vidW - 12 - compactStatusW : imgX + 12,
         y: imgY + 12,
@@ -656,10 +665,20 @@ function _getLiveLayout() {
     h: 164,
     visible: desktop || compactColumns || compactSplit,
   };
+  // Same column the model-selector's contentLeft offset reserves; keeping it
+  // as its own panel (rather than folding it into contentLeft's math) means
+  // its x/y/w/h can be hand-tuned the same way status/colour panels are.
+  const modelSelectorLayout = {
+    x: frameX + pad,
+    y: frameY + pad,
+    w: modelPanelW,
+    h: availH,
+    visible: desktop && modelPanelW > 0,
+  };
 
   return {
-    margin, headerH, pad, panelW, panelH, vidW, vidH, imgX, imgY,
-    desktop, leftSidebarW, rightSidebarW, statusLayout, colorPreviewLayout,
+    margin, pad, frameX, frameY, frameW, frameH, vidW, vidH, imgX, imgY,
+    desktop, modelPanelW, rightSidebarW, statusLayout, colorPreviewLayout, modelSelectorLayout,
     btnW, btnH, btnX, btnY,
   };
 }
@@ -684,12 +703,38 @@ function drawLiveState() {
   text("STEP 1: POSITION YOURSELF, THEN PRESS ENTER TO CAPTURE", 20, 50);
 
   const {
-    margin, headerH, panelW, panelH, vidW, vidH, imgX, imgY,
-    desktop, statusLayout, colorPreviewLayout, btnH, btnY,
+    frameX, frameY, frameW, frameH, vidW, vidH, imgX, imgY,
+    desktop, statusLayout, colorPreviewLayout, modelSelectorLayout, btnH, btnY,
   } = _getLiveLayout();
 
   fill('#161b22'); stroke('#30363d'); strokeWeight(2);
-  rect(margin, headerH + margin, panelW, panelH, 12);
+  rect(frameX, frameY, frameW, frameH, 12);
+
+  // Model-selector is a DOM element (needs a real <select>), but it now sits
+  // as a panel inside the same frame boundary as the camera/colour/status
+  // panels, positioned and sized from the layout just like they are.
+  const modelSelector = document.getElementById('model-selector');
+  if (modelSelector) {
+    if (modelSelectorLayout.visible) {
+      modelSelector.style.left = modelSelectorLayout.x + 'px';
+      modelSelector.style.top = modelSelectorLayout.y + 'px';
+      modelSelector.style.width = modelSelectorLayout.w + 'px';
+      modelSelector.style.height = modelSelectorLayout.h + 'px';
+      modelSelector.classList.add('in-frame');
+    } else {
+      modelSelector.style.removeProperty('left');
+      modelSelector.style.removeProperty('top');
+      modelSelector.style.removeProperty('width');
+      modelSelector.style.removeProperty('height');
+      modelSelector.classList.remove('in-frame');
+    }
+  }
+
+  // The raw capture is a 4:3 landscape frame (640×480); the display box is
+  // portrait, so crop a centred vertical slice instead of stretching it.
+  const srcW = 640, srcH = 480;
+  const cropW = Math.min(srcW, srcH * (vidW / vidH));
+  const cropX = (srcW - cropW) / 2;
 
   // Video feed or camera-off placeholder
   if (!cameraEnabled) {
@@ -701,7 +746,7 @@ function drawLiveState() {
     push();
     translate(imgX + vidW, imgY);
     scale(-1, 1);
-    image(capture, 0, 0, vidW, vidH);
+    image(capture, 0, 0, vidW, vidH, cropX, 0, cropW, srcH);
     pop();
 
     noFill(); stroke('#30363d'); strokeWeight(2);
@@ -719,7 +764,7 @@ function drawLiveState() {
 
     // 骨架疊加
     if (latestFeatures?.landmarks) {
-      _drawSkeleton(latestFeatures.landmarks, imgX, imgY, vidW, vidH);
+      _drawSkeleton(latestFeatures.landmarks, imgX, imgY, vidW, vidH, cropX / srcW, cropW / srcW);
     }
     _drawCaptureGuide(imgX, imgY, vidW, vidH, latestFeatures);
 
@@ -781,12 +826,16 @@ function drawLiveState() {
   const captureGateReady = cameraEnabled && _allCaptureIndicatorsPassed(latestFeatures);
 
   const btns = [
-    { id: 'capture', label: countdownValue > 0 ? "📸 CAPTURING..." : (captureGateReady ? "↵ ENTER｜3s 拍攝" : "🔒 等待全亮"),
+    {
+      id: 'capture', label: countdownValue > 0 ? "📸 CAPTURING..." : (captureGateReady ? "↵ ENTER｜3s 拍攝" : "🔒 等待全亮"),
       x: startX, w: captureW,
-      color: captureGateReady ? '#1f6feb' : '#21262d' },
-    { id: 'cam',     label: cameraEnabled ? '📷 關閉攝影機' : '📷 開啟攝影機',
+      color: captureGateReady ? '#1f6feb' : '#21262d'
+    },
+    {
+      id: 'cam', label: cameraEnabled ? '📷 關閉攝影機' : '📷 開啟攝影機',
       x: startX + captureW + gap, w: camW,
-      color: cameraEnabled ? '#6e7681' : '#388bfd' },
+      color: cameraEnabled ? '#6e7681' : '#388bfd'
+    },
   ];
 
   for (const b of btns) {
@@ -881,8 +930,8 @@ function drawCustomizeState() {
 
   // Center avatar
   const person = characters[0];
-  person.x = width/2 - 100; // shift slightly left to make room for UI
-  person.y = height/2 + (height * 0.05);
+  person.x = width / 2 - 100; // shift slightly left to make room for UI
+  person.y = height / 2 + (height * 0.05);
   person.accessories = accessoryPanel.values();
   // Dynamic scale based on screen height to avoid overflowing
   const dynamicScale = Math.max(1.2, Math.min(2.2, height / 450));
@@ -906,8 +955,8 @@ function drawCustomizeState() {
   _maybeSaveRenderedAvatar(person);
 
   // Accessory panel position
-  const uiX = width/2 + 150;
-  const uiY = height/2 - 120;
+  const uiX = width / 2 + 150;
+  const uiY = height / 2 - 120;
 
   accessoryPanel.show();
   accessoryPanel.position(uiX, uiY);
@@ -1101,7 +1150,8 @@ function _newRequestId() {
 function _requestAvatarGeneration(image, sourceType = 'camera') {
   if (!window.personaFlow?.socket || !image) return;
   activeAvatarRequestId = _newRequestId();
-  activeGenerationMode = _getSelectedMode();
+  activeGenerationMode = 'full_character';
+  const selectedModel = _getSelectedModel();
   generationStartedAt = millis();
   generationProgress = {
     stage: 'queued', percent: 2, displayPercent: 0,
@@ -1112,6 +1162,7 @@ function _requestAvatarGeneration(image, sourceType = 'camera') {
     mode: activeGenerationMode,
     request_id: activeAvatarRequestId,
     source_type: sourceType,
+    ...(selectedModel ? { model: selectedModel } : {}),
   });
 }
 
@@ -1321,18 +1372,19 @@ function _toggleCamera() {
   }
 }
 
-function _getSelectedMode() {
-  const checked = document.querySelector('input[name="genMode"]:checked');
-  return checked ? checked.value : 'full_character';
+function _getSelectedModel() {
+  return document.getElementById('modelSelect')?.value || '';
 }
 
-function _drawSkeleton(landmarks, ix, iy, vw, vh) {
+function _drawSkeleton(landmarks, ix, iy, vw, vh, cropLeftNorm = 0, cropWidthNorm = 1) {
   const CONNS = [
-    [11,12],[11,13],[13,15],[12,14],[14,16],
-    [11,23],[12,24],[23,24],
-    [23,25],[25,27],[24,26],[26,28]
+    [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
+    [11, 23], [12, 24], [23, 24],
+    [23, 25], [25, 27], [24, 26], [26, 28]
   ];
-  const lx = lm => ix + (1 - lm.x) * vw;
+  // Landmarks are normalized against the full uncropped capture; remap into
+  // the displayed (cropped) box before mirroring, or points drift outward.
+  const lx = lm => ix + (1 - (lm.x - cropLeftNorm) / cropWidthNorm) * vw;
   const ly = lm => iy + lm.y * vh;
   const vis = lm => (lm.v === undefined || lm.v > 0.4);
 
@@ -1464,7 +1516,7 @@ function _joinSwarm() {
 
   const eInner = _enh(p.innerColor);
   const eLower = _enh(p.lowerColor);
-  const eArm   = _enh(armSrc);
+  const eArm = _enh(armSrc);
 
   // Build enhanced outfit so projection.html doesn't see the raw CV hex
   let enhancedOutfit = myAvatarData?.outfit ? { ...myAvatarData.outfit } : null;
@@ -1482,16 +1534,16 @@ function _joinSwarm() {
     x: 960, y: 540,
     upper: { hex: eInner.hex, rgb: [eInner.r, eInner.g, eInner.b] },
     lower: { hex: eLower.hex, rgb: [eLower.r, eLower.g, eLower.b] },
-    arm:   { hex: eArm.hex,   rgb: [eArm.r,   eArm.g,   eArm.b  ] },
+    arm: { hex: eArm.hex, rgb: [eArm.r, eArm.g, eArm.b] },
     upper_type: 'short_sleeve',
     lower_type: (p.lowerType === 'jeans' || p.lowerType === 'suit_pants' || p.lowerType === 'long_pants')
       ? 'long_pants' : 'shorts',
     accessories: p.accessories,
-    accessory:   p.accessories[0] || 'none',
-    face:        myAvatarData?.face || null,
-    outfit:      enhancedOutfit,
-    body_png:    myAvatarData?.projection_png || myAvatarData?.body_png || null,
-    body_bbox:   myAvatarData?.body_bbox || null,
+    accessory: p.accessories[0] || 'none',
+    face: myAvatarData?.face || null,
+    outfit: enhancedOutfit,
+    body_png: myAvatarData?.projection_png || myAvatarData?.body_png || null,
+    body_bbox: myAvatarData?.body_bbox || null,
     character_mode: 'full_character',
     height_class: myAvatarData.height_class,
     height_profile: myAvatarData.height_profile,
@@ -1512,11 +1564,11 @@ function _joinSwarm() {
   try {
     const bc = new BroadcastChannel('avatar_sync');
     bc.postMessage({
-      boidId:      window.personaFlow.myCharId || 'user_0',
-      topColor:    eInner.hex,
+      boidId: window.personaFlow.myCharId || 'user_0',
+      topColor: eInner.hex,
       bottomColor: eLower.hex,
-      armColor:    eArm.hex,
-      hasGlasses:  p.accessories.includes('glasses'),
+      armColor: eArm.hex,
+      hasGlasses: p.accessories.includes('glasses'),
     });
     bc.close();
   } catch (_) { /* BroadcastChannel not supported */ }

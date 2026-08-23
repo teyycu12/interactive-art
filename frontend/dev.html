@@ -3,23 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>PersonaFlow｜生成歷史、成本與盲評</title>
+  <title>PersonaFlow｜生成歷史</title>
   <style>
     :root { color-scheme: dark; --bg:#070b12; --panel:#111824; --line:#263247; --muted:#93a1b5; --text:#edf3fb; --accent:#65d3ff; --green:#6ee7a8; --yellow:#f6c85f; --red:#ff7b86; }
     * { box-sizing:border-box; }
     body { margin:0; font-family:Inter,"Noto Sans TC",system-ui,sans-serif; background:radial-gradient(circle at 10% 0,#132039 0,transparent 36%),var(--bg); color:var(--text); min-height:100vh; }
     header { padding:22px clamp(18px,4vw,54px); border-bottom:1px solid var(--line); background:#09101bcc; backdrop-filter:blur(14px); position:sticky; top:0; z-index:20; }
-    .topline,.toolbar,.row,.actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-    .topline { justify-content:space-between; }
+    .topline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:space-between; }
     h1 { font-size:clamp(21px,3vw,32px); margin:0; letter-spacing:.02em; }
     h2 { margin:0 0 14px; font-size:20px; } h3 { margin:12px 0; }
     a { color:var(--accent); text-decoration:none; }
     main { width:min(1500px,calc(100% - 28px)); margin:22px auto 60px; }
     .notice { color:var(--muted); margin:0 0 16px; }
-    .tabs { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)); gap:8px; margin-bottom:16px; }
-    .tab { border:1px solid var(--line); background:#0d1420; color:var(--muted); padding:13px; border-radius:11px; cursor:pointer; font-weight:700; }
-    .tab.active { color:#061018; background:var(--accent); border-color:var(--accent); }
-    .view[hidden] { display:none!important; }
     .panel { background:linear-gradient(150deg,#131d2b,#0e1520); border:1px solid var(--line); border-radius:15px; padding:18px; margin-bottom:14px; box-shadow:0 14px 34px #0004; }
     .cards { display:grid; grid-template-columns:repeat(8,minmax(115px,1fr)); gap:9px; margin-bottom:14px; }
     .card { background:#0e1623; border:1px solid var(--line); border-radius:12px; padding:13px; min-height:85px; }
@@ -27,100 +22,62 @@
     button,input,select,textarea { font:inherit; }
     button,.button { border:1px solid #3a4a64; border-radius:9px; background:#172235; color:var(--text); padding:9px 13px; cursor:pointer; }
     button:hover { border-color:var(--accent); } button.primary { background:var(--accent); color:#05131c; border-color:var(--accent); font-weight:800; }
-    button.danger { border-color:#743744; color:#ffabb2; } button:disabled { opacity:.42; cursor:not-allowed; }
+    button:disabled { opacity:.42; cursor:not-allowed; }
     input,select,textarea { width:100%; border:1px solid var(--line); border-radius:9px; background:#080e17; color:var(--text); padding:10px; }
     textarea { min-height:78px; resize:vertical; }
     label { display:grid; gap:5px; color:#c9d4e4; font-size:13px; }
     .form-grid { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:12px; }
     .form-grid .wide { grid-column:1/-1; }
     .table-wrap { overflow:auto; max-width:100%; }
-    table { width:100%; border-collapse:collapse; font-size:13px; white-space:nowrap; }
-    th,td { padding:10px; border-bottom:1px solid #202c3e; text-align:left; vertical-align:top; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th,td { padding:10px; border-bottom:1px solid #202c3e; text-align:left; vertical-align:top; white-space:nowrap; }
     th { color:#9fb0c7; position:sticky; top:0; background:#111a28; }
     tbody tr[data-id] { cursor:pointer; } tbody tr[data-id]:hover { background:#172235; }
+    tbody tr[data-id] td:first-child::before { content:"▸"; display:inline-block; width:1em; color:var(--muted); }
+    tbody tr[data-id].open { background:#152032; } tbody tr[data-id].open td:first-child::before { content:"▾"; color:var(--accent); }
+    tr.detail-row > td { padding:0; border-bottom:1px solid #202c3e; white-space:normal; background:#0b121c; }
+    tr.detail-row .detail-inner { padding:16px; }
     .success,.pass { color:var(--green); } .failed,.fail,.error { color:var(--red); } .running,.pending { color:var(--yellow); }
     .pill { display:inline-block; border:1px solid #33445e; border-radius:999px; padding:3px 8px; color:#c5d3e7; font-size:11px; }
-    .split { display:grid; grid-template-columns:minmax(280px,1fr) minmax(350px,1.25fr); gap:14px; }
-    .gallery { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+    .compare { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px; max-width:560px; }
     .shot { border:1px solid var(--line); background:#09101a; border-radius:12px; padding:10px; display:grid; gap:8px; }
-    .shot img { width:100%; aspect-ratio:4/5; object-fit:contain; border-radius:8px; background:#05080d; }
-    .session { display:grid; grid-template-columns:1fr auto; gap:12px; border-top:1px solid var(--line); padding:12px 0; }
-    .session:first-child { border-top:0; }
-    .blind-stage { display:grid; grid-template-columns:minmax(240px,1fr) minmax(240px,1fr) minmax(310px,.8fr); gap:14px; align-items:start; }
-    .blind-image { background:#05080d; border:1px solid var(--line); border-radius:13px; padding:10px; }
-    .blind-image img { width:100%; height:min(58vh,620px); object-fit:contain; display:block; }
-    .score-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
-    .group-grid { display:grid; grid-template-columns:repeat(5,minmax(100px,1fr)); gap:8px; }
-    .group-grid img { width:100%; aspect-ratio:3/4; object-fit:contain; background:#05080d; border-radius:8px; }
-    .progress { height:8px; background:#172235; border-radius:999px; overflow:hidden; margin:8px 0 16px; }
-    .progress span { display:block; height:100%; background:var(--accent); }
-    .result-grid { display:grid; grid-template-columns:1.5fr 1fr; gap:14px; }
-    canvas { width:100%; min-height:320px; border-radius:10px; background:#080e17; }
+    .shot img { width:100%; max-height:260px; aspect-ratio:4/5; object-fit:contain; border-radius:8px; background:#05080d; }
+    .detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
     .empty { padding:28px; text-align:center; color:var(--muted); border:1px dashed #304057; border-radius:12px; }
-    @media(max-width:1100px){ .cards{grid-template-columns:repeat(4,1fr)} .blind-stage{grid-template-columns:1fr 1fr}.blind-stage form{grid-column:1/-1}.group-grid{grid-template-columns:repeat(3,1fr)} }
-    @media(max-width:720px){ main{width:min(100% - 16px,1500px)} header{padding:14px}.tabs{grid-template-columns:1fr 1fr}.cards{grid-template-columns:1fr 1fr}.form-grid,.split,.blind-stage,.result-grid{grid-template-columns:1fr}.group-grid{grid-template-columns:1fr 1fr}.score-grid{grid-template-columns:1fr} }
+    @media(max-width:1100px){ .cards{grid-template-columns:repeat(4,1fr)} }
+    @media(max-width:720px){ main{width:min(100% - 16px,1500px)} header{padding:14px} .cards{grid-template-columns:1fr 1fr} .form-grid,.compare,.detail-grid{grid-template-columns:1fr} }
   </style>
 </head>
 <body>
-  <header><div class="topline"><div><h1>生成歷史、成本與盲評</h1><span class="muted">PersonaFlow Research Console</span></div><nav><a href="index.html">主操作頁</a>　<a href="projection.html">投影牆</a></nav></div></header>
+  <header><div class="topline"><div><h1>生成歷史</h1><span class="muted">PersonaFlow Research Console</span></div><nav><a href="index.html">主操作頁</a>　<a href="projection.html">投影牆</a></nav></div></header>
   <main>
-    <p class="notice">一般生成不保存原始照片；只有明確匯入的評測縮圖會暫存在本機 gitignored 目錄，並可按實驗批次刪除。</p>
-    <nav class="tabs" aria-label="操作台分頁">
-      <button class="tab active" data-view="history">1　生成歷史</button>
-      <button class="tab" data-view="batch">2　建立盲評批次</button>
-      <button class="tab" data-view="blind">3　盲評模式</button>
-      <button class="tab" data-view="results">4　評測結果</button>
-    </nav>
-
-    <section class="view" id="view-history">
-      <div class="cards">
-        <div class="card"><span class="label">測試次數</span><strong class="value" id="runCount">—</strong></div>
-        <div class="card"><span class="label">API請求</span><strong class="value" id="apiCount">—</strong></div>
-        <div class="card"><span class="label">累計成本</span><strong class="value" id="cost">—</strong></div>
-        <div class="card"><span class="label">總Token</span><strong class="value" id="tokens">—</strong></div>
-        <div class="card"><span class="label">成功率</span><strong class="value" id="successRate">—</strong></div>
-        <div class="card"><span class="label">已人工審查</span><strong class="value" id="reviewedCount">—</strong></div>
-        <div class="card"><span class="label">人工通過率</span><strong class="value" id="reviewPassRate">—</strong></div>
-        <div class="card"><span class="label">正式／舊版細節</span><strong class="value" id="detailParity">—</strong></div>
-        <div class="card"><span class="label">物種離散度<br><span class="muted" style="font-weight:400">線寬·軀幹</span></span><strong class="value" id="castDrift">—</strong></div>
+    <p class="notice">點一筆紀錄可直接在原地展開，內含輸入照片與生成結果的對照，方便檢查還原性。</p>
+    <div class="cards">
+      <div class="card"><span class="label">測試次數</span><strong class="value" id="runCount">—</strong></div>
+      <div class="card"><span class="label">API請求</span><strong class="value" id="apiCount">—</strong></div>
+      <div class="card"><span class="label">累計成本</span><strong class="value" id="cost">—</strong></div>
+      <div class="card"><span class="label">總Token</span><strong class="value" id="tokens">—</strong></div>
+      <div class="card"><span class="label">成功率</span><strong class="value" id="successRate">—</strong></div>
+      <div class="card"><span class="label">已人工審查</span><strong class="value" id="reviewedCount">—</strong></div>
+      <div class="card"><span class="label">人工通過率</span><strong class="value" id="reviewPassRate">—</strong></div>
+      <div class="card"><span class="label">物種離散度<br><span class="muted" style="font-weight:400">線寬·軀幹</span></span><strong class="value" id="castDrift">—</strong></div>
+    </div>
+    <div class="panel" id="driftPanel" style="display:none">
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
+        <strong>跨角色物種漂移</strong>
+        <span class="muted">相對離散度 = 標準差／平均。越小代表越像同一個物種。</span>
+        <button id="backfillDrift" style="margin-left:auto">量測歷史紀錄</button>
       </div>
-      <div class="panel" id="driftPanel" style="display:none">
-        <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
-          <strong>跨角色物種漂移</strong>
-          <span class="muted">相對離散度 = 標準差／平均。越小代表越像同一個物種。</span>
-          <button id="backfillDrift" style="margin-left:auto">量測歷史紀錄</button>
-        </div>
-        <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>部位</th><th>樣本</th><th>方向性明暗</th><th>線寬</th><th>印刷佔比</th><th>邊緣密度</th><th>飽和度</th></tr></thead><tbody id="driftRows"></tbody></table></div>
-        <div class="muted" id="driftNote" style="margin-top:8px"></div>
-      </div>
-      <div class="panel toolbar">
-        <select id="modeFilter" style="max-width:230px"><option value="">全部模式</option><option value="full_character">full_character</option><option value="brick_ai_texture">已退役 brick_ai_texture</option><option value="body_sprite">已退役 body_sprite</option><option value="full_character_refined">已退役 refined</option><option value="external_import">外部匯入</option></select>
-        <input id="experimentFilter" placeholder="實驗ID（留空顯示全部）" style="max-width:260px">
-        <input id="variantFilter" placeholder="variant（留空顯示全部）" style="max-width:230px">
-        <button id="refreshHistory">重新整理</button><span class="muted" id="updated"></span>
-      </div>
-      <div class="panel table-wrap"><table><thead><tr><th>時間</th><th>模式</th><th>實驗／人物／variant</th><th>狀態</th><th>細節</th><th>人工審查</th><th>耗時</th><th>API</th><th>Token</th><th>成本USD</th><th>驗證問題</th></tr></thead><tbody id="historyRows"></tbody></table></div>
-      <section class="panel" id="historyDetail" hidden></section>
-    </section>
-
-    <section class="view" id="view-batch" hidden>
-      <div class="split">
-        <section class="panel"><h2>匯入評測原照縮圖</h2><p class="help">只供盲評左右對照；後端會移除EXIF、縮至640px並轉WebP。</p><form id="sourceForm" class="form-grid"><label>實驗ID<input name="experiment_id" required placeholder="brick_v2_10people_01"></label><label>人物代碼<input name="comparison_id" required placeholder="P01"></label><label>真人照片<input name="image" type="file" accept="image/*" required></label><div class="wide actions"><button class="primary">保存縮圖</button><button type="button" class="danger" id="deleteSources">刪除此實驗全部原照</button><span class="muted" id="sourceStatus"></span></div></form></section>
-        <section class="panel"><h2>匯入外部生成結果</h2><p class="help">適用Firefly、Scenario、Colab；Token未提供時會顯示「未提供」，不會記成0。</p><form id="externalForm" class="form-grid"><label>實驗ID<input name="experiment_id" required></label><label>人物代碼<input name="comparison_id" required placeholder="P01"></label><label>Variant<input name="variant_id" required placeholder="firefly"></label><label>模型／服務<input name="model" required placeholder="Adobe Firefly"></label><label>耗時ms<input name="duration_ms" type="number" min="0"></label><label>成本USD<input name="cost_usd" type="number" min="0" step="0.000001"></label><label class="wide">參數JSON<textarea name="parameters" placeholder='{"style_strength":80}'></textarea></label><label class="wide">生成結果<input name="image" type="file" accept="image/*" required></label><div class="wide actions"><button class="primary">匯入歷史與成本</button><span class="muted" id="externalStatus"></span></div></form></section>
-      </div>
-      <section class="panel"><h2>建立盲評批次</h2><p class="help">先在生成歷史詳細頁為各結果填入相同實驗ID、P01–P10及variant。建立後鎖定，評分者才可進入。</p><form id="sessionForm" class="form-grid"><label>批次名稱<input name="name" required placeholder="brick_v2 第一輪"></label><label>實驗ID<input name="experiment_id" required placeholder="brick_v2_10people_01"></label><div class="actions" style="align-self:end"><button class="primary">納入此實驗全部成功結果</button></div></form></section>
-      <section class="panel"><div class="topline"><h2>盲評批次</h2><button id="refreshSessions">重新整理</button></div><div id="sessionList"></div></section>
-    </section>
-
-    <section class="view" id="view-blind" hidden>
-      <section class="panel"><h2>進入匿名評分</h2><div class="form-grid"><label>已鎖定批次<select id="blindSession"></select></label><label>匿名評分者代碼<input id="reviewerCode" placeholder="R01"></label><div class="actions" style="align-self:end"><button class="primary" id="loadBlind">開始／繼續</button></div></div><p class="help">本頁不顯示模型、variant、成本、耗時、自動驗證分數或他人評分。</p></section>
-      <div id="blindWorkspace" class="empty">選擇批次並輸入評分者代碼。</div>
-    </section>
-
-    <section class="view" id="view-results" hidden>
-      <section class="panel"><h2>已解除匿名的結果</h2><div class="toolbar"><select id="resultSession"></select><button class="primary" id="loadResults">載入結果</button><a class="button" id="exportCsv" href="#">匯出CSV</a><button id="exportJson">匯出JSON</button></div><p class="help">只有管理者完成批次、且至少5位評分者完成所有單人與群體評分後，才會揭露variant與成本。</p></section>
-      <div id="resultWorkspace" class="empty">選擇已完成批次。</div>
-    </section>
+      <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>部位</th><th>樣本</th><th>方向性明暗</th><th>線寬</th><th>印刷佔比</th><th>邊緣密度</th><th>飽和度</th></tr></thead><tbody id="driftRows"></tbody></table></div>
+      <div class="muted" id="driftNote" style="margin-top:8px"></div>
+    </div>
+    <div class="panel" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <select id="modeFilter" style="max-width:230px"><option value="">全部模式</option><option value="full_character">full_character</option><option value="brick_ai_texture">已退役 brick_ai_texture</option><option value="body_sprite">已退役 body_sprite</option><option value="full_character_refined">已退役 refined</option><option value="external_import">外部匯入</option></select>
+      <input id="experimentFilter" placeholder="實驗ID（留空顯示全部）" style="max-width:260px">
+      <input id="variantFilter" placeholder="variant（留空顯示全部）" style="max-width:230px">
+      <button id="refreshHistory">重新整理</button><span class="muted" id="updated"></span>
+    </div>
+    <div class="panel table-wrap"><table><thead><tr><th>時間</th><th>模式</th><th>模型</th><th>實驗／人物／variant</th><th>狀態</th><th>細節</th><th>人工審查</th><th>耗時</th><th>API</th><th>Token</th><th>成本USD</th><th>驗證問題</th></tr></thead><tbody id="historyRows"></tbody></table></div>
   </main>
 
   <script>
@@ -129,27 +86,21 @@
     const money=v=>v==null?'未提供':`$${Number(v).toFixed(6)}`;
     const duration=v=>v==null?'—':`${(Number(v)/1000).toFixed(2)}s`;
     const api=async(path,options={})=>{const response=await fetch(`${API}${path}`,options);const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.detail||data.error||`HTTP ${response.status}`);return data};
-    const fileDataUrl=file=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file)});
     const formObject=form=>Object.fromEntries(new FormData(form).entries());
     const postJson=(path,body)=>api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const scoreSelect=(name,label)=>`<label>${label}<select name="${name}" required><option value="">請評分</option>${[1,2,3,4,5].map(n=>`<option value="${n}">${n}</option>`).join('')}</select></label>`;
 
-    document.querySelectorAll('.tab').forEach(button=>button.addEventListener('click',()=>{
-      document.querySelectorAll('.tab').forEach(item=>item.classList.toggle('active',item===button));
-      document.querySelectorAll('.view').forEach(view=>view.hidden=view.id!==`view-${button.dataset.view}`);
-      if(button.dataset.view==='batch')loadSessions();
-      if(button.dataset.view==='blind')loadSessions();
-      if(button.dataset.view==='results')loadSessions();
-    }));
+    let currentRuns=[], openId=null, openRow=null;
 
-    let currentRuns=[],sessions=[],blindState=null,lastResults=null;
     async function loadHistory(){
       const query=new URLSearchParams({limit:'500'});if($('modeFilter').value)query.set('mode',$('modeFilter').value);if($('experimentFilter').value.trim())query.set('experiment_id',$('experimentFilter').value.trim());if($('variantFilter').value.trim())query.set('variant_id',$('variantFilter').value.trim());
       const driftQuery=new URLSearchParams();if($('experimentFilter').value.trim())driftQuery.set('experiment_id',$('experimentFilter').value.trim());
-      const [summary,runs,benchmark,drift]=await Promise.all([api('/summary'),api(`/generations?${query}`),api('/detail-benchmark'),api(`/cast-drift?${driftQuery}`).catch(()=>null)]);currentRuns=runs.items||[];
-      $('runCount').textContent=summary.run_count||0;$('apiCount').textContent=summary.api_call_count||0;$('cost').textContent=money(summary.cost_usd);$('tokens').textContent=Number(summary.total_tokens||0).toLocaleString();$('successRate').textContent=`${(Number(summary.success_rate||0)*100).toFixed(1)}%`;$('reviewedCount').textContent=summary.reviewed_count||0;$('reviewPassRate').textContent=summary.reviewed_count?`${(summary.review_pass_count/summary.reviewed_count*100).toFixed(1)}%`:'—';const parity=benchmark.paired_detail_ratio_median??benchmark.detail_parity_ratio;$('detailParity').textContent=parity==null?'待正式樣本':`${(parity*100).toFixed(0)}%`;
-      $('historyRows').innerHTML=currentRuns.map(run=>`<tr data-id="${esc(run.request_id)}"><td>${new Date(run.created_at*1000).toLocaleString()}</td><td>${esc(run.mode)}</td><td><span class="pill">${esc(run.experiment_id||'未分組')}</span><br>${esc(run.comparison_id||'—')} · ${esc(run.variant_id||'—')}</td><td class="${esc(run.status)}">${esc(run.status)}</td><td>${run.detail_metrics?.detail_score==null?'—':Number(run.detail_metrics.detail_score).toFixed(3)}</td><td>${esc(run.review_verdict||'pending')}${run.overall_score?` · ${run.overall_score}/5`:''}</td><td>${duration(run.duration_ms)}</td><td>${run.api_call_count}</td><td>${run.token_reported?Number(run.total_tokens).toLocaleString():'未提供'}</td><td>${money(run.cost_usd)}</td><td>${esc((run.validation_errors||[]).join(', ')||'—')}</td></tr>`).join('')||'<tr><td colspan="11" class="muted">沒有符合條件的紀錄</td></tr>';
-      document.querySelectorAll('#historyRows tr[data-id]').forEach(row=>row.onclick=()=>showHistoryDetail(row.dataset.id));$('updated').textContent=`更新 ${new Date().toLocaleTimeString()}`;
+      const [summary,runs,drift]=await Promise.all([api('/summary'),api(`/generations?${query}`),api(`/cast-drift?${driftQuery}`).catch(()=>null)]);currentRuns=runs.items||[];
+      $('runCount').textContent=summary.run_count||0;$('apiCount').textContent=summary.api_call_count||0;$('cost').textContent=money(summary.cost_usd);$('tokens').textContent=Number(summary.total_tokens||0).toLocaleString();$('successRate').textContent=`${(Number(summary.success_rate||0)*100).toFixed(1)}%`;$('reviewedCount').textContent=summary.reviewed_count||0;$('reviewPassRate').textContent=summary.reviewed_count?`${(summary.review_pass_count/summary.reviewed_count*100).toFixed(1)}%`:'—';
+      $('historyRows').innerHTML=currentRuns.map(run=>`<tr data-id="${esc(run.request_id)}"><td>${new Date(run.created_at*1000).toLocaleString()}</td><td>${esc(run.mode)}</td><td>${esc(run.model||'—')}</td><td><span class="pill">${esc(run.experiment_id||'未分組')}</span><br>${esc(run.comparison_id||'—')} · ${esc(run.variant_id||'—')}</td><td class="${esc(run.status)}">${esc(run.status)}</td><td>${run.detail_metrics?.detail_score==null?'—':Number(run.detail_metrics.detail_score).toFixed(3)}</td><td>${esc(run.review_verdict||'pending')}${run.overall_score?` · ${run.overall_score}/5`:''}</td><td>${duration(run.duration_ms)}</td><td>${run.api_call_count}</td><td>${run.token_reported?Number(run.total_tokens).toLocaleString():'未提供'}</td><td>${money(run.cost_usd)}</td><td>${esc((run.validation_errors||[]).join(', ')||'—')}</td></tr>`).join('')||'<tr><td colspan="12" class="muted">沒有符合條件的紀錄</td></tr>';
+      openId=null;openRow=null;
+      document.querySelectorAll('#historyRows tr[data-id]').forEach(row=>row.onclick=()=>toggleHistoryDetail(row.dataset.id,row));
+      $('updated').textContent=`更新 ${new Date().toLocaleTimeString()}`;
       renderDrift(drift);
     }
     const DRIFT_FEATURES=['directional_gradient','stroke_width_rel','mark_share','edge_density','saturation_median'];
@@ -185,34 +136,48 @@
       catch(error){button.textContent=error.message}
       finally{setTimeout(()=>{button.disabled=false;button.textContent='量測歷史紀錄'},2500)}
     };
-    async function showHistoryDetail(id){const run=await api(`/generations/${encodeURIComponent(id)}`),review=run.review||{};$('historyDetail').hidden=false;$('historyDetail').innerHTML=`<div class="split"><div><h2>${esc(run.mode)} · ${esc(run.status)}</h2>${run.output_url?`<div class="shot"><img src="${ORIGIN}${esc(run.output_url)}" alt="生成結果"></div>`:'<div class="empty">沒有保存最終圖</div>'}<p class="muted">Request ${esc(run.request_id)}</p></div><div><h3>實驗配對</h3><form id="metaForm" class="form-grid"><label>實驗ID<input name="experiment_id" value="${esc(run.experiment_id||'')}"></label><label>人物代碼<input name="comparison_id" value="${esc(run.comparison_id||'')}"></label><label>Variant<input name="variant_id" value="${esc(run.variant_id||'')}"></label><div class="wide actions"><button class="primary">保存配對</button><span id="metaStatus" class="muted"></span></div></form><h3>開發者快速審查</h3><form id="quickReview" class="form-grid"><label>判定<select name="verdict"><option value="pending">待審</option><option value="pass" ${review.verdict==='pass'?'selected':''}>通過</option><option value="fail" ${review.verdict==='fail'?'selected':''}>不通過</option></select></label>${['completeness','clothing_match','face_match','overall'].map(key=>scoreSelect(`${key}_score`,{completeness:'肢體完整',clothing_match:'服裝相似',face_match:'臉髮相似',overall:'整體效果'}[key]).replace(`value=\"${review[`${key}_score`]}\"`,`value=\"${review[`${key}_score`]}\" selected`)).join('')}<label class="wide">備註<textarea name="notes">${esc(review.notes||'')}</textarea></label><div class="wide actions"><button>保存快速審查</button><span id="quickStatus" class="muted"></span></div></form><h3>API attempts</h3><div class="table-wrap"><table><thead><tr><th>階段</th><th>模型</th><th>耗時</th><th>Token</th><th>成本</th><th>結果</th></tr></thead><tbody>${(run.attempts||[]).map(a=>`<tr><td>${esc(a.phase)}</td><td>${esc(a.model||'—')}</td><td>${duration(a.duration_ms)}</td><td>${a.total_tokens==null?'未提供':a.total_tokens}</td><td>${money(a.cost_usd)}</td><td>${a.ok?'OK':esc(a.error_code||'failed')}</td></tr>`).join('')}</tbody></table></div></div></div>`;
-      $('metaForm').onsubmit=async event=>{event.preventDefault();try{await postJson(`/generations/${encodeURIComponent(id)}/experiment`,formObject(event.target));$('metaStatus').textContent='已保存';await loadHistory()}catch(error){$('metaStatus').textContent=error.message}};
-      $('quickReview').onsubmit=async event=>{event.preventDefault();const body=formObject(event.target);['completeness_score','clothing_match_score','face_match_score','overall_score'].forEach(key=>body[key]=body[key]?Number(body[key]):null);try{await postJson(`/generations/${encodeURIComponent(id)}/review`,body);$('quickStatus').textContent='已保存';await loadHistory()}catch(error){$('quickStatus').textContent=error.message}};
+
+    async function toggleHistoryDetail(id,row){
+      if(openId===id){closeDetail();return}
+      closeDetail();
+      const run=await api(`/generations/${encodeURIComponent(id)}`),review=run.review||{};
+      const detailRow=document.createElement('tr');
+      detailRow.className='detail-row';
+      detailRow.innerHTML=`<td colspan="12"><div class="detail-inner">
+        <div class="compare">
+          <div class="shot"><span class="muted">輸入照片</span>${run.input_url?`<img src="${ORIGIN}${esc(run.input_url)}" alt="輸入照片">`:'<div class="empty">此紀錄未保存輸入照片</div>'}</div>
+          <div class="shot"><span class="muted">生成結果</span>${run.output_url?`<img src="${ORIGIN}${esc(run.output_url)}" alt="生成結果">`:'<div class="empty">沒有保存最終圖</div>'}</div>
+        </div>
+        <p class="muted">Request ${esc(run.request_id)} · ${esc(run.mode)} · ${esc(run.model||'模型未提供')} · ${esc(run.status)}</p>
+        <div class="detail-grid">
+          <div>
+            <h3>實驗配對</h3>
+            <form id="metaForm" class="form-grid"><label>實驗ID<input name="experiment_id" value="${esc(run.experiment_id||'')}"></label><label>人物代碼<input name="comparison_id" value="${esc(run.comparison_id||'')}"></label><label>Variant<input name="variant_id" value="${esc(run.variant_id||'')}"></label><div class="wide" style="display:flex;align-items:center;gap:10px"><button class="primary">保存配對</button><span id="metaStatus" class="muted"></span></div></form>
+            <h3>開發者快速審查</h3>
+            <form id="quickReview" class="form-grid"><label>判定<select name="verdict"><option value="pending">待審</option><option value="pass" ${review.verdict==='pass'?'selected':''}>通過</option><option value="fail" ${review.verdict==='fail'?'selected':''}>不通過</option></select></label>${['completeness','clothing_match','face_match','overall'].map(key=>scoreSelect(`${key}_score`,{completeness:'肢體完整',clothing_match:'服裝相似',face_match:'臉髮相似',overall:'整體效果'}[key]).replace(`value=\"${review[`${key}_score`]}\"`,`value=\"${review[`${key}_score`]}\" selected`)).join('')}<label class="wide">備註<textarea name="notes">${esc(review.notes||'')}</textarea></label><div class="wide" style="display:flex;align-items:center;gap:10px"><button>保存快速審查</button><span id="quickStatus" class="muted"></span></div></form>
+          </div>
+          <div>
+            <h3>API attempts</h3>
+            <div class="table-wrap"><table><thead><tr><th>階段</th><th>模型</th><th>耗時</th><th>Token</th><th>成本</th><th>結果</th></tr></thead><tbody>${(run.attempts||[]).map(a=>`<tr><td>${esc(a.phase)}</td><td>${esc(a.model||'—')}</td><td>${duration(a.duration_ms)}</td><td>${a.total_tokens==null?'未提供':a.total_tokens}</td><td>${money(a.cost_usd)}</td><td>${a.ok?'OK':esc(a.error_code||'failed')}</td></tr>`).join('')}</tbody></table></div>
+          </div>
+        </div>
+      </div></td>`;
+      row.after(detailRow);
+      row.classList.add('open');
+      openId=id;openRow=row;
+      detailRow.querySelector('#metaForm').onsubmit=async event=>{event.preventDefault();try{const result=await postJson(`/generations/${encodeURIComponent(id)}/experiment`,formObject(event.target));detailRow.querySelector('#metaStatus').textContent='已保存';const item=result.item;row.children[3].innerHTML=`<span class="pill">${esc(item.experiment_id||'未分組')}</span><br>${esc(item.comparison_id||'—')} · ${esc(item.variant_id||'—')}`}catch(error){detailRow.querySelector('#metaStatus').textContent=error.message}};
+      detailRow.querySelector('#quickReview').onsubmit=async event=>{event.preventDefault();const body=formObject(event.target);['completeness_score','clothing_match_score','face_match_score','overall_score'].forEach(key=>body[key]=body[key]?Number(body[key]):null);try{const result=await postJson(`/generations/${encodeURIComponent(id)}/review`,body);detailRow.querySelector('#quickStatus').textContent='已保存';const savedReview=result.review||{};row.children[6].innerHTML=`${esc(savedReview.verdict||'pending')}${savedReview.overall_score?` · ${savedReview.overall_score}/5`:''}`}catch(error){detailRow.querySelector('#quickStatus').textContent=error.message}};
     }
+    function closeDetail(){
+      if(openRow)openRow.classList.remove('open');
+      const existing=document.querySelector('tr.detail-row');
+      if(existing)existing.remove();
+      openId=null;openRow=null;
+    }
+
     $('refreshHistory').onclick=()=>loadHistory().catch(showError);$('modeFilter').onchange=()=>loadHistory().catch(showError);
-
-    $('sourceForm').onsubmit=async event=>{event.preventDefault();const body=formObject(event.target);body.image=await fileDataUrl(body.image);try{await postJson('/review-sources',body);$('sourceStatus').textContent=`${body.comparison_id} 已保存`;event.target.querySelector('[name=image]').value=''}catch(error){$('sourceStatus').textContent=error.message}};
-    $('deleteSources').onclick=async()=>{const experiment=$('sourceForm').elements.experiment_id.value.trim();if(!experiment||!confirm(`刪除 ${experiment} 的全部評測原照？生成結果和評分不受影響。`))return;try{const result=await api(`/review-sources/${encodeURIComponent(experiment)}`,{method:'DELETE'});$('sourceStatus').textContent=`已刪除 ${result.deleted} 張`}catch(error){$('sourceStatus').textContent=error.message}};
-    $('externalForm').onsubmit=async event=>{event.preventDefault();const body=formObject(event.target);body.image=await fileDataUrl(body.image);body.duration_ms=body.duration_ms?Number(body.duration_ms):0;body.cost_usd=body.cost_usd===''?null:Number(body.cost_usd);try{body.parameters=body.parameters?JSON.parse(body.parameters):{};await postJson('/external-generations',body);$('externalStatus').textContent='已匯入生成歷史';event.target.reset();await loadHistory()}catch(error){$('externalStatus').textContent=error.message}};
-    $('sessionForm').onsubmit=async event=>{event.preventDefault();try{await postJson('/review-sessions',formObject(event.target));event.target.reset();await loadSessions()}catch(error){alert(error.message)}};
-    $('refreshSessions').onclick=()=>loadSessions();
-    async function loadSessions(){const data=await api('/review-sessions');sessions=data.items||[];$('sessionList').innerHTML=sessions.map(s=>`<div class="session"><div><strong>${esc(s.name)}</strong> <span class="pill">${esc(s.status)}</span><br><span class="muted">${esc(s.experiment_id)} · ${s.item_count}項 · 評分者${s.completed_reviewer_count}/${Math.max(5,s.reviewer_count||0)}</span></div><div class="actions">${s.status==='draft'?`<button data-action="lock" data-session="${esc(s.session_id)}">鎖定並開始</button>`:''}${s.status==='locked'?`<button data-action="complete" data-session="${esc(s.session_id)}">完成並揭露</button>`:''}${s.status==='completed'?`<button data-open-result="${esc(s.session_id)}">查看結果</button>`:''}</div></div>`).join('')||'<div class="empty">尚未建立盲評批次</div>';
-      document.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>{try{await postJson(`/review-sessions/${button.dataset.session}/${button.dataset.action}`,{});await loadSessions()}catch(error){alert(error.message)}});document.querySelectorAll('[data-open-result]').forEach(button=>button.onclick=()=>{switchView('results');$('resultSession').value=button.dataset.openResult;loadResults()});
-      $('blindSession').innerHTML='<option value="">選擇批次</option>'+sessions.filter(s=>s.status==='locked').map(s=>`<option value="${esc(s.session_id)}">${esc(s.name)}</option>`).join('');$('resultSession').innerHTML='<option value="">選擇已完成批次</option>'+sessions.filter(s=>s.status==='completed').map(s=>`<option value="${esc(s.session_id)}">${esc(s.name)}</option>`).join('');
-    }
-    function switchView(name){document.querySelector(`.tab[data-view="${name}"]`).click()}
-
-    $('loadBlind').onclick=async()=>{const session=$('blindSession').value,reviewer=$('reviewerCode').value.trim();if(!session||!reviewer)return alert('請選擇批次並輸入評分者代碼');try{blindState=await api(`/review-sessions/${encodeURIComponent(session)}/blind?reviewer_code=${encodeURIComponent(reviewer)}`);renderBlind()}catch(error){$('blindWorkspace').className='empty';$('blindWorkspace').textContent=error.message}};
-    function renderBlind(){const pendingItems=blindState.items.filter(item=>!item.completed),pendingGroups=blindState.groups.filter(group=>!group.completed);if(pendingItems.length){renderBlindItem(pendingItems[0]);return}if(pendingGroups.length){renderBlindGroup(pendingGroups[0]);return}$('blindWorkspace').className='panel empty';$('blindWorkspace').innerHTML='<strong>此評分者已完成全部單人與群體評分。</strong><br>結果仍保持匿名，等待管理者完成批次。'}
-    function renderBlindItem(item){const done=blindState.items.length-blindState.items.filter(i=>!i.completed).length;$('blindWorkspace').className='panel';$('blindWorkspace').innerHTML=`<h2>第一階段｜單一人物精緻度</h2><p>樣本 ${esc(item.comparison_id)} ／ 候選 ${esc(item.candidate_code)}</p><div class="progress"><span style="width:${done/blindState.items.length*100}%"></span></div><div class="blind-stage"><div class="blind-image"><span class="muted">真人參考縮圖</span><img src="${ORIGIN}${esc(item.source_url)}" alt="匿名真人參考"></div><div class="blind-image"><span class="muted">生成角色</span><img src="${ORIGIN}${esc(item.output_url)}" alt="匿名生成角色"></div><form id="blindItemForm"><div class="score-grid">${scoreSelect('clothing_color_score','服裝顏色相似')}${scoreSelect('clothing_detail_score','服裝圖案細節')}${scoreSelect('identity_score','臉髮配件辨識')}${scoreSelect('refinement_score','人物精緻度')}${scoreSelect('geometry_score','固定幾何完整')}${scoreSelect('projection_score','願意放入投影')}</div><label>備註<textarea name="notes"></textarea></label><button class="primary">提交並看下一張</button></form></div>`;$('blindItemForm').onsubmit=async event=>{event.preventDefault();const body=formObject(event.target);Object.keys(body).filter(k=>k.endsWith('_score')).forEach(k=>body[k]=Number(body[k]));body.reviewer_code=blindState.reviewer_code;try{await postJson(`/review-sessions/${blindState.session.session_id}/items/${item.anonymous_code}`,body);item.completed=true;renderBlind()}catch(error){alert(error.message)}}}
-    function renderBlindGroup(group){const done=blindState.groups.length-blindState.groups.filter(i=>!i.completed).length;$('blindWorkspace').className='panel';$('blindWorkspace').innerHTML=`<h2>第二階段｜群體物種一致性</h2><p>匿名候選組 ${esc(group.candidate_code)}</p><div class="progress"><span style="width:${done/blindState.groups.length*100}%"></span></div><div class="group-grid">${group.items.map(item=>`<img src="${ORIGIN}${esc(item.output_url)}" alt="匿名角色">`).join('')}</div><form id="blindGroupForm" style="margin-top:16px"><div class="score-grid">${scoreSelect('species_score','同一物種')}${scoreSelect('face_style_score','臉部線條一致')}${scoreSelect('lighting_score','材質光影一致')}${scoreSelect('body_diversity_score','高矮胖瘦差異')}${scoreSelect('separability_score','個體可分辨')}${scoreSelect('group_finish_score','群體完成度')}</div><label>備註<textarea name="notes"></textarea></label><button class="primary">提交並看下一組</button></form>`;$('blindGroupForm').onsubmit=async event=>{event.preventDefault();const body=formObject(event.target);Object.keys(body).filter(k=>k.endsWith('_score')).forEach(k=>body[k]=Number(body[k]));body.reviewer_code=blindState.reviewer_code;try{await postJson(`/review-sessions/${blindState.session.session_id}/groups/${group.candidate_code}`,body);group.completed=true;renderBlind()}catch(error){alert(error.message)}}}
-
-    $('loadResults').onclick=()=>loadResults();async function loadResults(){const id=$('resultSession').value;if(!id)return;try{lastResults=await api(`/review-sessions/${id}/results`);renderResults(lastResults);$('exportCsv').href=`${API}/review-sessions/${id}/export.csv`}catch(error){$('resultWorkspace').className='empty';$('resultWorkspace').textContent=error.message}}
-    function renderResults(data){const fields=[['species_score','物種'],['refinement_score','精緻'],['clothing_detail_score','服裝'],['separability_score','可分性']];$('resultWorkspace').className='result-grid';$('resultWorkspace').innerHTML=`<section class="panel table-wrap"><table><thead><tr><th>Variant</th>${fields.map(f=>`<th>${f[1]}</th>`).join('')}<th>樣本</th><th>成功率</th><th>P50／P95</th><th>總成本</th><th>有效角色成本</th></tr></thead><tbody>${data.variants.map(v=>`<tr><td><strong>${esc(v.variant_id)}</strong></td>${fields.map(f=>`<td>${v[f[0]]==null?'—':Number(v[f[0]]).toFixed(2)}</td>`).join('')}<td>${v.sample_count}</td><td>${(Number(v.success_rate||0)*100).toFixed(1)}%</td><td>${duration(v.duration_p50_ms)}／${duration(v.duration_p95_ms)}</td><td>${v.cost_reported_count?money(v.total_cost_usd):'未提供'}</td><td>${money(v.effective_character_cost)}</td></tr>`).join('')}</tbody></table></section><section class="panel"><h2>品質／成本</h2><canvas id="costChart" width="640" height="420"></canvas><p class="help">橫軸：有效角色成本；縱軸：物種一致性。沒有成本資料的外部結果不會被畫成0。</p></section>`;drawCostChart(data.variants)}
-    function drawCostChart(rows){const canvas=$('costChart'),ctx=canvas.getContext('2d'),points=rows.filter(r=>r.effective_character_cost!=null&&r.species_score!=null);ctx.clearRect(0,0,canvas.width,canvas.height);ctx.strokeStyle='#33445e';ctx.beginPath();ctx.moveTo(64,28);ctx.lineTo(64,365);ctx.lineTo(612,365);ctx.stroke();if(!points.length){ctx.fillStyle='#93a1b5';ctx.fillText('沒有同時具備成本與盲評分數的結果',110,190);return}const maxCost=Math.max(...points.map(p=>p.effective_character_cost),.001);points.forEach((p,i)=>{const x=64+p.effective_character_cost/maxCost*520,y=365-(p.species_score-1)/4*315;ctx.fillStyle=['#65d3ff','#6ee7a8','#f6c85f','#ff7b86'][i%4];ctx.beginPath();ctx.arc(x,y,7,0,Math.PI*2);ctx.fill();ctx.fillStyle='#edf3fb';ctx.fillText(p.variant_id,x+10,y-8)})}
-    $('exportJson').onclick=()=>{if(!lastResults)return;const blob=new Blob([JSON.stringify(lastResults,null,2)],{type:'application/json'}),link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`${lastResults.session.session_id}.json`;link.click();URL.revokeObjectURL(link.href)};
     function showError(error){$('updated').textContent=error.message}
-    loadHistory().catch(showError);loadSessions().catch(()=>{});
+    loadHistory().catch(showError);
   </script>
 <script src="./branch-badge.js"></script>
 </body>
