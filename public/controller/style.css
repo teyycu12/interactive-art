@@ -1,0 +1,495 @@
+/*
+ * M1 手機控制器樣式
+ *
+ * 全部使用純 CSS / DOM，無 WebGL、無外部字型下載（§6 風險 3：低階裝置支援）。
+ * 版面以 dvh 與 flex 撐滿單一視窗且禁止捲動 —— 控制器是「握在手上的實體按鍵」，
+ * 任何捲動都會在使用者推搖桿時誤觸頁面滾動。
+ */
+
+:root {
+  --paper: #FAF8F5;
+  --ink: #2F2A26;
+  --ink-soft: #7A716A;
+  --line: #D8D0C6;
+  --accent: #E76F51;
+  --ok: #2A9D8F;
+  --warn: #E9A23B;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  /* 手帳網格微點底紋 */
+  background-image: radial-gradient(var(--line) 1px, transparent 1px);
+  background-size: 22px 22px;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+#app { height: 100dvh; display: flex; flex-direction: column; }
+
+/* 四個畫面共用同一個版面外殼：撐滿視窗、不捲動、底部固定操作列 */
+#entry, #builder, #controller, #farewell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px;
+  gap: 10px;
+  min-height: 0;
+}
+section[hidden] { display: none !important; }
+
+.foot { display: flex; gap: 8px; }
+.foot button { flex: 1; }
+
+/* ── 通用元件 ───────────────────────────────────────────── */
+.card {
+  background: var(--paper);
+  border: 2px dashed var(--line);
+  border-radius: 16px;
+}
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper);
+  border: 2.5px solid var(--ink);
+  border-radius: 14px;
+  padding: 12px 20px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform .08s ease;
+}
+button:active { transform: translateY(2px); }
+button:disabled { opacity: .35; border-style: dashed; }
+
+.btn-primary { background: var(--ink); color: var(--paper); }
+.btn-ghost { border-style: dashed; border-color: var(--line); color: var(--ink-soft); }
+
+/* ── 進場與離場：置中的單一訊息畫面 ─────────────────────── */
+.centered {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  min-height: 0;
+}
+.centered h1 { font-size: 26px; margin: 0; letter-spacing: .03em; }
+.centered .lede { font-size: 15px; color: var(--ink-soft); margin: 0; max-width: 22em; }
+.centered .hint { font-size: 12px; color: var(--ink-soft); margin: 0; }
+.centered svg { height: min(24dvh, 180px); width: auto; }
+#entry #name-input { max-width: 320px; margin-top: 6px; }
+
+/* ── 捏臉流程 ───────────────────────────────────────────── */
+.builder-head { display: flex; align-items: baseline; justify-content: space-between; }
+.builder-head h1 { margin: 0; font-size: 19px; letter-spacing: .04em; }
+.builder-head .sub { font-size: 12px; color: var(--ink-soft); }
+
+/* 步驟進度：三段手繪線條 */
+.steps { display: flex; gap: 6px; }
+.steps i {
+  flex: 1; height: 5px; border-radius: 3px;
+  background: var(--line); transition: background .2s;
+}
+.steps i.on { background: var(--ink); }
+
+.preview {
+  display: grid; place-items: center;
+  padding: 4px;
+  min-height: 0;
+  flex: 0 1 auto;
+}
+.preview svg { height: min(26dvh, 200px); width: auto; }
+
+.step-body { flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.step-body[hidden] { display: none; }
+
+.step-title { font-size: 14px; font-weight: 700; margin: 0; }
+
+.options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  overflow-y: auto;
+  padding: 2px;
+  min-height: 0;
+  flex: 1;
+}
+.opt {
+  padding: 4px 4px 6px;
+  border: 2px dashed var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.opt svg { width: 100%; height: 62px; }
+.opt span { font-size: 11px; color: var(--ink-soft); font-weight: 600; }
+.opt[aria-pressed="true"] {
+  border: 2.5px solid var(--ink);
+  background: #F1ECE4;
+}
+.opt[aria-pressed="true"] span { color: var(--ink); }
+
+/* 色票 */
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.swatch {
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 2.5px solid var(--line); padding: 0;
+}
+.swatch[aria-pressed="true"] { border-color: var(--ink); transform: scale(1.12); }
+
+#name-input {
+  font: inherit; font-weight: 700; font-size: 16px;
+  width: 100%; padding: 12px 14px;
+  border: 2.5px solid var(--ink); border-radius: 14px;
+  background: var(--paper); color: var(--ink);
+}
+#name-input::placeholder { color: var(--line); font-weight: 500; }
+
+/* ── 控制器 ─────────────────────────────────────────────── */
+.bar { display: flex; align-items: center; gap: 10px; }
+.bar svg { height: 42px; width: auto; }
+.bar .who { flex: 1; min-width: 0; }
+.bar .who b { display: block; font-size: 16px; }
+.bar .who small { font-size: 11px; color: var(--ink-soft); }
+
+.pill {
+  font-size: 11px; font-weight: 700; padding: 5px 11px;
+  border-radius: 999px; border: 2px solid var(--line); color: var(--ink-soft);
+  white-space: nowrap;
+}
+.pill.ok { border-color: var(--ok); color: var(--ok); }
+.pill.warn { border-color: var(--warn); color: var(--warn); }
+
+/* 操控權提示：讓使用者理解「放手後角色會自己漫遊」是設計而非故障 */
+.agency {
+  text-align: center; font-size: 12px; font-weight: 700;
+  padding: 8px; border-radius: 12px;
+  border: 2px dashed var(--line); color: var(--ink-soft);
+  transition: color .3s, border-color .3s;
+}
+.agency.active { color: var(--accent); border-color: var(--accent); border-style: solid; }
+
+#joystick-zone {
+  flex: 1;
+  position: relative;
+  border: 2px dashed var(--line);
+  border-radius: 20px;
+  display: grid; place-items: center;
+  min-height: 0;
+  touch-action: none; /* 必要：否則 iOS 會把推桿手勢解讀為頁面捲動 */
+}
+#joystick-zone .hint {
+  font-size: 13px; color: var(--line); font-weight: 700; pointer-events: none;
+}
+
+#emotes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+#emotes button { padding: 14px 4px; font-size: 13px; line-height: 1.5; }
+#emotes button em { display: block; font-size: 22px; font-style: normal; }
+
+/* 離開鍵刻意做小並置於頂端角落。放在底部與搖桿、動作鍵相鄰會提高誤觸風險，
+   而誤觸離開在現場沒有補救餘地。 */
+.btn-exit {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-width: 2px;
+  border-style: dashed;
+  border-color: var(--line);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  flex: none;
+}
+
+/* ── 任務橫幅 ───────────────────────────────────────────── */
+.mission-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 14px;
+  border: 2.5px solid var(--accent);
+  border-radius: 14px;
+  background: #FDF0EC;
+  color: var(--ink);
+}
+.mission-banner[hidden] { display: none; }
+.mb-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.mb-title { font-size: 15px; font-weight: 700; }
+.mb-prog {
+  font-size: 13px; font-weight: 700; color: var(--accent);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.mb-prog.done { color: var(--ok); }
+.mb-code { font-size: 12px; font-weight: 500; color: var(--ink-soft); }
+.mb-code b {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 15px; letter-spacing: .18em; color: var(--ink);
+}
+
+/* ── 配對面板：由下滑出的全寬表單 ───────────────────────── */
+.sheet {
+  position: fixed;
+  inset: 0;
+  background: rgba(47, 42, 38, .45);
+  display: flex;
+  align-items: flex-end;
+  z-index: 90;
+}
+.sheet[hidden] { display: none; }
+.sheet-inner {
+  position: relative;
+  width: 100%;
+  background: var(--paper);
+  border-top: 3px solid var(--ink);
+  border-radius: 22px 22px 0 0;
+  padding: 22px 20px calc(22px + env(safe-area-inset-bottom));
+  max-height: 92dvh;
+  overflow-y: auto;
+}
+.sheet-close {
+  position: absolute; top: 14px; right: 14px;
+  width: 34px; height: 34px; padding: 0;
+  border-radius: 50%; border-width: 2px; border-color: var(--line);
+  font-size: 15px; color: var(--ink-soft); line-height: 1;
+}
+.sheet-inner h2 { margin: 0 0 4px; font-size: 19px; }
+.sheet-brief { margin: 0 0 16px; font-size: 13px; color: var(--ink-soft); }
+
+.mycode {
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 14px;
+  padding: 14px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+.mycode-label { display: block; font-size: 11px; opacity: .7; margin-bottom: 2px; }
+.mycode b {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 40px; letter-spacing: .22em; text-indent: .22em; display: block;
+}
+
+.sheet-field { display: block; margin-bottom: 14px; }
+.sheet-field > span {
+  display: block; font-size: 12px; font-weight: 700;
+  color: var(--ink-soft); margin-bottom: 6px;
+}
+#pair-input {
+  font: inherit;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 32px; font-weight: 700;
+  letter-spacing: .22em; text-indent: .22em; text-align: center;
+  width: 100%; padding: 12px;
+  border: 2.5px solid var(--ink); border-radius: 14px;
+  background: var(--paper); color: var(--ink);
+}
+#pair-input::placeholder { color: var(--line); }
+
+.sheet-msg {
+  margin: 0 0 12px; font-size: 13px; font-weight: 600;
+  padding: 9px 12px; border-radius: 10px;
+  background: #FDF0EC; color: #B44A2F;
+}
+.sheet-msg.ok { background: #E8F4F2; color: var(--ok); }
+.sheet-msg[hidden] { display: none; }
+.sheet-prog {
+  margin: 12px 0 0; text-align: center;
+  font-size: 13px; font-weight: 700; color: var(--ink-soft);
+}
+
+#pair-confirm-avatar svg { height: 128px; width: auto; display: block; margin: 0 auto 6px; }
+#pair-confirm .dialog { text-align: center; }
+#pair-confirm .dialog-actions { text-align: left; }
+
+/* ── 二次確認對話框 ─────────────────────────────────────── */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(47, 42, 38, .45);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 100;
+}
+.overlay[hidden] { display: none; }
+
+.dialog {
+  background: var(--paper);
+  border: 2.5px solid var(--ink);
+  border-radius: 18px;
+  padding: 22px;
+  max-width: 340px;
+  width: 100%;
+}
+.dialog h2 { margin: 0 0 8px; font-size: 19px; }
+.dialog p { margin: 0 0 18px; font-size: 14px; color: var(--ink-soft); line-height: 1.7; }
+.dialog-actions { display: flex; gap: 8px; }
+.dialog-actions button { flex: 1; }
+
+.btn-danger { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+
+/* ── 積分 ───────────────────────────────────────────────── */
+.score {
+  flex: none;
+  font-family: ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 17px; font-weight: 700;
+  color: var(--ink);
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.score small { font-size: 10px; font-weight: 700; margin-left: 2px; opacity: .6; }
+
+/* 得分浮標。刻意蓋在最上層並穿透點擊，任何畫面下加分都看得到 */
+.score-pop {
+  position: fixed; top: 54px; right: 16px; z-index: 120;
+  background: var(--ok); color: #fff;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 20px; font-weight: 700;
+  border-radius: 999px; padding: 6px 16px;
+  pointer-events: none;
+  animation: score-rise 1.6s ease-out forwards;
+}
+.score-pop[hidden] { display: none; }
+@keyframes score-rise {
+  0%   { opacity: 0; transform: translateY(10px) scale(.9); }
+  18%  { opacity: 1; transform: none; }
+  70%  { opacity: 1; transform: translateY(-4px); }
+  100% { opacity: 0; transform: translateY(-16px); }
+}
+
+/* ── 即時問答 ───────────────────────────────────────────── */
+.quiz {
+  position: fixed; inset: 0; z-index: 95;
+  background: var(--paper);
+  background-image: radial-gradient(var(--line) 1px, transparent 1px);
+  background-size: 22px 22px;
+  display: flex; flex-direction: column;
+}
+.quiz[hidden] { display: none; }
+.quiz-inner {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  gap: 12px;
+}
+
+.quiz-head { display: flex; align-items: center; justify-content: space-between; }
+.quiz-no {
+  font-size: 12px; font-weight: 700; letter-spacing: .12em;
+  color: var(--ink-soft);
+}
+.quiz-timer {
+  font-family: ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 26px; font-weight: 700;
+  color: var(--ink);
+}
+.quiz-timer.urgent { color: var(--accent); }
+
+.quiz-q {
+  margin: 0;
+  font-size: 21px; font-weight: 700; line-height: 1.5;
+  text-wrap: balance;
+}
+
+/* 選項填滿剩餘高度：現場是站著單手操作，按鈕要夠大才按得準 */
+.quiz-opts {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+}
+.quiz-opts.single { grid-template-columns: 1fr; }
+
+.quiz-opt {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px;
+  border: 3px solid var(--ink);
+  border-radius: 18px;
+  padding: 10px;
+  font: inherit; font-weight: 700; font-size: 16px;
+  color: #fff;
+  line-height: 1.35;
+  text-align: center;
+  word-break: break-word;
+  transition: transform .12s, opacity .2s;
+}
+.quiz-opt .g { font-size: 26px; line-height: 1; }
+.quiz-opt:active { transform: scale(.97); }
+.quiz-opt[disabled] { opacity: .4; }
+/* 自己選的那格：加粗墨框，即使被淡化也認得出來 */
+.quiz-opt.chosen { opacity: 1; box-shadow: 0 0 0 4px var(--ink) inset; }
+.quiz-opt.right { opacity: 1; }
+.quiz-opt.wrong { opacity: .3; }
+
+.quiz-msg {
+  margin: 0; text-align: center;
+  font-size: 14px; font-weight: 700; color: var(--ink-soft);
+}
+.quiz-msg[hidden] { display: none; }
+
+.quiz-result {
+  text-align: center;
+  border: 3px solid var(--ink);
+  border-radius: 18px;
+  padding: 14px;
+}
+.quiz-result[hidden] { display: none; }
+.quiz-result b { display: block; font-size: 24px; }
+.quiz-result span {
+  display: block; margin-top: 2px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 18px; font-weight: 700; color: var(--ok);
+}
+.quiz-result small { display: block; margin-top: 6px; font-size: 12px; color: var(--ink-soft); }
+.quiz-result.miss b { color: var(--ink-soft); }
+.quiz-result.miss span { color: var(--ink-soft); }
+
+@media (prefers-reduced-motion: reduce) {
+  .score-pop { animation: none; }
+  .quiz-opt { transition: none; }
+}
+
+/* ── 掃描生成 ─────────────────────────────────────────────
+   相機預覽填滿可用高度；overlay 蓋在上面顯示生成進度。 */
+.scan-stage {
+  position: relative;
+  flex: 1;
+  margin: 0 16px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #1a1713;
+}
+.scan-stage video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+#scan-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(26, 23, 19, 0.82);
+  color: #FAF8F5;
+  text-align: center;
+  padding: 24px;
+}
+#scan-overlay[hidden] { display: none; }

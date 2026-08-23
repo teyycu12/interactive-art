@@ -1,0 +1,19 @@
+{
+  "name": "personaflow",
+  "version": "2.0.0",
+  "description": "PersonaFlow（眾影鏈結）— 實體活動場域的雙層半自主參與式互動系統",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test test/",
+    "test:e2e": "node scripts/e2e.mjs",
+    "preview:scene": "node scripts/scene-preview.mjs"
+  },
+  "dependencies": {
+    "nipplejs": "^0.10.2",
+    "roughjs": "^4.6.6",
+    "ws": "^8.18.0"
+  }
+}

@@ -43,3 +43,16 @@ backend/test-results.xml
 .coverage
 htmlcov/
 
+# ── PersonaFlow2（Node 互動層）─────────────────────────────
+node_modules/
+
+# 活動資料快照。內含重連憑證與主辦端密鑰的明文，不進版本控制。
+data/
+
+# 參與者掃描生成的角色貼圖。每場活動重新產生，且內含可辨識個人的影像。
+public/assets/gen/*
+!public/assets/gen/.gitkeep
+
+# TLS 憑證與私鑰（scripts/make-cert.sh 產生）。私鑰絕不進版控。
+certs/
+

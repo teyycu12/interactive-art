@@ -1,0 +1,3 @@
+# 統一以 LF 存進版本庫，Windows 工作區仍可用 CRLF。
+# 沒有這一行，Mac 與 Windows 的組員互推時會整份檔案被判成有改動。
+* text=auto eol=lf

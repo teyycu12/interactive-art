@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<!-- maximum-scale 與 user-scalable=no：防止推搖桿時雙指誤觸縮放 -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#FAF8F5">
+<title>PersonaFlow 控制器</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ── 進場：命名 ──────────────────────────────────────
+       命名獨立成進場前的第一個畫面，而非塞在捏臉最後一步。
+       手機鍵盤會佔掉半個螢幕，與服裝選擇擠在同一頁時會蓋住角色預覽；
+       獨立出來後鍵盤只開關一次，互動乾淨許多。 -->
+  <section id="entry">
+    <div class="centered">
+      <h1>歡迎來到現場</h1>
+      <p class="lede">先告訴大家你叫什麼名字</p>
+      <input id="name-input" maxlength="12" placeholder="最多 12 個字"
+             autocomplete="off" enterkeyhint="next" autocapitalize="off">
+      <p class="hint">這會顯示在大螢幕上你的角色頭上</p>
+    </div>
+    <div class="foot">
+      <button class="btn-primary" id="btn-scan" disabled>拍照生成角色</button>
+      <button class="btn-ghost" id="btn-start" disabled>改用捏臉</button>
+    </div>
+  </section>
+
+  <!-- ── 掃描生成（拍照 → AI 生圖 → 貼圖）──────────────── -->
+  <section id="scan" hidden>
+    <div class="builder-head">
+      <h1>拍一張照片</h1>
+      <span class="sub" id="scan-hint">站遠一點，讓全身入鏡</span>
+    </div>
+    <div class="scan-stage">
+      <video id="scan-video" playsinline muted autoplay></video>
+      <div id="scan-overlay" hidden>
+        <p id="scan-status">正在生成你的角色…</p>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="btn-primary" id="btn-capture">拍照</button>
+      <button class="btn-ghost" id="btn-scan-back">改用捏臉</button>
+    </div>
+  </section>
+
+  <!-- ── 捏臉流程（3 步）────────────────────────────────── -->
+  <section id="builder" hidden>
+    <div class="builder-head">
+      <h1>捏一個你</h1>
+      <span class="sub" id="step-label">1 / 3　髮型與膚色</span>
+    </div>
+    <div class="steps">
+      <i class="on"></i><i></i><i></i>
+    </div>
+
+    <div class="preview" id="preview"></div>
+
+    <div class="step-body" data-step="1">
+      <p class="step-title">髮型</p>
+      <div class="options" id="opt-head"></div>
+      <p class="step-title">膚色</p>
+      <div class="swatches" id="opt-skin"></div>
+    </div>
+
+    <div class="step-body" data-step="2" hidden>
+      <p class="step-title">表情</p>
+      <div class="options" id="opt-face"></div>
+    </div>
+
+    <div class="step-body" data-step="3" hidden>
+      <p class="step-title">服裝</p>
+      <div class="options" id="opt-body"></div>
+      <p class="step-title">代表色</p>
+      <div class="swatches" id="opt-accent"></div>
+    </div>
+
+    <div class="foot">
+      <button class="btn-ghost" id="btn-random">隨機</button>
+      <button class="btn-ghost" id="btn-prev">上一步</button>
+      <button class="btn-primary" id="btn-next">下一步</button>
+    </div>
+  </section>
+
+  <!-- ── 控制器 ─────────────────────────────────────────── -->
+  <section id="controller" hidden>
+    <div class="bar">
+      <div id="mini-avatar"></div>
+      <div class="who">
+        <b id="my-name">—</b>
+        <small id="my-id">—</small>
+      </div>
+      <span class="score" id="score-chip">0<small>分</small></span>
+      <span class="pill" id="status">連線中…</span>
+      <button class="btn-exit" id="btn-exit" aria-label="離開現場">離開</button>
+    </div>
+
+    <!-- 任務橫幅。點擊才展開輸入面板，讓數字鍵盤不會干擾搖桿。 -->
+    <button class="mission-banner" id="mission-banner" hidden>
+      <span class="mb-row">
+        <span class="mb-title" id="mb-title">—</span>
+        <span class="mb-prog" id="mb-prog">0 / 0</span>
+      </span>
+      <span class="mb-code">你的配對碼 <b id="mb-code">----</b>　·　點此輸入對方的碼</span>
+    </button>
+
+    <div class="agency" id="agency">放開搖桿 3 秒後，角色會自己加入人群漫遊</div>
+
+    <div id="joystick-zone"><span class="hint">按住並拖曳來移動</span></div>
+
+    <div id="emotes">
+      <button data-action="CHEERS"><em>🍻</em>乾杯</button>
+      <button data-action="HEART"><em>💗</em>愛心</button>
+      <button data-action="WAVE"><em>👋</em>揮手</button>
+    </div>
+  </section>
+
+  <!-- ── 已離場 ─────────────────────────────────────────── -->
+  <section id="farewell" hidden>
+    <div class="centered">
+      <div id="farewell-avatar"></div>
+      <h1>已離場</h1>
+      <p class="lede">謝謝參與。你仍然會出現在活動的大合照裡。</p>
+    </div>
+    <div class="foot">
+      <button class="btn-primary" id="btn-rejoin">重新進場</button>
+    </div>
+  </section>
+
+</div>
+
+<!-- ── 即時問答 ─────────────────────────────────────────────
+     全螢幕覆蓋而非橫幅：問答是「全場一起停下來看大螢幕」的時刻，
+     此時手上的搖桿本來就不該再是視線焦點。角色會自動回到 Boids 漫遊，
+     所以蓋住控制器不會讓誰在畫面上呆站著。 -->
+<div class="quiz" id="quiz-panel" hidden>
+  <div class="quiz-inner">
+    <div class="quiz-head">
+      <span class="quiz-no" id="quiz-no">第 1 題</span>
+      <span class="quiz-timer" id="quiz-timer">20.0</span>
+    </div>
+
+    <p class="quiz-q" id="quiz-q">—</p>
+
+    <div class="quiz-opts" id="quiz-opts"></div>
+
+    <p class="quiz-msg" id="quiz-msg" hidden></p>
+
+    <div class="quiz-result" id="quiz-result-card" hidden>
+      <b id="quiz-verdict">—</b>
+      <span id="quiz-points">—</span>
+      <small id="quiz-standing">—</small>
+    </div>
+
+    <button class="btn-ghost" id="btn-quiz-hide" hidden>收起，回到現場</button>
+  </div>
+</div>
+
+<!-- 得分浮標：分數變動時短暫浮現，讓「剛剛那件事有加分」被看見 -->
+<div class="score-pop" id="score-pop" hidden></div>
+
+<!-- ── 配對面板 ─────────────────────────────────────────── -->
+<div class="sheet" id="pair-sheet" hidden>
+  <div class="sheet-inner">
+    <button class="sheet-close" id="btn-pair-close" aria-label="關閉">✕</button>
+    <h2 id="pair-title">找一個人配對</h2>
+    <p class="sheet-brief" id="pair-brief">走向另一位參與者，互相交換配對碼</p>
+
+    <div class="mycode">
+      <span class="mycode-label">把這組碼唸給對方</span>
+      <b id="pair-mycode">----</b>
+    </div>
+
+    <label class="sheet-field">
+      <span>輸入對方的配對碼</span>
+      <input id="pair-input" inputmode="numeric" pattern="[0-9]*" maxlength="4"
+             placeholder="0000" autocomplete="off">
+    </label>
+
+    <p class="sheet-msg" id="pair-msg" hidden></p>
+    <button class="btn-primary" id="btn-pair-submit">送出配對</button>
+    <p class="sheet-prog" id="pair-progress">—</p>
+  </div>
+</div>
+
+<!-- 配對確認：對方指定了你 -->
+<div class="overlay" id="pair-confirm" hidden>
+  <div class="dialog">
+    <div id="pair-confirm-avatar"></div>
+    <h2 id="pair-confirm-title">有人想和你配對</h2>
+    <p id="pair-confirm-text">請確認對方就在你面前。</p>
+    <div class="dialog-actions">
+      <button class="btn-ghost" id="btn-pair-decline">不是這個人</button>
+      <button class="btn-primary" id="btn-pair-accept">確認配對</button>
+    </div>
+  </div>
+</div>
+
+<!-- 退出二次確認。用頁內對話框而非原生 confirm()：
+     原生對話框在手機上樣式不受控，且會凍結整個 JS 執行緒。 -->
+<div class="overlay" id="confirm-exit" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <h2 id="confirm-title">確定要離開嗎？</h2>
+    <p>你的角色會立刻從大螢幕上離場。之後仍然可以重新進場，但會是一個全新的角色。</p>
+    <div class="dialog-actions">
+      <button class="btn-ghost" id="btn-cancel-exit">取消</button>
+      <button class="btn-danger" id="btn-confirm-exit">確定離開</button>
+    </div>
+  </div>
+</div>
+
+<!-- nipplejs 由本機 node_modules 直出，不走 CDN（現場網路不穩時仍可載入） -->
+<script src="/vendor/nipplejs.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
