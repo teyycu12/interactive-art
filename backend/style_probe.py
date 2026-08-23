@@ -184,34 +184,40 @@ def _region_crop(bgr: np.ndarray, mask: np.ndarray, y0: int, y1: int) -> Optiona
     return crop if crop.size else None
 
 
-def sprite_fingerprint(image: Union[str, bytes, np.ndarray, None]) -> Dict[str, Any]:
-    """Measure the style of each body region of one generated character.
+def region_crops(image: Union[str, bytes, np.ndarray, None]) -> Dict[str, Any]:
+    """The body-region crops of one sprite, as ``{region: BGR array or None}``.
+
+    Style drift and content spread are only comparable if they are measured on
+    the same pixels, so the cut is defined once here and every caller imports
+    it rather than reimplementing the bands.  ``identity_fidelity`` and
+    ``reference_bleed`` both read these crops; a second implementation that
+    drifted by a few rows would silently make the two numbers describe
+    different parts of the body while still looking like a valid comparison.
 
     Returns ``valid: False`` rather than raising: a probe that cannot read an
-    image must not take down a generation, and an unmeasurable sprite is
-    excluded from drift rather than counted as agreeing with everything.
+    image must not take down a generation.
     """
     bgra = _decode(image)
     if bgra is None or bgra.shape[0] < MIN_REGION_PX or bgra.shape[1] < MIN_REGION_PX:
-        return {"probe_version": PROBE_VERSION, "valid": False, "error": "undecodable_sprite", "regions": {}}
+        return {"valid": False, "error": "undecodable_sprite", "crops": {}}
 
     mask = _subject_mask(bgra)
     rows = np.flatnonzero(mask.any(axis=1))
     columns = np.flatnonzero(mask.any(axis=0))
     if rows.size == 0 or columns.size == 0:
-        return {"probe_version": PROBE_VERSION, "valid": False, "error": "empty_subject", "regions": {}}
+        return {"valid": False, "error": "empty_subject", "crops": {}}
 
     top, bottom = int(rows[0]), int(rows[-1]) + 1
     left, right = int(columns[0]), int(columns[-1]) + 1
     height = bottom - top
     if height < MIN_REGION_PX:
-        return {"probe_version": PROBE_VERSION, "valid": False, "error": "subject_too_small", "regions": {}}
+        return {"valid": False, "error": "subject_too_small", "crops": {}}
 
     bgr = _composite(bgra)[top:bottom, left:right]
     subject_mask = mask[top:bottom, left:right]
     landmarks = get_style_base()["landmarks_y"]
 
-    regions: Dict[str, Any] = {}
+    crops: Dict[str, Optional[np.ndarray]] = {}
     for name, (start_key, end_key) in REGION_BANDS.items():
         start = float(landmarks[start_key]["value"])
         end = float(landmarks[end_key]["value"])
@@ -219,7 +225,30 @@ def sprite_fingerprint(image: Union[str, bytes, np.ndarray, None]) -> Dict[str, 
             start += (end - start) * FACE_BAND_TOP_TRIM
         y0 = int(round(start * height))
         y1 = int(round(end * height))
-        crop = _region_crop(bgr, subject_mask, y0, y1)
+        crops[name] = _region_crop(bgr, subject_mask, y0, y1)
+
+    return {
+        "valid": any(crop is not None for crop in crops.values()),
+        "error": None,
+        "subject_px": [right - left, height],
+        "crops": crops,
+    }
+
+
+def sprite_fingerprint(image: Union[str, bytes, np.ndarray, None]) -> Dict[str, Any]:
+    """Measure the style of each body region of one generated character.
+
+    Returns ``valid: False`` rather than raising: a probe that cannot read an
+    image must not take down a generation, and an unmeasurable sprite is
+    excluded from drift rather than counted as agreeing with everything.
+    """
+    cut = region_crops(image)
+    if not cut.get("valid"):
+        return {"probe_version": PROBE_VERSION, "valid": False,
+                "error": cut.get("error") or "no_measurable_region", "regions": {}}
+
+    regions: Dict[str, Any] = {}
+    for name, crop in (cut.get("crops") or {}).items():
         if crop is None:
             regions[name] = {"valid": False, "error": "region_not_measurable"}
             continue
@@ -228,7 +257,7 @@ def sprite_fingerprint(image: Union[str, bytes, np.ndarray, None]) -> Dict[str, 
     return {
         "probe_version": PROBE_VERSION,
         "valid": any(region.get("valid") for region in regions.values()),
-        "subject_px": [right - left, height],
+        "subject_px": cut.get("subject_px"),
         "regions": regions,
     }
 
