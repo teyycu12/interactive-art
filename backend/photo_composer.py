@@ -14,6 +14,18 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+    load_dotenv()
+except ImportError:
+    pass
+
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None  # type: ignore
+
+try:
     from PIL import Image, ImageDraw, ImageFont
 except ImportError:
     Image = None  # type: ignore
@@ -282,6 +294,70 @@ def _create_qr_image(url: str, size: int = 160) -> Image.Image:
     return badge
 
 
+def _upload_imgbb(image_bytes: bytes, name: str = "personaflow") -> Optional[str]:
+    """上傳至 ImgBB（免費圖床）。需要 IMGBB_API_KEY 環境變數。"""
+    api_key = os.environ.get("IMGBB_API_KEY", "").strip()
+    if not api_key or _requests is None:
+        return None
+    try:
+        resp = _requests.post(
+            "https://api.imgbb.com/1/upload",
+            data={
+                "key": api_key,
+                "image": base64.b64encode(image_bytes).decode("utf-8"),
+                "name": name,
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            url = resp.json().get("data", {}).get("url")
+            if url:
+                print(f"[photo_composer] ImgBB upload OK: {url}")
+                return url
+        print(f"[photo_composer] ImgBB upload failed: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        print(f"[photo_composer] ImgBB upload error: {e}")
+    return None
+
+
+def _upload_imgur(image_bytes: bytes, title: str = "PersonaFlow") -> Optional[str]:
+    """上傳至 Imgur（匿名）。需要 IMGUR_CLIENT_ID 環境變數。"""
+    client_id = os.environ.get("IMGUR_CLIENT_ID", "").strip()
+    if not client_id or _requests is None:
+        return None
+    try:
+        resp = _requests.post(
+            "https://api.imgur.com/3/image",
+            headers={"Authorization": f"Client-ID {client_id}"},
+            data={
+                "image": base64.b64encode(image_bytes).decode("utf-8"),
+                "type": "base64",
+                "title": title,
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            link = resp.json().get("data", {}).get("link")
+            if link:
+                print(f"[photo_composer] Imgur upload OK: {link}")
+                return link
+        print(f"[photo_composer] Imgur upload failed: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        print(f"[photo_composer] Imgur upload error: {e}")
+    return None
+
+
+def upload_photo(image_bytes: bytes, photo_id: str = "personaflow") -> Optional[str]:
+    """
+    嘗試上傳合照到雲端圖床，回傳公開 URL。
+    優先順序：ImgBB → Imgur。全部失敗則回傳 None（fallback 到 local URL）。
+    """
+    return (
+        _upload_imgbb(image_bytes, name=photo_id)
+        or _upload_imgur(image_bytes, title=f"PersonaFlow {photo_id}")
+    )
+
+
 def compose_group_photo(
     characters: List[Dict[str, Any]],
     *,
@@ -293,6 +369,7 @@ def compose_group_photo(
     """
     合成大合照主入口。
     回傳字典包含 ok, photo_id, photo_bytes, photo_b64, qr_b64, character_count。
+    若 IMGUR_CLIENT_ID 有設定，會自動上傳至 Imgur 並把 QR Code 指向公開 URL。
     """
     if Image is None:
         return {"ok": False, "error": "Pillow (PIL) is not installed"}
@@ -391,6 +468,13 @@ def compose_group_photo(
     canvas.convert("RGB").save(buf, format="PNG", optimize=True)
     photo_bytes = buf.getvalue()
     photo_b64 = "data:image/png;base64," + base64.b64encode(photo_bytes).decode("utf-8")
+
+    # 5.5 嘗試上傳雲端圖床：成功則 QR 指向公網 URL，任何手機都能掃
+    cloud_url = upload_photo(photo_bytes, photo_id=photo_id)
+    if cloud_url:
+        photo_url = cloud_url
+        # 重新生成 QR Code 指向公開 URL
+        qr_img = _create_qr_image(cloud_url, size=qr_size)
 
     qr_buf = io.BytesIO()
     qr_img.save(qr_buf, format="PNG")

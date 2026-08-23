@@ -44,6 +44,37 @@
       font-size: 12px;
     }
     #canvas-container { position: absolute; inset: 0; }
+
+    /* 大合照結果覆蓋層：photo_ready 回來後顯示成品與 QR Code */
+    #photo-overlay {
+      position: absolute; inset: 0; z-index: 200;
+      background: rgba(10, 12, 20, 0.92);
+      display: none; align-items: center; justify-content: center;
+      flex-direction: column; gap: 16px; padding: 32px;
+    }
+    #photo-overlay.visible { display: flex; }
+    #photo-overlay img#photo-result {
+      max-width: 82vw; max-height: 66vh; object-fit: contain;
+      border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+      background: #000;
+    }
+    #photo-meta {
+      display: flex; align-items: center; gap: 20px;
+      background: rgba(255,255,255,0.94); border-radius: 12px;
+      padding: 14px 18px; color: #222;
+    }
+    #photo-meta img { width: 116px; height: 116px; display: block; }
+    #photo-meta .txt { font-size: 14px; line-height: 1.6; }
+    #photo-meta .txt strong { display: block; font-size: 16px; margin-bottom: 4px; }
+    #photo-meta .txt code {
+      font-family: monospace; font-size: 12px; color: #555;
+      word-break: break-all;
+    }
+    #photo-hint { color: #aab; font-size: 13px; }
+    #photo-overlay.pending #photo-meta,
+    #photo-overlay.pending #photo-result { display: none; }
+    #photo-overlay .spinner { color: #dde; font-size: 15px; display: none; }
+    #photo-overlay.pending .spinner { display: block; }
   </style>
 
   <!-- PixiJS v6 -->
@@ -61,6 +92,20 @@
 </div>
 
 <div id="coord-panel">Screen: (0, 0) | Original: (0, 0)</div>
+<div id="photo-overlay">
+  <div class="spinner">正在合成大合照…</div>
+  <img id="photo-result" alt="集體記憶紀念大合照">
+  <div id="photo-meta">
+    <img id="photo-qr" alt="下載用 QR Code">
+    <div class="txt">
+      <strong>掃描 QR Code 下載合照</strong>
+      <span id="photo-count"></span><br>
+      <code id="photo-url"></code>
+    </div>
+  </div>
+  <div id="photo-hint">按 Esc 或點擊任意處關閉</div>
+</div>
+
 <div id="canvas-container"></div>
 
 <script>
@@ -813,6 +858,26 @@ function initSocket() {
       statusEl.textContent = `無法連線至 ${BACKEND_URL}`;
     });
 
+    // 後端合成完成：顯示成品與 QR Code。
+    // 此事件後端一直有 emit，但前端先前完全沒有接，所以 M6 做完卻沒有介面。
+    socket.on('photo_ready', (data) => {
+      if (!data || !data.ok) {
+        hidePhotoOverlay();
+        statusEl.textContent = '合照生成失敗：' + ((data && data.error) || '未知原因');
+        statusEl.style.color = '#ff6b6b';
+        return;
+      }
+      const img = document.getElementById('photo-result');
+      const qr  = document.getElementById('photo-qr');
+      // photo_b64 / qr_b64 後端已附上 data: 前綴
+      if (data.photo_b64) img.src = data.photo_b64;
+      if (data.qr_b64)    qr.src  = data.qr_b64;
+      document.getElementById('photo-count').textContent =
+        `在場人數：${data.character_count ?? '—'} 人`;
+      document.getElementById('photo-url').textContent = data.photo_url || '';
+      showPhotoOverlay({ pending: false });
+    });
+
     socket.on('update_positions', (data) => {
       const chars = data.characters || [];
       if (chars.length > 0) {
@@ -963,6 +1028,23 @@ function initPixi() {
   });
 }
 
+// ─── 8.5 大合照結果覆蓋層 ────────────────────────────────────────────────────
+const photoOverlay = document.getElementById('photo-overlay');
+
+function showPhotoOverlay({ pending = false } = {}) {
+  photoOverlay.classList.toggle('pending', pending);
+  photoOverlay.classList.add('visible');
+}
+
+function hidePhotoOverlay() {
+  photoOverlay.classList.remove('visible', 'pending');
+}
+
+photoOverlay.addEventListener('click', hidePhotoOverlay);
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hidePhotoOverlay();
+});
+
 // ─── 9. UI 按鈕 ──────────────────────────────────────────────────────────────
 document.getElementById('photoBtn').onclick = () => {
   isPhotoTime = !isPhotoTime;
@@ -974,6 +1056,15 @@ document.getElementById('photoBtn').onclick = () => {
         pixiApp.screen.height * 0.6 + Math.floor(i / 5) * 120
       );
     });
+    // 先前這裡只做本地排隊，從未請後端合成 —— 所以 M6 的大合照與 QR Code
+    // 雖然後端已實作完成，實際上沒有任何介面能觸發或看到它。
+    // 稍等一下再送出，讓角色先就定位（合照內容取自後端狀態，與畫面排列無關，
+    // 但這樣現場的視覺節奏比較合理）。
+    showPhotoOverlay({ pending: true });
+    setTimeout(() => {
+      if (socket && socket.connected) socket.emit('trigger_photo', { room: 'default' });
+      else hidePhotoOverlay();
+    }, 1200);
   } else {
     flock.forEach(b => { b.photoTarget = null; });
   }
