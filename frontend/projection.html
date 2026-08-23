@@ -88,6 +88,7 @@
   <h2>PersonaFlow 投影牆</h2>
   <div id="status-line">等待 Socket.io 連線…</div>
   <button id="photoBtn" class="action-btn">📸 集合大合照</button>
+  <button id="addBotsBtn" class="action-btn" style="background:#2ea043;">🤖 注入模擬角色 (+5)</button>
   <button id="clearBtn" class="action-btn" style="background:#da3633;">🗑 清除全部角色</button>
 </div>
 
@@ -1056,10 +1057,6 @@ document.getElementById('photoBtn').onclick = () => {
         pixiApp.screen.height * 0.6 + Math.floor(i / 5) * 120
       );
     });
-    // 先前這裡只做本地排隊，從未請後端合成 —— 所以 M6 的大合照與 QR Code
-    // 雖然後端已實作完成，實際上沒有任何介面能觸發或看到它。
-    // 稍等一下再送出，讓角色先就定位（合照內容取自後端狀態，與畫面排列無關，
-    // 但這樣現場的視覺節奏比較合理）。
     showPhotoOverlay({ pending: true });
     setTimeout(() => {
       if (socket && socket.connected) socket.emit('trigger_photo', { room: 'default' });
@@ -1070,7 +1067,18 @@ document.getElementById('photoBtn').onclick = () => {
   }
 };
 
+document.getElementById('addBotsBtn').onclick = () => {
+  if (socket && socket.connected) {
+    socket.emit('inject_bots', { count: 5, room: 'default' });
+  } else {
+    alert('尚未連線至後端伺服器');
+  }
+};
+
 document.getElementById('clearBtn').onclick = () => {
+  if (socket && socket.connected) {
+    socket.emit('remove_bots', {});
+  }
   for (const boid of flock) boid.destroy();
   flock.length = 0;
   for (const k of Object.keys(boidMap)) delete boidMap[k];
@@ -1091,38 +1099,10 @@ window.addEventListener('mousemove', (e) => {
 // ─── 啟動 ─────────────────────────────────────────────────────────────────────
 initPixi();
 
-// Auto-spawn 5 ambient NPC boids (scene decoration — NOT in boidMap)
-setTimeout(() => {
-  const demoColors = [
-    [0xC81E1E, 0x1E3A8A],
-    [0x166534, 0xEAB308],
-    [0x7C3AED, 0xF97316],
-    [0xDB2777, 0x0F766E],
-    [0xB45309, 0x1D4ED8],
-  ];
-  demoColors.forEach(([top, bot]) => {
-    const lego = new LegoCharacter(top, bot);
-    let rx = pixiApp.screen.width / 2 + (Math.random() - 0.5) * 400;
-    let ry = pixiApp.screen.height / 2 + (Math.random() - 0.5) * 150;
-    if (window.bgTransform) {
-      const bg = window.bgTransform;
-      const origY = 300 + Math.random() * 280;
-      const bounds = getFloorBounds(origY);
-      const origX = bounds.minX + Math.random() * (bounds.maxX - bounds.minX);
-      rx = origX * bg.scale + bg.x;
-      ry = origY * bg.scale + bg.y;
-    }
-    const boid = new Boid(rx, ry, lego); // charId = null, NOT in boidMap
-    flock.push(boid);
-  });
-}, 800);
-
-// Console helper: spawnTest(n) to add more test boids
+// Console helper: spawnTest(n) to add test boids via backend
 window.spawnTest = (n = 3) => {
-  for (let i = 0; i < n; i++) {
-    const top = Math.floor(Math.random() * 0xFFFFFF);
-    const bot = Math.floor(Math.random() * 0xFFFFFF);
-    _spawnBoid('test_' + Date.now() + '_' + i, top, bot);
+  if (socket && socket.connected) {
+    socket.emit('inject_bots', { count: n, room: 'default' });
   }
 };
 </script>
