@@ -41,6 +41,12 @@ PARTS: List[str] = ["head", "torso", "legs"]
 # 太大會把肩線這種真實的階變也一起抹平。
 SMOOTH_WINDOW = 9
 
+# 判定「手臂已展開」的寬度門檻，相對於全身最大寬度。
+SHOULDER_WIDTH_RATIO = 0.9
+
+# 偵測腰線時取樣的中央橫向比例。取窄一點才不會把手臂與手掌的顏色算進來。
+WAIST_BAND = (0.42, 0.58)
+
 # 判定為「不透明」的 alpha 門檻。garment_gen 的去背會在邊界留 2px 半透明
 # 柔化環，取樣顏色時要把那一圈排除，否則會把背景色混進取樣結果。
 OPAQUE_ALPHA = 200
@@ -159,6 +165,37 @@ def slice_character(
     return {"ok": True, "assetId": asset_id, "textures": textures, "fallbackColors": colors}
 
 
+def _detect_waist(img: PILImage.Image, start: float) -> Optional[float]:
+    """以顏色不連續找出上衣與褲子的交界，回傳佔全身高度的比例。
+
+    只取中央窄帶：手臂與手掌的顏色與軀幹不同，納入會把訊號洗掉。
+    搜尋範圍限制在肩線之下、腳踝之上，避免把「頭→衣領」或「褲子→鞋子」
+    的交界誤判成腰線。
+    """
+    arr = np.asarray(img).astype(float)
+    h, w = arr.shape[:2]
+    x0, x1 = round(WAIST_BAND[0] * w), round(WAIST_BAND[1] * w)
+    band = arr[:, x0:x1, :]
+
+    opaque = band[:, :, 3] >= OPAQUE_ALPHA
+    rows = []
+    for y in range(h):
+        sel = band[y][opaque[y]]
+        rows.append(sel[:, :3].mean(axis=0) if len(sel) else np.array([np.nan] * 3))
+    prof = np.array(rows)
+
+    lo = max(1, int((start + 0.05) * h))
+    hi = int(0.95 * h)
+    if hi - lo < 3:
+        return None
+
+    diff = np.abs(np.diff(prof, axis=0)).sum(axis=1)[lo:hi]
+    diff = np.nan_to_num(diff)
+    if not np.isfinite(diff).any() or diff.max() == 0:
+        return None
+    return float(lo + int(np.argmax(diff)) + 1) / h
+
+
 def analyze_cuts(images: List[PILImage.Image]) -> Dict[str, Any]:
     """量測一批樣本的部位比例是否穩定（整合計畫階段 2 的驗收工具）。
 
@@ -166,13 +203,28 @@ def analyze_cuts(images: List[PILImage.Image]) -> Dict[str, Any]:
     判準：標準差若在數個百分點以內，固定裁切框就夠用；
     明顯浮動才需要在管線裡加入偵測步驟。
 
-    偵測方式：正規化後逐列統計不透明像素寬度。積木人偶的寬度剖面有兩個
-    明顯特徵 —— 肩線處寬度突增（手臂展開），胯線處出現中央鏤空使寬度回落。
+    偵測方式分成兩種訊號，因為這兩條線的性質根本不同：
+
+      肩線：手臂展開會讓寬度突增，這是幾何訊號。取「首次達到最大寬度九成」
+            的那一列，比取寬度差分的極值穩健 —— 差分極值容易命中頭頂那圈
+            比脖子寬的輪廓，而不是真正的肩線。
+
+      腰線：**積木人偶的腰沒有幾何特徵**，軀幹與腿一樣寬，寬度剖面在腰部
+            完全平坦。它是顏色變化（上衣→褲子）。因此改以中央窄帶的
+            逐列顏色差異取極值。
+
+    實測教訓：初版兩條線都用寬度差分，在真實生成圖上量出肩線 0.184、
+    腰線 0.816（實際約 0.30 / 0.64），會據此得出「需要偵測步驟」的錯誤結論。
     """
     shoulders: List[float] = []
     hips: List[float] = []
     for img in images:
-        norm = normalize(img)
+        # 單一張壞掉的樣本不該讓整批量測中斷 —— 驗證時常常是二十張裡有一兩張
+        # 生成失敗或整張全透明，那時應該略過它並繼續，而不是整批作廢。
+        try:
+            norm = normalize(img)
+        except ValueError:
+            continue
         alpha = np.asarray(norm)[:, :, 3]
         widths = (alpha > 0).sum(axis=1).astype(float)
         h = len(widths)
@@ -181,12 +233,18 @@ def analyze_cuts(images: List[PILImage.Image]) -> Dict[str, Any]:
         # 生成圖的邊緣有抗鋸齒與雜訊，逐列寬度會抖動；直接取 diff 的極值
         # 容易命中單列雜訊而不是真正的肩線。先做移動平均把剖面壓平。
         widths = _smooth(widths, SMOOTH_WINDOW)
-        # 肩線：上半部寬度增幅最大的一列
-        upper = widths[: h // 2]
-        shoulders.append(float(np.argmax(np.diff(upper)) + 1) / h)
-        # 胯線：下半部寬度減幅最大的一列（雙腿分岔造成的中央鏤空）
-        lower = widths[h // 2:]
-        hips.append(float(np.argmin(np.diff(lower)) + 1 + h // 2) / h)
+
+        # 肩線：首次達到最大寬度九成的那一列（手臂展開處）
+        wide = np.nonzero(widths >= widths.max() * SHOULDER_WIDTH_RATIO)[0]
+        if len(wide) == 0:
+            continue
+        shoulders.append(float(wide[0]) / h)
+
+        # 腰線：中央窄帶的顏色不連續處
+        waist = _detect_waist(norm, start=wide[0] / h)
+        if waist is None:
+            continue
+        hips.append(waist)
 
     def stat(v: List[float]) -> Dict[str, float]:
         if not v:

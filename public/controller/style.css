@@ -493,3 +493,29 @@ button:disabled { opacity: .35; border-style: dashed; }
   padding: 24px;
 }
 #scan-overlay[hidden] { display: none; }
+
+/* ── 非阻斷式通知 Toast ─────────────────────────────────────── */
+.toast {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 90vw;
+  width: max-content;
+  background: var(--ink);
+  color: var(--paper);
+  padding: 12px 18px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  z-index: 9999;
+  text-align: center;
+  pointer-events: none;
+  animation: toast-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.toast[hidden] { display: none; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, -12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}

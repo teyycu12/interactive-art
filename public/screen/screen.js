@@ -150,11 +150,16 @@ function avatarImage(avatar) {
   return img;
 }
 
+let screenReconnectDelay = 1000;
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}`);
 
-  ws.addEventListener('open', () => ws.send(JSON.stringify({ type: EV.SCREEN_HELLO })));
+  ws.addEventListener('open', () => {
+    screenReconnectDelay = 1000;
+    ws.send(JSON.stringify({ type: EV.SCREEN_HELLO }));
+  });
 
   ws.addEventListener('message', (e) => {
     let msg;
@@ -235,10 +240,13 @@ function connect() {
   });
 
   ws.addEventListener('close', () => {
-    metaEl.textContent = '與伺服器斷線，3 秒後重連…';
-    setTimeout(connect, 3000);
+    const delay = screenReconnectDelay + Math.floor(Math.random() * 500);
+    metaEl.textContent = `與伺服器斷線，${(delay / 1000).toFixed(1)} 秒後重連…`;
+    setTimeout(connect, delay);
+    screenReconnectDelay = Math.min(screenReconnectDelay * 1.5, 6000);
   });
 }
+
 connect();
 
 // ─────────────────────────────────────────────────────────────

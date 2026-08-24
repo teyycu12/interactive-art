@@ -154,6 +154,16 @@ $('#btn-start').addEventListener('click', () => {
 // 捏臉不會被這條路徑取代，而是降級為備援：相機權限被拒、非安全情境、
 // 生成失敗都會退回捏臉，參與者不會因此進不了場（整合計畫 §3.5）。
 
+let toastTimer = null;
+function showToast(text, durationMs = 3200) {
+  const el = $('#toast');
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, durationMs);
+}
+
 let scanStream = null;
 
 function stopScanStream() {
@@ -164,12 +174,13 @@ function stopScanStream() {
 
 function fallbackToBuilder(message) {
   stopScanStream();
-  if (message) alert(message);
+  if (message) showToast(message);
   ensureTokenConfig();
   refresh();
   showScreen('builder');
   showStep(1);
 }
+
 
 $('#btn-scan').addEventListener('click', async () => {
   if (!commitName()) return;
@@ -306,7 +317,7 @@ function connect() {
       setStatus('已連線', 'ok');
     } else if (msg.type === EV.CLIENT_REJECT) {
       setStatus('資料有誤', 'warn');
-      alert(`登入失敗：${msg.reason}`);
+      showToast(`登入失敗：${msg.reason}`);
       backToBuilder();
     } else {
       handleMissionMessage(msg);

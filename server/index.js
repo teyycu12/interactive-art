@@ -1237,3 +1237,16 @@ const shutdown = () => {
 };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+const handleCrash = (type, err) => {
+  console.error(`\n[fatal] 未處理的例外 (${type})：`, err);
+  try {
+    store.save(snapshotData(), { force: true });
+    console.error(`  崩潰前已緊急保存狀態快照　${store.file}`);
+  } catch (saveErr) {
+    console.error('  快照緊急存檔失敗：', saveErr);
+  }
+  process.exit(1);
+};
+process.on('uncaughtException', (err) => handleCrash('uncaughtException', err));
+process.on('unhandledRejection', (reason) => handleCrash('unhandledRejection', reason));

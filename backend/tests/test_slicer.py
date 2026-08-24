@@ -217,17 +217,63 @@ class TestCrossLanguageContract:
             assert re.match(r"^#[0-9a-fA-F]{6}$", hex_value), f"{key} 不是合法的 #RRGGBB"
 
 
+def make_minifig(shoulder=0.30, waist=0.64, w=400, h=520):
+    """已知肩線與腰線比例的積木人偶，背景透明。
+
+    比 make_figure() 更貼近真實生成結果：手臂在肩線下方外展、上衣與褲子
+    是兩種顏色、腰部沒有任何寬度變化 —— 最後這點正是初版偵測失手的地方。
+    """
+    a = np.zeros((h, w, 4), dtype=np.uint8)
+    cx = w // 2
+
+    def box(y0, y1, x0, x1, c):
+        a[y0:y1, x0:x1] = (*c, 255)
+
+    sh, wa = int(shoulder * h), int(waist * h)
+    box(int(0.04 * h), int(0.08 * h), cx - 14, cx + 14, (230, 180, 130))
+    box(int(0.08 * h), sh, cx - 58, cx + 58, (230, 180, 130))
+    box(sh, wa, cx - 72, cx + 72, (40, 110, 180))
+    box(sh + 6, wa - 20, cx - 118, cx - 72, (40, 110, 180))
+    box(sh + 6, wa - 20, cx + 72, cx + 118, (40, 110, 180))
+    box(wa, h - 8, cx - 66, cx - 6, (35, 35, 35))
+    box(wa, h - 8, cx + 6, cx + 66, (35, 35, 35))
+    return PILImage.fromarray(a, "RGBA")
+
+
 class TestAnalyzeCuts:
+    """初版兩條線都用寬度差分，在真實生成圖上量出肩線 0.184 / 腰線 0.816
+    （實際約 0.30 / 0.64），會據此給出「需要偵測步驟」的錯誤結論。
+    腰線在積木人偶上沒有幾何特徵 —— 軀幹與腿一樣寬 —— 它是顏色變化。
+    """
+
+    @pytest.mark.parametrize("shoulder,waist", [(0.30, 0.64), (0.26, 0.60), (0.34, 0.70)])
+    def test_recovers_known_ratios(self, shoulder, waist):
+        stats = analyze_cuts([make_minifig(shoulder, waist)])
+        assert abs(stats["shoulder"]["mean"] - shoulder) < 0.04
+        assert abs(stats["hip"]["mean"] - waist) < 0.04
+
+    def test_waist_needs_colour_not_width(self):
+        """軀幹與腿同寬時仍必須找得到腰線。"""
+        stats = analyze_cuts([make_minifig()])
+        assert stats["samples"] == 1
+        assert 0.5 < stats["hip"]["mean"] < 0.8
+
     def test_reports_stable_ratios_for_identical_figures(self):
-        stats = analyze_cuts([make_figure() for _ in range(5)])
+        stats = analyze_cuts([make_minifig() for _ in range(5)])
         assert stats["samples"] == 5
         assert stats["shoulder"]["std"] == 0.0, "同構圖的樣本標準差應為零"
+        assert stats["hip"]["std"] == 0.0
 
-    def test_detects_shoulder_and_hip_near_expected_ratios(self):
-        stats = analyze_cuts([make_figure()])
-        # 合成圖的肩線在 0.30、胯線在 0.64
-        assert abs(stats["shoulder"]["mean"] - 0.30) < 0.05
-        assert abs(stats["hip"]["mean"] - 0.64) < 0.05
+    def test_detects_varying_ratios_as_spread(self):
+        """構圖浮動時標準差必須反映出來，否則驗證工具會漏判。"""
+        figs = [make_minifig(0.26, 0.58), make_minifig(0.30, 0.64), make_minifig(0.34, 0.70)]
+        stats = analyze_cuts(figs)
+        assert stats["shoulder"]["std"] > 0.02
+        assert stats["hip"]["std"] > 0.02
 
     def test_handles_empty_input(self):
         assert analyze_cuts([])["samples"] == 0
+
+    def test_ignores_fully_transparent_sample(self):
+        blank = PILImage.new("RGBA", (50, 50), (0, 0, 0, 0))
+        assert analyze_cuts([make_minifig(), blank])["samples"] >= 1
