@@ -188,8 +188,10 @@ function resolveStatic(urlPath) {
 //   3. 生成服務掛掉時，這裡能回一個結構化的降級結果，而不是讓手機端看到
 //      連線錯誤 —— 對參與者而言那應該是「用預設外觀進場」，不是故障
 // ─────────────────────────────────────────────────────────────
-const VISION_HOST = process.env.VISION_HOST ?? '127.0.0.1';
-const VISION_PORT = Number(process.env.VISION_PORT ?? 5055);
+// 用 || 而非 ??：?? 只接住 null/undefined，接不到空字串，
+// 而 .env 裡留一行 VISION_PORT= 正是會產生空字串的寫法。
+const VISION_HOST = process.env.VISION_HOST || '127.0.0.1';
+const VISION_PORT = Number(process.env.VISION_PORT || 5055);
 
 /** 手機照片經 base64 後可達數 MB；超過此上限直接拒收，不讓記憶體被灌爆 */
 const MAX_PHOTO_BYTES = 12 * 1024 * 1024;
