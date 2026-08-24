@@ -210,9 +210,55 @@ function sendJSON(res, code, body) {
   res.end(payload);
 }
 
+// 生成是整套系統唯一會花錢的路徑：每次要兩支 Gemini 加一次生圖。
+// WebSocket 那端有 token bucket，這個 HTTP 端點原本什麼都沒有 ——
+// 場館 Wi-Fi 上任何一台裝置寫個迴圈就能把 API 額度燒光，也會讓
+// Python 服務的執行緒池被塞滿而排擠正在報到的人。
+const GENERATE_RATE = { capacity: 3, refillPerSec: 1 / 30, violationLimit: Infinity };
+
+/** 同時進行中的生成上限。Python 端每個請求要 4 個 worker（共 16 個）。 */
+const MAX_CONCURRENT_GENERATES = 4;
+let inFlightGenerates = 0;
+
+/** @type {Map<string, {limiter: RateLimiter, seenAt: number}>} 依來源位址計費 */
+const generateLimiters = new Map();
+const LIMITER_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * 取得該來源的限流器，並順手清掉久未出現的條目。
+ * 少了清理，這個 Map 會隨著到訪過的位址無限成長 —— 修掉一個資源耗盡問題
+ * 卻換來另一個並不划算。
+ */
+function limiterFor(ip, now) {
+  if (generateLimiters.size > 256) {
+    for (const [key, entry] of generateLimiters) {
+      if (now - entry.seenAt > LIMITER_TTL_MS) generateLimiters.delete(key);
+    }
+  }
+  let entry = generateLimiters.get(ip);
+  if (!entry) {
+    entry = { limiter: new RateLimiter(GENERATE_RATE, performance.now()), seenAt: now };
+    generateLimiters.set(ip, entry);
+  }
+  entry.seenAt = now;
+  return entry.limiter;
+}
+
 function proxyGenerate(req, res) {
   if (req.method !== 'POST') {
     sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
+    return;
+  }
+
+  // 逾量與滿載都回降級結果而非 429/503：對手機端而言這兩種情況與
+  // 「生成失敗」沒有差別，都應該安靜地退回捏臉，不是彈出錯誤。
+  const ip = req.socket.remoteAddress ?? 'unknown';
+  if (limiterFor(ip, Date.now()).check() !== 'ok') {
+    sendJSON(res, 200, { ok: false, error: 'rate_limited', fallbackColors: DEFAULT_FALLBACK_COLORS });
+    return;
+  }
+  if (inFlightGenerates >= MAX_CONCURRENT_GENERATES) {
+    sendJSON(res, 200, { ok: false, error: 'too_busy', fallbackColors: DEFAULT_FALLBACK_COLORS });
     return;
   }
 
@@ -235,6 +281,15 @@ function proxyGenerate(req, res) {
   req.on('end', () => {
     if (aborted) return;
     const body = Buffer.concat(chunks);
+
+    inFlightGenerates += 1;
+    let settled = false;
+    const release = () => {
+      if (settled) return;   // 成功、逾時、錯誤只能還一次計數
+      settled = true;
+      inFlightGenerates -= 1;
+    };
+
     const upstream = http.request({
       host: VISION_HOST,
       port: VISION_PORT,
@@ -246,6 +301,7 @@ function proxyGenerate(req, res) {
       const out = [];
       up.on('data', (c) => out.push(c));
       up.on('end', () => {
+        release();
         res.writeHead(up.statusCode ?? 200, {
           'Content-Type': 'application/json; charset=utf-8',
         });
@@ -255,11 +311,15 @@ function proxyGenerate(req, res) {
 
     // 生成服務沒開或逾時，都回降級結果讓參與者仍能進場（整合計畫 §3.5）
     const degrade = (error) => {
+      release();
       if (res.headersSent) return;
       sendJSON(res, 200, { ok: false, error, fallbackColors: DEFAULT_FALLBACK_COLORS });
     };
     upstream.on('timeout', () => { upstream.destroy(); degrade('generation_timeout'); });
     upstream.on('error', () => degrade('vision_service_unavailable'));
+    // 手機在生成途中關掉分頁時 upstream 不一定會收到 error，
+    // 沒有這一條，名額會被這類中斷請求一個個吃掉直到永遠滿載。
+    res.on('close', release);
 
     upstream.end(body);
   });

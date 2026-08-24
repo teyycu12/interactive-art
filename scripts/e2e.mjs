@@ -607,4 +607,34 @@ check('大螢幕連線不能改註冊為控制器', !screenGotWelcome);
 shiftyScreen.close();
 await sleep(200);
 
+// 生成端點是唯一會花錢的路徑（每次兩支 Gemini 加一次生圖），
+// 原本沒有任何速率限制 —— 場館 Wi-Fi 上一台裝置寫個迴圈就能把額度燒光。
+function postGenerate() {
+  return new Promise((resolve) => {
+    const body = Buffer.from('{}');
+    const req = http.request({
+      host: '127.0.0.1', port: PORT, path: '/api/generate', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
+    }, (res) => {
+      const out = [];
+      res.on('data', (c) => out.push(c));
+      res.on('end', () => {
+        try { resolve(JSON.parse(Buffer.concat(out).toString()).error); }
+        catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.end(body);
+  });
+}
+
+// 容量 3：前三次會被放行（生成服務沒開，因此回 vision_service_unavailable），
+// 第四次起應被限流擋下。
+const genResults = [];
+for (let i = 0; i < 4; i++) genResults.push(await postGenerate());
+check('生成端點在爆量時會限流',
+  genResults.slice(0, 3).every((r) => r !== 'rate_limited')
+  && genResults[3] === 'rate_limited',
+  genResults.join(', '));
+
 finish();
