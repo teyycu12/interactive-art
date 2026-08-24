@@ -1,8 +1,7 @@
 """vlm_module 的回應解析測試。
 
-vlm_module 在缺少 GEMINI_API_KEY 時會於 import 階段 raise，因此這裡先塞一個
-假金鑰再 import —— 測試不會發出任何網路請求，只驗證解析邏輯。
-真正呼叫 Gemini 的路徑不在單元測試範圍。
+這裡先塞一個假金鑰再 import —— 測試不會發出任何網路請求，只驗證解析邏輯與
+失敗回傳的形狀。真正呼叫 Gemini 的路徑不在單元測試範圍。
 """
 import json
 import os
@@ -10,6 +9,7 @@ import unittest
 
 os.environ.setdefault("GEMINI_API_KEY", "test-key-not-used-for-network")
 
+from backend import vlm_module  # noqa: E402
 from backend.vlm_module import strip_json_fence  # noqa: E402
 
 
@@ -69,3 +69,31 @@ class TestStripJsonFence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFailureCarriesNoFabricatedFields(unittest.TestCase):
+    """VLM 失敗時不得附帶捏造的語意欄位。
+
+    早期版本在失敗路徑回傳一組寫死的預設值（tshirt / jeans / short_straight
+    ...）。build_outfit_data 當時只讀 outfit 鍵、不看 ok，於是 VLM 一失敗，
+    穿西裝、洋裝、外套的人全都被生成為短袖 T 恤配牛仔褲 —— 而且沒有任何一處
+    會報錯，現場只會覺得模型變笨了。
+    """
+
+    def _force_failure(self, fn):
+        # 傳入解不開的 base64，讓函式走到 except 區塊，不會發出網路請求。
+        return fn("data:image/jpeg;base64,!!!not-base64!!!")
+
+    def test_outfit_failure_has_no_outfit_key(self):
+        result = self._force_failure(vlm_module.analyze_outfit)
+        self.assertFalse(result["ok"])
+        self.assertNotIn("outfit", result,
+                         "失敗回傳不得附帶服裝欄位，否則會被當成真的辨識結果")
+        self.assertIn("error", result)
+
+    def test_face_failure_has_no_face_key(self):
+        result = self._force_failure(vlm_module.analyze_face)
+        self.assertFalse(result["ok"])
+        self.assertNotIn("face", result,
+                         "失敗回傳不得附帶臉部欄位，否則捏造的髮型膚色會進 prompt")
+        self.assertIn("error", result)

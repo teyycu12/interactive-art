@@ -90,22 +90,12 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
         }
     except Exception as e:
         print(f"[VLM Error] {e}")
-        return {
-            "ok": False,
-            "error": str(e),
-            "outfit": {
-                "outer": "none",
-                "inner": "tshirt",
-                "lower": "jeans",
-                "inner_color": "#FFFFFF",
-                "outer_color": None,
-                "lower_color": "#336699",
-                "sleeve_length": "short",
-                "fit": "regular",
-                "legwear": "covered",
-                "has_pattern": False
-            }
-        }
+        # 失敗時「不」附帶服裝欄位。早期版本會回一組寫死的預設值
+        # （tshirt / jeans / short / regular），而 build_outfit_data 只讀
+        # outfit 鍵、不看 ok —— 結果是 VLM 一失敗，穿西裝、洋裝、外套的人
+        # 全都被生成為短袖 T 恤配牛仔褲，只有 CV 取到的顏色是對的，
+        # 且沒有任何一處會報錯。看起來像模型變笨，不像呼叫失敗。
+        return {"ok": False, "error": str(e)}
 
 
 def analyze_face(base64_image: str) -> Dict[str, Any]:
@@ -164,4 +154,6 @@ Respond ONLY with the JSON object, no markdown fences."""
         return {"ok": True, "face": {**_DEFAULTS, **data}}
     except Exception as e:
         print(f"[VLM face Error] {e}")
-        return {"ok": False, "face": _DEFAULTS}
+        # 同 analyze_outfit：失敗時不附帶臉部欄位，避免捏造的髮型與膚色
+        # 被當成真的辨識結果送進生圖 prompt。
+        return {"ok": False, "error": str(e)}

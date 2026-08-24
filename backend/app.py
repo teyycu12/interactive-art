@@ -119,19 +119,42 @@ except Exception:
         remove_bots = lambda *a, **k: 0  # type: ignore
         gemini_breaker = None
 
-# vlm_module 與 face_module 必須分開 import：vlm_module 在缺少 GEMINI_API_KEY
-# 時會於 import 階段 raise，而 face_module 是純 MediaPipe、與 Gemini 無關。
-# 兩者原本共用同一個 try 區塊，導致沒設金鑰時臉部偵測也一起被停用。
+def _raise_on_vlm_failure(fn, *args, **kwargs):
+    """把 {ok: False} 轉成例外，好讓熔斷器判定為失敗。
+
+    circuit_breaker.call 只在 func 拋例外時 record_failure()，正常回傳一律
+    record_success()。而 analyze_outfit / analyze_face 把所有例外都吞掉、改回
+    {"ok": False, "error": ...} —— 於是熔斷器永遠不會累積失敗、永遠不會跳開，
+    整段保護形同虛設：Gemini 全掛時每個參與者仍各自等滿一次逾時，而不是
+    在第三次失敗後快速失敗。
+    """
+    result = fn(*args, **kwargs)
+    if isinstance(result, dict) and result.get("ok") is False:
+        raise RuntimeError(result.get("error") or "vlm_call_failed")
+    return result
+
+
+# vlm_module 與 face_module 必須分開 import：vlm_module 只要載入失敗（缺套件、
+# SDK 版本不符）就整組停用，而 face_module 是純 MediaPipe、與 Gemini 無關。
+# 兩者原本共用同一個 try 區塊，導致 vlm_module 一出事臉部偵測也一起被停用。
 try:
     from backend.vlm_module import analyze_outfit, analyze_face
 except Exception:
     try:
         from vlm_module import analyze_outfit, analyze_face
     except Exception as _e:
-        # 常見原因：GEMINI_API_KEY 未設定（vlm_module 於 import 時即 raise）
         _degraded("vlm_module（VLM 服裝分析）", _e)
         analyze_outfit = lambda *a, **k: {"ok": False}
         analyze_face = lambda *a, **k: {"ok": False}
+
+# 金鑰未設定不會讓 import 失敗 —— vlm_module 在沒有 GEMINI_API_KEY 時只是跳過
+# genai.configure()，要等到實際呼叫才會失敗。上面那個 except 因此不會觸發，
+# 啟動訊息也就完全不會提到 VLM 是關的：每次生成都靜靜地少掉服裝款式與臉部
+# 特徵，只剩 CV 顏色。現場看起來像模型變笨，不像少設一個環境變數。
+if not os.environ.get("GEMINI_API_KEY"):
+    _DEGRADED.append("vlm_module（GEMINI_API_KEY 未設定）")
+    print("[app] ⚠️  GEMINI_API_KEY 未設定 —— 服裝款式與臉部特徵辨識將全數失敗，"
+          "生成的角色只會有 CV 取到的顏色，不會像本人。", file=sys.stderr)
 
 # 這三份色表原本在 app.py 與 avatar_pipeline 各有一份完全相同的副本。
 # 以 avatar_pipeline 為單一來源，避免兩邊日後各自漂移。
@@ -1027,8 +1050,9 @@ def handle_generate_avatar(payload):
             def _vlm(fn, kind):
                 if gemini_breaker is None:
                     return _vlm_executor.submit(fn, img_str)
+                # 經 _raise_on_vlm_failure 轉手，熔斷器才看得見失敗。
                 return _vlm_executor.submit(
-                    gemini_breaker.call, fn, img_str, max_retries=0,
+                    gemini_breaker.call, _raise_on_vlm_failure, fn, img_str, max_retries=0,
                     fallback={"ok": False, "error": "circuit_open", kind: {}},
                 )
 
