@@ -166,19 +166,78 @@ def _get_shield_mask(
 
 
 def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Optional[np.ndarray] = None) -> str:
-    """Uses rembg (U2-Net) to cleanly remove the background, then tight-crops the character."""
-    import rembg
+    """Flood-fill from the four corners turning near-white pixels transparent.
+
+    Connected white regions touching any edge become alpha=0; white pixels
+    enclosed by the garment (e.g. shirt logo, paper detail) are preserved.
+    Tolerance is per-channel max distance from pure white.
+    """
     try:
         raw = base64.b64decode(png_b64)
-        
-        # rembg.remove accepts bytes and returns bytes
-        clean_raw = rembg.remove(raw)
-        
-        # Tight-crop to the opaque content bounding box
-        img = PILImage.open(io.BytesIO(clean_raw)).convert("RGBA")
+        img = PILImage.open(io.BytesIO(raw)).convert("RGBA")
         arr = np.array(img)
         h, w, _ = arr.shape
-        
+        # Mask of "near-white" pixels
+        rgb = arr[:, :, :3]
+        near_white = np.all(rgb >= (255 - tolerance), axis=-1)
+
+        # 護盾（白色衣物／膚色／鞋子）在此只做尺寸對齊，先不從 near_white 扣掉。
+        #
+        # 原本的寫法是 near_white = near_white & ~shield_mask，等於把護盾內的
+        # 像素從「可走訪集合」裡拿掉 —— 但洪水填充只沿著 near_white 前進，
+        # 護盾因此變成一道牆，牆後方的背景永遠到不了，整片留著不透明。
+        # MediaPipe 沒抓到人時，護盾是覆蓋畫面中央一大塊的預設框，
+        # 於是角色會頂著一大片白色背景出現在投影牆上（實測不透明比例 99%）。
+        #
+        # 護盾的用意是「不要把這些像素挖成透明」，不是「不要走過這些像素」。
+        # 因此改成照常走訪，最後在挖洞的那一步才把護盾內的像素排除。
+        if shield_mask is not None:
+            if shield_mask.shape != near_white.shape:
+                shield_pil = PILImage.fromarray(shield_mask.astype(np.uint8) * 255).resize(
+                    (w, h), PILImage.NEAREST
+                )
+                shield_mask = np.array(shield_pil) > 128
+
+        # BFS from the border so logos / interior white stay opaque
+        from collections import deque
+        visited = np.zeros((h, w), dtype=bool)
+        q: deque = deque()
+        for x in range(w):
+            for y in (0, h - 1):
+                if near_white[y, x] and not visited[y, x]:
+                    visited[y, x] = True
+                    q.append((y, x))
+        for y in range(h):
+            for x in (0, w - 1):
+                if near_white[y, x] and not visited[y, x]:
+                    visited[y, x] = True
+                    q.append((y, x))
+        while q:
+            y, x = q.popleft()
+            for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx] and near_white[ny, nx]:
+                    visited[ny, nx] = True
+                    q.append((ny, nx))
+        # 挖洞時才套用護盾：走訪過的背景一律透明，但護盾內的保持原樣
+        punch = visited & ~shield_mask if shield_mask is not None else visited
+        arr[punch, 3] = 0  # punch transparency
+
+        # Soft alpha at the boundary: fade the 2-px ring around the cutout
+        # so the polygon clip in the frontend doesn't show a hard white line.
+        # (Simple Manhattan dilation of the visited mask.)
+        boundary = np.zeros_like(punch)
+        for dy in range(-2, 3):
+            for dx in range(-2, 3):
+                if dy == 0 and dx == 0:
+                    continue
+                shifted = np.roll(np.roll(punch, dy, axis=0), dx, axis=1)
+                boundary |= shifted & ~punch
+        # For boundary pixels keep colour but halve alpha
+        arr[boundary, 3] = (arr[boundary, 3].astype(int) // 2).astype(np.uint8)
+
+        # Tight-crop to the opaque content bounding box so the frontend can
+        # place the cardigan flush against the head with no top/bottom margin.
         opaque = arr[:, :, 3] > 5
         if opaque.any():
             ys, xs = np.where(opaque)
@@ -194,9 +253,6 @@ def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Opt
         buf = io.BytesIO()
         out.save(buf, format="PNG")
         return base64.b64encode(buf.getvalue()).decode("utf-8")
-    except Exception as e:
-        print(f"[garment_gen] bg removal error: {e}")
-        return png_b64
     except Exception as e:
         print(f"[garment_gen] bg-remove failed (returning original): {e}")
         return png_b64
