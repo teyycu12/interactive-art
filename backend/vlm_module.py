@@ -75,7 +75,7 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
         """
 
         response = _client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.6-flash",
             contents=[prompt, image_part],
         )
 
@@ -152,7 +152,7 @@ skin_tone guide (judge by face, not lighting):
 Respond ONLY with the JSON object, no markdown fences."""
 
         response = _client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.6-flash",
             contents=[prompt, image_part],
         )
         data = json.loads(strip_json_fence(response.text or ""))

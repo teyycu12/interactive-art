@@ -6,9 +6,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#FAF8F5">
 <title>PersonaFlow 控制器</title>
+<link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="reconnect-overlay" hidden>網路不穩，正在重新連線...</div>
 <div id="app">
 
   <!-- ── 進場：命名 ──────────────────────────────────────
@@ -37,6 +39,7 @@
     </div>
     <div class="scan-stage">
       <video id="scan-video" playsinline muted autoplay></video>
+      <div id="countdown-display" hidden style="position:absolute; inset:0; display:grid; place-items:center; font-size:120px; font-weight:900; color:white; text-shadow: 0 4px 24px rgba(0,0,0,0.5);"></div>
       <div id="scan-overlay" hidden>
         <p id="scan-status">正在生成你的角色…</p>
       </div>

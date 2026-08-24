@@ -257,7 +257,7 @@ export const CV_CUTS = {
 export const CV_PARTS = ['head', 'torso', 'legs'];
 
 /** 貼圖 URL：路徑形狀完全鎖死，杜絕路徑穿越與任意檔案讀取 */
-const TEXTURE_URL_RE = /^\/assets\/gen\/([0-9a-f]{32})\/(head|torso|legs)\.png$/;
+const TEXTURE_URL_RE = /^\/assets\/gen\/([0-9a-f]{32})\/(head|torso|legs)\.webp$/;
 const TEXTURE_PARTS = CV_PARTS;
 
 /**

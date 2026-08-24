@@ -30,6 +30,8 @@ export const EV = {
   HOST_PUBLISH_MISSION: 'HOST_PUBLISH_MISSION', // Host → Server：發布任務
   HOST_CLOSE_MISSION: 'HOST_CLOSE_MISSION',   // Host → Server：結算並關閉任務
   HOST_KICK: 'HOST_KICK',                     // Host → Server：踢除參與者
+  HOST_TAKE_PHOTO: 'HOST_TAKE_PHOTO',         // Host → Server：拍大合照（定位→合成）
+  HOST_PHOTO_STATE: 'HOST_PHOTO_STATE',       // Server → Host：合照進度與結果
 
   // ── 任務生命週期（規格 v3.0 §03）──────────────────────
   MISSION_ANNOUNCE: 'MISSION_ANNOUNCE',       // Server → All：任務公告

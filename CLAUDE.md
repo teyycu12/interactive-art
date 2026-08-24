@@ -28,7 +28,7 @@
 | 感知層 | Python + MediaPipe / OpenCV | 服裝色調、輪廓、姿勢提取 |
 | 生成層 | Python + Gemini / 生圖 API | 去背人偶圖生成、切片成三張貼圖 |
 | 互動層 | Node.js + ws | α 仲裁共治、任務、配對、問答、計分、社交圖譜 |
-| 渲染層 | Canvas2D（3D/Three.js 為進行中的重寫） | 角色與場景呈現 |
+| 渲染層 | Three.js 3D 場景 + Canvas2D 角色圖層 | 角色與場景呈現 |
 | 輸出層 | Python + Pillow | 大合照生成、QR Code |
 
 ---
@@ -79,7 +79,8 @@
 │   └── scene.js            # 場景障礙物佈局
 ├── /public                 # ★ 整合版前端
 │   ├── controller/         # 手機端：拍照生成 / 捏臉（備援）、搖桿、任務
-│   ├── screen/             # 大螢幕
+│   ├── screen/             # 大螢幕（3D 房間背景 + 2D 角色疊加）
+│   │   └── 3d/RoomScene.js # ★ Three.js 場景、燈光、透視投影 projectToScreen()
 │   ├── host/               # 主辦端控制台
 │   └── assets/gen/         # 生成貼圖落地處（gitignore，每場重新產生）
 ├── /test                   # ★ Node 單元測試（188 個，node --test）
@@ -256,6 +257,20 @@ Node 會據此把**所有**子目錄的 `.js` 當成 ES module —— 但 `front
 
 `frontend/package.json` 只做一件事：把模組型別重新限定成 `commonjs`。
 **不要刪除它**，也不要在 `frontend/` 底下改用 `import`／`export`。
+
+### 前端相依一律由 node_modules 直出，不走 CDN
+
+`nipplejs`、`roughjs`、`three` 都經由 `/vendor/*` 從本機 `node_modules` 提供
+（見 `server/index.js` 的 `resolveStatic`）。**不要為了省事改用 CDN。**
+
+3D 整合初期曾把 three 指向 jsdelivr，本機開發完全正常 —— 因為開發機有網路。
+但展場網路不通、或 CDN 被校園防火牆擋下時，大螢幕的整個 3D 背景會直接消失，
+而這是**本機永遠測不出來的故障**。HTTPS 模式下（現場要用手機相機就必須開）
+還會多一層混合內容風險。
+
+`three/addons/` 是整棵目錄樹（OrbitControls 會再 import 同目錄的其他模組），
+因此 `/vendor/three-addons/` 走的是目錄映射而非逐檔白名單，該分支自己做了
+路徑穿越防護 —— 下方那套通用檢查只涵蓋 PUBLIC_DIR 與 shared，別誤以為它罩得到。
 
 ### 掃描失敗一律降級，不擋人進場
 

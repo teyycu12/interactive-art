@@ -16,6 +16,21 @@ import {
 
 const $ = (sel) => document.querySelector(sel);
 
+// ── 防止手機休眠 (Wake Lock) ───────────────────────────────────
+let wakeLock = null;
+async function requestWakeLock() {
+  if ('wakeLock' in navigator) {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+    } catch {}
+  }
+}
+document.addEventListener('visibilitychange', async () => {
+  if (wakeLock !== null && document.visibilityState === 'visible') {
+    await requestWakeLock();
+  }
+});
+
 // ─────────────────────────────────────────────────────────────
 // 本地狀態
 // ─────────────────────────────────────────────────────────────
@@ -196,7 +211,7 @@ $('#btn-scan').addEventListener('click', async () => {
   $('#scan-overlay').hidden = true;
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { facingMode: 'environment', width: { ideal: 720 }, height: { ideal: 1280 } },
       audio: false,
     });
     $('#scan-video').srcObject = scanStream;
@@ -211,18 +226,56 @@ $('#btn-capture').addEventListener('click', async () => {
   const video = $('#scan-video');
   if (!video.videoWidth) return;
 
-  // 先把畫面定格成 JPEG。長邊限制在 1280：再大只是讓上傳變慢，
-  // 生圖模型看到的解析度並不會因此提升。
-  const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+  const btn = $('#btn-capture');
+  if (btn.disabled) return;
+  btn.disabled = true;
+
+  const display = $('#countdown-display');
+  display.hidden = false;
+
+  for (let i = 5; i > 0; i--) {
+    display.textContent = i;
+    btn.textContent = `倒數 ${i} 秒`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  display.hidden = true;
+  btn.textContent = '拍照';
+
+  // 裁切成 9:16 長方細長型：聚焦在人物，捨棄無用的左右背景，減少 API 負擔與上傳成本
+  const TARGET_RATIO = 9 / 16;
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  let sx = 0, sy = 0, sw = vw, sh = vh;
+
+  if (vw / vh > TARGET_RATIO) {
+    sw = vh * TARGET_RATIO;
+    sx = (vw - sw) / 2;
+  } else {
+    sh = vw / TARGET_RATIO;
+    sy = (vh - sh) / 2;
+  }
+
+  // 長邊限制在 1280，再大只是讓上傳變慢，生圖模型看到的解析度並不會因此提升。
+  const scale = Math.min(1, 1280 / Math.max(sw, sh));
   const canvas = document.createElement('canvas');
-  canvas.width = Math.round(video.videoWidth * scale);
-  canvas.height = Math.round(video.videoHeight * scale);
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+  
+  canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   const image = canvas.toDataURL('image/jpeg', 0.85);
 
   stopScanStream();
   $('#scan-overlay').hidden = false;
-  $('#scan-status').textContent = '正在生成你的角色…';
+  
+  const loadingMsgs = ['正在分析服裝特徵...', 'AI 正在挑選樂高積木...', '積木拼裝與上色中...', '即將完成，準備登場...'];
+  let msgIdx = 0;
+  const statusEl = $('#scan-status');
+  statusEl.textContent = loadingMsgs[0];
+  const loadingTimer = setInterval(() => {
+    msgIdx = (msgIdx + 1) % loadingMsgs.length;
+    statusEl.textContent = loadingMsgs[msgIdx];
+  }, 4000);
 
   let body;
   try {
@@ -233,9 +286,12 @@ $('#btn-capture').addEventListener('click', async () => {
     });
     body = await res.json();
   } catch {
+    clearInterval(loadingTimer);
     fallbackToBuilder('生成服務連不上，先用捏臉進場。');
     return;
   }
+
+  clearInterval(loadingTimer);
 
   if (!body?.ok) {
     fallbackToBuilder('這張照片沒能生成角色，先用捏臉進場。');
@@ -290,6 +346,8 @@ function connect() {
   const sock = ws;
 
   ws.addEventListener('open', () => {
+    const overlay = $('#reconnect-overlay');
+    if (overlay) overlay.hidden = true;
     reconnectDelay = 500;
     setStatus('登入中…');
     // 帶上舊 userId 與重連憑證：若伺服器上的角色還在（斷線 45 秒內），
@@ -329,6 +387,10 @@ function connect() {
     if (hasLeft) return;
     // 已被新連線取代的舊 socket 也不重連（見 enterStage）
     if (sock.superseded) return;
+    
+    const overlay = $('#reconnect-overlay');
+    if (overlay) overlay.hidden = false;
+
     setStatus('重新連線中…', 'warn');
     // 指數退避上限 5 秒：現場 Wi-Fi 壅塞時避免所有手機同頻重連加劇擁塞
     setTimeout(connect, reconnectDelay);
@@ -631,6 +693,7 @@ document.addEventListener('visibilitychange', () => {
 // ─────────────────────────────────────────────────────────────
 function enterStage() {
   showScreen('controller');
+  requestWakeLock();
   $('#mini-avatar').innerHTML = renderAvatarSVG(config);
   $('#my-name').textContent = displayName;
   $('#my-id').textContent = '—';

@@ -10,9 +10,11 @@
 
 import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES } from '/shared/protocol.js';
 import { renderAvatarSVG, CV_CUTS, CV_PARTS } from '/shared/avatars.js';
-import { OBSTACLES } from '/shared/scene.js';
-import { buildScene } from './scene.js';
+import { OBSTACLES, PROPS } from '/shared/scene.js';
+import { RoomScene, populateProps } from './3d/RoomScene.js';
 import { drawCharacter, drawNameplate, drawEmote, drawOffline } from './character.js';
+
+let roomScene = null;
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
@@ -38,7 +40,6 @@ let scale = 1;
 let offsetX = 0;
 let offsetY = 0;
 let dpr = 1;
-let sceneLayer = null;
 
 function resize() {
   dpr = devicePixelRatio || 1;
@@ -53,12 +54,13 @@ function resize() {
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingQuality = 'high';
-
-  // 場景以實際輸出像素重建，縮放視窗才不會糊掉
-  sceneLayer = buildScene(scale, dpr);
 }
 addEventListener('resize', resize);
 resize();
+
+// 初始化 3D 背景
+roomScene = new RoomScene(document.getElementById('bg3d'));
+populateProps(roomScene, PROPS);
 
 // ─────────────────────────────────────────────────────────────
 // 連線狀態
@@ -123,12 +125,17 @@ function cvAvatarImage(avatar) {
     // 比維持取樣色的替身難看得多。
     ctx.clearRect(0, 0, AVATAR_W, AVATAR_H);
     paintPlaceholder();
+    
+    // 視覺強化：增加投影大螢幕上的對比度與飽和度
+    ctx.filter = 'contrast(1.15) saturate(1.15) brightness(1.05)';
+    
     for (const part of CV_PARTS) {
       const img = loaded[part];
       if (!img) continue;
       const [top, bottom] = CV_CUTS[part];
       ctx.drawImage(img, 0, AVATAR_H * top, AVATAR_W, AVATAR_H * (bottom - top));
     }
+    ctx.filter = 'none'; // reset filter
   };
 
   for (const part of CV_PARTS) {
@@ -286,8 +293,10 @@ function toast(text) {
 // ─────────────────────────────────────────────────────────────
 const EMOTE_GLYPH = { CHEERS: '🍻', HEART: '💗', WAVE: '👋' };
 
-/** 邏輯座標 → 螢幕座標 */
-const toScreen = (v) => ({ x: offsetX + v.x * scale, y: offsetY + v.y * scale });
+/** 邏輯座標 → 螢幕座標 (3D 空間投影) */
+const toScreen = (v) => {
+  return roomScene ? roomScene.projectToScreen(v.x, v.y) : { x: 0, y: 0 };
+};
 
 function drawDebugOverlay(a, pos) {
   // 剛體避障半徑
@@ -318,14 +327,9 @@ function drawDebugOverlay(a, pos) {
 function render(now) {
   const time = now / 1000;
 
+  // 3D 畫布在底層自行 render，我們只需清空 2D Canvas
   ctx.clearRect(0, 0, innerWidth, innerHeight);
-  // 投影畫面以外的區域填成同色，避免出現黑邊
-  ctx.fillStyle = '#FAF8F5';
-  ctx.fillRect(0, 0, innerWidth, innerHeight);
-
-  if (sceneLayer) {
-    ctx.drawImage(sceneLayer, offsetX, offsetY, STAGE.width * scale, STAGE.height * scale);
-  }
+  if (roomScene) roomScene.render();
 
   if (debug) {
     ctx.strokeStyle = 'rgba(233,196,106,.9)';

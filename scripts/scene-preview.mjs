@@ -8,8 +8,11 @@
  * rough.js 的 generator API 是純運算、不依賴 DOM，因此可以在 Node 端跑完，
  * 只需把它產生的 ops 轉成 SVG path。
  *
- * ⚠ 這是離線預覽，不是實際渲染路徑。實際大螢幕由 public/screen/scene.js
- *   以 Canvas2D 繪製；兩邊的圖形參數必須保持一致，改動請同步。
+ * ⚠ 這是離線預覽，不是實際渲染路徑。大螢幕自 3D 整合後改由
+ *   public/screen/3d/RoomScene.js 以 Three.js 繪製場景與道具，
+ *   本檔的 rough.js 風格僅供離線檢視佈局，兩者視覺不再一致。
+ *   真正必須同步的是佈局本身 —— 兩邊都從 shared/scene.js 讀 PROPS，
+ *   那份定義才是單一事實來源。
  */
 
 import fs from 'node:fs';
@@ -62,7 +65,8 @@ function emit(drawable) {
   }
 }
 
-// 以下參數必須與 public/screen/props.js、scene.js 保持一致
+// 以下純屬本預覽的作畫風格參數。實際大螢幕改用 Three.js 之後，
+// 這些值不再需要與任何前端檔案對齊（佈局來自 shared/scene.js）。
 const stroke = (seed, extra = {}) => ({
   seed, stroke: INK, strokeWidth: 2.4, roughness: 1.5, bowing: 1.4, ...extra,
 });

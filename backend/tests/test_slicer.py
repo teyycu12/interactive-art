@@ -161,6 +161,37 @@ class TestSliceCharacter:
         assert img.mode == "RGBA"
 
 
+class TestFullPngForGroupPhoto:
+    """大合照在 Python 端合成，需要未切片的全身圖。
+
+    只留三張切片的話，Python 就得依 CUTS 比例把它們疊回去 —— 等於把
+    shared/avatars.js 的疊法在第二個語言再實作一次，正是本專案一再
+    警告的跨語言耦合（對不上時角色會脖子錯位，兩邊都不會報錯）。
+    """
+
+    def test_full_png_is_written(self, tmp_path):
+        res = slice_character(to_b64(make_figure()), str(tmp_path), "aid")
+        assert (tmp_path / "aid" / "full.png").is_file()
+
+    def test_full_png_url_is_returned(self, tmp_path):
+        res = slice_character(to_b64(make_figure()), str(tmp_path), "aid")
+        assert res["fullPng"] == "/assets/gen/aid/full.png"
+
+    def test_full_png_is_not_a_slice(self, tmp_path):
+        """全身圖必須比任一切片高，否則就是存錯了東西。"""
+        slice_character(to_b64(make_figure()), str(tmp_path), "aid")
+        d = tmp_path / "aid"
+        full_h = PILImage.open(d / "full.png").height
+        for part in PARTS:
+            assert full_h > PILImage.open(d / f"{part}.png").height
+
+    def test_full_png_keeps_transparency(self, tmp_path):
+        """去背結果不能在存檔時被壓成不透明，否則合照會有白方塊。"""
+        slice_character(to_b64(make_figure()), str(tmp_path), "aid")
+        img = PILImage.open(tmp_path / "aid" / "full.png")
+        assert img.mode == "RGBA"
+
+
 class TestCrossLanguageContract:
     """Python 產出的 URL 必須通得過 shared/avatars.js 的驗證。
 
