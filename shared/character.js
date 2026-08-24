@@ -1,8 +1,13 @@
 /**
  * 模組 M3 — 程式化 2D 步態渲染（技術文件 §程式化步態）
  *
+ * 放在 shared/ 而非 public/screen/ 的理由：大螢幕與手機端 POV 畫布
+ * 必須畫出**同一個角色**。若手機另抄一份步態常數，BOB_OMEGA 之類的數值
+ * 就成了第二份事實來源 —— 改了一邊另一邊不會報錯，只會默默走出不同步頻，
+ * 與 slicer.py / avatars.js 的切片比例是同一類跨檔案耦合。兩端一律 import 此檔。
+ *
  * 「無逐格動畫成本」是這套作法的重點：角色只有一張靜態 SVG，
- * 走路、擺動、呼吸、轉向全部由變換矩陣即時算出，
+ * 走路、擺動、轉向全部由變換矩陣即時算出，
  * 因此新增一種髮型不需要重畫任何一格動畫。
  *
  * 與技術文件的一處刻意差異：文件的公式以 frameCount 為自變數
@@ -11,14 +16,23 @@
  * 此處全部改為時間基準，並以 60fps 換算出等價常數，維持文件指定的觀感。
  */
 
+import { WALK_THRESHOLD } from '/shared/protocol.js';
+
 const INK = '#2F2A26';
 
 // 技術文件：ω = 0.2 rad/frame。以 60fps 換算 → 12 rad/s
 const BOB_OMEGA = 0.2 * 60;
 const BOB_AMPLITUDE = 6;        // 文件：A = 6px
 const WOBBLE_DEGREES = 5;       // 文件：±5°
-const BREATH_OMEGA = 2.2;       // 待機呼吸，明顯慢於步頻
-const BREATH_RANGE = 0.02;      // 文件：垂直比例 0.98 ~ 1.02
+
+/**
+ * 步態淡出的速度基準：直接沿用協定層的行走門檻。
+ *
+ * 低於它伺服器就回報 IDLE，因此步態也在同一點收斂到零 ——
+ * 兩者才不會出現「已回報 IDLE、畫面卻還在擺動」的矛盾。
+ * 不要在這裡另外寫死數字（見 CLAUDE.md 的單一事實來源原則）。
+ */
+const GAIT_FADE_SPEED = WALK_THRESHOLD;
 
 /**
  * 依速度調節步頻。技術文件未指定，但固定步頻會讓緩慢移動的角色
@@ -32,7 +46,7 @@ function cadence(speed, maxSpeed) {
  * 繪製單一角色。
  *
  * 變換順序（由外而內）：
- *   平移到腳底位置 → 畫地面投影 → 垂直彈跳 → 左右擺動 → 轉向鏡像與呼吸縮放
+ *   平移到腳底位置 → 畫地面投影 → 垂直彈跳 → 左右擺動 → 轉向鏡像
  * 投影必須在彈跳之前繪製，它屬於地面而非角色；
  * 擺動的旋轉樞紐設在腳底附近，否則角色會看起來像在原地打轉。
  *
@@ -44,20 +58,32 @@ function cadence(speed, maxSpeed) {
  */
 export function drawCharacter(ctx, agent, pos, sprite, opts) {
   const { time, maxSpeed, height = 150 } = opts;
-  const walking = agent.state === 'WALK';
   const speed = Math.hypot(agent.vx, agent.vy);
+
+  // 步態強度：不用 state === 'WALK' 這個布林開關，改為隨速度連續淡出。
+  //
+  // 開關式的寫法會在停下的瞬間把擺動硬切成 0，而 sin(phase/2) 當下是任意
+  // 值 —— 最壞情況角色正傾到滿幅 ±5°，卻在一幀之內被扳正，看起來就是
+  // 「停下來時突然左右擺一下」。同理，速度在門檻附近來回時 state 會反覆
+  // 翻轉，角色會持續抽動。
+  //
+  // 以 WALK_THRESHOLD 為終點線性淡出，擺動幅度隨速度一起歸零，
+  // 停下時自然收束到直立，不需要任何額外的過渡狀態。
+  const gait = Math.min(1, speed / GAIT_FADE_SPEED);
 
   // ── 垂直彈跳：Y_offset = -|sin(t·ω)| · A ──
   const phase = time * BOB_OMEGA * cadence(speed, maxSpeed);
-  const lift = walking ? Math.abs(Math.sin(phase)) * BOB_AMPLITUDE : 0;
+  const lift = Math.abs(Math.sin(phase)) * BOB_AMPLITUDE * gait;
 
   // ── 左右擺動：Rotation = sin(t·ω/2) · 5° ──
-  const wobble = walking
-    ? Math.sin(phase / 2) * WOBBLE_DEGREES * (Math.PI / 180)
-    : 0;
+  const wobble = Math.sin(phase / 2) * WOBBLE_DEGREES * (Math.PI / 180) * gait;
 
-  // ── 呼吸待機：靜止時垂直比例在 0.98 ~ 1.02 之間緩慢縮放 ──
-  const breath = walking ? 1 : 1 + Math.sin(time * BREATH_OMEGA) * BREATH_RANGE;
+  // 靜止時不做任何動畫。
+  //
+  // 原本這裡有「呼吸待機」：垂直比例在 0.98~1.02 之間緩慢縮放。單看一個
+  // 角色是細微的，但場上多人各自以不同相位縮放時，整片畫面會持續蠕動 ——
+  // 觀眾的視線被那個動態一直拉走，反而看不出誰真的在移動。
+  // 角色是貼圖而非骨架，縮放也會讓邊緣輕微抖動。
 
   const w = height * 0.77;   // 捏臉 SVG 的 viewBox 為 200×260
   const h = height;
@@ -77,7 +103,7 @@ export function drawCharacter(ctx, agent, pos, sprite, opts) {
   ctx.translate(0, -lift);
   ctx.rotate(wobble);
   // 轉向鏡像：Vx > 0 → ScaleX = 1；Vx < 0 → ScaleX = -1
-  ctx.scale(agent.facing, breath);
+  ctx.scale(agent.facing, 1);
 
   if (sprite?.complete && sprite.naturalWidth) {
     ctx.drawImage(sprite, -w / 2, -h, w, h);

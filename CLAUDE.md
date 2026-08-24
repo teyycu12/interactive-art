@@ -59,7 +59,7 @@
 │   ├── service.py          # ★ 角色資產生成 HTTP 服務（整合版用，只綁 127.0.0.1）
 │   ├── slicer.py           # ★ 生成圖正規化 + 切成 head/torso/legs 三張貼圖
 │   ├── validate_cuts.py    # ★ 切片比例穩定度驗證工具（計畫書 §3.3 驗收項）
-│   └── tests/              # 單元測試（225 個，pytest；conftest.py 提供 fixture）
+│   └── tests/              # 單元測試（236 個，pytest；conftest.py 提供 fixture）
 ├── /frontend
 │   ├── index.html          # 互動端主頁
 │   ├── projection.html     # 投影牆渲染（PixiJS）
@@ -74,18 +74,23 @@
 │   ├── missions.js pairing.js quiz.js scores.js socialgraph.js
 │   └── persistence.js scheduler.js ratelimit.js config.js
 ├── /shared                 # ★ 前後端共用的單一事實來源
-│   ├── protocol.js         # 事件名、節流頻率、場域尺寸
+│   ├── protocol.js         # 事件名、節流頻率、場域尺寸、EMOTE_GLYPH
 │   ├── avatars.js          # 捏臉素材 + CV 角色驗證 + CV_CUTS 切片比例
+│   ├── character.js        # ★ 程式化步態（大螢幕與手機 POV 共用）
+│   ├── avatarSprite.js     # ★ 角色圖像組裝（兩端共用）
 │   └── scene.js            # 場景障礙物佈局
 ├── /public                 # ★ 整合版前端
 │   ├── controller/         # 手機端：拍照生成 / 捏臉（備援）、搖桿、任務
+│   │   └── avatarRenderer.js # ★ 個人視角畫布（CLIENT_SYNC、鄰居、腳步震動）
 │   ├── screen/             # 大螢幕（3D 房間背景 + 2D 角色疊加）
 │   │   └── 3d/RoomScene.js # ★ Three.js 場景、燈光、透視投影 projectToScreen()
 │   ├── host/               # 主辦端控制台
 │   └── assets/gen/         # 生成貼圖落地處（gitignore，每場重新產生）
-├── /test                   # ★ Node 單元測試（198 個，node --test）
+├── /test                   # ★ Node 單元測試（228 個，node --test）
+│   ├── idle-still.test.mjs # ★ 靜止待機（預設 IDLE_MOTION）
+│   └── wander-mode.test.mjs # ★ 漫遊模式，需 npm run test:wander
 ├── /scripts
-│   ├── e2e.mjs             # ★ 端對端測試（93 項，會自行啟動伺服器）
+│   ├── e2e.mjs             # ★ 端對端測試（103 項，會自行啟動伺服器）
 │   ├── make-cert.sh        # ★ 現場用 TLS 憑證產生
 │   └── scene-preview.mjs   # 場景離線預覽
 ├── /docs                   # 所有規格與設計文件（PRD、TechStack、INTERFACES、SPEC…）
@@ -212,9 +217,10 @@ bash scripts/make-cert.sh
 TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start
 
 # 測試
-npm test                           # Node 單元測試（198）
-npm run test:e2e                   # 端對端，會自行啟動伺服器（93）
-pytest backend/                    # Python（225）
+npm test                           # Node 單元測試（228 + wander 模式 5）
+npm run test:wander                # 只跑漫遊模式那一組（PERSONAFLOW_IDLE_MOTION=wander）
+npm run test:e2e                   # 端對端，會自行啟動伺服器（103）
+pytest backend/                    # Python（236）
 
 # 切片比例驗證（計畫書 §3.3 的 R1 驗收項）
 python backend/validate_cuts.py --sprites samples/ --sheet report.png
@@ -246,6 +252,40 @@ node --test frontend/tests/        # 前端測試
 30 人的貼圖若內嵌進 `STAGE_ROSTER`，名冊訊息會膨脹到現場無線網路難以負荷。
 `roster()` 只在名冊變動時廣播，`snapshot()` 每幀 30Hz 只送座標 —— 這個分離要維持。
 
+### 渲染程式碼放 shared/，兩端 import 同一份
+
+`shared/character.js`（程式化步態）與 `shared/avatarSprite.js`（貼圖組裝）
+同時被大螢幕與手機端 POV 畫布使用。**不要為了方便在手機端另抄一份。**
+
+抄一份之後 `BOB_OMEGA` 之類的常數就成了第二份事實來源 —— 改了一邊另一邊
+不會報錯，只會默默走出不同步頻，或讓「手機上的我」與「大螢幕上的我」長得不一樣。
+與上面的切片比例是同一類跨檔案耦合。`EMOTE_GLYPH` 因為同樣理由放在 `shared/protocol.js`。
+
+### CLIENT_SYNC：手機端個人視角（10Hz）
+
+手機除了送搖桿輸入，也會收到自己的座標與半徑內的鄰居（相對座標），
+供 `public/controller/avatarRenderer.js` 繪製個人視角畫布。
+
+**兩個容易改壞的地方**，端對端測試都有回歸防護：
+
+1. 推送必須放在主迴圈 `screens.size === 0` 早退**之前**。放在後面的話，
+   大螢幕沒接上時所有手機畫面會整個凍結 —— 而「先開手機、投影機還沒接」
+   正是佈場時最常見的狀態。
+2. 節流比較要帶半個 tick 的容差（`>= CLIENT_SYNC_MS - TICK_MS / 2`）。
+   主迴圈是 30Hz（33.3ms），嚴格的 `>= 100` 會讓第 3 個 tick 差 0.1ms 被擋下，
+   實際變成每 4 個 tick 送一次 —— 7.5Hz 而非 10Hz。
+
+手機端**不自行模擬位置**，這與 issue #8（投影牆跑自己的 Boids）刻意相反：
+本地模擬會讓使用者低頭看到自己穿牆、抬頭卻看見角色卡在牆邊。
+伺服器狀態過期時收斂到靜止，不以最後速度外推（否則角色會飄出場外）。
+
+### navigator.vibrate 在 iOS 完全不支援
+
+不是降級，是沒有。震動只能是加分項，不能是任何互動的唯一回饋 ——
+每個震動點都另有畫面上的變化。腳步震動預設**關閉**並附開關：
+走路時每秒約 2–3 次的持續震動，對電池與體感疲勞都有實際代價。
+不支援的裝置上開關直接隱藏，而不是給一個按了沒反應的按鈕。
+
 ### 連線角色不可中途轉換
 
 `CLIENT_JOIN` / `SCREEN_HELLO` / `HOST_AUTH` 三者互斥，已在 `server/index.js`
@@ -261,6 +301,49 @@ Node 會據此把**所有**子目錄的 `.js` 當成 ES module —— 但 `front
 
 `frontend/package.json` 只做一件事：把模組型別重新限定成 `commonjs`。
 **不要刪除它**，也不要在 `frontend/` 底下改用 `import`／`export`。
+
+### 閒置時角色靜止（IDLE_MOTION，預設 'still'）
+
+沒有人操控時角色**停在原地**，不再自動漫遊。由 `server/config.js` 的
+`IDLE_MOTION` 控制，可用環境變數覆寫：
+
+```bash
+PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
+```
+
+| 值 | 行為 |
+|---|---|
+| `still`（預設） | 完全靜止，只播 IDLE 待機 |
+| `wander` | 原始設計：Boids 三力 + 漫遊擾動 |
+| `flock` | 保留三力但關掉漫遊擾動：有鄰居才動，孤身一人時停下 |
+
+原始設計刻意讓閒置角色漫遊（`boids.js` 的 `wanderForce` 就是為此存在），
+理由是「有人掛機時畫面不要死寂」；代價是參與者分不清畫面上的移動是自己
+造成的還是系統自己在動。兩種取捨都成立，所以保留成參數而非寫死。
+
+**三個踩過的坑**，測試都有回歸防護：
+
+1. **煞停不能只靠 α 衰減。** α 要閒置滿 `IDLE_THRESHOLD_MS` 才開始衰減，
+   而 `inputIntensity` 在手指離開搖桿的當下就歸零 —— 那一瞬間 α 還是 1，
+   兩者相乘會讓速度從全速直接掉到 0。`wander` 模式看不出來，因為空缺由
+   Boids 影子速度補上；自主項一旦歸零，缺口就直接變成畫面上的急煞。
+   因此 `arbiter.js` 另外對「上一幀的實際速度」做餘弦煞停。
+
+2. **靜止模式關掉的是「自主意圖」，不是「碰撞處理」。** 把整個自主項乘 0
+   會連帶抹掉道具斥力的側向分量，而正面推向圓形道具時，位置修正只消去朝內
+   的分量 —— 側向為零就沒有繞行方向，角色會卡在道具正面推不過去。
+   故另備 `obstacleAvoidance()` 回傳**切向**速度，且疊加後要正規化回原速率
+   （直接相加會超過 `MAX_SPEED`，也會讓煞停曲線彈回去）。
+
+3. **影子速度仍要持續整合**，不要為了省事跳過 `integrateBoids()` ——
+   否則現場把參數改回 `wander` 時，第一次交接會從一個過期的速度接手。
+
+測試分成兩檔，因為 `IDLE_MOTION` 在模組載入時就定案，同一個行程內無法切換：
+`test/idle-still.test.mjs`（預設）與 `test/wander-mode.test.mjs`
+（需 `npm run test:wander`，`npm test` 已把兩輪都串起來）。
+
+手機端的操控提示**不要寫死「放手後角色會漫遊」** —— 手機讀不到伺服器的
+`IDLE_MOTION`，寫死其中一種，另一種模式下就成了假訊息。
 
 ### 場域人數上限刻意壓在 10
 

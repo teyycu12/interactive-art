@@ -62,15 +62,23 @@
 
         <!-- 階段 1：拍攝前的指引 -->
         <div class="scan-panel" data-phase="aim">
-          <h1>拍一張照片</h1>
+          <h1><span class="who-name" id="aim-name"></span>拍一張照片</h1>
           <p class="lede">照片會被轉譯成你的樂高角色。</p>
           <ol class="tips">
             <li><b>站遠 2–3 公尺</b>　對齊畫面裡的人形輪廓</li>
             <li><b>光線充足</b>　背光或太暗會認不出服裝</li>
             <li><b>單人入鏡</b>　背景乾淨一點更好</li>
           </ol>
+          <p class="note">
+            按下拍照後會 <b>倒數 5 秒</b>，接著約需 <b>25 秒</b> 生成。
+            生成完成會先讓你看過，不滿意可以重來。
+            不方便當場拍的話，也可以 <b>從相簿選一張全身照</b>。
+          </p>
           <div class="foot">
             <button class="btn-primary" id="btn-capture">拍照</button>
+            <button class="btn-ghost" id="btn-upload">從相簿選</button>
+          </div>
+          <div class="foot">
             <button class="btn-ghost" id="btn-scan-back">改用捏臉</button>
           </div>
         </div>
@@ -85,8 +93,8 @@
 
         <!-- 階段 3：完成，讓本人決定要不要用 -->
         <div class="scan-panel" data-phase="done" hidden>
-          <h1>這是你的角色</h1>
-          <p class="lede">不滿意可以重拍一次。</p>
+          <h1>這是 <span class="who-name" id="done-name"></span>的角色</h1>
+          <p class="lede">確認後就會出現在大螢幕上，不滿意可以重拍一次。</p>
           <div class="foot">
             <button class="btn-primary" id="btn-accept">就是他，進場</button>
             <button class="btn-ghost" id="btn-retake">重拍一次</button>
@@ -95,16 +103,24 @@
 
         <!-- 階段 4：失敗。降級到捏臉是保底，但不該替使用者決定 -->
         <div class="scan-panel" data-phase="failed" hidden>
-          <h1>沒能生成角色</h1>
+          <h1 id="fail-title">沒能生成角色</h1>
           <p class="lede" id="scan-error">再試一次通常就好了。</p>
+          <p class="note" id="fail-hint" hidden></p>
           <div class="foot">
             <button class="btn-primary" id="btn-retry">重拍一次</button>
+            <button class="btn-ghost" id="btn-upload-alt">從相簿選</button>
+          </div>
+          <div class="foot">
             <button class="btn-ghost" id="btn-give-up">改用捏臉</button>
           </div>
         </div>
 
       </div>
     </div>
+
+    <!-- 相簿上傳。accept 限定圖片；刻意不加 capture 屬性 ——
+         加了會在手機上直接開相機，反而蓋掉「選現有照片」這個目的。 -->
+    <input type="file" id="upload-input" accept="image/*" hidden>
   </section>
 
   <!-- ── 捏臉流程（3 步）────────────────────────────────── -->
@@ -147,6 +163,10 @@
 
   <!-- ── 控制器 ─────────────────────────────────────────── -->
   <section id="controller" hidden>
+    <!-- 個人視角畫布。純背景層（aria-hidden + pointer-events:none），
+         搖桿與按鈕仍是原本的 DOM，不受它影響。 -->
+    <canvas id="pov-canvas" aria-hidden="true"></canvas>
+
     <div class="bar">
       <div id="mini-avatar"></div>
       <div class="who">
@@ -167,7 +187,19 @@
       <span class="mb-code">你的配對碼 <b id="mb-code">----</b>　·　點此輸入對方的碼</span>
     </button>
 
-    <div class="agency" id="agency">放開搖桿 3 秒後，角色會自己加入人群漫遊</div>
+    <!-- 社交連結：這場活動真正在累積的東西，但手機端原本完全看不到。
+         配對成功才出現，沒有連結時不佔版面。 -->
+    <button class="links-strip" id="links-strip" hidden>
+      <span class="ls-label">你認識了 <b id="ls-count">0</b> 個人</span>
+      <span class="ls-faces" id="ls-faces"></span>
+    </button>
+
+    <div class="agency-row">
+      <div class="agency" id="agency">推動搖桿即可操控你的角色</div>
+      <!-- 震動開關。iOS 不支援 navigator.vibrate，該裝置上此鍵會隱藏。 -->
+      <button class="btn-haptics" id="btn-haptics" hidden
+              aria-pressed="false" aria-label="腳步震動">震動</button>
+    </div>
 
     <div id="joystick-zone"><span class="hint">按住並拖曳來移動</span></div>
 
@@ -194,8 +226,8 @@
 
 <!-- ── 即時問答 ─────────────────────────────────────────────
      全螢幕覆蓋而非橫幅：問答是「全場一起停下來看大螢幕」的時刻，
-     此時手上的搖桿本來就不該再是視線焦點。角色會自動回到 Boids 漫遊，
-     所以蓋住控制器不會讓誰在畫面上呆站著。 -->
+     此時手上的搖桿本來就不該再是視線焦點 —— 全場角色本來就會停在原地
+     （伺服器 IDLE_MOTION 預設為靜止待機），蓋住控制器不影響任何人。 -->
 <div class="quiz" id="quiz-panel" hidden>
   <div class="quiz-inner">
     <div class="quiz-head">

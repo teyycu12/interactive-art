@@ -135,7 +135,7 @@ $$V_{text{final}} = (1 - alpha) cdot V_{text{Boids}} + alpha cdot V_{text{Manual
  垂直彈跳（Bobbing）：$Y_{text{offset}} = -leftvert{} sin(text{frameCount} times omega) rightvert{} times A$ （$A=6text{px}, omega=0.2$）
  左右擺動（Wobble）：$text{Rotation} = sin(text{frameCount} times frac{omega}{2}) times 5^{circ}$
  轉向鏡像：當 $V_x  0$ 時 $text{ScaleX} = 1$；當 $V_x  0$ 時 $text{ScaleX} = -1$。
- 呼吸待機（Idle Breathing）：當處於靜止狀態時，垂直比例以正弦波在 $0.98 sim 1.02$ 緩慢縮放。
+ ~~呼吸待機（Idle Breathing）~~：**已移除**。原設計為靜止時垂直比例以正弦波在 $0.98 \sim 1.02$ 緩慢縮放，但場上多人各自以不同相位縮放時整片畫面持續蠕動，反而看不出誰真的在移動。靜止即完全靜止。
 
 
  動態投影（Dynamic Shadow）：腳底繪製半透明橢圓，當 $Y_{text{offset}}$ 增加時，陰影透明度與半徑同步按比例衰減。

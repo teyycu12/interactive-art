@@ -10,215 +10,710 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
 import { STAGE } from '/shared/protocol.js';
 
-// ===== 房間尺寸 =====
-// 房間尺寸（3D 世界單位）。
-//
-// 這組數字決定角色相對於空間的份量感。原本是 36×28×9 —— 那是一個大廳的
-// 尺度，角色只佔牆高的 23%，看起來像玩具散落在空地上。動森那種質感來自
-// 「角色相對大、空間相對緊湊」，因此縮到約一半。
-//
-// 場域邏輯座標（STAGE 1920×1080）與 Boids 物理完全不受影響：
-// logicTo3D() 只是把邏輯座標等比映射到這個範圍，改的是視覺尺度而非玩法。
-const RW = 17, RD = 13, WALL_H = 4.6;    // 房間寬(x)、深(z)、牆高
+// ===== 房間尺寸 (3D 世界單位) =====
+const RW = 17, RD = 13, WALL_H = 4.6;
 const HALF_W = RW / 2, HALF_D = RD / 2;
 
-// 模型 URL
+// 模型 URL (Poly Pizza 低多邊形質感模型)
 const PROP_URLS = {
   couch: 'https://static.poly.pizza/7ac6188b-72be-4c82-81c8-85deab020a1c.glb',
   shelf: 'https://static.poly.pizza/673e29d8-beff-45ff-94d9-2104d01baece.glb',
   plant: 'https://static.poly.pizza/1683c0b1-4dd9-4d45-910e-cf3e46f163f5.glb',
-  lowtable: 'https://static.poly.pizza/2a849bd9-b82d-4e5d-8fab-df03b4017b29.glb', // 使用 plant2 當作矮桌/其他佔位
-  speaker: 'https://static.poly.pizza/673e29d8-beff-45ff-94d9-2104d01baece.glb', // 使用 shelf 當作音箱佔位
-  table: 'https://static.poly.pizza/2a849bd9-b82d-4e5d-8fab-df03b4017b29.glb', // 使用 plant2 當作高腳桌佔位
+  lowtable: 'https://static.poly.pizza/2a849bd9-b82d-4e5d-8fab-df03b4017b29.glb',
+  speaker: 'https://static.poly.pizza/673e29d8-beff-45ff-94d9-2104d01baece.glb',
+  table: 'https://static.poly.pizza/2a849bd9-b82d-4e5d-8fab-df03b4017b29.glb',
 };
 
-// 光線預設
-// 光線預設。
-//
-// day 是展場的預設，調性參照動森：明亮、偏暖、陰影柔而不重。
-// 具體手法是「主光偏暖 + 天空光偏藍」—— 冷暖對比會讓白色牆面產生層次，
-// 全白光源則會讓整個房間看起來像沒打光的 3D 模型。
+// 光線與氛圍預設
 const PRESETS = {
-  day:     { bg: 0xf2ede1, sun: 0xfff2d6, sunI: 2.6, pos: [11, 13, 9], hemi: 1.25, hSky: 0xdceeff, hGround: 0xb8a98e, amb: 0.42, lamp: 0, exp: 1.08 },
-  evening: { bg: 0xd8b892, sun: 0xffb066, sunI: 1.8, pos: [20, 12, 16], hemi: 0.6, hSky: 0xf3c58a, hGround: 0x5a4838, amb: 0.26, lamp: 1.2, exp: 1.0 },
-  night:   { bg: 0x0f1420, sun: 0x4a5c92, sunI: 0.3, pos: [-16, 24, 14], hemi: 0.13, hSky: 0x2a3a5c, hGround: 0x0a0f16, amb: 0.05, lamp: 2.4, exp: 0.8 },
+  day: {
+    bg: 0xf3eee5,
+    sun: 0xfff4dc,
+    sunI: 2.6,
+    pos: [12, 14, 9],
+    hemi: 1.2,
+    hSky: 0xddeeff,
+    hGround: 0xb8a98e,
+    amb: 0.42,
+    lamp: 0.3,
+    exp: 1.08,
+    rayOp: 0.16,
+    rayCol: 0xfff6dd,
+    skyCol1: '#7db9e8',
+    skyCol2: '#eaf4fc',
+  },
+  evening: {
+    bg: 0xd8b48a,
+    sun: 0xffa452,
+    sunI: 2.0,
+    pos: [18, 9, 14],
+    hemi: 0.65,
+    hSky: 0xf5c285,
+    hGround: 0x5a4838,
+    amb: 0.28,
+    lamp: 1.6,
+    exp: 1.02,
+    rayOp: 0.26,
+    rayCol: 0xff9944,
+    skyCol1: '#de6845',
+    skyCol2: '#fcd38d',
+  },
+  night: {
+    bg: 0x0e131d,
+    sun: 0x4a5d8f,
+    sunI: 0.4,
+    pos: [-16, 20, 14],
+    hemi: 0.18,
+    hSky: 0x253555,
+    hGround: 0x090e16,
+    amb: 0.09,
+    lamp: 2.6,
+    exp: 0.9,
+    rayOp: 0.06,
+    rayCol: 0x7799cc,
+    skyCol1: '#090d16',
+    skyCol2: '#1a233a',
+  },
 };
 
 export class RoomScene {
   constructor(containerElement) {
-    // preserveDrawingBuffer：大合照要把這張 WebGL 畫布讀回來（見 screen.js
-    // 的 captureStageFrame）。WebGL 預設在每次 render 後就把緩衝丟掉，
-    // 少了這個旗標，toDataURL() 讀到的是一張全透明的圖 —— 而且不會報錯。
     this.renderer = new THREE.WebGLRenderer({
-      antialias: true, alpha: true, preserveDrawingBuffer: true,
+      antialias: true,
+      alpha: true,
+      preserveDrawingBuffer: true,
     });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    
+
     containerElement.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xe7e0d4);
-    this.scene.fog = new THREE.Fog(0xe7e0d4, RD * 1.6, RD * 5.5);
+    this.scene.fog = new THREE.Fog(0xe7e0d4, RD * 1.8, RD * 6.0);
 
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.05, 500);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true; 
+    this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.maxPolarAngle = Math.PI / 2.05;
-    this.controls.minDistance = 8; 
+    this.controls.minDistance = 8;
     this.controls.maxDistance = 90;
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
+    this.clock = new THREE.Clock();
+    this.swayingObjects = [];
+    this.currentLightName = 'day';
+
     this.setupLights();
     this.buildRoom();
-    
+
     this.loader = new GLTFLoader();
-    // 相機必須在這裡定位。少了這一行，camera.position 會停在原點 (0,0,0)，
-    // 與 controls.target 重合 —— 投影矩陣退化，projectToScreen() 對每個
-    // 座標都算出 NaN，於是所有角色被畫到 NaN 像素，大螢幕整片空白。
-    // 而且這個故障不會拋任何例外，console 完全乾淨。
     this.resetCamera();
     this.setupComposer();
     this._resize();
     window.addEventListener('resize', () => this._resize());
   }
 
-  /**
-   * 後製鏈：bloom 讓亮處溢光、vignette 把視線收進畫面中央。
-   *
-   * 這兩者是「遊戲畫面」和「3D 模型檢視器」最明顯的差別 —— 沒有後製的
-   * 渲染即使光影正確，看起來仍像預覽視窗。
-   *
-   * 可以整條關掉（見 setPostProcessing）：現場硬體尚未確定，效能不足時
-   * 退回直接渲染仍是完整畫面，只是少了溢光與暗角。
-   */
   setupComposer() {
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
 
-    // 閾值調高、強度壓低：動森那種明亮風格要的是窗邊與亮面的柔和溢光，
-    // 不是整個畫面糊成一片光暈。
     this.bloom = new UnrealBloomPass(
-      new THREE.Vector2(innerWidth, innerHeight), 0.34, 0.85, 0.92);
+      new THREE.Vector2(innerWidth, innerHeight),
+      0.35,
+      0.82,
+      0.90
+    );
     this.composer.addPass(this.bloom);
 
     this.vignette = new ShaderPass(VignetteShader);
-    this.vignette.uniforms.offset.value = 1.05;
-    this.vignette.uniforms.darkness.value = 1.12;
+    this.vignette.uniforms.offset.value = 1.04;
+    this.vignette.uniforms.darkness.value = 1.15;
     this.composer.addPass(this.vignette);
 
-    // OutputPass 負責色調映射與 sRGB 轉換。少了它，經過 composer 的畫面
-    // 會比直接渲染暗一階 —— 因為 renderer 的 toneMapping 只作用在最後一步。
     this.composer.addPass(new OutputPass());
     this.postEnabled = true;
   }
 
-  /** 關閉後製退回直接渲染（效能不足時的降級路徑） */
   setPostProcessing(on) {
     this.postEnabled = !!on && !!this.composer;
   }
 
   setupLights() {
-    this.hemi = new THREE.HemisphereLight(0xffffff, 0x8a8577, 1.0); 
+    this.hemi = new THREE.HemisphereLight(0xffffff, 0x8a8577, 1.0);
     this.scene.add(this.hemi);
-    this.ambient = new THREE.AmbientLight(0xffffff, 0.32); 
+
+    this.ambient = new THREE.AmbientLight(0xffffff, 0.35);
     this.scene.add(this.ambient);
-    
-    this.sun = new THREE.DirectionalLight(0xffffff, 2.2); 
+
+    this.sun = new THREE.DirectionalLight(0xffffff, 2.4);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048); 
-    this.sun.shadow.bias = -0.0002; 
-    this.sun.shadow.normalBias = 0.02; 
+    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.bias = -0.0002;
+    this.sun.shadow.normalBias = 0.02;
     this.sun.shadow.radius = 3;
     const r = Math.max(RW, RD);
-    this.sun.shadow.camera.left = -r; this.sun.shadow.camera.right = r; 
-    this.sun.shadow.camera.top = r; this.sun.shadow.camera.bottom = -r;
-    this.sun.shadow.camera.near = 0.5; this.sun.shadow.camera.far = WALL_H * 10;
+    this.sun.shadow.camera.left = -r;
+    this.sun.shadow.camera.right = r;
+    this.sun.shadow.camera.top = r;
+    this.sun.shadow.camera.bottom = -r;
+    this.sun.shadow.camera.near = 0.5;
+    this.sun.shadow.camera.far = WALL_H * 10;
     this.scene.add(this.sun, this.sun.target);
-    
-    this.lamp = new THREE.PointLight(0xffcf8a, 0, 40, 1.4); 
-    this.lamp.position.set(0, WALL_H * 0.7, 0); 
+
+    // 室內主吊燈
+    this.lamp = new THREE.PointLight(0xffd59e, 0.4, 35, 1.3);
+    this.lamp.position.set(0, WALL_H * 0.75, 0);
     this.scene.add(this.lamp);
+
+    // 壁燈輔助光
+    this.sconceLight = new THREE.PointLight(0xffbe76, 0.6, 12, 1.6);
+    this.sconceLight.position.set(-RW * 0.15, WALL_H * 0.55, -HALF_D + 0.5);
+    this.scene.add(this.sconceLight);
 
     this.applyLight('day');
   }
 
   applyLight(name) {
+    this.currentLightName = name;
     const p = PRESETS[name] || PRESETS.day;
-    this.scene.background.setHex(p.bg); 
+    this.scene.background.setHex(p.bg);
     this.scene.fog.color.setHex(p.bg);
-    this.sun.color.setHex(p.sun); 
-    this.sun.intensity = p.sunI; 
-    this.sun.position.set(...p.pos); 
+    this.sun.color.setHex(p.sun);
+    this.sun.intensity = p.sunI;
+    this.sun.position.set(...p.pos);
     this.sun.target.position.set(0, 0, 0);
-    this.hemi.color.setHex(p.hSky); 
-    this.hemi.groundColor.setHex(p.hGround); 
+
+    this.hemi.color.setHex(p.hSky);
+    this.hemi.groundColor.setHex(p.hGround);
     this.hemi.intensity = p.hemi;
-    this.ambient.intensity = p.amb; 
-    this.lamp.intensity = p.lamp; 
+
+    this.ambient.intensity = p.amb;
+    this.lamp.intensity = p.lamp;
+    this.sconceLight.intensity = p.lamp * 0.8;
     this.renderer.toneMappingExposure = p.exp;
+
+    this.updateSkyTexture(p.skyCol1, p.skyCol2);
   }
 
-  noiseTex(base, spot, rep) {
-    const c = document.createElement('canvas'); c.width = c.height = 256; const g = c.getContext('2d');
-    g.fillStyle = base; g.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 700; i++) { g.fillStyle = spot.replace('A', (0.03 + Math.random() * 0.06).toFixed(2)); g.beginPath(); g.arc(Math.random() * 256, Math.random() * 256, 4 + Math.random() * 8, 0, 7); g.fill(); }
-    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.colorSpace = THREE.SRGBColorSpace; return t;
+  /**
+   * 生成高品質木質拼接地板紋理 (Parquet Hardwood Texture)
+   */
+  createWoodFloorTexture() {
+    const c = document.createElement('canvas');
+    c.width = 1024;
+    c.height = 1024;
+    const ctx = c.getContext('2d');
+
+    // 底色：溫暖斯堪地那維亞原木色
+    ctx.fillStyle = '#C2B19A';
+    ctx.fillRect(0, 0, 1024, 1024);
+
+    const plankH = 64;
+    const plankW = 256;
+    const tones = [
+      'rgba(195, 175, 150, 0.55)',
+      'rgba(215, 195, 170, 0.65)',
+      'rgba(182, 160, 135, 0.60)',
+      'rgba(202, 182, 158, 0.58)',
+      'rgba(175, 152, 126, 0.62)',
+    ];
+
+    // 繪製交錯木板
+    let rowIdx = 0;
+    for (let y = 0; y < 1024; y += plankH) {
+      const offsetX = (rowIdx % 2 === 0) ? 0 : plankW / 2;
+      for (let x = -plankW; x < 1024 + plankW; x += plankW) {
+        const px = x + offsetX;
+        const tone = tones[Math.floor(Math.random() * tones.length)];
+        ctx.fillStyle = tone;
+        ctx.fillRect(px, y, plankW - 2, plankH - 2);
+
+        // 細緻木纖維紋理 (Horizontal micro-fibers)
+        ctx.fillStyle = 'rgba(100, 75, 50, 0.05)';
+        for (let k = 0; k < 14; k++) {
+          const fy = y + 2 + Math.random() * (plankH - 6);
+          const fw = 30 + Math.random() * (plankW - 40);
+          ctx.fillRect(px + 4 + Math.random() * 20, fy, fw, 1.2);
+        }
+
+        // 接縫陰影與倒角高光線
+        ctx.fillStyle = 'rgba(70, 52, 35, 0.38)';
+        ctx.fillRect(px, y + plankH - 2, plankW, 2);
+        ctx.fillRect(px + plankW - 2, y, 2, plankH);
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+        ctx.fillRect(px, y, plankW - 2, 1);
+        ctx.fillRect(px, y, 1, plankH - 2);
+      }
+      rowIdx++;
+    }
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(4.5, 4.5);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  /**
+   * 生成波希米亞/幾何現代編織地毯紋理
+   */
+  createRugTexture() {
+    const c = document.createElement('canvas');
+    c.width = 512;
+    c.height = 512;
+    const ctx = c.getContext('2d');
+
+    // 奶油白羊毛基底
+    ctx.fillStyle = '#E8DFD3';
+    ctx.fillRect(0, 0, 512, 512);
+
+    // 織物噪點
+    for (let i = 0; i < 2000; i++) {
+      ctx.fillStyle = (Math.random() > 0.5) ? 'rgba(0,0,0,0.03)' : 'rgba(255,255,255,0.06)';
+      ctx.fillRect(Math.random() * 512, Math.random() * 512, 2, 2);
+    }
+
+    // 外圍邊框
+    ctx.strokeStyle = '#3D5A80';
+    ctx.lineWidth = 14;
+    ctx.strokeRect(20, 20, 472, 472);
+
+    ctx.strokeStyle = '#E07A5F';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(34, 34, 444, 444);
+
+    // 中央菱形幾何圖案
+    ctx.fillStyle = 'rgba(224, 122, 95, 0.25)';
+    ctx.beginPath();
+    ctx.moveTo(256, 70);
+    ctx.lineTo(440, 256);
+    ctx.lineTo(256, 442);
+    ctx.lineTo(72, 256);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = '#3D5A80';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+
+    ctx.fillStyle = '#81B29A';
+    ctx.beginPath();
+    ctx.arc(256, 256, 45, 0, Math.PI * 2);
+    ctx.fill();
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
+
+  /**
+   * 窗外漸層天空與景深
+   */
+  updateSkyTexture(c1 = '#7db9e8', c2 = '#eaf4fc') {
+    if (!this.skyCanvas) {
+      this.skyCanvas = document.createElement('canvas');
+      this.skyCanvas.width = 256;
+      this.skyCanvas.height = 256;
+    }
+    const ctx = this.skyCanvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, 0, 256);
+    grad.addColorStop(0, c1);
+    grad.addColorStop(1, c2);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 256, 256);
+
+    if (!this.skyTex) {
+      this.skyTex = new THREE.CanvasTexture(this.skyCanvas);
+      this.skyTex.colorSpace = THREE.SRGBColorSpace;
+    } else {
+      this.skyTex.needsUpdate = true;
+    }
+    return this.skyTex;
+  }
+
+  /**
+   * 建立極簡藝術掛畫 (Framed Canvas Art)
+   */
+  createWallArt() {
+    const c = document.createElement('canvas');
+    c.width = 512;
+    c.height = 360;
+    const ctx = c.getContext('2d');
+
+    // 雅緻米色畫布
+    ctx.fillStyle = '#F5F2EB';
+    ctx.fillRect(0, 0, 512, 360);
+
+    // 現代幾何色塊構圖
+    ctx.fillStyle = '#E76F51';
+    ctx.beginPath();
+    ctx.arc(170, 180, 95, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#264653';
+    ctx.fillRect(230, 90, 160, 190);
+
+    ctx.fillStyle = '#E9C46A';
+    ctx.beginPath();
+    ctx.moveTo(130, 290);
+    ctx.lineTo(390, 290);
+    ctx.lineTo(260, 120);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = '#2F2A26';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(260, 190, 120, 0.4, 2.8);
+    ctx.stroke();
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+
+    const group = new THREE.Group();
+    // 橡木外框
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.6 });
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.7, 0.08), frameMat);
+    frame.castShadow = true;
+    group.add(frame);
+
+    // 畫芯
+    const artMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
+    const art = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 1.5), artMat);
+    art.position.z = 0.045;
+    group.add(art);
+
+    return group;
   }
 
   buildRoom() {
-    // 地板只比房間大一圈。原本是 400×400 的無邊平面 —— 房間尺度縮小後，
-    // 牆外那片地板會佔掉大半畫面，房間看起來像漂在荒野上的小盒子。
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(RW * 1.06, RD * 1.06),
-      new THREE.MeshStandardMaterial({ map: this.noiseTex('#d8c8ad', 'rgba(120,95,60,A)', 18), roughness: 0.95, envMapIntensity: 0.3 }));
-    floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; this.scene.add(floor);
+    // 1. 高級拼木地板
+    const floorGeo = new THREE.PlaneGeometry(RW * 1.08, RD * 1.08);
+    const floorMat = new THREE.MeshStandardMaterial({
+      map: this.createWoodFloorTexture(),
+      roughness: 0.58,
+      metalness: 0.04,
+      envMapIntensity: 0.45,
+    });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    this.scene.add(floor);
 
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0xcdd8c4, roughness: 0.95, envMapIntensity: 0.3 });
-    const baseMat = new THREE.MeshStandardMaterial({ color: 0xf2efe8, roughness: 0.7, envMapIntensity: 0.3 });
-    
-    const back = new THREE.Mesh(new THREE.BoxGeometry(RW, WALL_H, 0.22), wallMat);
-    back.position.set(0, WALL_H / 2, -HALF_D); back.receiveShadow = true; back.castShadow = true; this.scene.add(back);
-    
-    const left = new THREE.Mesh(new THREE.BoxGeometry(0.22, WALL_H, RD), wallMat);
-    left.position.set(-HALF_W, WALL_H / 2, 0); left.receiveShadow = true; left.castShadow = true; this.scene.add(left);
-    
-    // 右牆與前牆：地板收邊之後，沒有牆的兩側會直接看到地板切口。
-    // 前牆刻意做矮一截（不擋視線），只是把地板邊界收乾淨。
-    const right = new THREE.Mesh(new THREE.BoxGeometry(0.22, WALL_H, RD), wallMat);
-    right.position.set(HALF_W, WALL_H / 2, 0); right.receiveShadow = true; this.scene.add(right);
+    // 2. 雙色護牆板材質
+    const upperWallMat = new THREE.MeshStandardMaterial({
+      color: 0xc8d3c5, // 雅緻鼠尾草灰綠
+      roughness: 0.94,
+      envMapIntensity: 0.25,
+    });
+    const lowerWainscotMat = new THREE.MeshStandardMaterial({
+      color: 0xede8df, // 暖調米白護牆板
+      roughness: 0.72,
+      envMapIntensity: 0.35,
+    });
+    const trimMat = new THREE.MeshStandardMaterial({
+      color: 0xf5f2eb, // 象牙白飾條
+      roughness: 0.55,
+      envMapIntensity: 0.4,
+    });
 
+    const wainscotH = WALL_H * 0.36;
+    const upperH = WALL_H - wainscotH;
+
+    // 後牆 (上下分色)
+    const backLower = new THREE.Mesh(new THREE.BoxGeometry(RW, wainscotH, 0.22), lowerWainscotMat);
+    backLower.position.set(0, wainscotH / 2, -HALF_D);
+    backLower.receiveShadow = true;
+    backLower.castShadow = true;
+    this.scene.add(backLower);
+
+    const backUpper = new THREE.Mesh(new THREE.BoxGeometry(RW, upperH, 0.22), upperWallMat);
+    backUpper.position.set(0, wainscotH + upperH / 2, -HALF_D);
+    backUpper.receiveShadow = true;
+    backUpper.castShadow = true;
+    this.scene.add(backUpper);
+
+    // 左牆 (上下分色)
+    const leftLower = new THREE.Mesh(new THREE.BoxGeometry(0.22, wainscotH, RD), lowerWainscotMat);
+    leftLower.position.set(-HALF_W, wainscotH / 2, 0);
+    leftLower.receiveShadow = true;
+    leftLower.castShadow = true;
+    this.scene.add(leftLower);
+
+    const leftUpper = new THREE.Mesh(new THREE.BoxGeometry(0.22, upperH, RD), upperWallMat);
+    leftUpper.position.set(-HALF_W, wainscotH + upperH / 2, 0);
+    leftUpper.receiveShadow = true;
+    leftUpper.castShadow = true;
+    this.scene.add(leftUpper);
+
+    // 右牆
+    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.22, WALL_H, RD), upperWallMat);
+    rightWall.position.set(HALF_W, WALL_H / 2, 0);
+    rightWall.receiveShadow = true;
+    this.scene.add(rightWall);
+
+    // 前矮收邊牆
     const frontH = WALL_H * 0.16;
-    const front = new THREE.Mesh(new THREE.BoxGeometry(RW, frontH, 0.22), baseMat);
-    front.position.set(0, frontH / 2, HALF_D); front.receiveShadow = true; this.scene.add(front);
+    const front = new THREE.Mesh(new THREE.BoxGeometry(RW, frontH, 0.22), trimMat);
+    front.position.set(0, frontH / 2, HALF_D);
+    front.receiveShadow = true;
+    this.scene.add(front);
 
-    const b1 = new THREE.Mesh(new THREE.BoxGeometry(RW, 0.22, 0.28), baseMat); b1.position.set(0, 0.11, -HALF_D + 0.05); this.scene.add(b1);
-    const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, RD), baseMat); b2.position.set(-HALF_W + 0.05, 0.11, 0); this.scene.add(b2);
-    
-    const win = new THREE.Mesh(new THREE.BoxGeometry(RW * 0.30, WALL_H * 0.42, 0.08),
-      new THREE.MeshStandardMaterial({ color: 0xbfe3f2, roughness: 0.1, metalness: 0.2, emissive: 0x88bcd6, emissiveIntensity: 0.15 }));
-    win.position.set(RW * 0.22, WALL_H * 0.58, -HALF_D + 0.22); this.scene.add(win);
-    const winFrame = new THREE.Mesh(new THREE.BoxGeometry(RW * 0.33, WALL_H * 0.47, 0.24), baseMat); winFrame.position.set(RW * 0.22, WALL_H * 0.58, -HALF_D + 0.17); this.scene.add(winFrame);
-    
-    const rug = new THREE.Mesh(new THREE.PlaneGeometry(RW * 0.38, RD * 0.36),
-      new THREE.MeshStandardMaterial({ color: 0x9c8f7a, roughness: 1, envMapIntensity: 0.3 }));
-    rug.rotation.x = -Math.PI / 2; rug.position.set(-RW * 0.05, 0.015, -RD * 0.12); rug.receiveShadow = true; this.scene.add(rug);
+    // 護牆板壓頂飾條 (Wainscot Molding Rails)
+    const railBack = new THREE.Mesh(new THREE.BoxGeometry(RW, 0.10, 0.28), trimMat);
+    railBack.position.set(0, wainscotH, -HALF_D + 0.04);
+    this.scene.add(railBack);
+
+    const railLeft = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.10, RD), trimMat);
+    railLeft.position.set(-HALF_W + 0.04, wainscotH, 0);
+    this.scene.add(railLeft);
+
+    // 踢腳板 (Baseboards)
+    const baseBack = new THREE.Mesh(new THREE.BoxGeometry(RW, 0.24, 0.30), trimMat);
+    baseBack.position.set(0, 0.12, -HALF_D + 0.05);
+    this.scene.add(baseBack);
+
+    const baseLeft = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.24, RD), trimMat);
+    baseLeft.position.set(-HALF_W + 0.05, 0.12, 0);
+    this.scene.add(baseLeft);
+
+    // 天花線條 (Crown Molding)
+    const crownBack = new THREE.Mesh(new THREE.BoxGeometry(RW, 0.16, 0.28), trimMat);
+    crownBack.position.set(0, WALL_H - 0.08, -HALF_D + 0.04);
+    this.scene.add(crownBack);
+
+    // 3. 窗戶系統與窗外視差 (Window with Vista & Curtains)
+    const winW = RW * 0.32;
+    const winH = WALL_H * 0.44;
+    const winX = RW * 0.22;
+    const winY = WALL_H * 0.60;
+    const winZ = -HALF_D;
+
+    // 窗外景深天空板 (Outdoor Sky Backdrop)
+    const skyMat = new THREE.MeshBasicMaterial({ map: this.updateSkyTexture() });
+    const skyMesh = new THREE.Mesh(new THREE.PlaneGeometry(winW * 1.6, winH * 1.5), skyMat);
+    skyMesh.position.set(winX, winY, winZ - 0.3);
+    this.scene.add(skyMesh);
+
+    // 窗外遠景綠植 Silhouette
+    const bushMat = new THREE.MeshBasicMaterial({ color: 0x5a7d5a, transparent: true, opacity: 0.85 });
+    for (let b = 0; b < 3; b++) {
+      const bush = new THREE.Mesh(new THREE.CircleGeometry(0.9 + b * 0.3, 16), bushMat);
+      bush.position.set(winX - 1.6 + b * 1.4, winY - winH * 0.35, winZ - 0.2);
+      this.scene.add(bush);
+    }
+
+    // 窗框主體 (Window Frame)
+    const frameOuter = new THREE.Mesh(new THREE.BoxGeometry(winW, winH, 0.26), trimMat);
+    frameOuter.position.set(winX, winY, winZ + 0.14);
+    this.scene.add(frameOuter);
+
+    // 窗戶玻璃 (Glass Pane)
+    const glassMat = new THREE.MeshStandardMaterial({
+      color: 0xd6f0fa,
+      roughness: 0.05,
+      metalness: 0.15,
+      transparent: true,
+      opacity: 0.45,
+      emissive: 0x90cde6,
+      emissiveIntensity: 0.2,
+    });
+    const glass = new THREE.Mesh(new THREE.PlaneGeometry(winW * 0.88, winH * 0.86), glassMat);
+    glass.position.set(winX, winY, winZ + 0.16);
+    this.scene.add(glass);
+
+    // 窗櫺十字格 (Mullions)
+    const mullionV = new THREE.Mesh(new THREE.BoxGeometry(0.08, winH * 0.86, 0.1), trimMat);
+    mullionV.position.set(winX, winY, winZ + 0.18);
+    this.scene.add(mullionV);
+
+    const mullionH = new THREE.Mesh(new THREE.BoxGeometry(winW * 0.88, 0.08, 0.1), trimMat);
+    mullionH.position.set(winX, winY, winZ + 0.18);
+    this.scene.add(mullionH);
+
+    // 窗台 (Window Sill)
+    const sill = new THREE.Mesh(new THREE.BoxGeometry(winW * 1.08, 0.12, 0.42), trimMat);
+    sill.position.set(winX, winY - winH / 2 - 0.04, winZ + 0.20);
+    this.scene.add(sill);
+
+    // 飄逸窗簾 (Translucent Curtains)
+    const curtainMat = new THREE.MeshStandardMaterial({
+      color: 0xfcf9f2,
+      roughness: 0.9,
+      transparent: true,
+      opacity: 0.88,
+    });
+    const curtainL = new THREE.Mesh(new THREE.BoxGeometry(0.55, winH * 1.12, 0.12), curtainMat);
+    curtainL.position.set(winX - winW / 2 - 0.18, winY - 0.06, winZ + 0.24);
+    curtainL.castShadow = true;
+    this.scene.add(curtainL);
+
+    const curtainR = new THREE.Mesh(new THREE.BoxGeometry(0.55, winH * 1.12, 0.12), curtainMat);
+    curtainR.position.set(winX + winW / 2 + 0.18, winY - 0.06, winZ + 0.24);
+    curtainR.castShadow = true;
+    this.scene.add(curtainR);
+
+    // 4. 精緻幾何編織地毯 (Boho Rug)
+    const rugGeo = new THREE.PlaneGeometry(RW * 0.44, RD * 0.42);
+    const rugMat = new THREE.MeshStandardMaterial({
+      map: this.createRugTexture(),
+      roughness: 0.98,
+      envMapIntensity: 0.2,
+    });
+    const rug = new THREE.Mesh(rugGeo, rugMat);
+    rug.rotation.x = -Math.PI / 2;
+    rug.position.set(-RW * 0.05, 0.016, -RD * 0.08);
+    rug.receiveShadow = true;
+    this.scene.add(rug);
+
+    // 5. 牆面現代藝術掛畫 (Wall Gallery Art)
+    const artLeft = this.createWallArt();
+    artLeft.position.set(-HALF_W + 0.08, WALL_H * 0.65, -RD * 0.12);
+    artLeft.rotation.y = Math.PI / 2;
+    this.scene.add(artLeft);
+
+    const artBack = this.createWallArt();
+    artBack.scale.set(0.85, 0.85, 0.85);
+    artBack.position.set(-RW * 0.26, WALL_H * 0.66, -HALF_D + 0.08);
+    this.scene.add(artBack);
+
+    // 6. 現代黃銅壁燈 (Wall Sconces)
+    const sconceMat = new THREE.MeshStandardMaterial({ color: 0xc49b45, metalness: 0.8, roughness: 0.25 });
+    const shadeMat = new THREE.MeshStandardMaterial({
+      color: 0xfff3db,
+      roughness: 0.3,
+      emissive: 0xffdb99,
+      emissiveIntensity: 0.6,
+    });
+
+    const sconceGroup = new THREE.Group();
+    const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.5, 12), sconceMat);
+    rod.position.set(0, 0, 0.15);
+    sconceGroup.add(rod);
+
+    const shade = new THREE.Mesh(new THREE.SphereGeometry(0.18, 16, 16), shadeMat);
+    shade.position.set(0, 0.22, 0.18);
+    sconceGroup.add(shade);
+
+    sconceGroup.position.set(-RW * 0.15, WALL_H * 0.55, -HALF_D + 0.08);
+    this.scene.add(sconceGroup);
   }
 
-  async loadProp(url, targetH, x, z, ry = 0) {
-    if (!url) return;
-    const gltf = await new Promise((res, rej) => this.loader.load(url, res, undefined, rej));
-    const o = gltf.scene;
-    o.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; if (m.material) m.material.envMapIntensity = 0.5; } });
-    let box = new THREE.Box3().setFromObject(o); const size = new THREE.Vector3(); box.getSize(size);
-    o.scale.setScalar(targetH / size.y);
-    box = new THREE.Box3().setFromObject(o); const c = new THREE.Vector3(); box.getCenter(c);
-    o.position.x -= c.x; o.position.z -= c.z; o.position.y -= box.min.y;
-    const pivot = new THREE.Group(); pivot.add(o); pivot.position.set(x, 0, z); pivot.rotation.y = ry; this.scene.add(pivot);
+
+
+  /**
+   * GLTF 載入失敗時的程序化備援模型生成器 (Procedural Geometry Fallback)
+   */
+  createFallbackProp(type, targetH) {
+    const group = new THREE.Group();
+    const woodMat = new THREE.MeshStandardMaterial({ color: 0x7a5839, roughness: 0.65 });
+    const fabricMat = new THREE.MeshStandardMaterial({ color: 0x457b9d, roughness: 0.85 });
+    const plantMat = new THREE.MeshStandardMaterial({ color: 0x387042, roughness: 0.8 });
+    const potMat = new THREE.MeshStandardMaterial({ color: 0xd9c5b2, roughness: 0.5 });
+
+    if (type === 'couch' || type === 'sofa') {
+      const base = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 1.2), fabricMat);
+      base.position.y = 0.25;
+      base.castShadow = true;
+      group.add(base);
+
+      const back = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.7, 0.35), fabricMat);
+      back.position.set(0, 0.7, -0.42);
+      back.castShadow = true;
+      group.add(back);
+    } else if (type === 'plant') {
+      const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.22, 0.6, 16), potMat);
+      pot.position.y = 0.3;
+      pot.castShadow = true;
+      group.add(pot);
+
+      for (let l = 0; l < 5; l++) {
+        const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.26, 8, 8), plantMat);
+        leaf.scale.set(1, 1.6, 0.3);
+        leaf.position.set(Math.sin(l * 1.3) * 0.22, 0.7 + l * 0.12, Math.cos(l * 1.3) * 0.22);
+        leaf.castShadow = true;
+        group.add(leaf);
+      }
+    } else {
+      // 預設桌几/音箱
+      const top = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.1, 18), woodMat);
+      top.position.y = 0.65;
+      top.castShadow = true;
+      group.add(top);
+
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.65, 12), woodMat);
+      leg.position.y = 0.32;
+      group.add(leg);
+    }
+
+    const box = new THREE.Box3().setFromObject(group);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    group.scale.setScalar(targetH / (size.y || 1));
+    return group;
+  }
+
+  async loadProp(url, targetH, x, z, ry = 0, type = 'prop') {
+    let pivot = null;
+    try {
+      if (!url) throw new Error('No URL');
+      const gltf = await new Promise((res, rej) => {
+        const timeout = setTimeout(() => rej(new Error('GLTF load timeout')), 6000);
+        this.loader.load(
+          url,
+          (data) => {
+            clearTimeout(timeout);
+            res(data);
+          },
+          undefined,
+          (err) => {
+            clearTimeout(timeout);
+            rej(err);
+          }
+        );
+      });
+
+      const o = gltf.scene;
+      o.traverse((m) => {
+        if (m.isMesh) {
+          m.castShadow = true;
+          m.receiveShadow = true;
+          if (m.material) m.material.envMapIntensity = 0.55;
+        }
+      });
+      let box = new THREE.Box3().setFromObject(o);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      o.scale.setScalar(targetH / size.y);
+      box = new THREE.Box3().setFromObject(o);
+      const c = new THREE.Vector3();
+      box.getCenter(c);
+      o.position.x -= c.x;
+      o.position.z -= c.z;
+      o.position.y -= box.min.y;
+
+      pivot = new THREE.Group();
+      pivot.add(o);
+    } catch (e) {
+      // 離線或 CDN 異常時自動啟用高品質程序化後備
+      pivot = new THREE.Group();
+      pivot.add(this.createFallbackProp(type, targetH));
+    }
+
+    pivot.position.set(x, 0, z);
+    pivot.rotation.y = ry;
+    this.scene.add(pivot);
+
+    if (type === 'plant') {
+      this.swayingObjects.push({ obj: pivot, baseRy: ry, offset: Math.random() * 6 });
+    }
     return pivot;
   }
 
@@ -226,21 +721,10 @@ export class RoomScene {
   logicTo3D(logicX, logicY) {
     return {
       x: (logicX / STAGE.width) * RW - HALF_W,
-      z: (logicY / STAGE.height) * RD - HALF_D
+      z: (logicY / STAGE.height) * RD - HALF_D,
     };
   }
 
-  // 將 3D 坐標透視投影至螢幕像素 (用於 2D Canvas 疊加)
-  /**
-   * 某個場域座標處，「一單位 3D 高度」對應多少螢幕像素。
-   *
-   * 角色是 2D 貼圖，位置雖然有投影，大小卻不會自動隨深度變化 ——
-   * 少了這個係數，站在房間最深處與最靠近鏡頭的人畫得一樣大，
-   * 看起來像貼紙浮在畫面上而不是站在地板上。
-   *
-   * 作法是投影同一點的地面與其上方一單位處，取兩者的螢幕距離。
-   * 直接用「相機距離的倒數」會忽略 FOV 與畫布長寬比。
-   */
   scaleAt(logicX, logicY, worldHeight = 1) {
     this.camera.updateMatrixWorld();
     const p = this.logicTo3D(logicX, logicY);
@@ -252,71 +736,72 @@ export class RoomScene {
   }
 
   projectToScreen(logicX, logicY) {
-    // project() 讀的是 camera.matrixWorldInverse 與 projectionMatrix。
-    // 前者由 updateMatrixWorld() 產生，平時只在 render() 內部被呼叫 ——
-    // 因此在第一幀之前（或本函式先於 render 被呼叫時）矩陣仍是單位矩陣，
-    // 投影結果會退化：所有座標算出同一個點，中心點甚至是 NaN。
-    // 這裡明確更新，讓投影不依賴呼叫順序。
     this.camera.updateMatrixWorld();
     const p3d = this.logicTo3D(logicX, logicY);
-    const vector = new THREE.Vector3(p3d.x, 0, p3d.z); // 地板高度 y=0
+    const vector = new THREE.Vector3(p3d.x, 0, p3d.z);
     vector.project(this.camera);
 
     const rect = this.renderer.domElement.getBoundingClientRect();
     return {
       x: (vector.x * 0.5 + 0.5) * rect.width,
-      y: (-(vector.y * 0.5) + 0.5) * rect.height
+      y: (-(vector.y * 0.5) + 0.5) * rect.height,
     };
   }
 
   resetCamera() {
-    // 相機取景：要讓整個場域（角色可走的範圍）都入鏡，同時看得到牆與地板的
-    // 交界 —— 那條線是「這是一個房間」的關鍵線索，被裁掉就只剩一片地板。
-    // 係數以房間尺寸表示，調整 RW/RD/WALL_H 時取景會自動跟著走。
     const START_POS = new THREE.Vector3(HALF_W * 0.95, WALL_H * 1.85, HALF_D * 1.55);
     const START_TARGET = new THREE.Vector3(0, WALL_H * 0.16, -RD * 0.06);
-    this.camera.position.copy(START_POS); 
+    this.camera.position.copy(START_POS);
     this.controls.target.copy(START_TARGET);
-    // 相機的朝向由 controls 依 target 算出。少了這次 update()，
-    // 在第一幀 render 之前相機仍朝著預設方向（-Z），投影會全部落在畫面外。
     this.controls.update();
     this.camera.updateMatrixWorld();
   }
 
   _resize() {
-    this.camera.aspect = innerWidth / innerHeight; 
-    this.camera.updateProjectionMatrix(); 
+    this.camera.aspect = innerWidth / innerHeight;
+    this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
-    // composer 與 bloom 各自持有 render target，不跟著 resize 會在換解析度後
-    // 顯示上一個尺寸的畫面（拉伸或裁切），而且不會報錯。
     this.composer?.setSize(innerWidth, innerHeight);
     this.bloom?.setSize(innerWidth, innerHeight);
   }
 
   render() {
+    const delta = this.clock.getDelta();
+    const elapsed = this.clock.getElapsedTime();
+
     this.controls.update();
-    if (this.postEnabled && this.composer) this.composer.render();
-    else this.renderer.render(this.scene, this.camera);
+
+    // 1. 植物微風輕晃動態
+    for (const item of this.swayingObjects) {
+      item.obj.rotation.y = item.baseRy + Math.sin(elapsed * 1.4 + item.offset) * 0.025;
+      item.obj.rotation.z = Math.cos(elapsed * 1.1 + item.offset) * 0.012;
+    }
+
+    // 3. 壁燈微弱暖光呼吸
+    if (this.sconceLight && this.currentLightName !== 'night') {
+      const p = PRESETS[this.currentLightName] || PRESETS.day;
+      this.sconceLight.intensity = p.lamp * 0.8 + Math.sin(elapsed * 3.2) * 0.04;
+    }
+
+    if (this.postEnabled && this.composer) {
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 }
 
 // 供外部呼叫的輔助函式，根據 PROPS 定義載入家具
 export async function populateProps(roomScene, propsDefinition) {
-  const promises = propsDefinition.map(p => {
+  const promises = propsDefinition.map((p) => {
     const p3d = roomScene.logicTo3D(p.x, p.y);
     const url = PROP_URLS[p.type] || PROP_URLS.plant;
-    // 預設給一個合理高度 (依類型不同可再調整)
-    // 家具高度以「佔牆高的比例」表示，而非絕對值 —— 調整房間尺度時
-    // 這裡就不必跟著改，否則家具會相對房間忽大忽小。
-    let h = WALL_H * 0.26;                                     // 沙發等
+    let h = WALL_H * 0.26;
     if (p.type === 'table' || p.type === 'lowtable') h = WALL_H * 0.15;
     if (p.type === 'shelf' || p.type === 'speaker') h = WALL_H * 0.38;
     if (p.type === 'plant') h = WALL_H * 0.20;
-    // 朝向來自 shared/scene.js 的 ry —— 那份定義是佈局的單一事實來源。
-    // 原本這裡對 sofa 硬寫 Math.PI/2，等於把資料驅動的那半架空：
-    // 音箱的 ±PI/4 永遠不會生效，改 shared/scene.js 也不會有任何反應。
     const ry = typeof p.ry === 'number' ? p.ry : 0;
-    return roomScene.loadProp(url, h, p3d.x, p3d.z, ry);
+    return roomScene.loadProp(url, h, p3d.x, p3d.z, ry, p.type);
   });
   await Promise.all(promises);
 }

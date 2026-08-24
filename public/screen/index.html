@@ -49,6 +49,37 @@
     font-size: 11px; color: var(--line); user-select: none;
   }
 
+  /* ── 斷線提示 ─────────────────────────────────────────────
+     沒有這個提示時，斷線在畫面上「完全看不出來」：伺服器的 IDLE_MOTION
+     預設是靜止待機，因此「沒有人操控的健康場域」與「伺服器已經掛掉」
+     兩者的畫面一模一樣 —— 角色都是停在原地。原本的斷線訊息只寫進
+     除錯面板的 #meta，而那個面板預設 hidden，現場等於沒有任何回饋。
+
+     放左下角：上方中央是任務橫幅與問答、右下角是排行榜，都不能被蓋到。 */
+  .offline {
+    position: fixed; bottom: 22px; left: 22px;
+    display: flex; align-items: center; gap: 10px;
+    background: var(--paper);
+    border: 3px solid #C4453C; border-radius: 14px;
+    padding: 11px 18px;
+    font-size: 15px; font-weight: 700; color: #C4453C;
+    box-shadow: 0 8px 28px -14px rgba(47,42,38,.5);
+  }
+  .offline[hidden] { display: none; }
+  /* 緩慢脈動：投影在大螢幕上要能被餘光注意到，但不該搶走角色的注意力 */
+  .offline .dot {
+    width: 11px; height: 11px; border-radius: 50%;
+    background: #C4453C; flex: none;
+    animation: offline-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes offline-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .25; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .offline .dot { animation: none; }
+  }
+
   /* 任務橫幅：任務公告必須在共享畫布上被看見（規格 v3.0 §3.1 第 05 步） */
   .mission {
     position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
@@ -223,7 +254,13 @@
   </div>
 </div>
 
-<div class="hint-key">按 <kbd>D</kbd> 顯示除錯資訊</div>
+<!-- 斷線提示。見上方 .offline 的說明：靜止的角色無法區分健康與故障。 -->
+<div class="offline" id="offline" hidden>
+  <span class="dot"></span>
+  <span id="offline-text">與伺服器斷線，正在重新連線…</span>
+</div>
+
+<div class="hint-key">按 <kbd>1–3</kbd> 切換光線 · <kbd>R</kbd> 重置視角 · <kbd>D</kbd> 除錯</div>
 <script type="module" src="screen.js"></script>
 </body>
 </html>

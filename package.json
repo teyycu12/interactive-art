@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test test/",
+    "test": "npm run test:default && npm run test:wander",
+    "test:default": "node --import ./test/helpers/shared-path-hook-register.mjs --test test/",
+    "test:wander": "PERSONAFLOW_IDLE_MOTION=wander node --import ./test/helpers/shared-path-hook-register.mjs --test test/wander-mode.test.mjs",
     "test:e2e": "node scripts/e2e.mjs",
     "preview:scene": "node scripts/scene-preview.mjs"
   },
