@@ -38,8 +38,12 @@ body {
 
 #app { height: 100dvh; display: flex; flex-direction: column; }
 
-/* 四個畫面共用同一個版面外殼：撐滿視窗、不捲動、底部固定操作列 */
-#entry, #builder, #controller, #farewell {
+/* 五個畫面共用同一個版面外殼：撐滿視窗、不捲動、底部固定操作列
+   #scan 原本漏掉了：少了這條，.scan-stage 的 flex: 1 沒有 flex 父容器，
+   video 的 height: 100% 解析成 auto，於是影片以原生尺寸（例如 1280x720）
+   撐開版面，把底下的按鈕整排擠出視窗。相機還沒出影格時原生尺寸是 0，
+   所以這個問題要等到相機真的運作起來才看得見。 */
+#entry, #scan, #builder, #controller, #farewell {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -471,6 +475,9 @@ button:disabled { opacity: .35; border-style: dashed; }
 .scan-stage {
   position: relative;
   flex: 1;
+  /* 沒有 min-height: 0 的話，flex item 的預設 min-height: auto 會讓它
+     不肯縮到內容以下 —— 影片一樣會把按鈕頂出去。 */
+  min-height: 0;
   margin: 0 16px;
   border-radius: 14px;
   overflow: hidden;
