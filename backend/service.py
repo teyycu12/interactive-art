@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import uuid
@@ -86,6 +87,17 @@ except Exception as _e:
     correction_for_validation = lambda v: ""
     guidance_for_validation = lambda v: ""
     validate_avatar_png = lambda *a, **k: {"passed": True, "errors": [], "warnings": []}
+
+# 拍攝閘門的時序判定。單張影格的好壞由 capture_quality 判斷，「可以按快門了」
+# 則是跨影格的問題 —— 人要連續數幀不動，身高比例也要連續數幀穩定。
+try:
+    import capture_session
+    from capture_quality import mean_landmark_displacement
+    from height_profiles import classify_height
+    _PREVIEW = True
+except Exception as _e:
+    _degraded("capture_session（拍攝站位引導）", _e)
+    _PREVIEW = False
 
 try:
     from style_registry import get_event_style_id
@@ -176,6 +188,65 @@ def health():
     })
 
 
+_sessions = capture_session.SessionStore() if _PREVIEW else None
+
+
+@app.route("/preview", methods=["POST"])
+def preview():
+    """站位引導：一張預覽影格進、可拍攝狀態出。
+
+    只跑 CV，不呼叫任何付費 API —— 這條路每秒會被打數次，成本必須是零。
+
+    回傳刻意與 app.py 的 clothing_features 同形狀，讓兩個入口共用同一套引導
+    文案與判準；差別只在傳輸方式（那邊 Socket.io、這邊 HTTP）。
+
+    不回傳 landmarks：那是可辨識的人體座標，而且每幀來回會把現場的行動網路
+    吃掉。位移量在伺服器端算完就丟，只送出結果。
+    """
+    if not _PREVIEW:
+        return jsonify({"ok": False, "error": "preview_unavailable"})
+    try:
+        payload = request.get_json(silent=True) or {}
+        img_str = payload.get("image")
+        if not img_str:
+            return jsonify({"ok": False, "error": "no_image"})
+
+        session_id = payload.get("sessionId")
+        if not isinstance(session_id, str) or not re.fullmatch(r"[0-9a-f]{32}", session_id):
+            session_id = _sessions.new_id()
+        live = _sessions.get(session_id)
+
+        frame, decode_err = decode_frame(img_str)
+        if frame is None:
+            return jsonify({"ok": False, "error": f"decode_failed: {decode_err}",
+                            "sessionId": session_id})
+
+        features = get_clothing_features(
+            frame, max_width=360, previous_landmarks=live.get("landmarks")
+        )
+        if not features.get("ok"):
+            _sessions.put(session_id, live)
+            return jsonify({"ok": False, "error": features.get("error", "no_person"),
+                            "guidance_reason": features.get("guidance_reason", "person_not_detected"),
+                            "sessionId": session_id})
+
+        current = features.get("landmarks") or []
+        displacement = mean_landmark_displacement(current, live.get("landmarks"))
+        capture_session.update(live, features, displacement, classify_height=classify_height)
+        live["landmarks"] = current
+        _sessions.put(session_id, live)
+
+        # landmarks、cloth_grid、stencil 等大欄位一律不外送：引導只需要判定結果。
+        for heavy in ("landmarks", "cloth_grid", "lower_grid", "stencil", "roi",
+                      "body_poly", "upper_poly", "lower_poly", "regions"):
+            features.pop(heavy, None)
+        features["sessionId"] = session_id
+        return jsonify(features)
+    except Exception as e:
+        print(f"[vision] /preview 未預期失敗：{e!r}", file=sys.stderr)
+        return jsonify({"ok": False, "error": "internal_error"})
+
+
 @app.route("/generate", methods=["POST"])
 def generate():
     """一張照片進、三張貼圖出。
@@ -249,6 +320,17 @@ def _generate():
     height_class = cv_result.get("height_class") if isinstance(cv_result, dict) else None
     height_ratio = cv_result.get("height_ratio") if isinstance(cv_result, dict) else None
     height_valid = cv_result.get("height_measurement_valid") if isinstance(cv_result, dict) else None
+
+    # 預覽期間跨影格量到的身高比單張快門的估計可信得多 —— 那是連續數幀落在
+    # 同一範圍才成立的值。拿不到就退回這張影格自己的量測。
+    session_id = payload.get("sessionId")
+    if _PREVIEW and isinstance(session_id, str) and re.fullmatch(r"[0-9a-f]{32}", session_id):
+        live = _sessions.get(session_id)
+        if live.get("trusted_height_class"):
+            height_class = live["trusted_height_class"]
+            height_ratio = live.get("trusted_height_ratio", height_ratio)
+            height_valid = True
+        _sessions.drop(session_id)   # 拍完就結束，不留著佔記憶體
 
     style_id = get_event_style_id()
     _history_call(start_run, request_id, mode="full_character", style_id=style_id,

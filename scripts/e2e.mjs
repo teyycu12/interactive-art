@@ -613,17 +613,37 @@ await sleep(200);
 
 // 生成端點是唯一會花錢的路徑（每次兩支 Gemini 加一次生圖），
 // 原本沒有任何速率限制 —— 場館 Wi-Fi 上一台裝置寫個迴圈就能把額度燒光。
-function postGenerate() {
+function postApi(path, body = Buffer.from('{}')) {
   return new Promise((resolve) => {
-    const body = Buffer.from('{}');
     const req = http.request({
-      host: '127.0.0.1', port: PORT, path: '/api/generate', method: 'POST',
+      host: '127.0.0.1', port: PORT, path, method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
     }, (res) => {
       const out = [];
       res.on('data', (c) => out.push(c));
       res.on('end', () => {
         try { resolve(JSON.parse(Buffer.concat(out).toString()).error); }
+        catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.end(body);
+  });
+}
+
+const postGenerate = () => postApi('/api/generate');
+
+/** 同 postApi，但回傳整包 body 而非只取 error 欄位 */
+function postApiBody(path, body = Buffer.from('{}')) {
+  return new Promise((resolve) => {
+    const req = http.request({
+      host: '127.0.0.1', port: PORT, path, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
+    }, (res) => {
+      const out = [];
+      res.on('data', (c) => out.push(c));
+      res.on('end', () => {
+        try { resolve(JSON.parse(Buffer.concat(out).toString())); }
         catch { resolve(null); }
       });
     });
@@ -640,5 +660,26 @@ check('生成端點在爆量時會限流',
   genResults.slice(0, 3).every((r) => r !== 'rate_limited')
   && genResults[3] === 'rate_limited',
   genResults.join(', '));
+
+// 站位引導：每秒會被打數次，因此額度必須遠寬於生成 —— 但不能沒有，
+// 否則一台裝置的迴圈就能把 Python 端的執行緒池塞滿，排擠正在報到的人。
+const previewResults = [];
+for (let i = 0; i < 6; i++) previewResults.push(await postApi('/api/preview'));
+check('引導端點的額度遠寬於生成端點',
+  previewResults.slice(0, 5).every((r) => r !== 'rate_limited'),
+  previewResults.join(', '));
+
+// 引導失敗時不該回降級外觀 —— 那是生成才需要的東西。少一幀引導沒有代價，
+// 下一幀就補上；把 fallbackColors 塞進來只會讓手機端誤以為該退回捏臉。
+// 這裡不假設生成服務開著或關著，兩種情況都必須成立。
+const previewBody = await postApiBody('/api/preview');
+check('引導失敗時不回降級外觀',
+  previewBody !== null && previewBody.ok === false && !('fallbackColors' in previewBody),
+  JSON.stringify(previewBody));
+
+// 引導影格是縮圖，不該有生成那種數 MB 的尺寸。
+const huge = Buffer.alloc(2 * 1024 * 1024, 0x20);
+check('引導端點擋下過大的影格',
+  await postApi('/api/preview', huge) === 'frame_too_large');
 
 finish();

@@ -7,6 +7,7 @@
 import base64
 import io
 import os
+import re
 
 import numpy as np
 import pytest
@@ -292,3 +293,55 @@ class TestHistoryIsNeverFatal:
         assert body["ok"] is True
         for part in PARTS:
             assert part in body["textures"]
+
+
+class TestPreview:
+    """站位引導端點。這條路每秒被打數次，成本必須是零。"""
+
+    def test_never_calls_a_paid_api(self, client, monkeypatch):
+        """預覽只跑 CV —— 碰到任何付費呼叫就是設計壞了。"""
+        def _boom(*a, **k):
+            raise AssertionError("預覽不得呼叫付費 API")
+
+        monkeypatch.setattr(service, "generate_full_character_png", _boom)
+        monkeypatch.setattr(service, "analyze_outfit", _boom)
+        monkeypatch.setattr(service, "analyze_face", _boom)
+        r = client.post("/preview", json={"image": _photo_b64()})
+        assert r.status_code == 200
+
+    def test_assigns_a_session_id(self):
+        """id 必須由伺服器配發：客戶端能自取的話，任何人都能猜到別人的
+        session 並污染他的穩定度計數。"""
+        from service import app as flask_app
+        with flask_app.test_client() as c:
+            body = c.post("/preview", json={"image": _photo_b64()}).get_json()
+        assert re.fullmatch(r"[0-9a-f]{32}", body["sessionId"])
+
+    def test_rejects_client_supplied_id_shape(self, client):
+        """格式不對的 id 一律換發，不當成有效 session。"""
+        body = client.post("/preview", json={"image": _photo_b64(),
+                                             "sessionId": "../../etc/passwd"}).get_json()
+        assert body["sessionId"] != "../../etc/passwd"
+        assert re.fullmatch(r"[0-9a-f]{32}", body["sessionId"])
+
+    def test_missing_image_is_not_an_error(self, client):
+        r = client.post("/preview", json={})
+        assert r.status_code == 200
+        assert r.get_json()["ok"] is False
+
+    def test_does_not_leak_landmarks_or_heavy_fields(self, client, monkeypatch):
+        """landmarks 是可辨識的人體座標，而且每幀來回會吃掉現場的行動網路。"""
+        monkeypatch.setattr(
+            service, "get_clothing_features",
+            lambda *a, **k: {
+                "ok": True, "capture_ready_raw": True,
+                "capture_quality": {"capture_checks": {}},
+                "landmarks": [[0.1, 0.2, 0.9]] * 33,
+                "cloth_grid": [[1, 2, 3]], "stencil": "x" * 1000,
+                "body_poly": [[0, 0], [1, 1]], "regions": {"a": 1},
+            },
+        )
+        body = client.post("/preview", json={"image": _photo_b64()}).get_json()
+        for heavy in ("landmarks", "cloth_grid", "stencil", "body_poly", "regions"):
+            assert heavy not in body, f"{heavy} 不該送到手機端"
+        assert "stability_count" in body, "判定結果仍必須送出"

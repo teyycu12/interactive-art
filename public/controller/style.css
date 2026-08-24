@@ -519,3 +519,38 @@ button:disabled { opacity: .35; border-style: dashed; }
   from { opacity: 0; transform: translate(-50%, -12px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
+
+
+/* ── 站位引導 ─────────────────────────────────────────────
+   引導必須疊在畫面上而不是擠在旁邊：參與者的視線在自己身上，
+   低頭找文字的那一秒剛好會讓穩定度視窗歸零。 */
+#scan-guide {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 10px 12px 12px;
+  background: linear-gradient(to top, rgba(0,0,0,.72), rgba(0,0,0,0));
+  pointer-events: none;
+}
+#scan-guide-text {
+  margin: 0 0 8px; color: #fff; font-size: 15px; font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0,0,0,.6); line-height: 1.35;
+}
+#scan-lights {
+  display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none;
+}
+#scan-lights li {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  padding: 3px 8px; border-radius: 999px;
+  background: rgba(255,255,255,.18); color: rgba(255,255,255,.72);
+}
+#scan-lights li.ok { background: #2f9e5f; color: #fff; }
+
+/* 倒數：數字要大到餘光就看得見，不必把視線移過去 */
+#scan-countdown {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: rgba(0,0,0,.28); pointer-events: none;
+}
+#scan-countdown[hidden] { display: none; }
+#scan-count {
+  font-size: 96px; font-weight: 900; color: #fff;
+  text-shadow: 0 4px 18px rgba(0,0,0,.55);
+}

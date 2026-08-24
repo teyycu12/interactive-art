@@ -37,6 +37,12 @@
     </div>
     <div class="scan-stage">
       <video id="scan-video" playsinline muted autoplay></video>
+      <!-- 站位引導：文字說明目前該怎麼調整，燈號說明還差哪一項 -->
+      <div id="scan-guide">
+        <p id="scan-guide-text">正在啟動鏡頭…</p>
+        <ul id="scan-lights"></ul>
+      </div>
+      <div id="scan-countdown" hidden><span id="scan-count">3</span></div>
       <div id="scan-overlay" hidden>
         <p id="scan-status">正在生成你的角色…</p>
       </div>
