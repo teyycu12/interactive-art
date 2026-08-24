@@ -70,6 +70,56 @@ except Exception as _e:  # 最常見：OPENAI_API_KEY 未設定
     _degraded("garment_gen（AI 角色圖像生成）", _e)
     generate_full_character_png = None
 
+# 品質關卡。validate_avatar_png 是唯一會觸發重生的檢查，而且它不只判定通過與否：
+# correction_for_validation 把失敗原因變成下一次生成的修正指令，
+# guidance_for_validation 變成給參與者的重拍理由。這是一個閉環，不是一個檢查。
+try:
+    from avatar_quality import (
+        add_transparent_margin,
+        correction_for_validation,
+        guidance_for_validation,
+        validate_avatar_png,
+    )
+except Exception as _e:
+    _degraded("avatar_quality（生成結果驗證）", _e)
+    add_transparent_margin = lambda png, **k: png
+    correction_for_validation = lambda v: ""
+    guidance_for_validation = lambda v: ""
+    validate_avatar_png = lambda *a, **k: {"passed": True, "errors": [], "warnings": []}
+
+try:
+    from style_registry import get_event_style_id
+except Exception as _e:
+    _degraded("style_registry（生成風格註冊表）", _e)
+    get_event_style_id = lambda: "lego"
+
+# 生成帳本。現場燒掉多少 token、花多少錢、失敗率多少，全靠這個；
+# 缺它不影響參與者，因此所有呼叫都經 _history_call 包起來、失敗只印一行。
+try:
+    from generation_history import (
+        finish_run,
+        record_attempt,
+        save_input_photo,
+        start_run,
+    )
+    _HISTORY = True
+except Exception as _e:
+    _degraded("generation_history（生成紀錄與成本）", _e)
+    _HISTORY = False
+
+
+def _history_call(function, *args, **kwargs):
+    """帳本永遠不得讓生成失敗 —— 它是觀測，不是流程的一部分。"""
+    if not _HISTORY:
+        return None
+    if os.environ.get("DEV_HISTORY_ENABLED", "1").strip().lower() in {"0", "false", "no"}:
+        return None
+    try:
+        return function(*args, **kwargs)
+    except Exception as exc:
+        print(f"[generation_history] {function.__name__} failed: {exc}", file=sys.stderr)
+        return None
+
 # 貼圖落地位置：Node 端以靜態檔案服務 public/，因此寫進 public/assets/gen/
 # 之後立刻就能用 /assets/gen/<assetId>/<part>.png 取得（見契約 4）。
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -148,6 +198,9 @@ def _generate():
     started = time.perf_counter()
     payload = request.get_json(silent=True) or {}
     img_str = payload.get("image")
+    # 一個 id 同時當帳本的 request_id 與貼圖目錄名，之後要從大螢幕上的某個
+    # 角色回頭查它花了多少 token、重試過幾次，不必再對照兩張表。
+    request_id = uuid.uuid4().hex
     if not img_str:
         return jsonify({"ok": False, "error": "no_image", "fallbackColors": DEFAULT_COLORS})
     if cv2 is None:
@@ -188,6 +241,20 @@ def _generate():
         print(f"[vision] 臉部特徵擷取失敗：{e!r}", file=sys.stderr)
         face_cv_result = {}
 
+    cv_ms = int((time.perf_counter() - started) * 1000.0)
+    # get_clothing_features 早就把這些算出來了，只是原本全部丟掉。
+    # regions 會被送進生成 prompt，其餘進帳本 —— 事後要解釋「為什麼這張很糟」
+    # 靠的就是這幾個欄位。
+    regions = cv_result.get("regions") if isinstance(cv_result, dict) else None
+    height_class = cv_result.get("height_class") if isinstance(cv_result, dict) else None
+    height_ratio = cv_result.get("height_ratio") if isinstance(cv_result, dict) else None
+    height_valid = cv_result.get("height_measurement_valid") if isinstance(cv_result, dict) else None
+
+    style_id = get_event_style_id()
+    _history_call(start_run, request_id, mode="full_character", style_id=style_id,
+                  source_type="camera")
+    _history_call(save_input_photo, request_id, img_str)
+
     body_poly: Optional[np.ndarray] = None
     if cv_result.get("ok") and len(cv_result.get("body_poly") or []) >= 3:
         try:
@@ -215,27 +282,99 @@ def _generate():
     face_data = build_face_data(face_cv_result, vlm_face)
     fallback_colors = _sampled_colors(cv_result, face_cv_result)
 
+    vlm_ms = int((time.perf_counter() - started) * 1000.0) - cv_ms
+
+    def _fail(error: str, *, stage: str, guidance: str = "",
+              validation: Optional[Dict[str, Any]] = None, retries: int = 0,
+              generation_ms: Optional[int] = None):
+        _history_call(
+            finish_run, request_id, status="failed", stage=stage,
+            height_class=height_class, duration_ms=int((time.perf_counter() - started) * 1000.0),
+            cv_ms=cv_ms, vlm_ms=vlm_ms, generation_ms=generation_ms, retry_count=retries,
+            validation=validation, error_code=error, guidance=guidance or None,
+            height_ratio=height_ratio, height_measurement_valid=height_valid,
+        )
+        body = {"ok": False, "error": error, "fallbackColors": fallback_colors}
+        # 帶上重拍理由，讓手機端能說明「為什麼」而不是只丟一句生成失敗。
+        # 沒有它，參與者唯一能做的就是再拍一張一模一樣的照片。
+        if guidance:
+            body["guidance"] = guidance
+        return jsonify(body)
+
     if generate_full_character_png is None:
-        return jsonify({"ok": False, "error": "imagegen_unavailable",
-                        "fallbackColors": fallback_colors})
+        return _fail("imagegen_unavailable", stage="generation")
 
-    gen = _imagegen_breaker.call(
-        _raise_on_failure, generate_full_character_png,
-        rgb_full, body_poly, face_data, outfit_data,
-        fallback={"ok": False, "error": "circuit_open"},
-    )
-    if not (isinstance(gen, dict) and gen.get("ok") and gen.get("body_png")):
-        error = gen.get("error", "generation_failed") if isinstance(gen, dict) else "generation_failed"
-        return jsonify({"ok": False, "error": error, "fallbackColors": fallback_colors})
+    generation_start = time.perf_counter()
 
-    asset_id = uuid.uuid4().hex
+    def _attempt(correction: Optional[str]) -> Dict[str, Any]:
+        # max_retries=0：熔斷器預設會自動重試一次，而這是整套系統唯一會花錢的
+        # 呼叫 —— 失敗時多付一次錢，而且那次重試不帶任何修正指令，成功率與
+        # 第一次相同。要不要重生由下方的驗證結果決定，不由熔斷器決定。
+        out = _imagegen_breaker.call(
+            _raise_on_failure, generate_full_character_png,
+            rgb_full, body_poly, face_data, outfit_data, True, regions, style_id, correction,
+            max_retries=0,
+            fallback={"ok": False, "error": "circuit_open"},
+        )
+        if isinstance(out, dict) and out.get("body_png"):
+            out = dict(out)
+            out["body_png"] = add_transparent_margin(out["body_png"])
+        return out if isinstance(out, dict) else {"ok": False, "error": "generation_failed"}
+
+    def _validate(out: Dict[str, Any]) -> Dict[str, Any]:
+        if not out.get("ok"):
+            return {"passed": False, "errors": [out.get("error", "generation_failed")], "warnings": []}
+        return validate_avatar_png(
+            out.get("body_png"),
+            upper_rgb=(cv_result.get("upper") or {}).get("rgb"),
+            lower_rgb=(cv_result.get("lower") or {}).get("rgb"),
+        )
+
     try:
-        result = slice_character(gen["body_png"], ASSET_DIR, asset_id)
+        max_retries = max(0, min(1, int(os.environ.get("GENERATION_MAX_RETRIES", "0"))))
+    except ValueError:
+        max_retries = 0
+
+    retries = 0
+    gen = _attempt(None)
+    validation = _validate(gen)
+    _history_call(record_attempt, request_id, phase="full_character",
+                  attempt_index=0, result=gen, validation=validation)
+
+    if max_retries and gen.get("ok") and not validation.get("passed"):
+        # 重生時帶上修正指令 —— 缺腿就要求雙腿雙腳完整，出框就要求置中留白。
+        # 不帶指令的重試等於再擲一次同樣的骰子。
+        retries = 1
+        gen = _attempt(correction_for_validation(validation))
+        validation = _validate(gen)
+        _history_call(record_attempt, request_id, phase="full_character",
+                      attempt_index=1, result=gen, validation=validation)
+
+    generation_ms = int((time.perf_counter() - generation_start) * 1000.0)
+
+    if not (gen.get("ok") and gen.get("body_png")):
+        return _fail(gen.get("error", "generation_failed"), stage="generation",
+                     validation=validation, retries=retries, generation_ms=generation_ms)
+
+    if not validation.get("passed"):
+        return _fail("validation_failed", stage="validation",
+                     guidance=guidance_for_validation(validation),
+                     validation=validation, retries=retries, generation_ms=generation_ms)
+
+    try:
+        result = slice_character(gen["body_png"], ASSET_DIR, request_id)
     except Exception as e:
-        return jsonify({"ok": False, "error": f"slice_failed: {e}",
-                        "fallbackColors": fallback_colors})
+        return _fail(f"slice_failed: {e}", stage="slice",
+                     validation=validation, retries=retries, generation_ms=generation_ms)
 
     result["elapsedMs"] = round((time.perf_counter() - started) * 1000.0, 1)
+    _history_call(
+        finish_run, request_id, status="ok", stage="base",
+        height_class=height_class, duration_ms=int((time.perf_counter() - started) * 1000.0),
+        cv_ms=cv_ms, vlm_ms=vlm_ms, generation_ms=generation_ms, retry_count=retries,
+        validation=validation, output_png=gen["body_png"],
+        height_ratio=height_ratio, height_measurement_valid=height_valid,
+    )
     return jsonify(result)
 
 
