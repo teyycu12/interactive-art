@@ -289,6 +289,8 @@ PersonaFlow/
 │   ├── STYLE_BASE.md           # 基底風格標準（量測方法與數值）
 │   ├── STYLE_PROBE_FOLLOWUPS.md# 已知但刻意延後的量測與管線細節
 │   ├── TECHNICAL_ARCHITECTURE.md
+│   ├── PRD.md                  # 產品需求與驗收定義
+│   ├── TechStack.md            # 技術選型
 │   ├── m3/                     # M3 交接文件與效能報告
 │   └── style_reference/        # 風格參考圖集；圖檔本身不進版控（見下）
 ├── .github/workflows/ci.yml    # CI：前端 Node 測試＋後端 pytest
@@ -439,7 +441,7 @@ python -m unittest discover -s backend\tests -v
 4. 到需要真人生成時停止於 `USER_MANUAL_GENERATION_REQUIRED`，由專案負責人手動生成並提供結果；系統不得自行假設成功。
 5. 結果納入 `dev.html` 盲評，至少5位評分者完成後比較物種一致性、個體可分辨度、成本與延遲。
 
-風格標準請參考 [docs/STYLE_BASE.md](./docs/STYLE_BASE.md)，Socket 介面請參考 [docs/INTERFACES.md](./docs/INTERFACES.md)，已知但刻意延後的細節請參考 [docs/STYLE_PROBE_FOLLOWUPS.md](./docs/STYLE_PROBE_FOLLOWUPS.md)，開發操作請參考 [CLAUDE.md](./CLAUDE.md)。
+完整的產品規格與欄位定義請參考 [docs/PRD.md](./docs/PRD.md)（**注意**：其驗收條件仍寫在已退役的 `brick_ai_texture` 與 `body_sprite` 上，尚未依現行架構重寫），風格標準請參考 [docs/STYLE_BASE.md](./docs/STYLE_BASE.md)，Socket 介面請參考 [docs/INTERFACES.md](./docs/INTERFACES.md)，已知但刻意延後的細節請參考 [docs/STYLE_PROBE_FOLLOWUPS.md](./docs/STYLE_PROBE_FOLLOWUPS.md)，開發操作請參考 [CLAUDE.md](./CLAUDE.md)。
 
 ### 已預留但尚未實作
 

@@ -79,6 +79,8 @@
 │   ├── STYLE_BASE.md             # 基底風格標準與量測方法
 │   ├── STYLE_PROBE_FOLLOWUPS.md  # 已知但刻意延後的量測與管線細節
 │   ├── TECHNICAL_ARCHITECTURE.md # 技術架構文件
+│   ├── PRD.md                    # 產品需求與驗收定義（驗收條件仍寫在已退役模式上，待重寫）
+│   ├── TechStack.md              # 技術選型
 │   ├── /m3                       # M3 交接說明與效能報告
 │   └── /style_reference          # 風格參考圖集；圖檔本身不進版控（見下）
 ├── /.github/workflows/ci.yml     # CI：前端 Node 測試＋後端 pytest（skip 一律視為失敗）
