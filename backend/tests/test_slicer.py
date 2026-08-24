@@ -149,6 +149,43 @@ class TestSliceCharacter:
             assert out["textures"][part] == f"/assets/gen/{asset_id}/{part}.png"
         assert set(out["fallbackColors"]) == {"skin", "hair", "torso", "legs"}
 
+    def test_writes_full_image_alongside_the_slices(self, figure, tmp_path):
+        """整張圖是 2D 大螢幕實際要畫的那一張，必須與正規化結果逐像素相同。
+
+        切片在 2D 這條路上是純成本：screen.js 又照同一組比例把三張疊回去，
+        構圖與原圖相同，卻換來三個請求、三次載入失敗風險，以及三張各自被
+        拉伸到固定寬度造成的整體變形。三張切片保留給之後貼到 3D 部件、
+        做肢體動作的用途。
+        """
+        asset_id = "e" * 32
+        out = slice_character(to_b64(figure), str(tmp_path), asset_id)
+        assert out["textures"]["full"] == f"/assets/gen/{asset_id}/full.png"
+
+        written = PILImage.open(tmp_path / asset_id / "full.png").convert("RGBA")
+        expected = normalize(decode_png(to_b64(figure)))
+        assert written.size == expected.size
+        assert np.array_equal(np.asarray(written), np.asarray(expected)),             "整張圖必須是未經裁切縮放的正規化結果"
+
+    def test_full_image_keeps_the_figure_aspect_ratio(self, figure, tmp_path):
+        """整張圖不得被壓成畫布比例 —— 那正是要避免的橫向拉伸。"""
+        asset_id = "f" * 32
+        slice_character(to_b64(figure), str(tmp_path), asset_id)
+        written = PILImage.open(tmp_path / asset_id / "full.png")
+        source = normalize(decode_png(to_b64(figure)))
+        assert abs(written.size[0] / written.size[1] - source.size[0] / source.size[1]) < 1e-9
+
+    def test_slices_reassemble_into_the_full_image(self, figure, tmp_path):
+        """三張切片疊回去必須等於整張圖 —— 兩條路徑不得畫出不同的角色。"""
+        asset_id = "0" * 32
+        slice_character(to_b64(figure), str(tmp_path), asset_id)
+        full = np.asarray(PILImage.open(tmp_path / asset_id / "full.png").convert("RGBA"))
+        rebuilt = np.concatenate(
+            [np.asarray(PILImage.open(tmp_path / asset_id / f"{p}.png").convert("RGBA"))
+             for p in PARTS],
+            axis=0,
+        )
+        assert np.array_equal(rebuilt, full)
+
     def test_accepts_data_uri_prefix(self, figure, tmp_path):
         b64 = "data:image/png;base64," + to_b64(figure)
         out = slice_character(b64, str(tmp_path), "b" * 32)

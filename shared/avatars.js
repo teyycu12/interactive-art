@@ -256,8 +256,20 @@ export const CV_CUTS = {
 /** 貼圖部位順序（由上到下） */
 export const CV_PARTS = ['head', 'torso', 'legs'];
 
+/**
+ * 未切割的整張角色圖。
+ *
+ * 選用欄位：2D 大螢幕優先用它，因為切了又照同一組比例疊回去等於沒切，
+ * 卻換來三個請求、三次載入失敗風險，以及三張各自被拉伸到固定寬度造成的
+ * 整體變形。三張切片保留給之後貼到 3D 部件、做肢體動作的用途。
+ *
+ * 刻意設為選用而非必要：舊的資產目錄沒有 full.png，把它列為必要會讓
+ * 那些角色在驗證階段整個被拒，等於一次改版就把先前生成的人全部踢出場。
+ */
+export const CV_FULL_PART = 'full';
+
 /** 貼圖 URL：路徑形狀完全鎖死，杜絕路徑穿越與任意檔案讀取 */
-const TEXTURE_URL_RE = /^\/assets\/gen\/([0-9a-f]{32})\/(head|torso|legs)\.png$/;
+const TEXTURE_URL_RE = /^\/assets\/gen\/([0-9a-f]{32})\/(head|torso|legs|full)\.png$/;
 const TEXTURE_PARTS = CV_PARTS;
 
 /**
@@ -293,6 +305,19 @@ function validateCVAvatar(cfg) {
     if (assetId === null) assetId = m[1];
     else if (m[1] !== assetId) return { ok: false, reason: 'textures 混用了不同的資產目錄' };
     cleanTextures[part] = url;
+  }
+
+  // 整張圖：有才驗，沒有就當這是改版前生成的資產，走三張切片那條路。
+  // 驗法與必要部位完全相同，包含「必須同屬一個資產目錄」——
+  // 少了那一條，就等於允許把別人的整張圖拼進自己的角色。
+  if (textures[CV_FULL_PART] !== undefined) {
+    const url = textures[CV_FULL_PART];
+    if (typeof url !== 'string') return { ok: false, reason: 'textures.full 必須是字串' };
+    const m = TEXTURE_URL_RE.exec(url);
+    if (!m) return { ok: false, reason: 'textures.full 不是合法的貼圖路徑' };
+    if (m[2] !== CV_FULL_PART) return { ok: false, reason: 'textures.full 的檔名與部位不符' };
+    if (m[1] !== assetId) return { ok: false, reason: 'textures 混用了不同的資產目錄' };
+    cleanTextures[CV_FULL_PART] = url;
   }
 
   if (!fallbackColors || typeof fallbackColors !== 'object') {

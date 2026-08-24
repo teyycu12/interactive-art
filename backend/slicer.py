@@ -162,6 +162,18 @@ def slice_character(
         parts[part].save(os.path.join(out_dir, f"{part}.png"), "PNG", optimize=True)
         textures[part] = f"{url_prefix}/{asset_id}/{part}.png"
 
+    # 未切割的整張圖，另外落地一份。
+    #
+    # 2D 大螢幕不需要切片：screen.js 又照同一組比例把三張疊回去，構圖與原圖
+    # 完全相同，切片在這條路上是純成本 —— 一張圖變三個請求、三次載入失敗風險，
+    # 而且三張各自被拉伸到固定寬度，整體寬高比會被畫布比例壓掉（實測角色平均
+    # 0.642，畫布 200x260 = 0.769，橫向被拉伸約 20%）。
+    #
+    # 三張切片保留給之後要貼到 3D 部件、做肢體動作的用途，屆時各部位需要
+    # 獨立變形，那才是切片真正的目的（見本檔開頭）。
+    img.save(os.path.join(out_dir, "full.png"), "PNG", optimize=True)
+    textures["full"] = f"{url_prefix}/{asset_id}/full.png"
+
     return {"ok": True, "assetId": asset_id, "textures": textures, "fallbackColors": colors}
 
 
