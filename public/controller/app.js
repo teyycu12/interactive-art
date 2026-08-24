@@ -238,7 +238,12 @@ $('#btn-capture').addEventListener('click', async () => {
   }
 
   if (!body?.ok) {
-    fallbackToBuilder('這張照片沒能生成角色，先用捏臉進場。');
+    // 生成服務在驗證不過時會附上重拍理由（缺腿、出框、輪廓不清…）。
+    // 沒有它，參與者能做的就只是再拍一張一模一樣的照片。
+    // 理由是伺服器端寫死的固定字串，不含使用者輸入。
+    const why = typeof body?.guidance === 'string' && body.guidance ? body.guidance : null;
+    fallbackToBuilder(why ? `${why}先用捏臉進場，也可以重拍再試。`
+                          : '這張照片沒能生成角色，先用捏臉進場。');
     return;
   }
 
