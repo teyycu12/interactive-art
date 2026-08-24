@@ -587,3 +587,22 @@ button:disabled { opacity: .35; border-style: dashed; }
 .scan-stage.ready #scan-stencil ellipse,
 .scan-stage.ready #scan-stencil line { stroke: rgba(46, 160, 67, .75); }
 .scan-stage.ready #scan-stencil .st-head { fill: rgba(46, 160, 67, .10); }
+
+
+/* 拍攝頁的操作列有三顆按鈕，窄螢幕會擠。padding 收窄並讓主要動作占大一點，
+   「拍照」仍是最明顯的那一顆。 */
+#scan .foot button { padding: 12px 10px; }
+#scan .foot #btn-capture { flex: 1.4; }
+
+/* 純上傳模式：相機用不了時，影片與參考圈都沒有意義，只留說明文字 */
+.scan-stage.upload-only video,
+.scan-stage.upload-only #scan-stencil { display: none; }
+.scan-stage.upload-only { background: var(--sunk, #eee); }
+.scan-stage.upload-only #scan-guide {
+  background: none;
+  display: grid; place-items: center; inset: 0;
+}
+.scan-stage.upload-only #scan-guide-text {
+  color: var(--ink, #222); text-align: center; text-shadow: none;
+  max-width: 22em; margin: 0;
+}

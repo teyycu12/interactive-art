@@ -345,3 +345,26 @@ class TestPreview:
         for heavy in ("landmarks", "cloth_grid", "stencil", "body_poly", "regions"):
             assert heavy not in body, f"{heavy} 不該送到手機端"
         assert "stability_count" in body, "判定結果仍必須送出"
+
+
+class TestUploadedPhoto:
+    """上傳的照片沒有預覽階段，因此沒有 sessionId。"""
+
+    def test_generate_without_session_id(self, client, monkeypatch):
+        monkeypatch.setattr(
+            service, "generate_full_character_png",
+            lambda *a, **k: {"ok": True, "body_png": _png_b64()},
+        )
+        body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+        assert body["ok"] is True
+        assert "full" in body["textures"]
+
+    def test_generate_ignores_a_malformed_session_id(self, client, monkeypatch):
+        """格式不對的 id 一律忽略，不得當成有效 session 去查別人的身高。"""
+        monkeypatch.setattr(
+            service, "generate_full_character_png",
+            lambda *a, **k: {"ok": True, "body_png": _png_b64()},
+        )
+        body = client.post("/generate", json={"image": _photo_b64(),
+                                              "sessionId": "../../etc/passwd"}).get_json()
+        assert body["ok"] is True

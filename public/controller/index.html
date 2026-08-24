@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#FAF8F5">
 <title>PersonaFlow 控制器</title>
-<link rel="stylesheet" href="style.css?v=20260825-scan-layout">
+<link rel="stylesheet" href="style.css?v=20260825-upload">
 </head>
 <body>
 <div id="app">
@@ -59,8 +59,12 @@
     </div>
     <div class="foot">
       <button class="btn-primary" id="btn-capture">拍照</button>
+      <button class="btn-ghost" id="btn-upload">上傳照片</button>
       <button class="btn-ghost" id="btn-scan-back">改用捏臉</button>
     </div>
+    <!-- capture 屬性刻意不加：加上去在手機會直接開相機，等於複製左邊那顆按鈕；
+         這裡要的是從相簿挑一張既有的照片。 -->
+    <input type="file" id="file-input" accept="image/*" hidden>
   </section>
 
   <!-- ── 捏臉流程（3 步）────────────────────────────────── -->
@@ -234,6 +238,6 @@
 <!-- nipplejs 由本機 node_modules 直出，不走 CDN（現場網路不穩時仍可載入） -->
 
 <script src="/vendor/nipplejs.js"></script>
-<script type="module" src="app.js?v=20260825-scan-layout"></script>
+<script type="module" src="app.js?v=20260825-upload"></script>
 </body>
 </html>

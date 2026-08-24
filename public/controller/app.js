@@ -236,6 +236,41 @@ function waitForVideo(video, timeoutMs = 4000) {
   });
 }
 
+/** 與代理層的 MAX_PHOTO_BYTES 一致；超過就會被 413 擋掉，不如先說 */
+const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * 把上傳的照片縮到與拍照相同的尺寸。
+ *
+ * 解不開時回傳 null 而不是拋錯 —— 最常見的情況是 iPhone 的 HEIC，
+ * Chrome 與 Firefox 都無法解碼，但後端有 pillow-heif 解得開。
+ * 那時直接把原檔送出去，讓後端處理，而不是擋下一張其實可用的照片。
+ */
+function downscaleDataUrl(dataUrl, maxEdge, quality) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.naturalWidth * scale);
+      canvas.height = Math.round(img.naturalHeight * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
 /**
  * 讓參考圈貼齊影片實際顯示的矩形。
  *
@@ -364,6 +399,22 @@ function startPreviewLoop() {
   previewTimer = setInterval(previewTick, PREVIEW_INTERVAL_MS);
 }
 
+/**
+ * 相機用不了時，留在拍攝頁的純上傳模式。
+ *
+ * 原本這兩種情況（非安全情境、權限被拒）都直接跳去捏臉 —— 但上傳按鈕就在
+ * 拍攝頁上，等於在最需要它的時候把它藏起來。捏臉沒有被拿掉，「改用捏臉」
+ * 仍然在同一排。
+ */
+function showScanUploadOnly(reason) {
+  stopScanStream();
+  showScreen('scan');
+  document.querySelector('.scan-stage')?.classList.add('upload-only');
+  $('#btn-capture').disabled = true;
+  $('#scan-guide-text').textContent = `${reason}可以改上傳一張全身照片，或改用捏臉。`;
+  $('#scan-lights').replaceChildren();
+}
+
 function fallbackToBuilder(message) {
   stopScanStream();
   if (message) showToast(message);
@@ -380,11 +431,13 @@ $('#btn-scan').addEventListener('click', async () => {
   // getUserMedia 要求安全情境。場館用 http://192.168.x.x 時瀏覽器會直接
   // 拒絕，且錯誤訊息相當隱晦 —— 這裡先明講，免得現場以為是相機壞了。
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-    fallbackToBuilder('這個網址無法使用相機（需要 HTTPS），先用捏臉進場。');
+    showScanUploadOnly('這個網址無法使用相機（需要 HTTPS）。');
     return;
   }
 
   showScreen('scan');
+  document.querySelector('.scan-stage')?.classList.remove('upload-only');
+  $('#btn-capture').disabled = false;
   $('#scan-overlay').hidden = true;
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
@@ -402,7 +455,7 @@ $('#btn-scan').addEventListener('click', async () => {
     layoutStencil();
     startPreviewLoop();
   } catch {
-    fallbackToBuilder('沒有取得相機權限，先用捏臉進場。');
+    showScanUploadOnly('沒有取得相機權限。');
   }
 });
 
@@ -415,14 +468,21 @@ async function doCapture() {
   // 生圖模型看到的解析度並不會因此提升。
   const image = grabFrame(1280, 0.85);
   if (!image) return;
-  capturing = true;
+  // sessionId：預覽期間跨影格量到的身高比快門那一瞬間的單張估計可信，
+  // 後端會優先採用它。上傳的照片沒有預覽階段，因此沒有這個。
+  await submitImage(image, previewSessionId, '正在生成你的角色…');
+}
 
-  // sessionId 帶給 /api/generate：預覽期間跨影格量到的身高比快門那一瞬間的
-  // 單張估計可信，後端會優先採用它。
-  const sessionId = previewSessionId;
+/**
+ * 把一張照片送去生成。拍照與上傳共用 —— 兩者的差別只有影像從哪裡來，
+ * 之後的等待、失敗降級與進場流程完全相同，沒有理由寫成兩份。
+ */
+async function submitImage(image, sessionId, statusText) {
+  if (capturing) return;
+  capturing = true;
   stopScanStream();
   $('#scan-overlay').hidden = false;
-  $('#scan-status').textContent = '正在生成你的角色…';
+  $('#scan-status').textContent = statusText;
 
   let body;
   try {
@@ -458,6 +518,36 @@ async function doCapture() {
 }
 
 $('#btn-capture').addEventListener('click', doCapture);
+
+// ── 上傳既有照片 ──────────────────────────────────────────
+//
+// 現場不是每個人都適合站到定點拍：抱小孩、坐輪椅、或單純不想被當場拍。
+// 上傳走的是同一條生成管線，只是少了站位引導那一段。
+$('#btn-upload').addEventListener('click', () => $('#file-input').click());
+
+$('#file-input').addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  // 先清空 value：同一個檔案連選兩次時 change 不會再觸發，
+  // 生成失敗想重試同一張照片就會像是按鈕壞了。
+  e.target.value = '';
+  if (!file || capturing) return;
+
+  if (file.size > MAX_UPLOAD_BYTES) {
+    showToast('這張照片太大了，請選一張小一點的。');
+    return;
+  }
+
+  const original = await readFileAsDataUrl(file);
+  if (!original) {
+    showToast('讀不到這個檔案，請換一張照片。');
+    return;
+  }
+
+  // 縮到與拍照相同的長邊。解不開多半是 HEIC —— 瀏覽器不會，但後端會，
+  // 因此原檔照送，不擋下一張其實可用的照片。
+  const scaled = await downscaleDataUrl(original, 1280, 0.85);
+  await submitImage(scaled ?? original, null, '正在辨識這張照片…');
+});
 
 // ── 捏臉 ──────────────────────────────────────────────────
 $('#btn-random').addEventListener('click', () => { config = randomAvatarConfig(); refresh(); });
