@@ -468,31 +468,111 @@ button:disabled { opacity: .35; border-style: dashed; }
 
 /* ── 掃描生成 ─────────────────────────────────────────────
    相機預覽填滿可用高度；overlay 蓋在上面顯示生成進度。 */
+/* 左右分欄：左邊取景、右邊隨階段替換 */
+.scan-split {
+  flex: 1;
+  display: flex;
+  gap: 16px;
+  min-height: 0;
+}
+
 .scan-stage {
   position: relative;
-  flex: 1;
-  margin: 0 16px;
+  /* 9:16 直式 —— 必須與相機原生方向、以及送出前的裁切比例一致。
+     原本這裡是撐滿寬度的橫框，object-fit:cover 會把直式畫面上下裁掉一大截，
+     於是「看到的取景」與「實際拍到的」對不上，使用者永遠拍不到全身。 */
+  aspect-ratio: 9 / 16;
+  height: 100%;
   border-radius: 14px;
   overflow: hidden;
   background: #1a1713;
+  flex: 0 0 auto;
 }
-.scan-stage video {
+.scan-stage video,
+.scan-stage img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* contain 而非 cover：寧可留黑邊，也不要裁掉使用者以為有拍到的部分 */
+  object-fit: contain;
   display: block;
 }
-#scan-overlay {
+#scan-guide {
+  position: absolute;
+  inset: 8% 0;
+  width: 100%;
+  height: 84%;
+  pointer-events: none;
+}
+#scan-guide[hidden] { display: none; }
+
+#countdown-display {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(26, 23, 19, 0.82);
-  color: #FAF8F5;
-  text-align: center;
-  padding: 24px;
+  font-size: clamp(64px, 18vh, 140px);
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, .5);
 }
-#scan-overlay[hidden] { display: none; }
+#countdown-display[hidden] { display: none; }
+
+/* 右欄 */
+.scan-side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.scan-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.scan-panel[hidden] { display: none; }
+.scan-panel h1 { margin: 0; font-size: 26px; }
+.scan-panel .foot { margin-top: auto; padding-top: 8px; }
+
+.tips {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+.tips b { color: var(--ink); }
+
+.bar {
+  height: 8px;
+  border-radius: 99px;
+  background: rgba(47, 42, 38, .12);
+  overflow: hidden;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 99px;
+  background: var(--ink);
+  transition: width .4s linear;
+}
+
+/* 直向手機：左右並排會讓兩邊都太窄，改成上下堆疊 */
+@media (max-aspect-ratio: 1/1) {
+  .scan-split { flex-direction: column; }
+  .scan-stage {
+    height: auto;
+    width: auto;
+    max-height: 58vh;
+    margin: 0 auto;
+  }
+  .scan-side { flex: 0 0 auto; justify-content: flex-start; }
+  .scan-panel h1 { font-size: 22px; }
+}
 
 #reconnect-overlay {
   position: fixed;

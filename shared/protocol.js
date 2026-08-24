@@ -32,6 +32,8 @@ export const EV = {
   HOST_KICK: 'HOST_KICK',                     // Host → Server：踢除參與者
   HOST_TAKE_PHOTO: 'HOST_TAKE_PHOTO',         // Host → Server：拍大合照（定位→合成）
   HOST_PHOTO_STATE: 'HOST_PHOTO_STATE',       // Server → Host：合照進度與結果
+  SCREEN_CAPTURE_REQ: 'SCREEN_CAPTURE_REQ',   // Server → Screen：請大螢幕交出當下畫面
+  SCREEN_CAPTURE: 'SCREEN_CAPTURE',           // Screen → Server：回傳截圖（合照底圖）
 
   // ── 任務生命週期（規格 v3.0 §03）──────────────────────
   MISSION_ANNOUNCE: 'MISSION_ANNOUNCE',       // Server → All：任務公告

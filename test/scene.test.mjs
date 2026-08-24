@@ -12,7 +12,7 @@ import { Stage } from '../server/state.js';
 import { SocialGraph } from '../server/socialgraph.js';
 import { OBSTACLES, PROPS, ZONES } from '../shared/scene.js';
 import { STAGE } from '../shared/protocol.js';
-import { BOIDS } from '../server/config.js';
+import { BOIDS, MAX_AGENTS } from '../server/config.js';
 
 const AVATAR = {
   head: 'head_short_01', face: 'face_smile_01', body: 'body_tee_01',
@@ -94,7 +94,9 @@ describe('剛體避障', () => {
   test('漫遊中的角色長時間不會卡在任何道具裡', () => {
     const stage = new Stage();
     const agents = [];
-    for (let i = 0; i < 12; i++) {
+    // 綁在 MAX_AGENTS 上而非寫死：這裡驗的是「角色不會卡進道具」，
+    // 具體幾個不重要，但超過場域上限時 addAgent 會回 null。
+    for (let i = 0; i < MAX_AGENTS; i++) {
       agents.push(makeAgent(stage, {
         x: 200 + (i % 4) * 450,
         y: 200 + Math.floor(i / 4) * 320,

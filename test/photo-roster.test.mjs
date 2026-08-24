@@ -20,9 +20,9 @@ const BUILDER_AVATAR = {
 const CV_AVATAR = {
   source: 'CV',
   textures: {
-    head: '/assets/gen/aid1/head.png',
-    torso: '/assets/gen/aid1/torso.png',
-    legs: '/assets/gen/aid1/legs.png',
+    head: '/assets/gen/aid1/head.webp',
+    torso: '/assets/gen/aid1/torso.webp',
+    legs: '/assets/gen/aid1/legs.webp',
   },
   fallbackColors: {
     hair: '#4A2C1A', skin: '#F4C08A', torso: '#8FA05E', legs: '#B7A98A',
@@ -37,7 +37,7 @@ function photoRoster(stage) {
     const avatar = meta.avatar || {};
     const out = { id: s.id, name: meta.name || '', x: s.x, y: s.y };
     const head = avatar.textures?.head;
-    if (typeof head === 'string') out.fullPng = head.replace(/\/head\.png$/, '/full.png');
+    if (typeof head === 'string') out.fullPng = head.replace(/\/head\.webp$/, '/full.webp');
     if (avatar.fallbackColors) {
       out.outfit = {
         inner_color: avatar.fallbackColors.torso,
@@ -57,17 +57,17 @@ describe('大合照名冊', () => {
     const stage = new Stage();
     stage.addAgent({ name: '掃描客', avatar: CV_AVATAR });
     const [row] = photoRoster(stage);
-    assert.equal(row.fullPng, '/assets/gen/aid1/full.png');
+    assert.equal(row.fullPng, '/assets/gen/aid1/full.webp');
   });
 
-  test('只替換結尾的 head.png，不動路徑中的其他片段', () => {
+  test('只替換結尾的 head.webp，不動路徑中的其他片段', () => {
     const stage = new Stage();
     stage.addAgent({
       name: 'x',
-      avatar: { ...CV_AVATAR, textures: { ...CV_AVATAR.textures, head: '/assets/gen/head/head.png' } },
+      avatar: { ...CV_AVATAR, textures: { ...CV_AVATAR.textures, head: '/assets/gen/head/head.webp' } },
     });
     const [row] = photoRoster(stage);
-    assert.equal(row.fullPng, '/assets/gen/head/full.png', '目錄名叫 head 時不可被誤改');
+    assert.equal(row.fullPng, '/assets/gen/head/full.webp', '目錄名叫 head 時不可被誤改');
   });
 
   test('捏臉角色沒有生成圖，但帶著色碼供程式化繪製', () => {

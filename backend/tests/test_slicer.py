@@ -145,8 +145,8 @@ class TestSliceCharacter:
         assert out["ok"] is True
         assert out["assetId"] == asset_id
         for part in PARTS:
-            assert os.path.exists(tmp_path / asset_id / f"{part}.png")
-            assert out["textures"][part] == f"/assets/gen/{asset_id}/{part}.png"
+            assert os.path.exists(tmp_path / asset_id / f"{part}.webp")
+            assert out["textures"][part] == f"/assets/gen/{asset_id}/{part}.webp"
         assert set(out["fallbackColors"]) == {"skin", "hair", "torso", "legs"}
 
     def test_accepts_data_uri_prefix(self, figure, tmp_path):
@@ -157,11 +157,11 @@ class TestSliceCharacter:
     def test_written_files_are_valid_pngs_with_alpha(self, figure, tmp_path):
         asset_id = "c" * 32
         slice_character(to_b64(figure), str(tmp_path), asset_id)
-        img = PILImage.open(tmp_path / asset_id / "head.png")
+        img = PILImage.open(tmp_path / asset_id / "head.webp")
         assert img.mode == "RGBA"
 
 
-class TestFullPngForGroupPhoto:
+class TestFullImageForGroupPhoto:
     """大合照在 Python 端合成，需要未切片的全身圖。
 
     只留三張切片的話，Python 就得依 CUTS 比例把它們疊回去 —— 等於把
@@ -169,26 +169,26 @@ class TestFullPngForGroupPhoto:
     警告的跨語言耦合（對不上時角色會脖子錯位，兩邊都不會報錯）。
     """
 
-    def test_full_png_is_written(self, tmp_path):
+    def test_full_image_is_written(self, tmp_path):
         res = slice_character(to_b64(make_figure()), str(tmp_path), "aid")
-        assert (tmp_path / "aid" / "full.png").is_file()
+        assert (tmp_path / "aid" / "full.webp").is_file()
 
-    def test_full_png_url_is_returned(self, tmp_path):
+    def test_full_image_url_is_returned(self, tmp_path):
         res = slice_character(to_b64(make_figure()), str(tmp_path), "aid")
-        assert res["fullPng"] == "/assets/gen/aid/full.png"
+        assert res["fullPng"] == "/assets/gen/aid/full.webp"
 
-    def test_full_png_is_not_a_slice(self, tmp_path):
+    def test_full_image_is_not_a_slice(self, tmp_path):
         """全身圖必須比任一切片高，否則就是存錯了東西。"""
         slice_character(to_b64(make_figure()), str(tmp_path), "aid")
         d = tmp_path / "aid"
-        full_h = PILImage.open(d / "full.png").height
+        full_h = PILImage.open(d / "full.webp").height
         for part in PARTS:
-            assert full_h > PILImage.open(d / f"{part}.png").height
+            assert full_h > PILImage.open(d / f"{part}.webp").height
 
-    def test_full_png_keeps_transparency(self, tmp_path):
+    def test_full_image_keeps_transparency(self, tmp_path):
         """去背結果不能在存檔時被壓成不透明，否則合照會有白方塊。"""
         slice_character(to_b64(make_figure()), str(tmp_path), "aid")
-        img = PILImage.open(tmp_path / "aid" / "full.png")
+        img = PILImage.open(tmp_path / "aid" / "full.webp")
         assert img.mode == "RGBA"
 
 

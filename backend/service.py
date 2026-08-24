@@ -161,6 +161,7 @@ def compose():
             chars,
             photo_url_base=payload.get("photoUrlBase") or "",
             title=payload.get("title") or "PersonaFlow 集體記憶",
+            backdrop=payload.get("backdrop"),
         )
         if not (isinstance(res, dict) and res.get("ok")):
             return jsonify({"ok": False, "error": "compose_failed"})
@@ -173,7 +174,7 @@ def compose():
 
 
 def _asset_path(url):
-    """把 /assets/gen/<id>/full.png 轉成本機絕對路徑。
+    """把 /assets/gen/<id>/full.webp 轉成本機絕對路徑。
 
     只接受落在 ASSET_DIR 底下的結果：這個值來自互動層轉發的名冊，
     不做邊界檢查等於讓上游的任意字串決定要讀哪個檔案。

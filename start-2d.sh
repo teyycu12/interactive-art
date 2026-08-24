@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────
-# PersonaFlow — 整合版一鍵啟動（主線）
+# PersonaFlow — 2D 備援版一鍵啟動
 #
-#   start.sh      本檔　：Node 互動層 :3000 + 生成服務 :5055
-#   start-2d.sh   備援版：Flask :5001 + 前端靜態伺服器 :8080
+# ⚠ 這不是主線。主線（整合版）用 start.sh。
 #
-# 兩套系統並存，埠號刻意錯開，可以同時啟動（見 CLAUDE.md）。
+#   start.sh      整合版：Node 互動層 :3000 + 生成服務 :5055
+#   start-2d.sh   本檔　：Flask :5001 + 前端靜態伺服器 :8080
 #
-# 用法：bash start.sh              （生成服務 + 互動伺服器）
-#       bash start.sh --vision     （僅生成服務）
-#       bash start.sh --node       （僅互動伺服器）
+# 備援版是「3D 若來不及，仍能完成校內實測」的保險（見 CLAUDE.md）。
+# 它的整套測試都還在跑，請勿刪除 backend/app.py 與 frontend/。
+# 兩者的埠號刻意錯開，可以同時啟動。
+#
+# 用法：bash start-2d.sh              （後端 + 前端）
+#       bash start-2d.sh --backend    （僅後端）
+#       bash start-2d.sh --frontend   （僅前端）
 # ─────────────────────────────────────────────────────────────────
 set -e
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
-SERVER_DIR="$ROOT_DIR/server"
-VISION_PORT=5055
-NODE_PORT=3000
+FRONTEND_DIR="$ROOT_DIR/frontend"
+BACKEND_PORT=5001
+FRONTEND_PORT=8080
 
 # 偵測本機 LAN IP（方便現場用手機/平板連入）
 LAN_IP=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' || echo "?")
@@ -45,35 +49,30 @@ check_env() {
   fi
 }
 
-start_vision() {
-  echo -e "${GREEN}▶ 啟動 AI 生成服務${NC} (Python Flask on :${VISION_PORT})"
-  echo -e "  模型切換請至 .env 設定 OPENAI_API_KEY"
+start_backend() {
+  echo -e "${GREEN}▶ 啟動後端${NC} (Flask-SocketIO on :${BACKEND_PORT})"
+  echo -e "  LAN 連線位址：${BOLD}http://${LAN_IP}:${BACKEND_PORT}${NC}"
   echo ""
-  
-  if [ -d "$ROOT_DIR/venv" ]; then
-    source "$ROOT_DIR/venv/bin/activate"
-  fi
-  
-  python3 "$BACKEND_DIR/service.py" &
-  VISION_PID=$!
-  echo "[PID: $VISION_PID]"
+  python3 "$BACKEND_DIR/app.py" &
+  BACKEND_PID=$!
+  echo "[PID: $BACKEND_PID]"
 }
 
-start_node() {
-  echo -e "${GREEN}▶ 啟動 Node.js 互動伺服器${NC} (http://0.0.0.0:${NODE_PORT})"
-  echo -e "  手機控制器：${BOLD}http://${LAN_IP}:${NODE_PORT}/controller/index.html${NC}"
-  echo -e "  3D 投影牆：${BOLD}http://${LAN_IP}:${NODE_PORT}/screen/index.html${NC}"
+start_frontend() {
+  echo -e "${GREEN}▶ 啟動前端靜態伺服器${NC} (http://0.0.0.0:${FRONTEND_PORT})"
+  echo -e "  互動端：${BOLD}http://${LAN_IP}:${FRONTEND_PORT}/index.html${NC}"
+  echo -e "  投影牆：${BOLD}http://${LAN_IP}:${FRONTEND_PORT}/projection.html${NC}"
   echo ""
-  node "$SERVER_DIR/index.js" &
-  NODE_PID=$!
-  echo "[PID: $NODE_PID]"
+  python3 -m http.server ${FRONTEND_PORT} --directory "$FRONTEND_DIR" --bind 0.0.0.0 &
+  FRONTEND_PID=$!
+  echo "[PID: $FRONTEND_PID]"
 }
 
 cleanup() {
   echo ""
   echo -e "${RED}正在關閉...${NC}"
-  [ -n "$VISION_PID" ] && kill "$VISION_PID" 2>/dev/null
-  [ -n "$NODE_PID" ] && kill "$NODE_PID" 2>/dev/null
+  [ -n "$BACKEND_PID" ]  && kill "$BACKEND_PID"  2>/dev/null
+  [ -n "$FRONTEND_PID" ] && kill "$FRONTEND_PID" 2>/dev/null
   wait 2>/dev/null
   echo "已關閉。"
 }
@@ -84,16 +83,16 @@ banner
 check_env
 
 case "${1:-all}" in
-  --vision)
-    start_vision
+  --backend)
+    start_backend
     ;;
-  --node)
-    start_node
+  --frontend)
+    start_frontend
     ;;
   *)
-    start_vision
+    start_backend
     sleep 1
-    start_node
+    start_frontend
     ;;
 esac
 

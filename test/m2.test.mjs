@@ -15,7 +15,7 @@ import { stepAgent } from '../server/arbiter.js';
 import { Stage } from '../server/state.js';
 import {
   IDLE_THRESHOLD_MS, ALPHA_RAMP_UP_MS, ALPHA_DECAY_MS,
-  MAX_SPEED, BOIDS,
+  MAX_SPEED, BOIDS, MAX_AGENTS,
 } from '../server/config.js';
 import { STAGE } from '../shared/protocol.js';
 
@@ -220,7 +220,10 @@ describe('M2 Boids 群體動力學', () => {
     const stage = new Stage();
     const t0 = 1_000_000;
     const agents = [];
-    for (let i = 0; i < 12; i++) {
+    // 綁在 MAX_AGENTS 上而非寫死：這裡要的是「一群角色互相影響」，
+    // 具體幾個不重要，但超過場域上限時 addAgent 會回 null（曾寫死 12，
+    // 上限降到 10 時整組測試以 TypeError 失敗）。
+    for (let i = 0; i < MAX_AGENTS; i++) {
       agents.push(makeAgent(stage, {
         x: 900 + (i % 4) * 30, y: 500 + Math.floor(i / 4) * 30, lastInputAt: 0,
       }));

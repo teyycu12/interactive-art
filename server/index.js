@@ -391,6 +391,42 @@ function handleRequest(req, res) {
     return;
   }
 
+  // 大螢幕上傳合照底圖。走 HTTP 而非 WebSocket：一張 1080p 截圖遠大於
+  // MAX_MESSAGE_BYTES(4KB)，而那個上限是擋惡意客戶端灌爆記憶體用的，
+  // 不該為了單一功能對所有連線放寬。
+  if (urlPath === '/api/screen-capture' && req.method === 'POST') {
+    const chunks = [];
+    let size = 0;
+    let aborted = false;
+    req.on('data', (chunk) => {
+      if (aborted) return;
+      size += chunk.length;
+      if (size > MAX_PHOTO_BYTES) {
+        aborted = true;
+        sendJSON(res, 413, { ok: false, error: 'capture_too_large' });
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (aborted) return;
+      let msg;
+      try { msg = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { sendJSON(res, 400, { ok: false, error: 'bad_json' }); return; }
+
+      const pending = pendingCaptures.get(msg?.requestId);
+      // requestId 認不得就丟掉：它是伺服器剛剛才發出去的隨機值，
+      // 猜不中等於這不是我們要的那張截圖。
+      if (!pending) { sendJSON(res, 200, { ok: false, error: 'unknown_request' }); return; }
+      pendingCaptures.delete(msg.requestId);
+      clearTimeout(pending.timer);
+      pending.resolve(typeof msg.image === 'string' ? msg.image : null);
+      sendJSON(res, 200, { ok: true });
+    });
+    return;
+  }
+
   if (urlPath === '/api/generate') {
     proxyGenerate(req, res);
     return;
@@ -1253,6 +1289,35 @@ let photoInFlight = false;
 /** 面向鏡頭（畫面下方＝觀眾席）的朝向角 */
 const FACING_CAMERA = Math.PI / 2;
 
+// 大螢幕交回的截圖暫存區：requestId → { resolve, timer }
+// 只在一次合照流程中短暫存在，用完即刪。
+const pendingCaptures = new Map();
+const CAPTURE_TIMEOUT_MS = 8000;
+
+/**
+ * 向大螢幕要一張當下畫面。
+ *
+ * 為什麼是「跟大螢幕要」而不是伺服器自己畫：3D 房間跑在瀏覽器的 WebGL 上，
+ * 伺服器端沒有等價的渲染路徑。要在 Node 端重畫一次，等於把 RoomScene、
+ * 光照、GLTF 載入與角色貼圖疊合全部再實作一遍 —— 而且兩份必然會漂移，
+ * 合照裡的場景會跟觀眾前一秒看到的不一樣（arbiter.js 的註解警告過同一件事）。
+ *
+ * 沒有大螢幕連線時回 null，呼叫端會退回 Python 端的舞台底圖。
+ */
+const requestScreenCapture = () => new Promise((resolve) => {
+  const screen = [...screens].find((ws) => ws.readyState === ws.OPEN);
+  if (!screen) { resolve(null); return; }
+
+  const requestId = randomBytes(8).toString('hex');
+  const timer = setTimeout(() => {
+    pendingCaptures.delete(requestId);
+    resolve(null);          // 逾時就用沒有底圖的版本，不要卡住現場
+  }, CAPTURE_TIMEOUT_MS);
+
+  pendingCaptures.set(requestId, { resolve, timer });
+  send(screen, EV.SCREEN_CAPTURE_REQ, { requestId });
+});
+
 const photoRoster = () => {
   const byId = new Map(stage.roster().map((a) => [a.id, a]));
   return stage.snapshot().map((s) => {
@@ -1263,7 +1328,7 @@ const photoRoster = () => {
     // avatar 白名單只保留 textures / fallbackColors（shared/avatars.js），
     // fullPng 不在其中，因此不能直接取。
     const head = avatar.textures?.head;
-    if (typeof head === 'string') out.fullPng = head.replace(/\/head\.png$/, '/full.png');
+    if (typeof head === 'string') out.fullPng = head.replace(/\/head\.webp$/, '/full.webp');
     // 捏臉角色沒有生成圖，交給 photo_composer 程式化繪製樂高人偶
     if (avatar.fallbackColors) {
       out.outfit = {
@@ -1279,9 +1344,10 @@ const photoRoster = () => {
   });
 };
 
-const requestCompose = (characters) => new Promise((resolve) => {
+const requestCompose = (characters, backdrop) => new Promise((resolve) => {
   const body = Buffer.from(JSON.stringify({
     characters,
+    backdrop,
     photoUrlBase: `http://${VISION_HOST}:${VISION_PORT}/photos`,
   }), 'utf8');
   const up = http.request({
@@ -1329,8 +1395,11 @@ const takeGroupPhoto = async (ws) => {
       await new Promise((r) => setTimeout(r, PHOTO_POLL_MS));
     }
 
+    // 先跟大螢幕要一張當下畫面當底圖，角色與 3D 房間都已經在上面了。
+    // 拿不到（沒有大螢幕連線、逾時）就傳 null，Python 端會退回自己畫的舞台。
+    const backdrop = await requestScreenCapture();
     send(ws, EV.HOST_PHOTO_STATE, { phase: 'COMPOSING' });
-    const res = await requestCompose(photoRoster());
+    const res = await requestCompose(photoRoster(), backdrop);
     if (res && res.ok) {
       console.log(`[photo] 完成　${res.character_count} 人　${res.photo_id}`);
       send(ws, EV.HOST_PHOTO_STATE, {

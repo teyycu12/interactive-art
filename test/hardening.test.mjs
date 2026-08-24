@@ -54,10 +54,12 @@ describe('重連憑證', () => {
   });
 
   test('每個角色的憑證互不相同且長度足夠', () => {
+    // 樣本數綁在 MAX_AGENTS 上而非寫死：這個測試驗的是憑證唯一性，
+    // 不該因為場域人數上限調整就連帶失敗（曾寫死 50，上限降到 10 時整組壞掉）。
     const stage = new Stage();
     const tokens = new Set();
-    for (let i = 0; i < 50; i++) tokens.add(add(stage).rejoinToken);
-    assert.equal(tokens.size, 50, '憑證不應重複');
+    for (let i = 0; i < MAX_AGENTS; i++) tokens.add(add(stage).rejoinToken);
+    assert.equal(tokens.size, MAX_AGENTS, '憑證不應重複');
     for (const t of tokens) assert.equal(t.length, 32, '應為 16 bytes 的 hex');
   });
 

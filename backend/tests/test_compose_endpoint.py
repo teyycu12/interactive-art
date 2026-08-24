@@ -38,24 +38,24 @@ class TestAssetPath:
     @pytest.mark.parametrize("bad", [
         None, "", 123, [],
         "/etc/passwd",                              # 絕對路徑
-        "assets/gen/x/full.png",                    # 缺前導斜線
+        "assets/gen/x/full.webp",                    # 缺前導斜線
         "/assets/gen/../../../etc/passwd",          # 相對路徑逃逸
         "/assets/gen/../../.env",
-        "/other/gen/x/full.png",                    # 前綴不符
+        "/other/gen/x/full.webp",                    # 前綴不符
     ])
     def test_rejects_unsafe_or_malformed(self, bad):
         assert service._asset_path(bad) is None
 
     def test_rejects_path_that_does_not_exist(self):
-        assert service._asset_path("/assets/gen/nope/full.png") is None
+        assert service._asset_path("/assets/gen/nope/full.webp") is None
 
     def test_accepts_real_file_under_asset_dir(self, tmp_path, monkeypatch):
         monkeypatch.setattr(service, "ASSET_DIR", str(tmp_path))
         d = tmp_path / "abc123"
         d.mkdir()
-        (d / "full.png").write_bytes(b"x")
-        got = service._asset_path("/assets/gen/abc123/full.png")
-        assert got == str(d / "full.png")
+        (d / "full.webp").write_bytes(b"x")
+        got = service._asset_path("/assets/gen/abc123/full.webp")
+        assert got == str(d / "full.webp")
 
 
 class TestComposeEndpoint:
@@ -107,7 +107,7 @@ class TestComposeEndpoint:
         d.mkdir()
         arr = np.zeros((80, 40, 4), dtype=np.uint8)
         arr[:, :] = (200, 50, 50, 255)
-        PILImage.fromarray(arr, "RGBA").save(d / "full.png")
+        PILImage.fromarray(arr, "RGBA").save(d / "full.webp")
 
         seen = {}
         def spy(chars, **kw):
@@ -117,5 +117,5 @@ class TestComposeEndpoint:
         monkeypatch.setattr(service, "compose_group_photo", spy)
 
         client.post("/compose", json={
-            "characters": [_char(10, 10, fullPng="/assets/gen/aid/full.png")]})
-        assert seen["path"] == str(d / "full.png")
+            "characters": [_char(10, 10, fullPng="/assets/gen/aid/full.webp")]})
+        assert seen["path"] == str(d / "full.webp")

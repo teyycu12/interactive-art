@@ -243,6 +243,19 @@ function connect() {
       case EV.SCORE_BOARD:
         renderRanks(msg.leaderboard ?? []);
         break;
+
+      case EV.SCREEN_CAPTURE_REQ:
+        // 大合照的底圖只能由大螢幕自己提供 —— 3D 場景在 WebGL 畫布上，
+        // 伺服器端沒有等價的渲染路徑（見 server/index.js 的 takeGroupPhoto）。
+        //
+        // 走 HTTP 而非這條 WebSocket：截圖遠大於單則訊息上限（4KB），
+        // 那個上限是擋惡意客戶端用的，不該為了合照對所有連線放寬。
+        fetch('/api/screen-capture', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId: msg.requestId, image: captureStageFrame() }),
+        }).catch(() => { /* 失敗就讓伺服器那邊逾時，退回無底圖版本 */ });
+        break;
     }
   });
 
@@ -298,6 +311,21 @@ const toScreen = (v) => {
   return roomScene ? roomScene.projectToScreen(v.x, v.y) : { x: 0, y: 0 };
 };
 
+// 角色在 3D 世界裡的身高（房間牆高 9，成人約佔五分之一多一點）
+const CHARACTER_WORLD_HEIGHT = 2.1;
+
+/**
+ * 角色在該座標處應有的螢幕高度。
+ *
+ * 走 3D 投影而非固定值：同一個人走到房間深處就該變小，走近就該變大。
+ * roomScene 還沒建好時退回原本的等比縮放，畫面不會空掉。
+ */
+function characterHeightAt(v) {
+  if (!roomScene || !v) return CHARACTER_HEIGHT * scale;
+  const px = roomScene.scaleAt(v.x, v.y, CHARACTER_WORLD_HEIGHT);
+  return px > 1 ? px : CHARACTER_HEIGHT * scale;
+}
+
 function drawDebugOverlay(a, pos) {
   // 剛體避障半徑
   ctx.beginPath();
@@ -322,6 +350,34 @@ function drawDebugOverlay(a, pos) {
   ctx.strokeStyle = a.mode === 'ACTIVE' ? COLOR_ACTIVE : COLOR_SWARM;
   ctx.lineWidth = 2.5 * scale;
   ctx.stroke();
+}
+
+/**
+ * 把當下的大螢幕畫面截成一張 PNG（大合照的底圖）。
+ *
+ * 畫面實際上是兩張獨立的畫布疊出來的：3D 房間在 WebGL 畫布、角色在 2D
+ * 畫布，CSS 用 z-index 把它們疊在一起。截圖必須依同樣順序合成 ——
+ * 只截其中一張會得到「有房間沒有人」或「有人沒有房間」。
+ *
+ * 先強制 render 一次再讀：WebGL 的緩衝內容只在該幀有效，
+ * 不重畫就可能讀到上一幀甚至空白（配合 preserveDrawingBuffer）。
+ */
+function captureStageFrame() {
+  if (roomScene) roomScene.render();
+
+  const out = document.createElement('canvas');
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const octx = out.getContext('2d');
+
+  // 3D 房間在底層。WebGL 畫布的像素尺寸與 2D 畫布未必相同
+  // （setPixelRatio 上限 1.5，2D 用完整 dpr），因此明確拉伸到同一尺寸。
+  const gl = roomScene?.renderer?.domElement;
+  if (gl) octx.drawImage(gl, 0, 0, out.width, out.height);
+  // 角色與名牌在上層
+  octx.drawImage(canvas, 0, 0);
+
+  return out.toDataURL('image/png');
 }
 
 function render(now) {
@@ -355,10 +411,13 @@ function render(now) {
 
   // 依 Y 軸排序，讓視覺上較近（偏下）的角色蓋住較遠的（§6 風險 2）
   const sorted = [...latest].sort((p, q) => p.y - q.y);
-  const height = CHARACTER_HEIGHT * scale;
 
   for (const a of sorted) {
-    const pos = toScreen(view.get(a.id));
+    const v = view.get(a.id);
+    const pos = toScreen(v);
+    // 角色高度隨深度變化。房間最深處到最近處的相機距離差 2.45 倍，
+    // 固定高度會讓所有人畫得一樣大 —— 那是「貼紙浮在畫面上」的主因。
+    const height = characterHeightAt(v);
     const entry = roster.get(a.id);
 
     // 剛完成配對：向外擴散的環，讓觀眾把螢幕上的事件與
@@ -382,7 +441,8 @@ function render(now) {
     if (debug) drawDebugOverlay(a, pos);
 
     drawCharacter(ctx, a, pos, entry?.img, { time, maxSpeed: MAX_SPEED, height });
-    drawNameplate(ctx, pos, entry?.name ?? a.id, { fontSize: Math.max(11, 17 * scale) });
+    // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
+    drawNameplate(ctx, pos, entry?.name ?? a.id, { fontSize: Math.max(10, height * 0.12) });
     if (a.emote) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }

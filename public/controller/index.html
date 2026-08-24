@@ -32,21 +32,78 @@
   </section>
 
   <!-- ── 掃描生成（拍照 → AI 生圖 → 貼圖）──────────────── -->
+  <!--
+    左右分欄：左邊是直式取景（與相機原生方向、以及最終送出的 9:16 裁切一致），
+    右邊隨階段替換內容。三個階段共用同一個外框，避免畫面整塊跳動。
+    直向手機會改成上下堆疊（見 style.css 的 media query）。
+  -->
   <section id="scan" hidden>
-    <div class="builder-head">
-      <h1>拍一張照片</h1>
-      <span class="sub" id="scan-hint">站遠一點，讓全身入鏡</span>
-    </div>
-    <div class="scan-stage">
-      <video id="scan-video" playsinline muted autoplay></video>
-      <div id="countdown-display" hidden style="position:absolute; inset:0; display:grid; place-items:center; font-size:120px; font-weight:900; color:white; text-shadow: 0 4px 24px rgba(0,0,0,0.5);"></div>
-      <div id="scan-overlay" hidden>
-        <p id="scan-status">正在生成你的角色…</p>
+    <div class="scan-split">
+
+      <!-- 左：取景 -->
+      <div class="scan-stage">
+        <video id="scan-video" playsinline muted autoplay></video>
+        <img id="scan-result" alt="生成的角色" hidden>
+        <!-- 人形輔助線：站到剛好填滿輪廓，全身就會入鏡 -->
+        <svg id="scan-guide" viewBox="0 0 90 160" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+          <g fill="none" stroke="rgba(255,255,255,.55)" stroke-width="2"
+             stroke-linecap="round" stroke-dasharray="5 4">
+            <circle cx="45" cy="26" r="13"/>
+            <path d="M45 39 v46"/>
+            <path d="M24 54 L45 45 L66 54"/>
+            <path d="M45 85 L31 132 M45 85 L59 132"/>
+          </g>
+        </svg>
+        <div id="countdown-display" hidden></div>
       </div>
-    </div>
-    <div class="foot">
-      <button class="btn-primary" id="btn-capture">拍照</button>
-      <button class="btn-ghost" id="btn-scan-back">改用捏臉</button>
+
+      <!-- 右：隨階段替換 -->
+      <div class="scan-side">
+
+        <!-- 階段 1：拍攝前的指引 -->
+        <div class="scan-panel" data-phase="aim">
+          <h1>拍一張照片</h1>
+          <p class="lede">照片會被轉譯成你的樂高角色。</p>
+          <ol class="tips">
+            <li><b>站遠 2–3 公尺</b>　對齊畫面裡的人形輪廓</li>
+            <li><b>光線充足</b>　背光或太暗會認不出服裝</li>
+            <li><b>單人入鏡</b>　背景乾淨一點更好</li>
+          </ol>
+          <div class="foot">
+            <button class="btn-primary" id="btn-capture">拍照</button>
+            <button class="btn-ghost" id="btn-scan-back">改用捏臉</button>
+          </div>
+        </div>
+
+        <!-- 階段 2：生成中 -->
+        <div class="scan-panel" data-phase="working" hidden>
+          <h1>生成中</h1>
+          <p class="lede" id="scan-status">正在分析服裝特徵…</p>
+          <div class="bar"><i id="scan-progress"></i></div>
+          <p class="hint" id="scan-elapsed">約需 25 秒</p>
+        </div>
+
+        <!-- 階段 3：完成，讓本人決定要不要用 -->
+        <div class="scan-panel" data-phase="done" hidden>
+          <h1>這是你的角色</h1>
+          <p class="lede">不滿意可以重拍一次。</p>
+          <div class="foot">
+            <button class="btn-primary" id="btn-accept">就是他，進場</button>
+            <button class="btn-ghost" id="btn-retake">重拍一次</button>
+          </div>
+        </div>
+
+        <!-- 階段 4：失敗。降級到捏臉是保底，但不該替使用者決定 -->
+        <div class="scan-panel" data-phase="failed" hidden>
+          <h1>沒能生成角色</h1>
+          <p class="lede" id="scan-error">再試一次通常就好了。</p>
+          <div class="foot">
+            <button class="btn-primary" id="btn-retry">重拍一次</button>
+            <button class="btn-ghost" id="btn-give-up">改用捏臉</button>
+          </div>
+        </div>
+
+      </div>
     </div>
   </section>
 

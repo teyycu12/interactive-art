@@ -372,6 +372,41 @@ def upload_photo(image_bytes: bytes, photo_id: str = "personaflow") -> Optional[
     )
 
 
+def _decode_backdrop(backdrop: Optional[str], width: int, height: int):
+    """把大螢幕交回的截圖解成畫布尺寸的底圖。
+
+    任何解不開的情況（None、格式壞掉、被截斷）都回 None，讓呼叫端安靜地
+    退回自畫舞台 —— 合照失敗對現場的代價，遠高於背景不是 3D 房間。
+    """
+    if not backdrop or not isinstance(backdrop, str) or Image is None:
+        return None
+    try:
+        raw = backdrop.split(",", 1)[1] if backdrop.startswith("data:image") else backdrop
+        img = Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
+        if img.size != (width, height):
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+        return img
+    except Exception as e:
+        print(f"[photo_composer] 底圖解碼失敗，改用自畫舞台：{e}")
+        return None
+
+
+def _draw_stage_backdrop(canvas, draw, width: int, height: int) -> None:
+    """自畫的夜幕舞台。2D 備援版、以及整合版拿不到截圖時的退路。"""
+    stage_y = int(height * 0.75)
+    for y in range(height):
+        ratio = y / height
+        draw.line(
+            [(0, y), (width, y)],
+            fill=(int(18 + ratio * 20), int(22 + ratio * 25), int(45 + ratio * 35), 255),
+        )
+    draw.polygon(
+        [(0, stage_y), (width, stage_y), (width, height), (0, height)],
+        fill=(12, 14, 25, 255),
+    )
+    draw.line([(0, stage_y), (width, stage_y)], fill=(80, 110, 180, 180), width=3)
+
+
 def _has_positions(characters: List[Dict[str, Any]]) -> bool:
     """名冊是否帶著場上座標。整合版會帶，2D 備援版不會。"""
     return any(
@@ -444,6 +479,7 @@ def compose_group_photo(
     height: int = 1080,
     title: str = "PersonaFlow · 集體記憶紀念大合照",
     photo_url_base: str = "http://127.0.0.1:5001/photos",
+    backdrop: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     合成大合照主入口。
@@ -459,27 +495,33 @@ def compose_group_photo(
     photo_id = f"photo_{timestamp}_{len(characters)}p_{uuid.uuid4().hex[:8]}"
     photo_url = f"{photo_url_base}/{photo_id}.png"
 
-    # 1. 建立高畫質背景畫布 (漸層質感夜幕展場風格)
-    canvas = Image.new("RGBA", (width, height), (20, 24, 40, 255))
-    draw = ImageDraw.Draw(canvas)
-
-    # 繪製舞臺地板與光暈
-    stage_y = int(height * 0.75)
-    for y in range(height):
-        # 垂直漸層
-        ratio = y / height
-        r = int(18 + ratio * 20)
-        g = int(22 + ratio * 25)
-        b = int(45 + ratio * 35)
-        draw.line([(0, y), (width, y)], fill=(r, g, b, 255))
-
-    # 地板網格/光照
-    draw.polygon([(0, stage_y), (width, stage_y), (width, height), (0, height)], fill=(12, 14, 25, 255))
-    draw.line([(0, stage_y), (width, stage_y)], fill=(80, 110, 180, 180), width=3)
+    # 1. 背景畫布
+    #
+    # 有 backdrop 時直接用大螢幕交回的那張畫面 —— 3D 房間與角色都已經在上面，
+    # 合照因此與觀眾當下看到的完全一致。這是唯一能保證兩者不漂移的做法：
+    # 在 Python 端重畫一次 3D 場景等於維護第二套渲染器。
+    #
+    # 沒有 backdrop（沒有大螢幕連線、截圖逾時）才退回自己畫的舞台，
+    # 那條路徑同時也是 2D 備援版在用的。
+    stage_canvas = _decode_backdrop(backdrop, width, height)
+    if stage_canvas is not None:
+        canvas = stage_canvas
+        draw = ImageDraw.Draw(canvas)
+        stage_y = int(height * 0.75)
+    else:
+        canvas = Image.new("RGBA", (width, height), (20, 24, 40, 255))
+        draw = ImageDraw.Draw(canvas)
+        _draw_stage_backdrop(canvas, draw, width, height)
+        stage_y = int(height * 0.75)
 
     # 2. 構圖排版
+    #
+    # 底圖若來自大螢幕，角色已經畫在上面了 —— 這裡再畫一次會出現兩組人。
+    # 因此只有走自畫舞台時才需要排版。
     total = len(characters)
-    if total == 0:
+    if stage_canvas is not None:
+        pass
+    elif total == 0:
         # 空合照提示
         draw.text((width // 2 - 150, height // 2), "目前尚無在場角色", fill=(200, 200, 200, 255), font=_cjk_font(28))
     elif _has_positions(characters):

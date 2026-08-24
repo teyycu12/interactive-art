@@ -15,7 +15,7 @@
 | 互動層 | `server/`（Node.js + ws） | `backend/app.py`（Flask + Socket.io） |
 | 前端 | `public/`（controller / screen / host） | `frontend/`（p5.js + PixiJS） |
 | 群聚 | `server/` 的 M2 α 仲裁 + Boids | `backend/swarm_logic.py` |
-| 啟動 | `npm start` + `python backend/service.py` | `bash start.sh` |
+| 啟動 | `bash start.sh` | `bash start-2d.sh` |
 
 備援版是「3D 若來不及，仍能完成實測」的保險，整套測試都還在跑，**請勿刪除**。
 
@@ -59,7 +59,7 @@
 │   ├── service.py          # ★ 角色資產生成 HTTP 服務（整合版用，只綁 127.0.0.1）
 │   ├── slicer.py           # ★ 生成圖正規化 + 切成 head/torso/legs 三張貼圖
 │   ├── validate_cuts.py    # ★ 切片比例穩定度驗證工具（計畫書 §3.3 驗收項）
-│   └── tests/              # 單元測試（170 個，pytest；conftest.py 提供 fixture）
+│   └── tests/              # 單元測試（225 個，pytest；conftest.py 提供 fixture）
 ├── /frontend
 │   ├── index.html          # 互動端主頁
 │   ├── projection.html     # 投影牆渲染（PixiJS）
@@ -83,13 +83,14 @@
 │   │   └── 3d/RoomScene.js # ★ Three.js 場景、燈光、透視投影 projectToScreen()
 │   ├── host/               # 主辦端控制台
 │   └── assets/gen/         # 生成貼圖落地處（gitignore，每場重新產生）
-├── /test                   # ★ Node 單元測試（188 個，node --test）
+├── /test                   # ★ Node 單元測試（198 個，node --test）
 ├── /scripts
-│   ├── e2e.mjs             # ★ 端對端測試（87 項，會自行啟動伺服器）
+│   ├── e2e.mjs             # ★ 端對端測試（93 項，會自行啟動伺服器）
 │   ├── make-cert.sh        # ★ 現場用 TLS 憑證產生
 │   └── scene-preview.mjs   # 場景離線預覽
 ├── /docs                   # 所有規格與設計文件（PRD、TechStack、INTERFACES、SPEC…）
-├── start.sh                # 2D 備援版一鍵啟動
+├── start.sh                # ★ 整合版一鍵啟動（主線）
+├── start-2d.sh             # 2D 備援版一鍵啟動
 ├── package.json            # ★ Node 相依與指令
 ├── requirements.txt        # 執行相依（mediapipe 已釘 <1.0，原因見下）
 └── requirements-dev.txt    # 測試相依（pytest）
@@ -199,7 +200,10 @@ gevent.exceptions.LoopExit: This operation would block forever
 npm install
 pip install -r requirements.txt requirements-dev.txt   # mediapipe 已釘 <1.0，見下方
 
-# 啟動：兩個行程
+# 啟動：一行帶起兩個行程
+bash start.sh                      # 生成服務 :5055 + 互動層 :3000
+
+# 或分別啟動（除錯時比較好看 log）
 npm start                          # 互動層，印出大螢幕/手機/主辦端三個網址
 python backend/service.py          # 角色生成服務（127.0.0.1:5055）
 
@@ -208,9 +212,9 @@ bash scripts/make-cert.sh
 TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start
 
 # 測試
-npm test                           # Node 單元測試（188）
-npm run test:e2e                   # 端對端，會自行啟動伺服器（87）
-cd backend && pytest tests/        # Python（170）
+npm test                           # Node 單元測試（198）
+npm run test:e2e                   # 端對端，會自行啟動伺服器（93）
+pytest backend/                    # Python（225）
 
 # 切片比例驗證（計畫書 §3.3 的 R1 驗收項）
 python backend/validate_cuts.py --sprites samples/ --sheet report.png
@@ -220,7 +224,7 @@ python backend/validate_cuts.py --photos photos/ --out samples/
 ### 2D 備援版
 
 ```bash
-bash start.sh                      # 後端 5001 + 前端 8080
+bash start-2d.sh                   # 後端 5001 + 前端 8080
 python backend/e2e_smoke.py        # 煙霧測試（需後端已啟動）
 node --test frontend/tests/        # 前端測試
 ```
@@ -246,7 +250,7 @@ node --test frontend/tests/        # 前端測試
 
 `CLIENT_JOIN` / `SCREEN_HELLO` / `HOST_AUTH` 三者互斥，已在 `server/index.js`
 加上守衛。拿掉任何一個都會讓 agent 的 `disconnectedAt` 永遠是 null，
-`AGENT_TTL` 不回收，反覆操作即可耗盡 120 人上限。端對端測試有回歸防護。
+`AGENT_TTL` 不回收，反覆操作即可耗盡 `MAX_AGENTS` 上限。端對端測試有回歸防護。
 
 ### frontend/ 必須維持 CommonJS
 
@@ -257,6 +261,20 @@ Node 會據此把**所有**子目錄的 `.js` 當成 ES module —— 但 `front
 
 `frontend/package.json` 只做一件事：把模組型別重新限定成 `commonjs`。
 **不要刪除它**，也不要在 `frontend/` 底下改用 `import`／`export`。
+
+### 場域人數上限刻意壓在 10
+
+`MAX_AGENTS = 10`（原本 120）。這是「少而精緻」的取捨：角色數降下來之後，
+每個人都負擔得起即時陰影、高解析度貼圖與後製效果，畫面質感遠勝過塞滿
+一百個扁平貼紙。3D 房間、bloom、vignette 都建立在這個前提上。
+
+**測試不要寫死角色數量**。曾有三處測試硬寫 12 / 50 個角色，上限降到 10 時
+`addAgent` 開始回傳 null，整組測試以 `TypeError: Cannot set properties of null`
+失敗 —— 而錯誤訊息完全看不出跟人數上限有關。需要「一群角色」時請用
+`MAX_AGENTS` 當迴圈上界。
+
+注意這是「同時在場」而非「總參與人數」：賓客關掉分頁後角色仍留在場上，
+要等 `AGENT_TTL_MS`（45 秒）才回收，現場輪替速度取決於那個值。
 
 ### 前端相依一律由 node_modules 直出，不走 CDN
 

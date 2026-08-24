@@ -2,10 +2,24 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
 import { STAGE } from '/shared/protocol.js';
 
 // ===== 房間尺寸 =====
-const RW = 36, RD = 28, WALL_H = 9;      // 房間寬(x)、深(z)、牆高
+// 房間尺寸（3D 世界單位）。
+//
+// 這組數字決定角色相對於空間的份量感。原本是 36×28×9 —— 那是一個大廳的
+// 尺度，角色只佔牆高的 23%，看起來像玩具散落在空地上。動森那種質感來自
+// 「角色相對大、空間相對緊湊」，因此縮到約一半。
+//
+// 場域邏輯座標（STAGE 1920×1080）與 Boids 物理完全不受影響：
+// logicTo3D() 只是把邏輯座標等比映射到這個範圍，改的是視覺尺度而非玩法。
+const RW = 17, RD = 13, WALL_H = 4.6;    // 房間寬(x)、深(z)、牆高
 const HALF_W = RW / 2, HALF_D = RD / 2;
 
 // 模型 URL
@@ -19,15 +33,25 @@ const PROP_URLS = {
 };
 
 // 光線預設
+// 光線預設。
+//
+// day 是展場的預設，調性參照動森：明亮、偏暖、陰影柔而不重。
+// 具體手法是「主光偏暖 + 天空光偏藍」—— 冷暖對比會讓白色牆面產生層次，
+// 全白光源則會讓整個房間看起來像沒打光的 3D 模型。
 const PRESETS = {
-  day:     { bg: 0xe9e2d6, sun: 0xffffff, sunI: 2.2, pos: [22, 26, 18], hemi: 1.0, hSky: 0xffffff, hGround: 0x9a9488, amb: 0.34, lamp: 0, exp: 1.0 },
+  day:     { bg: 0xf2ede1, sun: 0xfff2d6, sunI: 2.6, pos: [11, 13, 9], hemi: 1.25, hSky: 0xdceeff, hGround: 0xb8a98e, amb: 0.42, lamp: 0, exp: 1.08 },
   evening: { bg: 0xd8b892, sun: 0xffb066, sunI: 1.8, pos: [20, 12, 16], hemi: 0.6, hSky: 0xf3c58a, hGround: 0x5a4838, amb: 0.26, lamp: 1.2, exp: 1.0 },
   night:   { bg: 0x0f1420, sun: 0x4a5c92, sunI: 0.3, pos: [-16, 24, 14], hemi: 0.13, hSky: 0x2a3a5c, hGround: 0x0a0f16, amb: 0.05, lamp: 2.4, exp: 0.8 },
 };
 
 export class RoomScene {
   constructor(containerElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    // preserveDrawingBuffer：大合照要把這張 WebGL 畫布讀回來（見 screen.js
+    // 的 captureStageFrame）。WebGL 預設在每次 render 後就把緩衝丟掉，
+    // 少了這個旗標，toDataURL() 讀到的是一張全透明的圖 —— 而且不會報錯。
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true, alpha: true, preserveDrawingBuffer: true,
+    });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -37,7 +61,7 @@ export class RoomScene {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xe7e0d4);
-    this.scene.fog = new THREE.Fog(0xe7e0d4, 45, 130);
+    this.scene.fog = new THREE.Fog(0xe7e0d4, RD * 1.6, RD * 5.5);
 
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.05, 500);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -59,8 +83,44 @@ export class RoomScene {
     // 座標都算出 NaN，於是所有角色被畫到 NaN 像素，大螢幕整片空白。
     // 而且這個故障不會拋任何例外，console 完全乾淨。
     this.resetCamera();
+    this.setupComposer();
     this._resize();
     window.addEventListener('resize', () => this._resize());
+  }
+
+  /**
+   * 後製鏈：bloom 讓亮處溢光、vignette 把視線收進畫面中央。
+   *
+   * 這兩者是「遊戲畫面」和「3D 模型檢視器」最明顯的差別 —— 沒有後製的
+   * 渲染即使光影正確，看起來仍像預覽視窗。
+   *
+   * 可以整條關掉（見 setPostProcessing）：現場硬體尚未確定，效能不足時
+   * 退回直接渲染仍是完整畫面，只是少了溢光與暗角。
+   */
+  setupComposer() {
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+    // 閾值調高、強度壓低：動森那種明亮風格要的是窗邊與亮面的柔和溢光，
+    // 不是整個畫面糊成一片光暈。
+    this.bloom = new UnrealBloomPass(
+      new THREE.Vector2(innerWidth, innerHeight), 0.34, 0.85, 0.92);
+    this.composer.addPass(this.bloom);
+
+    this.vignette = new ShaderPass(VignetteShader);
+    this.vignette.uniforms.offset.value = 1.05;
+    this.vignette.uniforms.darkness.value = 1.12;
+    this.composer.addPass(this.vignette);
+
+    // OutputPass 負責色調映射與 sRGB 轉換。少了它，經過 composer 的畫面
+    // 會比直接渲染暗一階 —— 因為 renderer 的 toneMapping 只作用在最後一步。
+    this.composer.addPass(new OutputPass());
+    this.postEnabled = true;
+  }
+
+  /** 關閉後製退回直接渲染（效能不足時的降級路徑） */
+  setPostProcessing(on) {
+    this.postEnabled = !!on && !!this.composer;
   }
 
   setupLights() {
@@ -71,10 +131,10 @@ export class RoomScene {
     
     this.sun = new THREE.DirectionalLight(0xffffff, 2.2); 
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1024, 1024); 
-    this.sun.shadow.bias = -0.0004; 
+    this.sun.shadow.mapSize.set(2048, 2048); 
+    this.sun.shadow.bias = -0.0002; 
     this.sun.shadow.normalBias = 0.02; 
-    this.sun.shadow.radius = 4;
+    this.sun.shadow.radius = 3;
     const r = Math.max(RW, RD);
     this.sun.shadow.camera.left = -r; this.sun.shadow.camera.right = r; 
     this.sun.shadow.camera.top = r; this.sun.shadow.camera.bottom = -r;
@@ -112,30 +172,41 @@ export class RoomScene {
   }
 
   buildRoom() {
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(400, 400),
-      new THREE.MeshStandardMaterial({ map: this.noiseTex('#d8c8ad', 'rgba(120,95,60,A)', 40), roughness: 0.95, envMapIntensity: 0.3 }));
+    // 地板只比房間大一圈。原本是 400×400 的無邊平面 —— 房間尺度縮小後，
+    // 牆外那片地板會佔掉大半畫面，房間看起來像漂在荒野上的小盒子。
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(RW * 1.06, RD * 1.06),
+      new THREE.MeshStandardMaterial({ map: this.noiseTex('#d8c8ad', 'rgba(120,95,60,A)', 18), roughness: 0.95, envMapIntensity: 0.3 }));
     floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; this.scene.add(floor);
 
     const wallMat = new THREE.MeshStandardMaterial({ color: 0xcdd8c4, roughness: 0.95, envMapIntensity: 0.3 });
     const baseMat = new THREE.MeshStandardMaterial({ color: 0xf2efe8, roughness: 0.7, envMapIntensity: 0.3 });
     
-    const back = new THREE.Mesh(new THREE.BoxGeometry(RW, WALL_H, 0.4), wallMat);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(RW, WALL_H, 0.22), wallMat);
     back.position.set(0, WALL_H / 2, -HALF_D); back.receiveShadow = true; back.castShadow = true; this.scene.add(back);
     
-    const left = new THREE.Mesh(new THREE.BoxGeometry(0.4, WALL_H, RD), wallMat);
+    const left = new THREE.Mesh(new THREE.BoxGeometry(0.22, WALL_H, RD), wallMat);
     left.position.set(-HALF_W, WALL_H / 2, 0); left.receiveShadow = true; left.castShadow = true; this.scene.add(left);
     
-    const b1 = new THREE.Mesh(new THREE.BoxGeometry(RW, 0.4, 0.5), baseMat); b1.position.set(0, 0.2, -HALF_D + 0.08); this.scene.add(b1);
-    const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, RD), baseMat); b2.position.set(-HALF_W + 0.08, 0.2, 0); this.scene.add(b2);
+    // 右牆與前牆：地板收邊之後，沒有牆的兩側會直接看到地板切口。
+    // 前牆刻意做矮一截（不擋視線），只是把地板邊界收乾淨。
+    const right = new THREE.Mesh(new THREE.BoxGeometry(0.22, WALL_H, RD), wallMat);
+    right.position.set(HALF_W, WALL_H / 2, 0); right.receiveShadow = true; this.scene.add(right);
+
+    const frontH = WALL_H * 0.16;
+    const front = new THREE.Mesh(new THREE.BoxGeometry(RW, frontH, 0.22), baseMat);
+    front.position.set(0, frontH / 2, HALF_D); front.receiveShadow = true; this.scene.add(front);
+
+    const b1 = new THREE.Mesh(new THREE.BoxGeometry(RW, 0.22, 0.28), baseMat); b1.position.set(0, 0.11, -HALF_D + 0.05); this.scene.add(b1);
+    const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, RD), baseMat); b2.position.set(-HALF_W + 0.05, 0.11, 0); this.scene.add(b2);
     
-    const win = new THREE.Mesh(new THREE.BoxGeometry(6, 4, 0.1),
+    const win = new THREE.Mesh(new THREE.BoxGeometry(RW * 0.30, WALL_H * 0.42, 0.08),
       new THREE.MeshStandardMaterial({ color: 0xbfe3f2, roughness: 0.1, metalness: 0.2, emissive: 0x88bcd6, emissiveIntensity: 0.15 }));
-    win.position.set(6, 5, -HALF_D + 0.26); this.scene.add(win);
-    const winFrame = new THREE.Mesh(new THREE.BoxGeometry(6.6, 4.6, 0.3), baseMat); winFrame.position.set(6, 5, -HALF_D + 0.2); this.scene.add(winFrame);
+    win.position.set(RW * 0.22, WALL_H * 0.58, -HALF_D + 0.22); this.scene.add(win);
+    const winFrame = new THREE.Mesh(new THREE.BoxGeometry(RW * 0.33, WALL_H * 0.47, 0.24), baseMat); winFrame.position.set(RW * 0.22, WALL_H * 0.58, -HALF_D + 0.17); this.scene.add(winFrame);
     
-    const rug = new THREE.Mesh(new THREE.PlaneGeometry(12, 8),
+    const rug = new THREE.Mesh(new THREE.PlaneGeometry(RW * 0.38, RD * 0.36),
       new THREE.MeshStandardMaterial({ color: 0x9c8f7a, roughness: 1, envMapIntensity: 0.3 }));
-    rug.rotation.x = -Math.PI / 2; rug.position.set(-2, 0.02, -4); rug.receiveShadow = true; this.scene.add(rug);
+    rug.rotation.x = -Math.PI / 2; rug.position.set(-RW * 0.05, 0.015, -RD * 0.12); rug.receiveShadow = true; this.scene.add(rug);
   }
 
   async loadProp(url, targetH, x, z, ry = 0) {
@@ -160,6 +231,26 @@ export class RoomScene {
   }
 
   // 將 3D 坐標透視投影至螢幕像素 (用於 2D Canvas 疊加)
+  /**
+   * 某個場域座標處，「一單位 3D 高度」對應多少螢幕像素。
+   *
+   * 角色是 2D 貼圖，位置雖然有投影，大小卻不會自動隨深度變化 ——
+   * 少了這個係數，站在房間最深處與最靠近鏡頭的人畫得一樣大，
+   * 看起來像貼紙浮在畫面上而不是站在地板上。
+   *
+   * 作法是投影同一點的地面與其上方一單位處，取兩者的螢幕距離。
+   * 直接用「相機距離的倒數」會忽略 FOV 與畫布長寬比。
+   */
+  scaleAt(logicX, logicY, worldHeight = 1) {
+    this.camera.updateMatrixWorld();
+    const p = this.logicTo3D(logicX, logicY);
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const foot = new THREE.Vector3(p.x, 0, p.z).project(this.camera);
+    const head = new THREE.Vector3(p.x, worldHeight, p.z).project(this.camera);
+    const px = Math.abs(head.y - foot.y) * 0.5 * rect.height;
+    return Number.isFinite(px) ? px : 0;
+  }
+
   projectToScreen(logicX, logicY) {
     // project() 讀的是 camera.matrixWorldInverse 與 projectionMatrix。
     // 前者由 updateMatrixWorld() 產生，平時只在 render() 內部被呼叫 ——
@@ -179,8 +270,11 @@ export class RoomScene {
   }
 
   resetCamera() {
-    const START_POS = new THREE.Vector3(HALF_W * 1.05, WALL_H * 2.35, HALF_D * 1.15);
-    const START_TARGET = new THREE.Vector3(0, 1.2, 1);
+    // 相機取景：要讓整個場域（角色可走的範圍）都入鏡，同時看得到牆與地板的
+    // 交界 —— 那條線是「這是一個房間」的關鍵線索，被裁掉就只剩一片地板。
+    // 係數以房間尺寸表示，調整 RW/RD/WALL_H 時取景會自動跟著走。
+    const START_POS = new THREE.Vector3(HALF_W * 0.95, WALL_H * 1.85, HALF_D * 1.55);
+    const START_TARGET = new THREE.Vector3(0, WALL_H * 0.16, -RD * 0.06);
     this.camera.position.copy(START_POS); 
     this.controls.target.copy(START_TARGET);
     // 相機的朝向由 controls 依 target 算出。少了這次 update()，
@@ -193,11 +287,16 @@ export class RoomScene {
     this.camera.aspect = innerWidth / innerHeight; 
     this.camera.updateProjectionMatrix(); 
     this.renderer.setSize(innerWidth, innerHeight);
+    // composer 與 bloom 各自持有 render target，不跟著 resize 會在換解析度後
+    // 顯示上一個尺寸的畫面（拉伸或裁切），而且不會報錯。
+    this.composer?.setSize(innerWidth, innerHeight);
+    this.bloom?.setSize(innerWidth, innerHeight);
   }
 
   render() {
     this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    if (this.postEnabled && this.composer) this.composer.render();
+    else this.renderer.render(this.scene, this.camera);
   }
 }
 
@@ -207,10 +306,12 @@ export async function populateProps(roomScene, propsDefinition) {
     const p3d = roomScene.logicTo3D(p.x, p.y);
     const url = PROP_URLS[p.type] || PROP_URLS.plant;
     // 預設給一個合理高度 (依類型不同可再調整)
-    let h = 2.4;
-    if (p.type === 'table' || p.type === 'lowtable') h = 1.2;
-    if (p.type === 'shelf' || p.type === 'speaker') h = 3.6;
-    if (p.type === 'plant') h = 2.6;
+    // 家具高度以「佔牆高的比例」表示，而非絕對值 —— 調整房間尺度時
+    // 這裡就不必跟著改，否則家具會相對房間忽大忽小。
+    let h = WALL_H * 0.26;                                     // 沙發等
+    if (p.type === 'table' || p.type === 'lowtable') h = WALL_H * 0.15;
+    if (p.type === 'shelf' || p.type === 'speaker') h = WALL_H * 0.38;
+    if (p.type === 'plant') h = WALL_H * 0.20;
     // 朝向來自 shared/scene.js 的 ry —— 那份定義是佈局的單一事實來源。
     // 原本這裡對 sofa 硬寫 Math.PI/2，等於把資料驅動的那半架空：
     // 音箱的 ±PI/4 永遠不會生效，改 shared/scene.js 也不會有任何反應。
