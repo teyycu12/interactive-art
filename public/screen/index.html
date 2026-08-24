@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PersonaFlow 大螢幕</title>
+<style>
+  :root { --paper: #FAF8F5; --ink: #2F2A26; --soft: #7A716A; --line: #D8D0C6; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); }
+  body {
+    color: var(--ink);
+    font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  }
+  canvas { display: block; width: 100vw; height: 100vh; }
+
+  .hud {
+    position: fixed; top: 16px; left: 16px;
+    background: rgba(250, 248, 245, .92);
+    border: 2px dashed var(--line); border-radius: 14px;
+    padding: 12px 16px; font-size: 13px; line-height: 1.7;
+    max-width: 320px; max-height: 90vh; overflow-y: auto;
+  }
+  .hud h2 { margin: 0 0 6px; font-size: 14px; letter-spacing: .05em; }
+  .hud .meta { color: var(--soft); font-size: 12px; margin-bottom: 8px; }
+  .hud table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .hud td { padding: 3px 4px; vertical-align: middle; }
+  .hud td.n { font-weight: 700; white-space: nowrap; max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
+  .bar { height: 7px; border-radius: 4px; background: var(--line); overflow: hidden; min-width: 60px; }
+  .bar i { display: block; height: 100%; background: #E76F51; }
+  .m { font-size: 10px; font-weight: 700; color: var(--soft); white-space: nowrap; }
+  .m.ACTIVE { color: #E76F51; }
+  .m.SWARM { color: #457B9D; }
+  .hud[hidden] { display: none; }
+  .note { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--soft); font-size: 11px; }
+  kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 10px; }
+
+  /* 投影時這行應該不顯眼；它只是給操作者的提示 */
+  .hint-key {
+    position: fixed; bottom: 14px; right: 16px;
+    font-size: 11px; color: var(--line); user-select: none;
+  }
+
+  /* 任務橫幅：任務公告必須在共享畫布上被看見（規格 v3.0 §3.1 第 05 步） */
+  .mission {
+    position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--paper); border: 3px solid #E76F51; border-radius: 18px;
+    padding: 14px 30px; text-align: center; min-width: 380px;
+    box-shadow: 0 8px 28px -14px rgba(47,42,38,.4);
+  }
+  .mission[hidden] { display: none; }
+  .mission .m-label {
+    font-size: 11px; letter-spacing: .2em; color: #B44A2F; font-weight: 700;
+  }
+  .mission .m-title { font-size: 27px; font-weight: 900; margin: 2px 0 4px; }
+  .mission .m-brief { font-size: 13px; color: var(--soft); }
+  .mission .m-prog {
+    margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line);
+    font-size: 14px; font-weight: 700;
+  }
+  .mission .m-prog b { font-size: 19px; color: #E76F51; }
+
+  /* 完成回饋：短暫浮現後淡出 */
+  .toasts {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column-reverse; gap: 8px; align-items: center;
+    pointer-events: none;
+  }
+  .toast {
+    background: #2A8C80; color: #FAF8F5;
+    border-radius: 999px; padding: 11px 26px;
+    font-size: 17px; font-weight: 700;
+    box-shadow: 0 8px 24px -12px rgba(47,42,38,.5);
+    animation: pop .35s ease-out;
+  }
+  @keyframes pop {
+    from { opacity: 0; transform: translateY(14px) scale(.94); }
+    to   { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
+
+  /* ── 即時問答 ───────────────────────────────────────────
+     投影用尺寸：最後一排的人要看得清楚，所以字級遠大於一般網頁。 */
+  .quiz {
+    position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+    width: min(1180px, 92vw);
+    background: var(--paper);
+    border: 4px solid var(--ink);
+    border-radius: 22px;
+    padding: 22px 30px 26px;
+    box-shadow: 0 14px 44px -18px rgba(47, 42, 38, .55);
+  }
+  .quiz[hidden] { display: none; }
+
+  .q-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    font-size: 14px; font-weight: 700; letter-spacing: .12em; color: var(--soft);
+    margin-bottom: 6px;
+  }
+  .q-title { font-size: 34px; font-weight: 900; line-height: 1.35; margin: 0 0 16px; }
+
+  /* 倒數條由滿到空，投影出去比數字更容易被餘光注意到 */
+  .q-timebar { height: 12px; border-radius: 8px; background: var(--line); overflow: hidden; margin-bottom: 18px; }
+  .q-timebar i { display: block; height: 100%; width: 100%; background: #E76F51; }
+  .q-timebar.urgent i { background: #C4453C; }
+
+  .q-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .q-opt {
+    display: flex; align-items: center; gap: 14px;
+    border-radius: 16px; padding: 16px 20px;
+    color: #fff; font-size: 25px; font-weight: 700;
+    border: 4px solid transparent;
+  }
+  .q-opt .g { font-size: 30px; line-height: 1; flex: none; }
+  .q-opt .t { flex: 1; min-width: 0; }
+  .q-opt .c {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 22px; flex: none; opacity: .85;
+  }
+  /* 揭曉：正解描上墨框並保持飽和，其餘退到背景 */
+  .q-opt.dim { opacity: .28; }
+  .q-opt.right { border-color: var(--ink); }
+
+  .q-foot {
+    margin-top: 16px; text-align: center;
+    font-size: 18px; font-weight: 700; color: var(--soft);
+  }
+  .q-foot b { color: var(--ink); font-size: 22px; }
+
+  /* ── 排行榜 ─────────────────────────────────────────────
+     常駐在右下角：積分要一直看得到才會有人在意它。 */
+  .ranks {
+    position: fixed; right: 22px; bottom: 22px;
+    width: 296px;
+    background: rgba(250, 248, 245, .94);
+    border: 3px solid var(--ink);
+    border-radius: 18px;
+    padding: 14px 18px 16px;
+  }
+  .ranks[hidden] { display: none; }
+  .ranks h2 {
+    margin: 0 0 8px; font-size: 13px; letter-spacing: .18em; color: #B44A2F;
+  }
+  .ranks ol { list-style: none; margin: 0; padding: 0; }
+  .ranks li {
+    display: flex; align-items: center; gap: 10px;
+    padding: 5px 0; font-size: 19px;
+    border-bottom: 1px solid var(--line);
+  }
+  .ranks li:last-child { border-bottom: none; }
+  .ranks .no {
+    width: 26px; flex: none; text-align: center;
+    font-family: ui-monospace, Consolas, monospace; font-size: 15px; color: var(--soft);
+  }
+  .ranks li.top .no { color: #E76F51; font-weight: 900; }
+  .ranks .who {
+    flex: 1; min-width: 0; font-weight: 700;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ranks .pts {
+    font-family: ui-monospace, Consolas, monospace;
+    font-variant-numeric: tabular-nums; font-weight: 900;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<div class="mission" id="mission" hidden>
+  <div class="m-label">現在的任務</div>
+  <div class="m-title" id="m-title">—</div>
+  <div class="m-brief" id="m-brief">—</div>
+  <div class="m-prog" id="m-prog" hidden></div>
+</div>
+
+<!-- 即時問答。題目在共享畫布上呈現，手機只是輸入裝置 —— 這與任務的
+     設計原則一致：完成與結果都必須被全場看見。 -->
+<div class="quiz" id="quiz" hidden>
+  <div class="q-head">
+    <span id="q-no">第 1 題</span>
+    <span id="q-state">作答中</span>
+  </div>
+  <p class="q-title" id="q-title">—</p>
+  <div class="q-timebar" id="q-timebar"><i id="q-timefill"></i></div>
+  <div class="q-opts" id="q-opts"></div>
+  <div class="q-foot" id="q-foot">已作答 <b id="q-answered">0</b> 人</div>
+</div>
+
+<div class="ranks" id="ranks" hidden>
+  <h2>積分排行</h2>
+  <ol id="ranks-list"></ol>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<!-- 除錯面板：預設隱藏，按 D 切換。保留自 M2 開發期，
+     用於檢查 α 權重、剛體避障半徑與速度向量。 -->
+<div class="hud" id="hud" hidden>
+  <h2>除錯視圖</h2>
+  <div class="meta" id="meta">等待連線…</div>
+  <table id="list"></table>
+  <div class="note">
+    橘＝主動控制態，藍＝湧現漫遊態；角色外圈粗細即為 α 權重。<br>
+    黃圈為道具的剛體避障半徑，黃框為邊界回推帶。<br>
+    再按 <kbd>D</kbd> 關閉。
+  </div>
+</div>
+
+<div class="hint-key">按 <kbd>D</kbd> 顯示除錯資訊</div>
+<script type="module" src="screen.js"></script>
+</body>
+</html>

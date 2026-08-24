@@ -1,0 +1,887 @@
+<title>PersonaFlow 立體場域架構</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+/* 沿用 v3.0 規格的設計系統 —— 同一份文件系列，視覺應連續。
+   紙色與墨色出自技術文件 §M3，主色出自專案調色盤首項。 */
+:root {
+  --paper:#FAF8F5; --surface:#FFFDFA; --sunk:#F2EDE6;
+  --ink:#2F2A26; --ink-soft:#6E655D; --ink-faint:#9A9089;
+  --line:#DED6CA; --line-soft:#ECE5DA; --dot:#E2DACE;
+  --accent:#E76F51; --accent-ink:#B44A2F;
+  --teal:#2A8C80; --blue:#3E6E8E; --amber:#B5822A; --danger:#B03A30;
+  --font-sans:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,"Cascadia Code",Consolas,monospace;
+  --measure:68ch;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper:#1A1715; --surface:#221E1B; --sunk:#14110F;
+    --ink:#EDE7DF; --ink-soft:#A79C91; --ink-faint:#786D64;
+    --line:#3B3430; --line-soft:#2B2522; --dot:#2A2421;
+    --accent:#F08A6C; --accent-ink:#F3A78E;
+    --teal:#4FB8A8; --blue:#74A6C4; --amber:#D9A648; --danger:#E0685C;
+  }
+}
+:root[data-theme="dark"] {
+  --paper:#1A1715; --surface:#221E1B; --sunk:#14110F;
+  --ink:#EDE7DF; --ink-soft:#A79C91; --ink-faint:#786D64;
+  --line:#3B3430; --line-soft:#2B2522; --dot:#2A2421;
+  --accent:#F08A6C; --accent-ink:#F3A78E;
+  --teal:#4FB8A8; --blue:#74A6C4; --amber:#D9A648; --danger:#E0685C;
+}
+
+* { box-sizing:border-box; }
+body {
+  margin:0;
+  background-color:var(--paper);
+  background-image:radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size:24px 24px;
+  color:var(--ink);
+  font-family:var(--font-sans);
+  font-size:16px; line-height:1.8;
+  -webkit-font-smoothing:antialiased;
+}
+
+.shell {
+  max-width:1180px; margin:0 auto; padding:0 28px 96px;
+  display:grid; grid-template-columns:216px minmax(0,1fr); gap:56px; align-items:start;
+}
+nav.rail { position:sticky; top:0; padding:40px 0; max-height:100vh; overflow-y:auto; font-size:13px; }
+nav.rail .rail-title {
+  font-family:var(--font-mono); font-size:10px; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--ink-faint); margin-bottom:14px;
+}
+nav.rail ol { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:2px; }
+nav.rail a {
+  display:flex; gap:9px; padding:5px 9px; border-radius:6px;
+  color:var(--ink-soft); text-decoration:none; line-height:1.5;
+}
+nav.rail a:hover { background:var(--sunk); color:var(--ink); }
+nav.rail a:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+nav.rail a .num {
+  font-family:var(--font-mono); font-size:11px; color:var(--ink-faint);
+  font-variant-numeric:tabular-nums; padding-top:1px;
+}
+main { min-width:0; padding-top:40px; }
+
+.masthead { padding-bottom:30px; border-bottom:2px solid var(--ink); margin-bottom:44px; }
+.eyebrow {
+  font-family:var(--font-mono); font-size:11px; letter-spacing:.18em;
+  text-transform:uppercase; color:var(--accent-ink); margin-bottom:14px;
+}
+h1 {
+  font-size:clamp(30px,4.6vw,46px); font-weight:900; letter-spacing:-.015em;
+  line-height:1.22; margin:0 0 16px; text-wrap:balance;
+}
+.standfirst { font-size:17px; color:var(--ink-soft); margin:0; max-width:var(--measure); }
+.docmeta {
+  margin-top:24px; display:flex; flex-wrap:wrap; gap:8px 26px;
+  font-family:var(--font-mono); font-size:12px; color:var(--ink-faint);
+}
+.docmeta b { color:var(--ink-soft); font-weight:500; }
+
+section { margin-bottom:60px; scroll-margin-top:24px; }
+section > * { max-width:var(--measure); }
+section > .wide, section > .tablewrap, section > .grid2, section > .stack, section > .flow { max-width:100%; }
+
+h2 {
+  font-size:25px; font-weight:900; letter-spacing:-.01em; line-height:1.35;
+  margin:0 0 6px; display:flex; align-items:baseline; gap:13px; text-wrap:balance;
+}
+h2 .num {
+  font-family:var(--font-mono); font-size:13px; font-weight:500;
+  color:var(--accent-ink); font-variant-numeric:tabular-nums; flex:none;
+}
+.deck { color:var(--ink-soft); margin:0 0 26px; font-size:15px; }
+h3 { font-size:17px; font-weight:700; margin:34px 0 10px; letter-spacing:-.005em; }
+p { margin:0 0 15px; }
+a { color:var(--accent-ink); }
+ul, ol.list { margin:0 0 15px; padding-left:1.25em; }
+li { margin-bottom:7px; }
+li::marker { color:var(--ink-faint); }
+code {
+  font-family:var(--font-mono); font-size:.87em; background:var(--sunk);
+  border:1px solid var(--line-soft); border-radius:4px; padding:.1em .38em;
+  color:var(--ink); white-space:nowrap;
+}
+
+.st {
+  display:inline-flex; align-items:center; gap:5px;
+  font-family:var(--font-mono); font-size:10.5px; font-weight:500; letter-spacing:.06em;
+  padding:2px 8px; border-radius:3px; border:1px solid; white-space:nowrap; vertical-align:middle;
+}
+.st::before { content:""; width:5px; height:5px; border-radius:50%; background:currentColor; }
+.st-done { color:var(--teal);      border-color:color-mix(in srgb, var(--teal) 40%, transparent); }
+.st-now  { color:var(--accent-ink);border-color:color-mix(in srgb, var(--accent) 45%, transparent); }
+.st-open { color:var(--amber);     border-color:color-mix(in srgb, var(--amber) 42%, transparent); }
+.st-later{ color:var(--ink-faint); border-color:var(--line); }
+.st-cut  { color:var(--ink-faint); border-color:var(--line); text-decoration:line-through; }
+.st-risk { color:var(--danger);    border-color:color-mix(in srgb, var(--danger) 45%, transparent); }
+
+.tablewrap { overflow-x:auto; margin:0 0 20px; border:1px solid var(--line); border-radius:9px; background:var(--surface); }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+thead th {
+  text-align:left; font-family:var(--font-mono); font-size:10.5px; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint);
+  padding:11px 15px; border-bottom:1px solid var(--line); white-space:nowrap; background:var(--sunk);
+}
+tbody td { padding:12px 15px; border-bottom:1px solid var(--line-soft); vertical-align:top; line-height:1.65; }
+tbody tr:last-child td { border-bottom:none; }
+td.mono { font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:13px; white-space:nowrap; }
+td .sub { display:block; font-size:12.5px; color:var(--ink-soft); margin-top:3px; }
+
+.note {
+  border-left:3px solid var(--line); background:var(--surface);
+  border-radius:0 8px 8px 0; padding:16px 20px; margin:0 0 20px; font-size:14.5px;
+}
+.note > :last-child { margin-bottom:0; }
+.note .label {
+  font-family:var(--font-mono); font-size:10.5px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--ink-faint); display:block; margin-bottom:6px;
+}
+.note-key  { border-left-color:var(--accent); }
+.note-key .label { color:var(--accent-ink); }
+.note-open { border-left-color:var(--amber); }
+.note-open .label { color:var(--amber); }
+.note-risk { border-left-color:var(--danger); }
+.note-risk .label { color:var(--danger); }
+.note-good { border-left-color:var(--teal); }
+.note-good .label { color:var(--teal); }
+
+.flow { display:flex; gap:8px; overflow-x:auto; padding:4px 0 12px; margin-bottom:22px; }
+.flow .step {
+  flex:1 0 160px; background:var(--surface); border:1px solid var(--line);
+  border-radius:9px; padding:13px 15px;
+}
+.flow .step .k {
+  font-family:var(--font-mono); font-size:10px; letter-spacing:.1em;
+  color:var(--ink-faint); display:block; margin-bottom:5px;
+}
+.flow .step .t { font-weight:700; font-size:14.5px; display:block; margin-bottom:4px; }
+.flow .step .d { font-size:12.5px; color:var(--ink-soft); line-height:1.6; }
+
+.grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(268px,1fr)); gap:16px; margin-bottom:22px; }
+.card { border:1px solid var(--line); border-radius:9px; background:var(--surface); padding:17px 19px; }
+.card h4 { margin:0 0 8px; font-size:15px; font-weight:700; display:flex; align-items:center; gap:8px; }
+.card p { font-size:14px; color:var(--ink-soft); margin-bottom:0; }
+
+.contract {
+  border:1.5px solid var(--line); border-radius:11px; background:var(--surface);
+  padding:18px 20px; margin-bottom:14px;
+}
+.contract .head { display:flex; align-items:baseline; gap:11px; margin-bottom:8px; }
+.contract .cn {
+  font-family:var(--font-mono); font-size:12px; color:var(--accent-ink);
+  border:1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius:4px; padding:1px 7px; flex:none;
+}
+.contract .ct { font-weight:700; font-size:16px; }
+.contract .who {
+  margin-left:auto; font-family:var(--font-mono); font-size:11.5px; color:var(--ink-faint); white-space:nowrap;
+}
+.contract p { font-size:14px; margin-bottom:10px; }
+.contract pre {
+  margin:0; background:var(--sunk); border:1px solid var(--line-soft); border-radius:7px;
+  padding:12px 14px; overflow-x:auto; font-family:var(--font-mono); font-size:12.5px; line-height:1.7;
+}
+
+footer {
+  margin-top:72px; padding-top:22px; border-top:1px solid var(--line);
+  font-size:13px; color:var(--ink-faint); font-family:var(--font-mono);
+}
+
+@media (max-width:900px) {
+  .shell { grid-template-columns:1fr; gap:0; padding:0 20px 64px; }
+  nav.rail { position:static; max-height:none; padding:28px 0 20px; border-bottom:1px solid var(--line); margin-bottom:8px; }
+  nav.rail ol { flex-direction:row; flex-wrap:wrap; gap:4px; }
+  nav.rail a { border:1px solid var(--line); border-radius:999px; padding:4px 11px; }
+  main { padding-top:26px; }
+  .contract .who { margin-left:0; width:100%; }
+  .contract .head { flex-wrap:wrap; }
+}
+@media (prefers-reduced-motion:reduce) { * { transition:none !important; scroll-behavior:auto !important; } }
+</style>
+
+<div class="shell">
+
+<nav class="rail">
+  <div class="rail-title">目次</div>
+  <ol>
+    <li><a href="#s0"><span class="num">00</span><span>改版摘要</span></a></li>
+    <li><a href="#s1"><span class="num">01</span><span>存活與汰換</span></a></li>
+    <li><a href="#s2"><span class="num">02</span><span>座標與架構</span></a></li>
+    <li><a href="#s3"><span class="num">03</span><span>角色管線</span></a></li>
+    <li><a href="#s4"><span class="num">04</span><span>3D 渲染引擎</span></a></li>
+    <li><a href="#s5"><span class="num">05</span><span>五份介面契約</span></a></li>
+    <li><a href="#s6"><span class="num">06</span><span>五人分工</span></a></li>
+    <li><a href="#s7"><span class="num">07</span><span>時程與備援</span></a></li>
+    <li><a href="#s8"><span class="num">08</span><span>待決事項</span></a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="masthead">
+  <div class="eyebrow">規格文件 v4.0 · 取代 v3.0 之 §02 架構與 §04 呈現方式</div>
+  <h1>PersonaFlow 立體場域架構</h1>
+  <p class="standfirst">
+    場域由 2D 手繪畫布轉為 Three.js 立體空間，角色由 SVG 模組捏臉轉為
+    AI 生圖驅動的骨架模型 —— 角色從「飄移」變成真正的行走。
+    後端整套保留，本次替換的是渲染層與角色資產，不是系統。
+  </p>
+  <div class="docmeta">
+    <span><b>版本</b> v4.0</span>
+    <span><b>基準</b> 規格 v3.0</span>
+    <span><b>仍然有效</b> v3.0 §03 任務系統 · §05 主辦端</span>
+    <span><b>實測期限</b> 9/30</span>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<section id="s0">
+  <h2><span class="num">00</span>改版摘要</h2>
+  <p class="deck">小組決議三項變更：掃描生成角色、場景立體化、角色真正行走。</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>項目</th><th>v3.0</th><th>v4.0</th><th>狀態</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>角色生成</strong></td>
+          <td>手機端結構化模組捏臉</td>
+          <td>掃描人物 → AI 生成去背積木人偶圖 → 切片貼到共用 3D 模型</td>
+          <td><span class="st st-done">生圖已完成</span></td>
+        </tr>
+        <tr>
+          <td><strong>場域呈現</strong></td>
+          <td>2D 手繪畫布（Canvas2D + rough.js）</td>
+          <td>3D 立體場景（Three.js）</td>
+          <td><span class="st st-done">技術已驗證</span></td>
+        </tr>
+        <tr>
+          <td><strong>角色運動</strong></td>
+          <td>程式化 2D 步態（彈跳擺動，觀感為飄移）</td>
+          <td>骨架動畫，真正的行走循環</td>
+          <td><span class="st st-now">本階段重點</span></td>
+        </tr>
+        <tr>
+          <td><strong>合照分發</strong></td>
+          <td>規劃中</td>
+          <td>QR Code 下載</td>
+          <td><span class="st st-done">已完成</span></td>
+        </tr>
+        <tr>
+          <td><strong>M2 共治引擎</strong></td>
+          <td>—</td>
+          <td>完全不變</td>
+          <td><span class="st st-done">沿用</span></td>
+        </tr>
+        <tr>
+          <td><strong>任務系統與主辦端</strong></td>
+          <td>—</td>
+          <td>完全不變，另需納入場景控制</td>
+          <td><span class="st st-done">沿用</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note note-key">
+    <span class="label">給 R4 的論述提示</span>
+    <p>
+      技術文件 v2.0 曾明確「移除高延遲 CVAI 影像辨識，捨棄不穩定的相機拍照與純 AI
+      全圖生成」。v4.0 把掃描拉回來，WP-D 必須重新交代這個轉折 ——
+      否則答辯時會被問「你們不是說這條路不穩定嗎」。
+    </p>
+    <p>
+      可用的論證方向：v2.0 移除的是「即時全圖生成」（延遲不可控、結果不可預期）；
+      v4.0 採用的是「生成一次、綁定到預先驗證過的骨架」，
+      生成發生在進場當下而非每一幀，延遲與失敗都可被隔離處理。
+      這是兩種不同的技術路徑，不是推翻先前的判斷。
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<section id="s1">
+  <h2><span class="num">01</span>存活與汰換</h2>
+  <p class="deck">先確認範圍：這次動的是渲染層與角色資產，後端一行都不用改。</p>
+
+  <div class="grid2">
+    <div class="card">
+      <h4><span class="st st-done">保留</span></h4>
+      <p>
+        Gateway、連線防護、固定頻率時脈、<strong>M2 共治引擎（α 仲裁 + Boids）</strong>、
+        任務系統、配對、社交圖譜、主辦端控制台、手機控制器的搖桿與任務介面。
+      </p>
+    </div>
+    <div class="card">
+      <h4><span class="st st-cut">汰換</span></h4>
+      <p>
+        <code>shared/avatars.js</code>（SVG 捏臉組裝）、
+        <code>public/screen/</code> 全部（2D 渲染器、手繪場景、程式化步態、道具）。
+      </p>
+    </div>
+  </div>
+
+  <div class="note note-good">
+    <span class="label">為什麼 M2 完全不用改</span>
+    <p>
+      M2 輸出的是地面平面上的位置與速度，它從來不知道畫面是 2D 還是 3D。
+      更關鍵的是，<code>STAGE_SYNC</code> 現在送的 <code>state: WALK / IDLE</code>
+      加上 <code>vx / vy</code>，正好就是驅動 3D 骨架動畫混合所需要的輸入 ——
+      當初為 2D 步態設計的欄位，換到骨架動畫一樣夠用。
+    </p>
+    <p>
+      障礙物在 2D 是地面上的圓，在 3D 還是地面上的圓。避障、社交群聚、
+      邊界回推、剛體修正全部原封不動。
+    </p>
+  </div>
+
+  <div class="note">
+    <span class="label">建議保留 · 捏臉作為備援</span>
+    <p>
+      既有的三步捏臉流程請<strong>不要刪除</strong>。相機權限被拒、光線不足、
+      生成失敗都是現場一定會發生的事，屆時需要第二條路讓參與者仍能進場。
+      這套流程已經寫好且通過測試，留著不花成本。
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<section id="s2">
+  <h2><span class="num">02</span>座標與架構</h2>
+  <p class="deck">邏輯平面直接就是 3D 地面，這是後端得以完整保留的原因。</p>
+
+  <h3>2.1　座標映射</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>伺服器（邏輯 2D）</th><th>Three.js（世界 3D）</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">x ∈ [0, 1920]</td><td class="mono">world.x</td><td>場域寬度，直接對應</td></tr>
+        <tr><td class="mono">y ∈ [0, 1080]</td><td class="mono">world.z</td><td>俯視圖的縱深，成為 3D 的深度軸</td></tr>
+        <tr><td class="mono">—</td><td class="mono">world.y = 0</td><td>角色站在地面；Three.js 為 Y 軸向上</td></tr>
+        <tr><td class="mono">vx, vy</td><td class="mono">朝向角 = atan2(vy, vx)</td><td>由渲染端自行換算，伺服器不需送角度</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note note-open">
+    <span class="label">給 R2 的實作提醒</span>
+    <p>
+      速度趨近 0 時 <code>atan2</code> 會劇烈跳動，角色會原地亂轉。
+      渲染端必須自行維護一個平滑後的朝向角，並在速度低於門檻時保持上一次的朝向。
+      <code>facing</code> 欄位（±1）在 3D 已不足用，但保留無害，可作為初始朝向。
+    </p>
+  </div>
+
+  <h3>2.2　層級架構</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>層</th><th>內容</th><th>本次變動</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">00 主辦端</td><td>任務控制、現場處置、資料匯出</td><td>新增場景控制</td></tr>
+        <tr><td class="mono">01 個人控制層</td><td>掃描進場、搖桿、社交動作、任務</td><td>捏臉改為掃描（捏臉留作備援）</td></tr>
+        <tr><td class="mono">02 通訊與狀態調度</td><td>連線、狀態矩陣、M2、任務、配對</td><td><strong>無</strong></td></tr>
+        <tr><td class="mono">03 公共渲染</td><td>3D 場景、骨架角色、任務回饋</td><td><strong>整層重寫</strong></td></tr>
+        <tr><td class="mono">04 記憶層</td><td>行為 Log、社交圖譜、合照與 QR 分發</td><td>合照改由 3D 相機取景</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<section id="s3">
+  <h2><span class="num">03</span>角色管線</h2>
+  <p class="deck">把「掃描生成」與「骨架」解耦，是這條路能走通的關鍵。</p>
+
+  <div class="note note-good">
+    <span class="label">生圖的產出格式決定了整條管線</span>
+    <p>
+      生圖系統產出的是<strong>正面直立、去背景的積木人偶全身圖</strong>。
+      這個格式有三個性質，讓原本困難的問題變得單純：
+    </p>
+    <ol class="list" style="margin-top:10px">
+      <li><strong>構圖固定</strong> —— 每一張的姿勢與取景都一樣，不是任意輸入</li>
+      <li><strong>分件規格化</strong> —— 頭、髮、軀幹、雙臂、雙手、臀、雙腿，每一隻都相同</li>
+      <li><strong>剛體關節</strong> —— 積木人偶只在肩與髖轉動，身體不會變形</li>
+    </ol>
+  </div>
+
+  <h3>3.1　為什麼這不需要一般意義的「綁骨架」</h3>
+  <p>
+    一般人形角色要綁骨架，是因為皮膚必須跟著骨頭變形（skinning），
+    需要逐頂點的權重繪製，這才是耗時且需要專業技能的部分。
+  </p>
+  <p>
+    <strong>積木人偶完全不需要蒙皮。</strong>它就是一組剛體的父子關係 ——
+    九個節點，每個節點是一塊不會變形的實體。所謂「綁骨架」在這裡只是
+    把模型的各部件依正確的階層接起來，是建模時就順手完成的事。
+  </p>
+
+  <h3>3.2　行走可以用程式算，不需要動畫剪輯</h3>
+  <p>
+    積木人偶的走路，全部內容就是<strong>大腿繞髖部、手臂繞肩膀做反相擺動</strong>。
+    這正是技術文件「程式化步態，無逐格動畫成本」的同一套作法 ——
+    2D 版本已經以正弦函式實作過一次，換到 3D 只是把數值套到關節旋轉上。
+  </p>
+  <div class="note note-key">
+    <span class="label">連帶結論</span>
+    <p>
+      <strong>不需要 Mixamo，也不需要任何動畫剪輯檔案。</strong>
+      沒有動畫檔就沒有格式轉換、沒有重定向、沒有授權問題。
+      R4 的任務從「學會綁骨架與匯出動畫」縮減為「做一個分件正確的積木人偶模型」。
+    </p>
+  </div>
+
+  <h3>3.3　管線</h3>
+  <div class="flow">
+    <div class="step"><span class="k">01</span><span class="t">掃描</span>
+      <span class="d">手機相機拍攝參與者（需安全情境，見 §08）</span></div>
+    <div class="step"><span class="k">02</span><span class="t">生成</span>
+      <span class="d">既有系統產出去背景的積木人偶全身圖</span></div>
+    <div class="step"><span class="k">03</span><span class="t">正規化</span>
+      <span class="d">裁到 alpha 邊界、縮放到固定高度，消除構圖誤差</span></div>
+    <div class="step"><span class="k">04</span><span class="t">切片</span>
+      <span class="d">依固定比例裁切框切出頭／軀幹／腿，成為貼圖</span></div>
+    <div class="step"><span class="k">05</span><span class="t">貼圖</span>
+      <span class="d">套到共用的積木人偶模型對應部件</span></div>
+    <div class="step"><span class="k">06</span><span class="t">行走</span>
+      <span class="d">程式化擺動關節，與生成品質無關</span></div>
+  </div>
+
+  <p>
+    第 03 步的正規化是可靠度的來源。<strong>先裁到 alpha 邊界再縮放</strong>，
+    後續的固定比例裁切框才會穩定命中同樣的部位；直接對原圖套裁切框，
+    構圖只要有一點偏差就會切歪。
+  </p>
+
+  <div class="note note-open">
+    <span class="label">R1 第一週要驗證的事</span>
+    <p>
+      拿約 20 張實際生成結果，確認正規化後<strong>各部件是否穩定落在同一比例位置</strong>。
+      若一致，固定裁切框即可；若有明顯浮動，才需要加入偵測步驟。
+      這個驗證便宜且能及早排除最大的未知數。
+    </p>
+  </div>
+
+  <h3>3.4　背面貼圖</h3>
+  <p>
+    生成的是正面單視角，但 3D 模型有背面。對於群體俯視的場景，
+    <strong>背面採用由正面取樣得到的單色即可</strong>，觀眾在那個距離看不出差異。
+    若日後要提升，再考慮生成第二張背視圖，但這不該排進本期時程。
+  </p>
+
+  <h3>3.5　生成失敗的備援</h3>
+  <p>
+    走路是模型與程式帶來的，與生成結果無關。因此生圖失敗時，
+    只要退回預設貼圖，角色依然能正常行走與參與任務 ——
+    失敗會降級為「外觀不像本人」，而不是「無法進場」。
+    再加上保留的捏臉流程作為第二條路，現場不會出現無法參與的狀況。
+  </p>
+</section>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<section id="s4">
+  <h2><span class="num">04</span>3D 渲染引擎</h2>
+  <p class="deck">這是原本分工清單裡漏掉的一項，而它是最大的單一工程量。</p>
+
+  <p>
+    「3D 場景建模」與「角色骨架」都是<strong>美術資產</strong>任務。
+    但把 Three.js 接上 <code>STAGE_SYNC</code>、載入模型、驅動骨架動畫、
+    處理相機與光照、移植任務橫幅與完成回饋 —— 這個<strong>引擎整合</strong>
+    才是工作量最大的部分，必須列為獨立項目並指定負責人，
+    否則它會變成「大家以為別人在做」的那一項。
+  </p>
+
+  <h3>4.1　引擎需要完成的事</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>項目</th><th>說明</th></tr></thead>
+      <tbody>
+        <tr><td>場景載入與相機</td><td>載入場景 glTF，設定投影用的固定機位與光照</td></tr>
+        <tr><td>角色池</td><td>共用骨架與動畫剪輯，每位參與者一個實例；需支援中途進出場</td></tr>
+        <tr><td>狀態驅動動畫</td><td><code>state</code> 切換走路／待機，速度決定播放速率</td></tr>
+        <tr><td>朝向平滑</td><td>由 <code>vx / vy</code> 換算並平滑，低速時保持前一次朝向</td></tr>
+        <tr><td>位置內插</td><td>伺服器 30 Hz、畫面 60 Hz，需內插否則有階梯感（2D 版已有可參考的實作）</td></tr>
+        <tr><td>任務回饋</td><td>任務橫幅、完成提示、配對成功的視覺強調</td></tr>
+        <tr><td>合照取景</td><td>收尾時的相機運鏡與畫面輸出</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note note-open">
+    <span class="label">效能守則</span>
+    <p>
+      目標是 30 個骨架角色維持 30 FPS 以上。務必：模型低面數、
+      共用材質與貼圖（每個人一張獨立貼圖會讓 draw call 爆掉）、
+      骨骼數量克制。<strong>第一週就用 30 個佔位角色壓測</strong>，
+      不要等到資產完成才發現跑不動。
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<section id="s5">
+  <h2><span class="num">05</span>五份介面契約</h2>
+  <p class="deck">分工失敗通常不是分錯，是介面沒先講好。第一週把這幾件事定案，五條線就能各做各的。</p>
+
+  <div class="contract">
+    <div class="head">
+      <span class="cn">契約 1</span>
+      <span class="ct">STAGE_SYNC 不變</span>
+      <span class="who">R3 → R2</span>
+    </div>
+    <p>渲染器只吃以下欄位，伺服器保證不改動。每秒 30 次廣播。</p>
+    <pre>{
+  id:      "usr_8f9a2b",   // 參與者識別碼
+  x, y:    數值,            // 邏輯座標 → world.x / world.z
+  vx, vy:  數值,            // 合成後的速度，用於行走播放速率
+  heading: 弧度,            // 完整朝向角，已由伺服器平滑並在靜止時保持
+  state:   "WALK" | "IDLE", // 行走／待機切換
+  mode:    "ACTIVE" | "SWARM" | "STAGED",
+  alpha:   0 ~ 1,           // 主動控制權重
+  facing:  1 | -1,          // 2D 備援版本用；3D 請用 heading
+  offline: 布林,
+  emote:   "CHEERS" | "HEART" | "WAVE" | null,
+
+  // 以下兩欄只在有意義時才出現，未出現時視同預設值
+  emoteT:  0 ~ 1,           // 社交動作進度，用於對齊動畫相位
+  arrived: true             // 定位鎖定且已就位
+}</pre>
+    <p style="margin-top:10px">
+      <strong>朝向由伺服器計算，渲染端不要自行從 <code>vx / vy</code> 推算。</strong>
+      速度趨近 0 時 <code>atan2</code> 會劇烈跳動，需要「靜止時保持前一次朝向」的狀態；
+      而大螢幕與合照是兩個渲染端，各算一套必然不一致 ——
+      合照當下角色的朝向會與觀眾前一秒看到的不同。
+    </p>
+  </div>
+
+  <div class="contract">
+    <div class="head">
+      <span class="cn">契約 5</span>
+      <span class="ct">定位鎖定（合照用）</span>
+      <span class="who">M2 → M4</span>
+    </div>
+    <p>
+      M2 提供把角色平滑帶到指定座標的機制，<strong>但不決定隊形</strong>。
+      誰站哪、怎麼排是 M4 的決策，因此排版演算法可以任意更換而完全不必動 M2。
+    </p>
+    <pre>// 指派定位。heading 為到位後的朝向，合照時通常全部面向鏡頭。
+stage.lockStage(new Map([
+  ["usr_8f9a2b", { x: 900, y: 700, heading: -Math.PI / 2 }],
+  ...
+]));
+
+// 輪詢直到全體就位。不要用固定秒數等待 ——
+// 移動時間取決於角色原本散得多開。
+if (stage.allArrived()) { 拍照 }
+
+// 拍完解除，角色平滑重新加入人群
+stage.unlockStage();</pre>
+    <p style="margin-top:10px">
+      鎖定期間使用者操控與群體動力都不生效，接管與解除都是漸進的
+      （<code>ARRIVE.takeoverMs</code>，現值 600ms），對應技術文件要求的「角色平滑移向」。
+      角色以抵達式轉向前進並在接近時減速，<strong>不會衝過定位再折返</strong>。
+    </p>
+  </div>
+
+  <div class="contract">
+    <div class="head">
+      <span class="cn">契約 2</span>
+      <span class="ct">模型節點階層與命名</span>
+      <span class="who">R4 → R2</span>
+    </div>
+    <p>
+      渲染程式以節點名稱取得關節並施加旋轉，命名一旦變動程式就會靜默失效
+      （角色會站著不動，而不是報錯）。階層固定為：
+    </p>
+    <pre>Root
+└ Hips              ← 位置與朝向由此驅動
+  ├ Torso           ← 貼軀幹貼圖
+  │ ├ Head          ← 貼頭部貼圖
+  │ │ └ Hair
+  │ ├ Arm_L → Hand_L   ← 繞肩擺動
+  │ └ Arm_R → Hand_R
+  ├ Leg_L           ← 繞髖擺動
+  └ Leg_R</pre>
+    <p style="margin-top:10px">
+      要求：<strong>各關節的旋轉軸心必須落在真實轉軸上</strong> ——
+      手臂的軸心在肩、腿的軸心在髖，不是在部件中心。
+      軸心放錯會讓角色走路時肢體從身體上脫開。
+    </p>
+    <p>
+      貼圖以 <code>Tex_Head</code>、<code>Tex_Torso</code>、<code>Tex_Legs</code>
+      三張為掛載點，對應 §3.3 切出的三塊。
+    </p>
+  </div>
+
+  <div class="contract">
+    <div class="head">
+      <span class="cn">契約 3</span>
+      <span class="ct">場景碰撞佈局回寫</span>
+      <span class="who">R5 → R3 / R2</span>
+    </div>
+    <p>
+      3D 模型裡的沙發座標，必須與伺服器 <code>shared/scene.js</code> 的障礙物清單一致，
+      否則角色會直接穿過家具。<strong>模型是視覺，碰撞是資料，兩者必須人工同步。</strong>
+      建模完成後要把每件道具的座標與碰撞半徑填回：
+    </p>
+    <pre>PROPS = [
+  { id: "sofa_1", type: "sofa", x: 1452, y: 622, r: 84 },
+  ...
+]</pre>
+    <p style="margin-top:10px">
+      現有的 <code>npm run preview:scene</code> 會把碰撞半徑畫成黃色虛線圈，
+      可用來核對是否與模型對得上。
+    </p>
+  </div>
+
+  <div class="contract">
+    <div class="head">
+      <span class="cn">契約 4</span>
+      <span class="ct">角色外觀資產</span>
+      <span class="who">R1 → R2 / R4</span>
+    </div>
+    <p>
+      掃描與生成的最終產出：三張已正規化並切好的貼圖，
+      加上供背面與備援使用的取樣色。這份 schema 決定 R4 的 UV 分區與 R2 的載入邏輯。
+    </p>
+    <pre>{
+  userId:   "usr_8f9a2b",
+  textures: {
+    head:  "/assets/gen/usr_8f9a2b/head.png",
+    torso: "/assets/gen/usr_8f9a2b/torso.png",
+    legs:  "/assets/gen/usr_8f9a2b/legs.png"
+  },
+  // 由正面取樣，用於背面與側面的單色填補、以及貼圖載入前的替身
+  fallbackColors: {
+    skin: "#F4C08A", hair: "#4A2C1A",
+    torso: "#8FA05E", legs: "#B7A98A"
+  }
+}</pre>
+    <p style="margin-top:10px">
+      貼圖以 <strong>檔案 URL</strong> 而非 base64 傳遞。30 人的貼圖若內嵌進
+      <code>STAGE_ROSTER</code> 會讓名冊訊息膨脹到現場無線網路難以負荷；
+      走 URL 則可由瀏覽器自行快取與並行下載。
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<section id="s6">
+  <h2><span class="num">06</span>五人分工</h2>
+  <p class="deck">第一部分資產與探索並重，第二部分整合並讓 R4、R5 回到本業。</p>
+
+  <h3>6.1　第一部分</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>角色</th><th>主責</th><th>完成的判準</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>R1</strong><span class="sub">總召</span></td>
+          <td>掃描接上生圖 ＋ <strong>HTTPS 部署決策</strong> ＋ 正規化與切片</td>
+          <td>手機拍照後產出符合契約 4 的三張貼圖；20 張樣本驗證切片穩定</td>
+        </tr>
+        <tr>
+          <td><strong>R2</strong><span class="sub">前端</span></td>
+          <td><strong>3D 渲染引擎整合</strong>（Three.js）</td>
+          <td>佔位角色接上 <code>STAGE_SYNC</code>，能在 3D 場景中行走；30 人壓測通過</td>
+        </tr>
+        <tr>
+          <td><strong>R3</strong><span class="sub">後端</span></td>
+          <td>前後台控制系統完善 ＋ 行為 Log 落地</td>
+          <td>主辦端能控場，資料能匯出檔案（WP-C 交付物）</td>
+        </tr>
+        <tr>
+          <td><strong>R4</strong><span class="sub">文書研究</span></td>
+          <td>積木人偶 3D 模型（分件、關節階層、UV 分區）</td>
+          <td>一個節點命名與軸心都符合契約 2 的 glTF；<strong>不需製作動畫</strong></td>
+        </tr>
+        <tr>
+          <td><strong>R5</strong><span class="sub">實測統籌</span></td>
+          <td>3D 場景建模 ＋ 碰撞佈局</td>
+          <td>場景 glTF ＋ 回寫 <code>shared/scene.js</code>，符合契約 3</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="label">為什麼 R4、R5 這階段做資產</span>
+    <p>
+      他們本業的工作（論述、實測腳本）在系統穩定前推不動，此時有餘裕；
+      第二部分再回到自己的線。這是依「各人何時有空檔」分配，而非只按職稱。
+    </p>
+  </div>
+
+  <h3>6.2　第二部分</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>角色</th><th>主責</th><th>完成的判準</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>R1</strong></td>
+          <td>轉譯角色加入系統：掃描 → 參數 → 模型外觀</td>
+          <td>參與者掃描後，大螢幕上出現對應外觀的角色</td>
+        </tr>
+        <tr>
+          <td><strong>R2</strong></td>
+          <td>正式場景與角色就位 ＋ 合照取景運鏡</td>
+          <td>佔位資產全數換成正式資產；合照能框住全體</td>
+        </tr>
+        <tr>
+          <td><strong>R3</strong></td>
+          <td>場景納入後台控制 ＋ 合照輸出接上既有 QR 分發</td>
+          <td>主辦端能切換場景／燈光；合照能產出並分發</td>
+        </tr>
+        <tr>
+          <td><strong>R4</strong></td>
+          <td>回到 WP-D，論述隨架構調整（見 §00 的論述提示）</td>
+          <td>期末報告與答辯簡報</td>
+        </tr>
+        <tr>
+          <td><strong>R5</strong></td>
+          <td>回到 WP-C，實測腳本與現場部署</td>
+          <td>校內實測 N ≥ 25，完整行為 Log</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note note-key">
+    <span class="label">最重要的一條排程規則</span>
+    <p>
+      <strong>R2 不能等 R4 的模型。</strong>第一天就用<strong>幾個方塊組成的假人偶</strong>
+      當佔位 —— 只要節點階層與命名符合契約 2，R2 就能把整套朝向、行走擺動、
+      位置內插、30 人壓測全部做完，最後只是把模型換掉。
+      這個假人偶 R2 自己十分鐘就能拼出來，不必等任何人。
+      這一步能省掉一到兩週的串行等待，是五人分工能否真正並行的關鍵。
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<section id="s7">
+  <h2><span class="num">07</span>時程與備援</h2>
+
+  <div class="note note-risk">
+    <span class="label">時程現實</span>
+    <p>
+      距 WP-C 的校內實測（9/30）只剩約<strong>五週半</strong>。
+      要在這段時間完成 HTTPS 部署、掃描管線、3D 場景、骨架、渲染引擎重寫、
+      合照取景 —— 對五位還有其他課業的同學來說非常緊。
+    </p>
+  </div>
+
+  <div class="note note-key">
+    <span class="label">因此：2D 版本不要刪</span>
+    <p>
+      現行的 2D 系統已通過 71 項單元測試與 46 項端對端測試，是一個完整可運行的版本。
+      請在另一條分支上開發 3D，<strong>隨時保持「至少有一個版本能跑」</strong>。
+    </p>
+    <p>
+      如果 9/29 晚上 3D 仍有問題，可以用 2D 版完成實測、取得 N ≥ 25 的資料，
+      而不是開天窗。這一條可能比任何技術選擇都值錢。
+    </p>
+  </div>
+
+  <h3>7.1　關鍵路徑</h3>
+  <p>
+    最長的依賴鏈是：<strong>HTTPS → 掃描 → 生成 → 參數萃取 → 角色轉譯</strong>。
+    這條鏈上任何一環卡住，整個掃描功能就不存在。因此 HTTPS 必須在第一週解決，
+    它現在是 P0，不再是「之後再說」的項目。
+  </p>
+  <p>
+    3D 渲染引擎與美術資產是<strong>可並行</strong>的第二條線，
+    只要遵守 §6.2 的佔位資產規則就不會互相阻塞。
+  </p>
+</section>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<section id="s8">
+  <h2><span class="num">08</span>待決事項</h2>
+
+  <h3>8.1　硬阻擋：相機需要安全情境</h3>
+  <div class="note note-risk">
+    <span class="label">P0 · 第一週必須解決</span>
+    <p>
+      手機瀏覽器在 <code>http://192.168.x.x</code> 上<strong>會拒絕相機權限</strong>。
+      <code>getUserMedia</code> 要求安全情境（HTTPS 或 localhost），區網 IP 不符合。
+      這是瀏覽器的硬規則，不是可以繞過的設定。
+    </p>
+    <p>
+      可行方案各有代價：自簽憑證會在活動入口跳出安全警告嚇退參與者；
+      真實憑證需要網域與 DNS 配置。<strong>沒有它，掃描功能完全不存在。</strong>
+    </p>
+  </div>
+
+  <h3>8.2　待確認清單</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>項目</th><th>需要誰決定</th><th>影響</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>HTTPS 部署方案</td>
+          <td>R1 · R3</td>
+          <td>掃描功能能否存在</td>
+        </tr>
+        <tr>
+          <td><strong>切片比例是否穩定</strong>
+            <span class="sub">以 20 張實際生成結果驗證，見 §3.3</span></td>
+          <td>R1</td>
+          <td>決定要不要加入偵測步驟</td>
+        </tr>
+        <tr>
+          <td><strong>積木人偶造型的權利議題</strong>
+            <span class="sub">見下方說明</span></td>
+          <td>R1 · R4</td>
+          <td>公開展示與書面報告的呈現方式</td>
+        </tr>
+        <tr>
+          <td>社交群聚偏置強度 <code>affinityBonus</code></td>
+          <td>R2 · R5</td>
+          <td>現值 1.5，待現場實測定案</td>
+        </tr>
+        <tr>
+          <td>場景資產庫的授權條款</td>
+          <td>R5</td>
+          <td>公開展示是否適用</td>
+        </tr>
+        <tr>
+          <td>節流頻率或延遲標準二選一</td>
+          <td>R1 · R3</td>
+          <td>v3.0 §9.3 遺留，尚未決議</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>8.3　造型的權利議題</h3>
+  <div class="note note-open">
+    <span class="label">值得先確認一次</span>
+    <p>
+      積木人偶的外觀是受保護的商業設計，其權利人對該造型的使用一向積極維護。
+      本專案會在公開活動投影、並將畫面收入書面報告與答辯簡報，
+      屬於對外呈現而非純內部試作。
+    </p>
+    <p>
+      學術研究用途通常風險不高，但建議 R1 與 R4 先確認校方或指導老師的意見。
+      若有疑慮，可調整生成提示詞讓造型偏離特定商標識別特徵（例如改變頭部與手部形狀），
+      <strong>整條管線不受影響</strong> —— 它依賴的是「正面、去背、分件規格化」這三個性質，
+      而不是特定的積木造型。
+    </p>
+  </div>
+</section>
+
+<footer>
+  PersonaFlow（眾影鏈結）· 規格 v4.0 · 本文件取代 v3.0 之 §02 架構與 §04 呈現方式；
+  v3.0 的任務系統（§03）與主辦端（§05）仍然有效
+</footer>
+
+</main>
+</div>

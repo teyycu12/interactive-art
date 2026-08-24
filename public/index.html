@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PersonaFlow</title>
+<style>
+  :root { --paper: #FAF8F5; --ink: #2F2A26; --soft: #7A716A; --line: #D8D0C6; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100dvh; display: grid; place-items: center;
+    background: var(--paper);
+    background-image: radial-gradient(var(--line) 1px, transparent 1px);
+    background-size: 22px 22px;
+    color: var(--ink);
+    font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  }
+  main { text-align: center; padding: 32px; max-width: 560px; }
+  h1 { font-size: 30px; margin: 0 0 4px; letter-spacing: .06em; }
+  .sub { color: var(--soft); margin: 0 0 28px; font-size: 14px; }
+  .links { display: grid; gap: 12px; }
+  a {
+    display: block; padding: 18px; text-decoration: none; color: var(--ink);
+    border: 2.5px solid var(--ink); border-radius: 16px; font-weight: 700;
+  }
+  a small { display: block; font-weight: 500; color: var(--soft); font-size: 12px; margin-top: 4px; }
+  a.ghost { border-style: dashed; border-color: var(--line); }
+  footer { margin-top: 26px; font-size: 12px; color: var(--soft); line-height: 1.8; }
+</style>
+</head>
+<body>
+<main>
+  <h1>PersonaFlow</h1>
+  <p class="sub">眾影鏈結 — 實體活動場域的雙層半自主互動系統</p>
+  <div class="links">
+    <a href="/screen/">開啟大螢幕
+      <small>投影用。目前為 M2 共治引擎的驗證視圖，M3 完成後將替換為手繪風格畫布</small></a>
+    <a class="ghost" href="/controller/">開啟手機控制器
+      <small>現場請以手機掃描 QR Code 進入，或連上同一區網後輸入本機 IP</small></a>
+    <a class="ghost" href="/host/">開啟主辦端控制台
+      <small>發布任務、監看進度、現場處置。需要伺服器終端機顯示的通行密鑰</small></a>
+  </div>
+  <footer>
+    已完成：<strong>M1 捏臉與控制器</strong>　<strong>M2 半自主共治引擎</strong>
+    <strong>任務系統與配對任務</strong>　Gateway<br>
+    待開發：M3 手繪畫布與程式化步態　行為 Log 落地　M4 收尾合照
+  </footer>
+</main>
+</body>
+</html>

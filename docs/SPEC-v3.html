@@ -1,0 +1,961 @@
+<title>PersonaFlow 任務驅動架構</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+/* ─────────────────────────────────────────────────────────
+   調色盤沿用專案既有系統：紙色與墨色出自技術文件 §M3 手繪風格規範，
+   主色出自 shared/avatars.js 的 ACCENT_COLORS 首項。
+   ───────────────────────────────────────────────────────── */
+:root {
+  --paper:      #FAF8F5;
+  --surface:    #FFFDFA;
+  --sunk:       #F2EDE6;
+  --ink:        #2F2A26;
+  --ink-soft:   #6E655D;
+  --ink-faint:  #9A9089;
+  --line:       #DED6CA;
+  --line-soft:  #ECE5DA;
+  --dot:        #E2DACE;
+
+  --accent:     #E76F51;
+  --accent-ink: #B44A2F;
+  --teal:       #2A8C80;
+  --blue:       #3E6E8E;
+  --amber:      #B5822A;
+
+  --shadow: 0 1px 2px rgba(47, 42, 38, .05), 0 8px 24px -12px rgba(47, 42, 38, .12);
+
+  --font-sans: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  --measure: 68ch;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper:      #1A1715;
+    --surface:    #221E1B;
+    --sunk:       #14110F;
+    --ink:        #EDE7DF;
+    --ink-soft:   #A79C91;
+    --ink-faint:  #786D64;
+    --line:       #3B3430;
+    --line-soft:  #2B2522;
+    --dot:        #2A2421;
+
+    --accent:     #F08A6C;
+    --accent-ink: #F3A78E;
+    --teal:       #4FB8A8;
+    --blue:       #74A6C4;
+    --amber:      #D9A648;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -12px rgba(0, 0, 0, .6);
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper:      #1A1715;
+  --surface:    #221E1B;
+  --sunk:       #14110F;
+  --ink:        #EDE7DF;
+  --ink-soft:   #A79C91;
+  --ink-faint:  #786D64;
+  --line:       #3B3430;
+  --line-soft:  #2B2522;
+  --dot:        #2A2421;
+
+  --accent:     #F08A6C;
+  --accent-ink: #F3A78E;
+  --teal:       #4FB8A8;
+  --blue:       #74A6C4;
+  --amber:      #D9A648;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px -12px rgba(0, 0, 0, .6);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background-color: var(--paper);
+  /* 手帳網格微點 —— 技術文件 §M3 指定的場景底紋語彙 */
+  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: 24px 24px;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.8;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 版面骨架 ─────────────────────────────────────────── */
+.shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 28px 96px;
+  display: grid;
+  grid-template-columns: 216px minmax(0, 1fr);
+  gap: 56px;
+  align-items: start;
+}
+
+nav.rail {
+  position: sticky;
+  top: 0;
+  padding: 40px 0;
+  max-height: 100vh;
+  overflow-y: auto;
+  font-size: 13px;
+}
+nav.rail .rail-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 14px;
+}
+nav.rail ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+nav.rail a {
+  display: flex;
+  gap: 9px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  color: var(--ink-soft);
+  text-decoration: none;
+  line-height: 1.5;
+  border-left: 2px solid transparent;
+}
+nav.rail a:hover { background: var(--sunk); color: var(--ink); }
+nav.rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+nav.rail a .num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  padding-top: 1px;
+}
+
+main { min-width: 0; padding-top: 40px; }
+
+/* ── 文件抬頭 ─────────────────────────────────────────── */
+.masthead { padding-bottom: 30px; border-bottom: 2px solid var(--ink); margin-bottom: 44px; }
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  margin-bottom: 14px;
+}
+h1 {
+  font-size: clamp(30px, 4.6vw, 46px);
+  font-weight: 900;
+  letter-spacing: -.015em;
+  line-height: 1.22;
+  margin: 0 0 16px;
+  text-wrap: balance;
+}
+.standfirst {
+  font-size: 17px;
+  color: var(--ink-soft);
+  margin: 0;
+  max-width: var(--measure);
+}
+.docmeta {
+  margin-top: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 26px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.docmeta b { color: var(--ink-soft); font-weight: 500; }
+
+/* ── 章節 ─────────────────────────────────────────────── */
+section { margin-bottom: 60px; scroll-margin-top: 24px; }
+section > * { max-width: var(--measure); }
+section > .wide, section > .tablewrap, section > .grid2, section > .flow, section > .stack { max-width: 100%; }
+
+h2 {
+  font-size: 25px;
+  font-weight: 900;
+  letter-spacing: -.01em;
+  line-height: 1.35;
+  margin: 0 0 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 13px;
+  text-wrap: balance;
+}
+h2 .num {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-ink);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.deck { color: var(--ink-soft); margin: 0 0 26px; font-size: 15px; }
+
+h3 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 34px 0 10px;
+  letter-spacing: -.005em;
+}
+
+p { margin: 0 0 15px; }
+strong { font-weight: 700; }
+a { color: var(--accent-ink); }
+
+ul, ol.list { margin: 0 0 15px; padding-left: 1.25em; }
+li { margin-bottom: 7px; }
+li::marker { color: var(--ink-faint); }
+
+code {
+  font-family: var(--font-mono);
+  font-size: .87em;
+  background: var(--sunk);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: .1em .38em;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+/* ── 狀態標籤：編碼真實的施工狀態，非裝飾 ───────────────── */
+.st {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: .06em;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.st::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.st-done { color: var(--teal);     border-color: color-mix(in srgb, var(--teal) 40%, transparent); }
+.st-v1   { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.st-open { color: var(--amber);    border-color: color-mix(in srgb, var(--amber) 42%, transparent); }
+.st-later{ color: var(--ink-faint);border-color: var(--line); }
+.st-cut  { color: var(--ink-faint);border-color: var(--line); text-decoration: line-through; }
+
+/* ── 表格 ─────────────────────────────────────────────── */
+.tablewrap { overflow-x: auto; margin: 0 0 20px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+thead th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  background: var(--sunk);
+}
+tbody td { padding: 12px 15px; border-bottom: 1px solid var(--line-soft); vertical-align: top; line-height: 1.65; }
+tbody tr:last-child td { border-bottom: none; }
+td.mono, .num-col { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 13px; white-space: nowrap; }
+
+/* ── 呼籲區塊 ─────────────────────────────────────────── */
+.note {
+  border-left: 3px solid var(--line);
+  background: var(--surface);
+  border-radius: 0 8px 8px 0;
+  padding: 16px 20px;
+  margin: 0 0 20px;
+  font-size: 14.5px;
+}
+.note > :last-child { margin-bottom: 0; }
+.note .label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  display: block;
+  margin-bottom: 6px;
+}
+.note-block { border-left-color: var(--accent); }
+.note-block .label { color: var(--accent-ink); }
+.note-open  { border-left-color: var(--amber); }
+.note-open .label { color: var(--amber); }
+.note-cut   { border-left-color: var(--line); }
+
+/* ── 生命週期流程 ─────────────────────────────────────── */
+.flow { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 12px; margin-bottom: 22px; }
+.flow .step {
+  flex: 1 0 152px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 13px 15px;
+}
+.flow .step .k {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .1em;
+  color: var(--ink-faint);
+  display: block;
+  margin-bottom: 5px;
+}
+.flow .step .t { font-weight: 700; font-size: 14.5px; display: block; margin-bottom: 4px; }
+.flow .step .d { font-size: 12.5px; color: var(--ink-soft); line-height: 1.6; }
+
+/* ── 架構層堆疊 ───────────────────────────────────────── */
+.stack { display: flex; flex-direction: column; gap: 7px; margin-bottom: 22px; }
+.layer {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  padding: 14px 18px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+}
+.layer .lnum { font-family: var(--font-mono); font-size: 13px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.layer .lname { font-weight: 700; font-size: 15px; }
+.layer .ldesc { font-size: 13px; color: var(--ink-soft); margin-top: 2px; line-height: 1.6; }
+.layer.is-new { border-color: var(--accent); border-width: 1.5px; }
+
+/* ── 兩欄 ─────────────────────────────────────────────── */
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 16px; margin-bottom: 22px; }
+.card { border: 1px solid var(--line); border-radius: 9px; background: var(--surface); padding: 17px 19px; }
+.card h4 { margin: 0 0 8px; font-size: 15px; font-weight: 700; }
+.card p { font-size: 14px; color: var(--ink-soft); margin-bottom: 0; }
+
+hr { border: none; border-top: 1px solid var(--line); margin: 0 0 34px; }
+
+footer {
+  margin-top: 72px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+}
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; gap: 0; padding: 0 20px 64px; }
+  nav.rail {
+    position: static;
+    max-height: none;
+    padding: 28px 0 0;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 20px;
+    margin-bottom: 8px;
+  }
+  nav.rail ol { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  nav.rail a { border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; }
+  main { padding-top: 26px; }
+  .layer { grid-template-columns: 26px minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+</style>
+
+<div class="shell">
+
+<nav class="rail">
+  <div class="rail-title">目次</div>
+  <ol>
+    <li><a href="#s0"><span class="num">00</span><span>改版摘要</span></a></li>
+    <li><a href="#s1"><span class="num">01</span><span>為什麼要改</span></a></li>
+    <li><a href="#s2"><span class="num">02</span><span>架構總覽</span></a></li>
+    <li><a href="#s3"><span class="num">03</span><span>任務系統</span></a></li>
+    <li><a href="#s4"><span class="num">04</span><span>社交圖譜</span></a></li>
+    <li><a href="#s5"><span class="num">05</span><span>主辦端控制台</span></a></li>
+    <li><a href="#s6"><span class="num">06</span><span>協定增補</span></a></li>
+    <li><a href="#s7"><span class="num">07</span><span>M4 重新定位</span></a></li>
+    <li><a href="#s8"><span class="num">08</span><span>工作包影響</span></a></li>
+    <li><a href="#s9"><span class="num">09</span><span>阻擋與待決</span></a></li>
+    <li><a href="#s10"><span class="num">10</span><span>分期計畫</span></a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="masthead">
+  <div class="eyebrow">規格文件 v3.0 · 取代 v2.0 之 M4 與 WP-B 相關章節</div>
+  <h1>PersonaFlow 任務驅動架構</h1>
+  <p class="standfirst">
+    把系統從「再現現場」轉為「介入現場」。大螢幕不再只是反映參與者已經在做的事，
+    而是由主辦端發布任務、指定現場該發生什麼——破冰的因果機制第一次被寫進系統裡。
+  </p>
+  <div class="docmeta">
+    <span><b>版本</b> v3.0</span>
+    <span><b>基準</b> 技術文件 v2.0</span>
+    <span><b>狀態</b> 待團隊確認</span>
+    <span><b>實作進度</b> M1 · M2 · Gateway 已完成</span>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s0">
+  <h2><span class="num">00</span>改版摘要</h2>
+  <p class="deck">v2.0 的四層架構與 M1、M2 全部保留，改動集中在系統的目的與 M4 的定位。</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>項目</th><th>v2.0</th><th>v3.0</th><th>狀態</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>系統定位</strong></td>
+          <td>參與式互動與記憶結晶</td>
+          <td>任務驅動的實體交流促進系統</td>
+          <td><span class="st st-v1">本版重點</span></td>
+        </tr>
+        <tr>
+          <td><strong>任務系統</strong></td>
+          <td>無</td>
+          <td>主辦端發布任務，驅動現場行為</td>
+          <td><span class="st st-done">已完成</span></td>
+        </tr>
+        <tr>
+          <td><strong>主辦端</strong></td>
+          <td>僅有觸發合照的能力</td>
+          <td>獨立控制台，第三個系統角色</td>
+          <td><span class="st st-done">已完成</span></td>
+        </tr>
+        <tr>
+          <td><strong>M4 大合照</strong></td>
+          <td>核心產出「記憶結晶」</td>
+          <td>降級為收尾儀式；改由參與者名冊構圖</td>
+          <td><span class="st st-later">降級</span></td>
+        </tr>
+        <tr>
+          <td><strong>階梯分層排版演算法</strong></td>
+          <td>WP-B 驗收項目</td>
+          <td>取消，資源移往任務系統</td>
+          <td><span class="st st-cut">取消</span></td>
+        </tr>
+        <tr>
+          <td><strong>M1 捏臉與控制器</strong></td>
+          <td>—</td>
+          <td>不變，另補進場流程與退出功能</td>
+          <td><span class="st st-done">已完成</span></td>
+        </tr>
+        <tr>
+          <td><strong>M2 共治引擎</strong></td>
+          <td>—</td>
+          <td>不變，另作為社交圖譜的呈現載體</td>
+          <td><span class="st st-done">已完成</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s1">
+  <h2><span class="num">01</span>為什麼要改</h2>
+  <p class="deck">v2.0 宣稱達成實體破冰，但破冰的因果機制是缺的。</p>
+
+  <p>
+    v2.0 的系統做的是<strong>再現</strong>：參與者移動搖桿，大螢幕顯示對應的角色移動。
+    這建立了共享的視覺場域，但它反映的是現場已經發生的事。兩個陌生人的角色在畫面上靠近，
+    不會讓這兩個人開口說話。
+  </p>
+  <p>
+    WP-D 的論述架構以「達成實體破冰」為核心主張，但 v2.0 並未提供任何促使陌生人互動的機制。
+    論述與系統之間有一個缺口。
+  </p>
+  <p>
+    v3.0 把因果方向反過來。系統轉為<strong>介入</strong>：主辦端發布任務，大螢幕指定現場該發生什麼，
+    參與者為了完成任務必須在物理空間中行動與交談。數位層對實體行為產生因果力，
+    而不只是映射——這正是混合空間論述（de Souza e Silva, 2006）真正有力的地方，
+    也讓 WP-D 的主張第一次有對應的系統機制可以指稱。
+  </p>
+
+  <div class="note note-block">
+    <span class="label">給 R4 的論述提示</span>
+    <p>
+      三大理論支撐不需推翻，但重心要調整。Goffman 的自我呈現仍對應捏臉模組；
+      Halbwachs 的集體記憶符號化改由「任務完成的累積記錄」承載，而非單一張合照；
+      社會臨場感與混合空間則從輔助論述升為主論述，因為它現在有了可驗證的行為機制。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s2">
+  <h2><span class="num">02</span>架構總覽</h2>
+  <p class="deck">四層架構保留，新增主辦端作為第三個客戶端角色。</p>
+
+  <div class="stack">
+    <div class="layer is-new">
+      <span class="lnum">00</span>
+      <div>
+        <div class="lname">主辦端控制台（Host Console）<span class="st st-v1" style="margin-left:8px">新增</span></div>
+        <div class="ldesc">發布與關閉任務、監看完成進度、觸發收尾合照、緊急處置（踢除、暫停）</div>
+      </div>
+    </div>
+    <div class="layer">
+      <span class="lnum">01</span>
+      <div>
+        <div class="lname">個人控制層（Mobile Web）</div>
+        <div class="ldesc">模組化捏臉、虛擬搖桿、社交動作、<strong>任務接收與提交</strong></div>
+      </div>
+    </div>
+    <div class="layer">
+      <span class="lnum">02</span>
+      <div>
+        <div class="lname">通訊與狀態調度層（Gateway）</div>
+        <div class="ldesc">連線生命週期、狀態矩陣、共治仲裁、<strong>任務生命週期與驗證</strong></div>
+      </div>
+    </div>
+    <div class="layer">
+      <span class="lnum">03</span>
+      <div>
+        <div class="lname">公共渲染與群體動力層（Public Canvas）</div>
+        <div class="ldesc">手繪場景、程式化步態、Boids 群體動力、<strong>任務公告與完成回饋</strong></div>
+      </div>
+    </div>
+    <div class="layer">
+      <span class="lnum">04</span>
+      <div>
+        <div class="lname">記憶層（Memory Layer）</div>
+        <div class="ldesc">任務完成記錄、社交圖譜累積、收尾合照與分發</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <span class="label">存取控制</span>
+    <p>
+      主辦端控制台必須與參與者端有實質區隔，不能只靠「網址沒人知道」。
+      現場所有人都連在同一個區網，路徑可被掃出。控制台需要獨立的通行密鑰，
+      於伺服器啟動時產生並印在終端機，主辦者手動輸入一次。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s3">
+  <h2><span class="num">03</span>任務系統</h2>
+  <p class="deck">共用一套生命週期，驗證策略可插拔。三種任務類型的驗證模型差異極大，不可當成同一種東西實作。</p>
+
+  <h3>3.1　任務生命週期</h3>
+  <div class="flow">
+    <div class="step">
+      <span class="k">01</span><span class="t">發布</span>
+      <span class="d">主辦端選定任務類型與參數，推送至全體手機與大螢幕</span>
+    </div>
+    <div class="step">
+      <span class="k">02</span><span class="t">執行</span>
+      <span class="d">參與者在物理空間中行動；大螢幕持續顯示任務內容與完成人數</span>
+    </div>
+    <div class="step">
+      <span class="k">03</span><span class="t">提交</span>
+      <span class="d">參與者提交完成憑據，形式依任務類型而異</span>
+    </div>
+    <div class="step">
+      <span class="k">04</span><span class="t">驗證</span>
+      <span class="d">依該類型的驗證策略判定，自動或由主辦端裁決</span>
+    </div>
+    <div class="step">
+      <span class="k">05</span><span class="t">回饋</span>
+      <span class="d">大螢幕即時呈現完成事件，這是任務回推現實的關鍵環節</span>
+    </div>
+    <div class="step">
+      <span class="k">06</span><span class="t">結算</span>
+      <span class="d">主辦端關閉任務，記錄寫入行為 Log</span>
+    </div>
+  </div>
+
+  <div class="note note-block">
+    <span class="label">設計原則</span>
+    <p>
+      第 05 步不可省略。若任務完成後只有手機上跳出一行字，這就退化成一個手機小遊戲，
+      與專案要打破個人螢幕封閉性的核心命題背道而馳。<strong>每一次完成都必須在共享畫布上被看見。</strong>
+    </p>
+  </div>
+
+  <h3>3.2　三種任務類型的比較</h3>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>任務類型</th><th>驗證方式</th><th>需要相機</th><th>對實體交流的貢獻</th><th>v1</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>找一個人配對</strong><div style="font-size:13px;color:var(--ink-soft);margin-top:3px">交換配對碼</div></td>
+          <td>雙方相互確認，可完全自動判定</td>
+          <td class="mono">否</td>
+          <td><strong>高</strong>——強制產生面對面互動</td>
+          <td><span class="st st-v1">納入</span></td>
+        </tr>
+        <tr>
+          <td><strong>搶答問題</strong><div style="font-size:13px;color:var(--ink-soft);margin-top:3px">主辦端出題</div></td>
+          <td>自動比對答案，但搶答順序涉及公平性</td>
+          <td class="mono">否</td>
+          <td><strong>低</strong>——一對多廣播，不促成陌生人交談</td>
+          <td><span class="st st-later">延後</span></td>
+        </tr>
+        <tr>
+          <td><strong>拍攝現場照片</strong><div style="font-size:13px;color:var(--ink-soft);margin-top:3px">指定主題</div></td>
+          <td>無法自動驗證，需主辦端人工審核</td>
+          <td class="mono">是</td>
+          <td><strong>中</strong>——促使走動觀察，但屬單人任務</td>
+          <td><span class="st st-later">延後</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    排序依據是本專案的目標：<strong>回推現實交流</strong>。配對任務是三者中唯一強制產生物理互動的，
+    且不觸及任何部署阻擋，因此列為 v1 唯一範圍。另兩種延後的原因見 <a href="#s9">§09</a>。
+  </p>
+
+  <h3>3.3　v1 規格：配對任務</h3>
+  <p>
+    關鍵洞察是<strong>驗證不需要照片</strong>。真正的完成證據是雙方的相互確認，
+    照片只是副產品。因此 v1 可以完全不碰相機。
+  </p>
+  <ol class="list">
+    <li>每位參與者的手機上顯示一組 <strong>4 碼配對碼</strong>，每 60 秒輪換一次。</li>
+    <li>A 走向 B，口頭索取並輸入 B 的配對碼。</li>
+    <li>伺服器建立待確認配對，推送確認請求至 B 的手機。</li>
+    <li>B 按下確認，配對成立。逾 30 秒未確認則作廢。</li>
+    <li>大螢幕出現完成回饋，雙方任務進度更新，社交圖譜寫入一條邊。</li>
+  </ol>
+  <p>
+    要拿到對方的碼<strong>必須走過去開口問他</strong>——這個索取動作本身就是破冰，
+    而不是系統事後對破冰的記錄。
+  </p>
+
+  <div class="note">
+    <span class="label">防繞過</span>
+    <p>
+      隔空喊碼或在群組貼碼可以繞過物理接近。60 秒輪換是最廉價的對策，讓遠端分享不實用。
+      校內活動不需做到滴水不漏；若日後要強化，可考慮限制同一對參與者只能配對一次，
+      並要求配對雙方的角色在大螢幕上距離足夠近（利用既有的空間狀態矩陣）。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s4">
+  <h2><span class="num">04</span>社交圖譜</h2>
+  <p class="deck">配對任務的累積產物。這可能比任務系統本身更有價值。</p>
+
+  <p>
+    v2.0 規劃 M4 的構圖演算法要「依據社交圖譜將互相按讚互動的角色分群靠攏」，
+    但「按讚」是很薄的關係資料——兩人互點一下不代表任何實質互動。
+    配對任務每完成一次，就產生一條<strong>經雙方確認的真實社交連結</strong>：
+    這兩個人確實在物理空間中碰過面、講過話。一場活動下來累積出來的，是一張有效度的社交圖譜。
+  </p>
+
+  <h3>4.1　資料模型</h3>
+  <p>無向圖。節點為參與者，邊帶有建立時間與所屬任務。同一對參與者的重複配對不重複計邊。</p>
+
+  <h3>4.2　呈現方式</h3>
+  <div class="note note-cut">
+    <span class="label">已否決　在角色之間畫連線</span>
+    <p>
+      30 名參與者、每人配對數次，畫面會糊成毛球。視覺雜訊會壓垮手繪極簡的場景語彙。
+    </p>
+  </div>
+
+  <div class="note note-block">
+    <span class="label">提案　轉為 Boids 凝聚權重偏置</span>
+    <p>
+      不畫任何線。改為讓配對過的參與者之間，Boids 的凝聚力（cohesion）權重略高於一般值。
+      社交圖譜於是表現為畫面上的<strong>自然群聚</strong>——互動過的人的角色會漸漸靠在一起，
+      形成幾個鬆散的團體。
+    </p>
+    <p>
+      這個作法零視覺雜訊、直接複用 M2 既有的群體動力引擎，
+      且剛好實現了 v2.0 原本描述的「依社交圖譜分群靠攏」——只是把它從合照當下的排版演算法，
+      提前成活動全程持續發生的空間現象。
+    </p>
+  </div>
+
+  <div class="note note-open">
+    <span class="label">已實作　強度待現場定案</span>
+    <p>
+      已於 <code>BOIDS.affinityBonus</code> 實作，現值 <code>1.5</code>：配對過的鄰居
+      在凝聚質心中的權重為一般人的 2.5 倍。
+    </p>
+    <p>
+      實作過程釐清了一件事：偏置的作用<strong>不是</strong>讓熟人貼得更近 ——
+      分離力構成 95 單位的地板，凝聚力再強也擠不進去。它真正的作用是
+      <strong>決定角色往哪一群漂</strong>。測試以兩個相隔的群體驗證：
+      置於正中間的角色，在有社交連結時會明顯漂向熟人那一群（距離 29 對 98），
+      無連結時則維持等距（72 對 77）。
+    </p>
+    <p>
+      強度仍需於 WP-C 現場實測定案 —— 過強會讓群體黏成硬塊、失去湧現感。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s5">
+  <h2><span class="num">05</span>主辦端控制台</h2>
+  <p class="deck">系統的第三個角色。v2.0 只在 M4 觸發合照時提到主辦端，v3.0 將其獨立為完整客戶端。</p>
+
+  <div class="grid2">
+    <div class="card">
+      <h4>任務控制</h4>
+      <p>選擇任務類型、填寫參數、發布、監看即時完成進度、關閉任務。</p>
+    </div>
+    <div class="card">
+      <h4>現場處置</h4>
+      <p>踢除特定參與者、暫停全場、重置場域。現場出狀況時的唯一處理管道。</p>
+    </div>
+    <div class="card">
+      <h4>收尾儀式</h4>
+      <p>觸發最終合照與成果回顧，作為活動的結束標記。</p>
+    </div>
+    <div class="card">
+      <h4>資料匯出</h4>
+      <p>匯出行為 Log 與社交圖譜，供 WP-C 與 WP-D 分析使用。</p>
+    </div>
+  </div>
+
+  <div class="note note-block">
+    <span class="label">同時解決既有缺口</span>
+    <p>
+      現場處置與資料匯出兩項，正好補上 1.0 版自評指出的兩個缺口：
+      無法處置惡意參與者，以及 WP-C 行為 Log 只存在記憶體、重啟即失。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s6">
+  <h2><span class="num">06</span>協定增補</h2>
+  <p class="deck">v2.0 §3 的既有事件全部保留。以下為新增，全部沿用既有的 JSON over WebSocket 形式。</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>事件</th><th>方向</th><th>說明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="mono">HOST_AUTH</td><td class="mono">Host → Server</td><td>以通行密鑰註冊為主辦端</td></tr>
+        <tr><td class="mono">HOST_PUBLISH_MISSION</td><td class="mono">Host → Server</td><td>發布任務，帶類型與參數</td></tr>
+        <tr><td class="mono">HOST_CLOSE_MISSION</td><td class="mono">Host → Server</td><td>結算並關閉任務</td></tr>
+        <tr><td class="mono">HOST_KICK</td><td class="mono">Host → Server</td><td>踢除指定參與者</td></tr>
+        <tr><td class="mono">MISSION_ANNOUNCE</td><td class="mono">Server → All</td><td>任務公告，同時推送至手機與大螢幕</td></tr>
+        <tr><td class="mono">MISSION_STATE</td><td class="mono">Server → All</td><td>任務進度更新（完成人數、剩餘時間）</td></tr>
+        <tr><td class="mono">PAIR_CODE</td><td class="mono">Server → Phone</td><td>下發本輪配對碼，每 60 秒輪換</td></tr>
+        <tr><td class="mono">PAIR_CLAIM</td><td class="mono">Phone → Server</td><td>提交對方的配對碼</td></tr>
+        <tr><td class="mono">PAIR_CONFIRM_REQ</td><td class="mono">Server → Phone</td><td>推送確認請求給被指定的一方</td></tr>
+        <tr><td class="mono">PAIR_CONFIRM</td><td class="mono">Phone → Server</td><td>被指定方按下確認</td></tr>
+        <tr><td class="mono">MISSION_COMPLETE</td><td class="mono">Server → All</td><td>完成事件，觸發大螢幕回饋</td></tr>
+        <tr><td class="mono">CLIENT_LEAVE</td><td class="mono">Phone → Server</td><td>主動退出，角色離場</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="label">速率限制</span>
+    <p>
+      新增事件一律納入既有的 Token Bucket 限流。
+      <code>PAIR_CLAIM</code> 另需獨立冷卻（建議 3 秒），否則可暴力枚舉 4 碼配對碼。
+      4 碼在 30 人規模下碰撞率可接受，但沒有冷卻就等於可被窮舉。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s7">
+  <h2><span class="num">07</span>M4 重新定位</h2>
+  <p class="deck">從核心產出降級為收尾儀式，同時修正一個語意錯誤。</p>
+
+  <p>
+    <strong>降級理由。</strong>逐步累積的社交圖譜比一張擺拍合照更有力，
+    而且它在活動全程持續發生，不是最後三十秒的事。
+    「階梯分層排版演算法」與「4K 紀念框」的工程成本高、與破冰目標關聯低，
+    資源移往任務系統是划算的交換。
+  </p>
+
+  <p>
+    <strong>語意修正。</strong>合照應從<strong>參與者名冊</strong>（所有曾經進場的人）構圖，
+    而非從當下場上的角色構圖。婚禮、尾牙的合照記錄的是「這場活動有誰來過」，
+    不是「某個瞬間站在這裡的人」；早退者被排除在外，在社交意義上是失禮的。
+  </p>
+
+  <div class="note note-block">
+    <span class="label">連帶簡化</span>
+    <p>
+      這個修正讓 M4 與即時狀態解耦：不再需要「合照前 N 分鐘內須有操作」的資格規則，
+      也不需要退出排除邏輯。退出功能仍然保留（讓人乾淨離場、停止角色漫遊），
+      但不再影響合照資格。
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s8">
+  <h2><span class="num">08</span>工作包影響</h2>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>工作包</th><th>變更</th><th>驗收標準調整</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>WP-A</strong><div style="font-size:13px;color:var(--ink-soft)">捏臉與控制器</div></td>
+          <td>捏臉與搖桿已完成。新增：名字前置至進場流程、退出功能、任務接收與提交介面。</td>
+          <td>「延遲 &lt; 50ms」需重新檢視，見 <a href="#s9">§09</a></td>
+        </tr>
+        <tr>
+          <td><strong>WP-B</strong><div style="font-size:13px;color:var(--ink-soft)">畫布與共治引擎</div></td>
+          <td>共治引擎已完成。<strong>移除</strong>合照排版演算法；<strong>新增</strong>任務公告與完成回饋的渲染、社交圖譜的凝聚偏置。</td>
+          <td>「合照自動構圖 &lt; 5 秒」取消<br>「30 角色 30 FPS」已達成</td>
+        </tr>
+        <tr>
+          <td><strong>WP-C</strong><div style="font-size:13px;color:var(--ink-soft)">場域實測與數據</div></td>
+          <td>行為 Log 新增任務完成率、配對次數、社交圖譜密度。這些比操控時長更能回答「是否促成實體交流」。</td>
+          <td>建議增列：人均配對數、任務完成率</td>
+        </tr>
+        <tr>
+          <td><strong>WP-D</strong><div style="font-size:13px;color:var(--ink-soft)">理論論述與分析</div></td>
+          <td>論述重心調整，見 <a href="#s1">§01</a>。集體記憶的載體由單張合照改為任務完成的累積記錄。</td>
+          <td>問卷需增列破冰效果相關題項</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s9">
+  <h2><span class="num">09</span>阻擋與待決事項</h2>
+
+  <h3>9.1　硬阻擋：相機需要安全情境</h3>
+  <div class="note note-open">
+    <span class="label">必須在開工前解決</span>
+    <p>
+      手機瀏覽器在 <code>http://192.168.x.x</code> 上<strong>會拒絕相機權限</strong>。
+      <code>getUserMedia</code> 要求安全情境（HTTPS 或 localhost），區網 IP 不符合。
+      這是瀏覽器的硬規則，不是可以繞過的設定。
+    </p>
+    <p>
+      可行方案各有代價：自簽憑證會跳出安全警告，在活動入口嚇退參與者；
+      真實憑證需要網域與 DNS 配置。<strong>這是「拍攝現場照片」任務延後的主因</strong>——
+      不是功能難做，是部署條件未備。
+    </p>
+  </div>
+
+  <h3>9.2　搶答的公平性</h3>
+  <p>
+    搶答順序取決於封包抵達順序，而封包抵達順序取決於各人的 Wi-Fi 訊號強度，
+    不是反應速度。實測管線延遲 p50 為 18.1ms、p99 為 49.3ms（不含現場 Wi-Fi），
+    這個離散程度足以決定勝負。要做得公平需要客戶端時間戳加上伺服器校時，是另一套工程。
+  </p>
+
+  <h3>9.3　既有的規格內部矛盾</h3>
+  <p>
+    v2.0 同時要求「搖桿輸入 20 Hz 節流」與「輸入延遲 &lt; 50ms」，這兩者無法同時成立：
+    節流佇列本身最差就佔滿 50ms 預算。需決定調整節流頻率或修訂驗收標準。
+    伺服器 CPU 餘裕充足（30 角色時每 tick 僅 0.011ms，佔預算 0.03%），提高頻率在技術上可行。
+  </p>
+
+  <h3>9.4　待決清單</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>項目</th><th>負責決定</th><th>影響</th></tr></thead>
+      <tbody>
+        <tr><td>凝聚偏置強度</td><td>R2 · R5</td><td>實測時定案</td></tr>
+        <tr><td>節流頻率或延遲標準二選一</td><td>R1 · R3</td><td>WP-A 驗收標準</td></tr>
+        <tr><td>HTTPS 部署方案</td><td>R3</td><td>決定照片任務能否納入</td></tr>
+        <tr><td>是否保留搶答任務</td><td>R1</td><td>影響活動節奏設計</td></tr>
+        <tr><td>每人任務數量與活動節奏</td><td>R5</td><td>WP-C 實測腳本</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section id="s10">
+  <h2><span class="num">10</span>分期實作計畫</h2>
+  <p class="deck">依「不依賴未解決條件」與「對破冰目標的貢獻」排序。</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>階段</th><th>內容</th><th>前置條件</th><th>狀態</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="mono">P0</td>
+          <td>M1 捏臉與控制器、M2 共治引擎、Gateway、連線防護</td>
+          <td>—</td>
+          <td><span class="st st-done">已完成</span></td>
+        </tr>
+        <tr>
+          <td class="mono">P1</td>
+          <td>進場流程調整（名字前置）、退出功能（二次確認、可再進場）</td>
+          <td>無</td>
+          <td><span class="st st-done">已完成</span></td>
+        </tr>
+        <tr>
+          <td class="mono">P2</td>
+          <td>主辦端控制台、任務生命週期骨架、配對任務</td>
+          <td>P1</td>
+          <td><span class="st st-done">已完成</span></td>
+        </tr>
+        <tr>
+          <td class="mono">P3</td>
+          <td>M3 手繪畫布、程式化步態、任務回饋渲染、凝聚偏置</td>
+          <td>P2</td>
+          <td><span class="st st-done">已完成</span></td>
+        </tr>
+        <tr>
+          <td class="mono">P4</td>
+          <td>行為 Log 落地與匯出、社交圖譜匯出</td>
+          <td>P2</td>
+          <td><span class="st st-later">WP-C 需求</span></td>
+        </tr>
+        <tr>
+          <td class="mono">P5</td>
+          <td>M4 收尾合照（簡化版，由名冊構圖）</td>
+          <td>P3</td>
+          <td><span class="st st-later">降級</span></td>
+        </tr>
+        <tr>
+          <td class="mono">—</td>
+          <td>搶答任務、照片任務</td>
+          <td>§9.1 · §9.2 解決</td>
+          <td><span class="st st-open">條件未備</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note note-block">
+    <span class="label">P1 與 P2 的關係</span>
+    <p>
+      P1 的兩項不依賴任務系統，可獨立完成，且補上了目前「能進場但沒有合法出場方式」的生命週期缺口。
+      建議先收尾 P1 再全力投入 P2。
+    </p>
+  </div>
+</section>
+
+<footer>
+  PersonaFlow（眾影鏈結）· 規格 v3.0 · 本文件取代技術文件 v2.0 之 M4 與 WP-B 相關章節，其餘章節仍然有效
+</footer>
+
+</main>
+</div>

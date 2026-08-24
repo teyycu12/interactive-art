@@ -35,15 +35,32 @@ jobs:
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         pip install -r requirements-dev.txt
 
-    # 前端沒有建置流程，也沒有 npm 相依 —— 直接用 Node 內建的測試執行器。
-    # 涵蓋的是 draw() 迴圈裡的格柵記憶化：單次 pipeline 約 2.2ms，若快取失效，
-    # 30 個角色的每幀成本會達 65ms（約 15fps），遠低於 60fps 目標。
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
         node-version: "20"
+        cache: "npm"
 
-    - name: Run frontend tests
+    - name: Install Node dependencies
+      run: npm ci
+
+    # PersonaFlow2 互動層：α 仲裁共治、任務、配對、問答、計分、社交圖譜，
+    # 以及掃描生成角色的驗證邏輯。
+    - name: Run interaction-layer unit tests
+      run: npm test
+
+    # 端對端會自行啟動真實 Gateway 跑完整條資料流。
+    # 這裡也涵蓋數條安全性回歸（路徑穿越、無效 URL 導致行程終止、
+    # 連線角色轉換造成的角色洩漏）—— 那些都是單元測試抓不到的。
+    - name: Run end-to-end tests
+      run: npm run test:e2e
+
+    # 2D 備援版前端。這些腳本是 CommonJS，而根目錄的 package.json 宣告了
+    # "type": "module" —— frontend/package.json 把模組型別重新限定回該子樹，
+    # 否則此步驟會整批以 ReferenceError: require is not defined 失敗。
+    # 涵蓋的是 draw() 迴圈裡的格柵記憶化：單次 pipeline 約 2.2ms，若快取失效，
+    # 30 個角色的每幀成本會達 65ms（約 15fps），遠低於 60fps 目標。
+    - name: Run 2D fallback frontend tests
       run: node --test frontend/tests/
 
     - name: Run Pytest Suite

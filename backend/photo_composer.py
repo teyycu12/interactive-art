@@ -473,8 +473,14 @@ def compose_group_photo(
     cloud_url = upload_photo(photo_bytes, photo_id=photo_id)
     if cloud_url:
         photo_url = cloud_url
-        # 重新生成 QR Code 指向公開 URL
+        # 重新生成 QR Code 指向公開 URL，並重繪回畫布
         qr_img = _create_qr_image(cloud_url, size=qr_size)
+        qr_bg.paste(qr_img, (12, 10))
+        canvas.paste(qr_bg, (badge_x, badge_y), qr_bg)
+        buf = io.BytesIO()
+        canvas.convert("RGB").save(buf, format="PNG", optimize=True)
+        photo_bytes = buf.getvalue()
+        photo_b64 = "data:image/png;base64," + base64.b64encode(photo_bytes).decode("utf-8")
 
     qr_buf = io.BytesIO()
     qr_img.save(qr_buf, format="PNG")

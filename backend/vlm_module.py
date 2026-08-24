@@ -1,13 +1,16 @@
 import base64
 import json
 import os
-import google.generativeai as genai
-from typing import Dict, Any
+from typing import Any, Dict
+
+from google import genai
+from google.genai import types
 
 _API_KEY = os.environ.get("GEMINI_API_KEY")
 if not _API_KEY:
     raise RuntimeError("GEMINI_API_KEY not set — add it to your .env file")
-genai.configure(api_key=_API_KEY)
+_client = genai.Client(api_key=_API_KEY)
+
 
 def strip_json_fence(text: str) -> str:
     """把模型回應中的 markdown code fence 去掉，取出純 JSON。
@@ -39,25 +42,17 @@ def strip_json_fence(text: str) -> str:
 
 def analyze_outfit(base64_image: str) -> Dict[str, Any]:
     """
-    Sends the base64 image to Gemini 1.5 Flash to analyze the outfit components.
+    Sends the base64 image to Gemini 2.0 Flash to analyze the outfit components.
     Returns a parsed JSON dictionary.
     """
     try:
-        # Use gemini-1.5-flash for fast multimodal processing
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        
         # Decode base64 to bytes
         if base64_image.startswith("data:image"):
             base64_image = base64_image.split(",")[1]
-        
+
         image_bytes = base64.b64decode(base64_image)
-        
-        # Prepare the payload for Gemini
-        image_part = {
-            "mime_type": "image/jpeg",
-            "data": image_bytes
-        }
-        
+        image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+
         prompt = """
         You are a fashion analyst for a 2D avatar system.
         Analyze the clothing the person is wearing in the image and output a JSON object describing the outfit components.
@@ -78,13 +73,16 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
         If there is no outer layer, set "outer" to "none" and "outer_color" to null.
         Respond ONLY with the JSON object, no markdown formatting like ```json or other text.
         """
-        
-        response = model.generate_content([prompt, image_part])
-        
-        data = json.loads(strip_json_fence(response.text))
+
+        response = _client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[prompt, image_part],
+        )
+
+        data = json.loads(strip_json_fence(response.text or ""))
         return {
             "ok": True,
-            "outfit": data
+            "outfit": data,
         }
     except Exception as e:
         print(f"[VLM Error] {e}")
@@ -98,8 +96,8 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
                 "inner_color": "#FFFFFF",
                 "outer_color": None,
                 "lower_color": "#336699",
-                "has_pattern": False
-            }
+                "has_pattern": False,
+            },
         }
 
 
@@ -109,19 +107,18 @@ def analyze_face(base64_image: str) -> Dict[str, Any]:
     and facial hair — all via visual analysis (no color sampling).
     """
     _DEFAULTS = {
-        "hair_style":  "short_straight",
-        "hair_color":  "dark_brown",
-        "skin_tone":   "light",
-        "eye_color":   "brown",
-        "has_beard":   False,
+        "hair_style": "short_straight",
+        "hair_color": "dark_brown",
+        "skin_tone": "light",
+        "eye_color": "brown",
+        "has_beard": False,
         "beard_style": "none",
     }
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
         if base64_image.startswith("data:image"):
             base64_image = base64_image.split(",")[1]
         image_bytes = base64.b64decode(base64_image)
-        image_part = {"mime_type": "image/jpeg", "data": image_bytes}
+        image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
 
         prompt = """Carefully analyze this person's appearance.
 Return ONLY a JSON object with exactly these keys and values:
@@ -154,9 +151,13 @@ skin_tone guide (judge by face, not lighting):
 
 Respond ONLY with the JSON object, no markdown fences."""
 
-        response = model.generate_content([prompt, image_part])
-        data = json.loads(strip_json_fence(response.text))
+        response = _client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[prompt, image_part],
+        )
+        data = json.loads(strip_json_fence(response.text or ""))
         return {"ok": True, "face": {**_DEFAULTS, **data}}
     except Exception as e:
         print(f"[VLM face Error] {e}")
         return {"ok": False, "face": _DEFAULTS}
+

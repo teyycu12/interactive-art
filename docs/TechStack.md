@@ -33,5 +33,6 @@
 │   ├── character.js    # 角色組件定義
 │   └── socket.js       # 通訊處理
 ├── /assets             # 插畫組件 (SVG/PNG)
-├── PRD.md
-└── TechStack.md
+└── docs/
+    ├── PRD.md
+    └── TechStack.md

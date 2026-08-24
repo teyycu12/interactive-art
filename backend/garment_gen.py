@@ -32,6 +32,24 @@ except ImportError:
 _client: Optional["OpenAI"] = None
 
 
+# 模型名稱一律由 config 決定。此檔原本自行讀 os.environ 並各自寫死一組
+# 後備值，與 config.py 的預設不一致 —— 實際發生過的後果是三條生成路徑
+# 全都落到 google/gemini-2.5-flash-image-preview（該 ID 不存在，
+# OpenRouter 回 404），而熔斷器只會回報 circuit_open，看不出真正原因。
+try:
+    from backend.config import config as _config  # type: ignore
+except Exception:  # pragma: no cover - 直接以 backend/ 為工作目錄時
+    from config import config as _config  # type: ignore
+
+
+def _resolve_model(*candidates: Optional[str]) -> str:
+    """取第一個非空的模型名，全空時退回 OUTFIT_GEN_MODEL。"""
+    for c in candidates:
+        if c and c.strip():
+            return c.strip()
+    return _config.OUTFIT_GEN_MODEL
+
+
 def _get_client() -> Optional["OpenAI"]:
     """Build an OpenAI-SDK client. Auto-detects OpenRouter from key prefix."""
     global _client
@@ -163,14 +181,22 @@ def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Opt
         rgb = arr[:, :, :3]
         near_white = np.all(rgb >= (255 - tolerance), axis=-1)
 
-        # Protect shielded pixels (e.g. white clothes / skin / shoes)
+        # 護盾（白色衣物／膚色／鞋子）在此只做尺寸對齊，先不從 near_white 扣掉。
+        #
+        # 原本的寫法是 near_white = near_white & ~shield_mask，等於把護盾內的
+        # 像素從「可走訪集合」裡拿掉 —— 但洪水填充只沿著 near_white 前進，
+        # 護盾因此變成一道牆，牆後方的背景永遠到不了，整片留著不透明。
+        # MediaPipe 沒抓到人時，護盾是覆蓋畫面中央一大塊的預設框，
+        # 於是角色會頂著一大片白色背景出現在投影牆上（實測不透明比例 99%）。
+        #
+        # 護盾的用意是「不要把這些像素挖成透明」，不是「不要走過這些像素」。
+        # 因此改成照常走訪，最後在挖洞的那一步才把護盾內的像素排除。
         if shield_mask is not None:
             if shield_mask.shape != near_white.shape:
                 shield_pil = PILImage.fromarray(shield_mask.astype(np.uint8) * 255).resize(
                     (w, h), PILImage.NEAREST
                 )
                 shield_mask = np.array(shield_pil) > 128
-            near_white = near_white & ~shield_mask
 
         # BFS from the border so logos / interior white stay opaque
         from collections import deque
@@ -193,18 +219,20 @@ def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Opt
                 if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx] and near_white[ny, nx]:
                     visited[ny, nx] = True
                     q.append((ny, nx))
-        arr[visited, 3] = 0  # punch transparency
+        # 挖洞時才套用護盾：走訪過的背景一律透明，但護盾內的保持原樣
+        punch = visited & ~shield_mask if shield_mask is not None else visited
+        arr[punch, 3] = 0  # punch transparency
 
         # Soft alpha at the boundary: fade the 2-px ring around the cutout
         # so the polygon clip in the frontend doesn't show a hard white line.
         # (Simple Manhattan dilation of the visited mask.)
-        boundary = np.zeros_like(visited)
+        boundary = np.zeros_like(punch)
         for dy in range(-2, 3):
             for dx in range(-2, 3):
                 if dy == 0 and dx == 0:
                     continue
-                shifted = np.roll(np.roll(visited, dy, axis=0), dx, axis=1)
-                boundary |= shifted & ~visited
+                shifted = np.roll(np.roll(punch, dy, axis=0), dx, axis=1)
+                boundary |= shifted & ~punch
         # For boundary pixels keep colour but halve alpha
         arr[boundary, 3] = (arr[boundary, 3].astype(int) // 2).astype(np.uint8)
 
@@ -311,7 +339,7 @@ def _call_image_chat_multi(
         return None
 
     if model is None:
-        model = os.environ.get("OUTFIT_GEN_MODEL", "google/gemini-2.5-flash-image-preview").strip()
+        model = _resolve_model(_config.OUTFIT_GEN_MODEL)
 
     content: list = [{"type": "text", "text": prompt}]
     for url in image_data_urls:
@@ -459,11 +487,7 @@ def generate_full_character_png(
         return out
 
     h, w = rgb.shape[:2]
-    model = (
-        os.environ.get("FULL_CHARACTER_MODEL", "").strip()
-        or os.environ.get("OUTFIT_GEN_MODEL", "").strip()
-        or "google/gemini-2.5-flash-image-preview"
-    )
+    model = _resolve_model(_config.FULL_CHARACTER_MODEL, _config.OUTFIT_GEN_MODEL)
     print(f"[garment_gen] start full-character (frame={w}x{h}, model={model}, remove_bg={remove_bg})")
     t_start = time.perf_counter()
 
@@ -474,8 +498,17 @@ def generate_full_character_png(
         )
         data_url = _pil_to_data_url(square)
 
-        # Generate shield mask to prevent eating white clothes/shoes
-        shield_mask = _get_shield_mask(body_poly_norm, (x1, y1, x2, y2), w, h, target_size=1024)
+        # 這條路徑刻意不使用護盾。
+        #
+        # 護盾是依「輸入照片」的人體多邊形畫出來的，但它被套用在「模型新生成
+        # 的那張圖」上 —— 兩張圖的構圖、比例、姿勢都不同，多邊形與生成結果
+        # 之間沒有任何對應關係。實測預設中央框會蓋住生成圖的 35%（x 192~832、
+        # y 224~800），保護的幾乎全是背景而不是衣物，結果就是角色頂著一大片
+        # 白色方塊出現在投影牆上。
+        #
+        # 白色衣物的保護改由連通性負責：背景是「連到畫面邊界」的白色，
+        # 衣物上的白是被人偶包住的白，洪水填充本來就不會碰到後者。
+        shield_mask = None
 
         prompt = _FULL_CHARACTER_PROMPT_TEMPLATE.format(
             attrs=_attr_lines(face_data, outfit_data)
@@ -617,11 +650,10 @@ def generate_refine_character_png(
         return out
 
     h, w = rgb.shape[:2]
-    model = (
-        os.environ.get("REFINE_CHARACTER_MODEL", "").strip()
-        or os.environ.get("FULL_CHARACTER_MODEL", "").strip()
-        or os.environ.get("OUTFIT_GEN_MODEL", "").strip()
-        or "google/gemini-2.5-flash-image-preview"
+    model = _resolve_model(
+        _config.REFINE_CHARACTER_MODEL,
+        _config.FULL_CHARACTER_MODEL,
+        _config.OUTFIT_GEN_MODEL,
     )
     print(f"[garment_gen] start refine pass (frame={w}x{h}, model={model})")
     t_start = time.perf_counter()

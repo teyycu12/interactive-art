@@ -88,4 +88,4 @@ EVENT_LOG_ENABLED=0 python3 backend/app.py
 ```
 
 事件 log 位置：`backend/logs/events-YYYYMMDD.jsonl`（已 gitignore，不進版控）。
-事件與 payload 規格見 [`INTERFACES.md`](../../INTERFACES.md)。
+事件與 payload 規格見 [`INTERFACES.md`](../INTERFACES.md)。
