@@ -44,6 +44,37 @@
       font-size: 12px;
     }
     #canvas-container { position: absolute; inset: 0; }
+
+    /* 大合照結果覆蓋層：photo_ready 回來後顯示成品與 QR Code */
+    #photo-overlay {
+      position: absolute; inset: 0; z-index: 200;
+      background: rgba(10, 12, 20, 0.92);
+      display: none; align-items: center; justify-content: center;
+      flex-direction: column; gap: 16px; padding: 32px;
+    }
+    #photo-overlay.visible { display: flex; }
+    #photo-overlay img#photo-result {
+      max-width: 82vw; max-height: 66vh; object-fit: contain;
+      border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+      background: #000;
+    }
+    #photo-meta {
+      display: flex; align-items: center; gap: 20px;
+      background: rgba(255,255,255,0.94); border-radius: 12px;
+      padding: 14px 18px; color: #222;
+    }
+    #photo-meta img { width: 116px; height: 116px; display: block; }
+    #photo-meta .txt { font-size: 14px; line-height: 1.6; }
+    #photo-meta .txt strong { display: block; font-size: 16px; margin-bottom: 4px; }
+    #photo-meta .txt code {
+      font-family: monospace; font-size: 12px; color: #555;
+      word-break: break-all;
+    }
+    #photo-hint { color: #aab; font-size: 13px; }
+    #photo-overlay.pending #photo-meta,
+    #photo-overlay.pending #photo-result { display: none; }
+    #photo-overlay .spinner { color: #dde; font-size: 15px; display: none; }
+    #photo-overlay.pending .spinner { display: block; }
   </style>
 
   <!-- PixiJS v6 -->
@@ -57,10 +88,25 @@
   <h2>PersonaFlow 投影牆</h2>
   <div id="status-line">等待 Socket.io 連線…</div>
   <button id="photoBtn" class="action-btn">📸 集合大合照</button>
+  <button id="addBotsBtn" class="action-btn" style="background:#2ea043;">🤖 注入模擬角色 (+5)</button>
   <button id="clearBtn" class="action-btn" style="background:#da3633;">🗑 清除全部角色</button>
 </div>
 
 <div id="coord-panel">Screen: (0, 0) | Original: (0, 0)</div>
+<div id="photo-overlay">
+  <div class="spinner">正在合成大合照…</div>
+  <img id="photo-result" alt="集體記憶紀念大合照">
+  <div id="photo-meta">
+    <img id="photo-qr" alt="下載用 QR Code">
+    <div class="txt">
+      <strong>掃描 QR Code 下載合照</strong>
+      <span id="photo-count"></span><br>
+      <code id="photo-url"></code>
+    </div>
+  </div>
+  <div id="photo-hint">按 Esc 或點擊任意處關閉</div>
+</div>
+
 <div id="canvas-container"></div>
 
 <script>
@@ -83,6 +129,10 @@ class Vec2 {
 const flock = [];
 const boidMap = {};   // charId → Boid
 let isPhotoTime = false;
+const USE_SERVER_POSITIONS = false; // 設為 true 啟用伺服器座標權威插值
+let _lastUpdatePositionsTs = performance.now();
+const STALE_THRESHOLD_MS = 2500;   // 超過此時間沒收到 update_positions 視為訊號中斷
+let _staleWarned = false;          // 避免每幀重寫 DOM，並支援恢復後自動回復狀態
 let pixiApp;
 
 // 背景尺寸（配合你的背景圖調整）
@@ -566,6 +616,8 @@ class Boid {
     this.styleId = projectionRenderers.has(styleId) ? styleId : 'lego';
     this.heightProfile = heightProfile || { id: 'medium', display_scale: 1 };
     this.photoTarget = null;
+    this.serverTarget = null;
+    this.serverState = 'ROAMING';
     this.walkTimer   = Math.random() * 200 + 100;
     this.restTimer   = 0;
     this.turnCooldown = 0;
@@ -634,7 +686,21 @@ class Boid {
 
     const isTurning = this.turnCooldown > 0;
 
-    if (isPhotoTime && this.photoTarget) {
+    if (USE_SERVER_POSITIONS && this.serverTarget) {
+      const diff = Vec2.sub(this.serverTarget, this.pos);
+      const dist = diff.mag();
+      if (dist > 1.0) {
+        this.vel = diff.mult(0.15);
+        this.pos.add(this.vel);
+      } else {
+        this.pos.x = this.serverTarget.x;
+        this.pos.y = this.serverTarget.y;
+        this.vel.mult(0);
+      }
+      if (this.serverState === 'GREETING' && this.turnCooldown <= 0) {
+        this.startGreeting(null);
+      }
+    } else if (isPhotoTime && this.photoTarget) {
       const diff = Vec2.sub(this.photoTarget, this.pos);
       if (diff.mag() > 2) {
         this.vel = diff.normalize().mult(3.5);
@@ -766,7 +832,8 @@ class Boid {
 }
 
 // ─── 7. Socket.io 整合 ───────────────────────────────────────────────────────
-const BACKEND_URL = 'http://127.0.0.1:5001';
+const _host = window.location.hostname || '127.0.0.1';
+const BACKEND_URL = `http://${_host}:5001`;
 let socket = null;
 const statusEl = document.getElementById('status-line');
 
@@ -859,7 +926,13 @@ function _spawnBoid(charId, topColor, botColor, armColor, accList, clothGrid, lo
 
 function initSocket() {
   try {
-    socket = io(BACKEND_URL, { reconnectionAttempts: 10 });
+    // 不設 reconnectionAttempts（預設 Infinity）：投影牆無人看顧，原本設 10 次
+    // 在預設退避下約 45 秒就永久放棄 —— 後端重啟一次，整面牆就再也不會恢復，
+    // 且現場沒有人會去按重新整理。
+    socket = io(BACKEND_URL, {
+      transports: ['websocket'],
+      reconnectionDelayMax: 5000,
+    });
 
     socket.on('connect', () => {
       statusEl.textContent = `已連線 Socket.io ✓ (${socket.id})`;
@@ -871,6 +944,26 @@ function initSocket() {
     });
     socket.on('connect_error', () => {
       statusEl.textContent = `無法連線至 ${BACKEND_URL}`;
+    });
+
+    // 後端合成完成：顯示成品與 QR Code。
+    // 此事件後端一直有 emit，但前端先前完全沒有接，所以 M6 做完卻沒有介面。
+    socket.on('photo_ready', (data) => {
+      if (!data || !data.ok) {
+        hidePhotoOverlay();
+        statusEl.textContent = '合照生成失敗：' + ((data && data.error) || '未知原因');
+        statusEl.style.color = '#ff6b6b';
+        return;
+      }
+      const img = document.getElementById('photo-result');
+      const qr  = document.getElementById('photo-qr');
+      // photo_b64 / qr_b64 後端已附上 data: 前綴
+      if (data.photo_b64) img.src = data.photo_b64;
+      if (data.qr_b64)    qr.src  = data.qr_b64;
+      document.getElementById('photo-count').textContent =
+        `在場人數：${data.character_count ?? '—'} 人`;
+      document.getElementById('photo-url').textContent = data.photo_url || '';
+      showPhotoOverlay({ pending: false });
     });
 
     socket.on('update_positions', (data) => {
@@ -928,7 +1021,14 @@ function initSocket() {
             boidMap[char.id].characterDisplay.updateLowerGrid(char.lower_grid || null);
           }
         }
+        if (boidMap[char.id]) {
+          boidMap[char.id].serverTarget = new Vec2((char.x / 1920) * pixiApp.screen.width, (char.y / 1080) * pixiApp.screen.height);
+          boidMap[char.id].serverState = char.state || 'ROAMING';
+        }
       }
+
+      _lastUpdatePositionsTs = performance.now();
+      statusEl.style.color = '';
 
       // Live status: show how many characters are on the wall
       const n = Object.keys(boidMap).length;
@@ -984,6 +1084,20 @@ function initPixi() {
   // Start socket and game loop immediately — no waiting for assets
   initSocket();
   pixiApp.ticker.add(() => {
+    // 訊號中斷偵測：門檻與文案共用同一常數，避免兩者漂移。
+    // 恢復收到更新後要能自動回復正常狀態，否則一次瞬斷就永久亮紅燈。
+    if (Object.keys(boidMap).length > 0) {
+      const stale = performance.now() - _lastUpdatePositionsTs > STALE_THRESHOLD_MS;
+      if (stale && !_staleWarned) {
+        _staleWarned = true;
+        statusEl.textContent = `⚠️ 伺服器訊號中斷 (超過 ${STALE_THRESHOLD_MS / 1000} 秒未收到更新)`;
+        statusEl.style.color = '#ff6b6b';
+      } else if (!stale && _staleWarned) {
+        _staleWarned = false;
+        statusEl.textContent = `已連線 Socket.io ✓ (${socket && socket.id ? socket.id : ''})`;
+        statusEl.style.color = '';
+      }
+    }
     flock.forEach(b => b.update());
     pixiApp.stage.children.sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
   });
@@ -1014,6 +1128,23 @@ function initPixi() {
   });
 }
 
+// ─── 8.5 大合照結果覆蓋層 ────────────────────────────────────────────────────
+const photoOverlay = document.getElementById('photo-overlay');
+
+function showPhotoOverlay({ pending = false } = {}) {
+  photoOverlay.classList.toggle('pending', pending);
+  photoOverlay.classList.add('visible');
+}
+
+function hidePhotoOverlay() {
+  photoOverlay.classList.remove('visible', 'pending');
+}
+
+photoOverlay.addEventListener('click', hidePhotoOverlay);
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hidePhotoOverlay();
+});
+
 // ─── 9. UI 按鈕 ──────────────────────────────────────────────────────────────
 document.getElementById('photoBtn').onclick = () => {
   isPhotoTime = !isPhotoTime;
@@ -1025,12 +1156,28 @@ document.getElementById('photoBtn').onclick = () => {
         pixiApp.screen.height * 0.6 + Math.floor(i / 5) * 120
       );
     });
+    showPhotoOverlay({ pending: true });
+    setTimeout(() => {
+      if (socket && socket.connected) socket.emit('trigger_photo', { room: 'default' });
+      else hidePhotoOverlay();
+    }, 1200);
   } else {
     flock.forEach(b => { b.photoTarget = null; });
   }
 };
 
+document.getElementById('addBotsBtn').onclick = () => {
+  if (socket && socket.connected) {
+    socket.emit('inject_bots', { count: 5, room: 'default' });
+  } else {
+    alert('尚未連線至後端伺服器');
+  }
+};
+
 document.getElementById('clearBtn').onclick = () => {
+  if (socket && socket.connected) {
+    socket.emit('remove_bots', {});
+  }
   for (const boid of flock) boid.destroy();
   flock.length = 0;
   for (const k of Object.keys(boidMap)) delete boidMap[k];
@@ -1051,38 +1198,10 @@ window.addEventListener('mousemove', (e) => {
 // ─── 啟動 ─────────────────────────────────────────────────────────────────────
 initPixi();
 
-// Auto-spawn 5 ambient NPC boids (scene decoration — NOT in boidMap)
-setTimeout(() => {
-  const demoColors = [
-    [0xC81E1E, 0x1E3A8A],
-    [0x166534, 0xEAB308],
-    [0x7C3AED, 0xF97316],
-    [0xDB2777, 0x0F766E],
-    [0xB45309, 0x1D4ED8],
-  ];
-  demoColors.forEach(([top, bot]) => {
-    const lego = new LegoCharacter(top, bot);
-    let rx = pixiApp.screen.width / 2 + (Math.random() - 0.5) * 400;
-    let ry = pixiApp.screen.height / 2 + (Math.random() - 0.5) * 150;
-    if (window.bgTransform) {
-      const bg = window.bgTransform;
-      const origY = 300 + Math.random() * 280;
-      const bounds = getFloorBounds(origY);
-      const origX = bounds.minX + Math.random() * (bounds.maxX - bounds.minX);
-      rx = origX * bg.scale + bg.x;
-      ry = origY * bg.scale + bg.y;
-    }
-    const boid = new Boid(rx, ry, lego); // charId = null, NOT in boidMap
-    flock.push(boid);
-  });
-}, 800);
-
-// Console helper: spawnTest(n) to add more test boids
+// Console helper: spawnTest(n) to add test boids via backend
 window.spawnTest = (n = 3) => {
-  for (let i = 0; i < n; i++) {
-    const top = Math.floor(Math.random() * 0xFFFFFF);
-    const bot = Math.floor(Math.random() * 0xFFFFFF);
-    _spawnBoid('test_' + Date.now() + '_' + i, top, bot);
+  if (socket && socket.connected) {
+    socket.emit('inject_bots', { count: n, room: 'default' });
   }
 };
 </script>

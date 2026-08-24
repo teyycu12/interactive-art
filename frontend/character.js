@@ -1,11 +1,6 @@
 // PersonaFlow – character component definitions
 // Loaded as a plain <script> before sketch.js; all symbols are global.
 
-const STATES = {
-  ROAMING: 'ROAMING',
-  GREETING: 'GREETING',
-};
-
 const ACCESSORIES_LIST = [
   { value: 'none', label: '— None —' },
   { value: 'bouquet', label: '💐 Bouquet' },
@@ -450,3 +445,290 @@ function _drawCat(a) {
   line(0, -18, -3, -15); line(0, -18, 3, -15);
   pop();
 }
+
+
+// ── 角色模型 ────────────────────────────────────────────────────────
+// 依 CLAUDE.md 的規範，角色的資料模型與換色邏輯屬於 character.js，
+// sketch.js 只放渲染程式碼。此類別原本定義在 sketch.js（298 行），
+// 而 character.js 反而完全沒有類別，與規範相反，故搬移至此。
+// 對外仍以 Person 之名提供，避免變更既有呼叫點。
+class Character {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+
+    // Walking animation state (used by lego.js drawLegoCharacter)
+    this.vel = { x: 0, y: 0 };
+    this.walkPhase = 0;
+
+    // Clothing
+    this.innerColor = { r: 200, g: 200, b: 200 };
+    this.outerColor = null;
+    this.lowerColor = { r: 100, g: 100, b: 100 };
+    this.innerType = 'tshirt';
+    this.outerType = 'none';
+    this.lowerType = 'shorts';
+    this.upperKind = 'short_sleeve';   // 'short_sleeve' | 'long_sleeve' — drives bare-arm rendering
+    this.stencilImg = null;
+    this.accessories = [];
+    this.alpha = 255;
+    // Legacy image sprites are retained only for full-character history compatibility.
+    this.clothSprite = null;  // p5.Image (legacy: upper-only)
+    this.lowerSprite = null;  // p5.Image (legacy: lower-only)
+    this.bodySprite = null;  // p5.Image (NEW: full LEGO body, neck down)
+
+    // Face / hair (defaults — overwritten by updateFace)
+    this.armColor = null;  // detected sleeve colour; overrides outerColor for arm rendering
+    this.skinColor = { r: 255, g: 224, b: 196 };
+    this.hairColor = { r: 45, g: 35, b: 30 };
+    this.eyeColor = { r: 55, g: 35, b: 20 }; // dark brown default
+    this.lipColor = { r: 220, g: 110, b: 110 };
+    this.hairStyle = 'short_straight';
+    this.faceShape = 'oval';
+    this.eyeShape = 'almond';
+    this.eyebrowStyle = 'normal';
+    this.smileScore = 0.0;
+    this.hasBeard = false;
+    this.beardStyle = 'none';
+
+    // 'full_character': one AI image covers the entire figure, so the
+    // programmatic LEGO parts are skipped entirely.
+    this.renderMode = 'full_character';
+    this.styleId = DEFAULT_STYLE_ID;
+    this.heightClass = 'medium';
+    this.heightProfile = { id: 'medium', display_scale: 1, torso_scale_y: 1, leg_scale_y: 1 };
+
+    // Forward-compat slots for future skeletal rigging (out of scope here, but
+    // populated by a downstream pipeline so themes/animation can read them).
+    this.skeleton = null;   // { joints: [...], bones: [...] }
+    this.animState = 'idle'; // 'idle' | 'walking' | 'greeting' | ...
+  }
+
+  setRenderMode(mode) {
+    if (mode === 'full_character') {
+      this.renderMode = mode;
+    }
+  }
+
+  updateFromVLM(outfit, stencilB64, face) {
+    if (outfit.inner_color) this.innerColor = hexToRgb(outfit.inner_color);
+    if (outfit.outer_color) this.outerColor = hexToRgb(outfit.outer_color);
+    if (outfit.lower_color) this.lowerColor = hexToRgb(outfit.lower_color);
+    this.innerType = outfit.inner || 'tshirt';
+    this.outerType = outfit.outer || 'none';
+    this.lowerType = outfit.lower || 'jeans';
+    if (stencilB64) {
+      loadImage('data:image/png;base64,' + stencilB64, img => { this.stencilImg = img; });
+    } else {
+      this.stencilImg = null;
+    }
+    this.updateFace(face);
+  }
+
+  // Load OpenAI-generated full-body LEGO sprite (base64 PNG, no data: prefix)
+  updateBodySprite(bodyPng) {
+    // Prevent a delayed load from capturing an older request's sprite.
+    this.bodySprite = null;
+    if (bodyPng) {
+      loadImage('data:image/png;base64,' + bodyPng,
+        img => { this.bodySprite = img; },
+        () => { console.warn('body sprite load failed'); }
+      );
+    } else {
+      this.bodySprite = null;
+    }
+  }
+
+  updateFace(face) {
+    if (!face) return;
+    // Use VLM-detected skin tone (head + hands + bare arms render in this colour)
+    if (face.skin_tone) this.skinColor = hexToRgb(face.skin_tone);
+    if (face.hair_color) this.hairColor = hexToRgb(face.hair_color);
+    if (face.eye_color) this.eyeColor = hexToRgb(face.eye_color);
+    if (face.lip_color) this.lipColor = hexToRgb(face.lip_color);
+    if (face.hair_style) this.hairStyle = face.hair_style;
+    if (face.face_shape) this.faceShape = face.face_shape;
+    if (face.eye_shape) this.eyeShape = face.eye_shape;
+    if (face.eyebrow_style) this.eyebrowStyle = face.eyebrow_style;
+    if (face.smile_score !== undefined) this.smileScore = face.smile_score;
+    if (face.has_beard !== undefined) this.hasBeard = face.has_beard;
+    if (face.beard_style) this.beardStyle = face.beard_style;
+  }
+
+  drawSelf(scaleFactor = 1.2) {
+    const theme = window.PersonaFlowThemes?.get(this.styleId || DEFAULT_STYLE_ID);
+    const heightScale = Number(this.heightProfile?.display_scale) || 1;
+    const footAnchor = typeof theme?.footAnchor === 'function' ? theme.footAnchor(this) : 0;
+    const baseFootAnchor = Number(theme?.baseFootAnchor) || footAnchor;
+    push();
+    // Keep the feet on the same baseline while applying both the profile's
+    // geometry and its uniform display scale.
+    translate(this.x, this.y + scaleFactor * (baseFootAnchor - footAnchor * heightScale));
+    scale(scaleFactor * heightScale);
+
+    if (theme?.draw) {
+      theme.draw(this);
+      if (typeof drawAccessories === 'function') drawAccessories(this.accessories, 1, theme.accessoryOptions || {});
+      pop();
+      return;
+    }
+
+    // Build p5 color objects from instance state
+    const sc = color(this.skinColor.r, this.skinColor.g, this.skinColor.b);
+    const hc = color(this.hairColor.r, this.hairColor.g, this.hairColor.b);
+    const ec = this.eyeColor;   // kept as {r,g,b} for _drawEyes
+    // lc (lip color) used inline below via this.lipColor
+    const iColor = color(this.innerColor.r, this.innerColor.g, this.innerColor.b);
+    const lColor = color(this.lowerColor.r, this.lowerColor.g, this.lowerColor.b);
+
+    stroke('#5a3a29');
+    strokeWeight(2);
+    strokeJoin(ROUND);
+
+    // 1. Back hair (behind everything)
+    _hairBack(this.hairStyle, hc);
+
+    // 2. Legs
+    fill(sc); noStroke();
+    rect(-18, 20, 12, 60, 6);
+    rect(6, 20, 12, 60, 6);
+    stroke('#5a3a29'); strokeWeight(2);
+
+    // 3. Lower body
+    fill(lColor);
+    if (this.lowerType === 'jeans' || this.lowerType === 'suit_pants' || this.lowerType === 'long_pants') {
+      rect(-20, 20, 16, 55, 2, 2, 5, 5);
+      rect(4, 20, 16, 55, 2, 2, 5, 5);
+    } else if (this.lowerType === 'shorts') {
+      rect(-20, 20, 16, 20, 2);
+      rect(4, 20, 16, 20, 2);
+    } else if (this.lowerType === 'pleated_skirt' || this.lowerType === 'skirt') {
+      quad(-25, 15, 25, 15, 40, 40, -40, 40);
+      fill(this.lowerColor.r * 0.85, this.lowerColor.g * 0.85, this.lowerColor.b * 0.85);
+      rect(-40, 40, 80, 6, 3);
+      stroke(0, 40); strokeWeight(1.5);
+      for (let i = -30; i <= 30; i += 10) line(i * 0.8, 15, i, 40);
+      stroke('#5a3a29'); strokeWeight(2);
+    }
+
+    // 4. Inner torso
+    fill(iColor);
+    if (this.innerType === 'vneck') {
+      quad(-20, -40, 20, -40, 25, 20, -25, 20);
+      fill(sc); triangle(-10, -40, 10, -40, 0, -25);
+    } else if (this.innerType === 'button_up') {
+      quad(-20, -40, 20, -40, 25, 20, -25, 20);
+      stroke(0, 50); strokeWeight(1.5);
+      line(0, -40, 0, 20);
+      for (let y = -30; y < 15; y += 10) circle(0, y, 3);
+      stroke('#5a3a29'); strokeWeight(2);
+    } else {
+      quad(-20, -40, 20, -40, 25, 20, -25, 20);
+    }
+
+    // 5. Legacy stencil overlay (never used by the formal CharacterSpec renderer)
+    if (this.stencilImg && this.stencilImg.width > 0) {
+      push();
+      imageMode(CENTER);
+      drawingContext.save();
+      drawingContext.beginPath();
+      drawingContext.moveTo(-20, -40); drawingContext.lineTo(20, -40);
+      drawingContext.lineTo(25, 20); drawingContext.lineTo(-25, 20);
+      drawingContext.clip();
+      tint(255, 220);
+      image(this.stencilImg, 0, -10, 40, 40);
+      drawingContext.restore();
+      pop();
+    }
+
+    // 6. Outer jacket / blazer
+    if (this.outerType !== 'none' && this.outerColor) {
+      const oColor = color(this.outerColor.r, this.outerColor.g, this.outerColor.b);
+      fill(oColor);
+      if (this.outerType === 'blazer' || this.outerType === 'cardigan') {
+        beginShape(); vertex(-22, -42); vertex(0, -15); vertex(-5, 22); vertex(-27, 22); endShape(CLOSE);
+        beginShape(); vertex(22, -42); vertex(0, -15); vertex(5, 22); vertex(27, 22); endShape(CLOSE);
+        if (this.outerType === 'blazer') {
+          fill(this.outerColor.r * 0.9, this.outerColor.g * 0.9, this.outerColor.b * 0.9);
+          triangle(-20, -40, 0, -15, -12, -25);
+          triangle(20, -40, 0, -15, 12, -25);
+        }
+      } else if (this.outerType === 'denim_jacket') {
+        rect(-27, -42, 22, 60, 4); rect(5, -42, 22, 60, 4);
+        stroke(200, 150, 50, 100); strokeWeight(2);
+        line(-16, -42, -16, 18); line(16, -42, 16, 18);
+        stroke('#5a3a29'); strokeWeight(4);
+      }
+    }
+
+    // 7. Arms
+    const _arm = (x, rot) => {
+      push(); translate(x, -35); rotate(rot);
+      fill(sc); rect(-6, 0, 12, 50, 6);
+      const sleeveC = (this.outerType !== 'none' && this.outerColor)
+        ? color(this.outerColor.r, this.outerColor.g, this.outerColor.b) : iColor;
+      const longSleeve = this.outerType !== 'none' || this.innerType === 'button_up';
+      fill(sleeveC);
+      rect(-7, 0, 14, longSleeve ? 45 : 18, 4, 4, 2, 2);
+      pop();
+    };
+    _arm(-20, PI / 6);
+    _arm(20, -PI / 6);
+
+    // 8. Head & neck
+    fill(sc);
+    rect(-8, -45, 16, 18); // neck (taller to fill gap)
+
+    // Ears — at face edge, same style as reference arc(85,225,...) / arc(315,225,...)
+    stroke('#5a3a29'); strokeWeight(2);
+    arc(-50, -62, 22, 28, HALF_PI, PI + HALF_PI);
+    arc(50, -62, 22, 28, -HALF_PI, HALF_PI);
+
+    // Chibi face — round, wide cheeks
+    beginShape();
+    vertex(-50, -75);
+    bezierVertex(-54, -48, -30, -27, 0, -26);
+    bezierVertex(30, -27, 54, -48, 50, -75);
+    bezierVertex(50, -118, -50, -118, -50, -75);
+    endShape(CLOSE);
+
+    // 9. Blush — horizontal ovals, matching reference ellipse(115,268,25,12) proportions
+    //    reference y=268 is ~47% below face top (y=200→330); mapped → y≈-47
+    //    reference x=115 is ±85 from center, scaled → ±37
+    noStroke();
+    fill(255, 99, 71, 90);
+    ellipse(-36, -47, 28, 12);
+    ellipse(36, -47, 28, 12);
+
+    // 10. Eyes (shape + color aware, from character.js)
+    _drawEyes(this.eyeShape, ec);
+
+    // 11. Eyebrows
+    _drawEyebrows(this.eyebrowStyle);
+
+    // 12. Mouth (smile-score driven)
+    noFill(); stroke('#5a3a29'); strokeWeight(2);
+    const smileW = 7 + this.smileScore * 10;
+    const smileH = 4 + this.smileScore * 8;
+    arc(0, -40, smileW, smileH, 0, PI);
+
+    // 13. Lip tint
+    noStroke(); fill(this.lipColor.r, this.lipColor.g, this.lipColor.b, 70);
+    ellipse(0, -39, smileW * 0.9, 4);
+
+    // 14. Beard / facial hair
+    if (this.hasBeard) _drawBeard(this.beardStyle, this.skinColor, this.hairColor);
+
+    // 15. Front hair (on top of face)
+    stroke('#5a3a29'); strokeWeight(2);
+    _hairFront(this.hairStyle, hc);
+
+    // 16. Accessories (multi)
+    if (typeof drawAccessories === 'function') drawAccessories(this.accessories, 1);
+
+    pop();
+  }
+}
+
+// 沿用原本的名稱，index.html 的載入順序保證此檔先於 sketch.js 執行
+const Person = Character;

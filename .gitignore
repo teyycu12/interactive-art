@@ -29,8 +29,10 @@ Thumbs.db
 *.suo
 *.user
 
-# M3 事件 log 落地（現場產生的資料，不進版控）
+# M3 事件 log 與快照 / 合照落地（現場產生的資料，不進版控）
 backend/logs/
+backend/data/
+backend/photos/
 *.jsonl
 backend.log
 
@@ -50,3 +52,9 @@ docs/style_reference/**/*.png
 docs/style_reference/**/*.webp
 docs/style_reference/**/*.jpg
 docs/style_reference/**/*.jpeg
+
+# 測試產出
+.pytest_cache/
+backend/test-results.xml
+.coverage
+htmlcov/

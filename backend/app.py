@@ -4,11 +4,17 @@ import os
 import random
 import re
 import socket as network_socket
+import sys
 import threading
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
+
+try:
+    from backend.config import config
+except ImportError:
+    from config import config
 
 # Load .env before importing modules that read env vars (vlm_module, garment_gen)
 try:
@@ -19,8 +25,43 @@ except ImportError:
     pass
 
 import numpy as np
-from flask import Flask, jsonify, request, send_from_directory
-from flask_socketio import SocketIO, emit
+
+try:
+    from flask import Flask, jsonify, request, send_from_directory
+    from flask_socketio import SocketIO, emit, join_room, leave_room
+except ModuleNotFoundError:
+    Flask = None
+    jsonify = None
+    request = None
+    send_from_directory = None
+    SocketIO = None
+    emit = None
+    join_room = None
+    leave_room = None
+
+
+def _on_socket(event_name):
+    """安全裝飾器：在 SocketIO 未安裝的環境下不報錯，安裝時正常註冊 handler。"""
+    def decorator(fn):
+        if socketio is not None:
+            socketio.on(event_name)(fn)
+        return fn
+    return decorator
+
+
+# --- 模組載入退化追蹤 ---
+# 下方的 import 採「backend.X → X → stub」三段式，前兩段是為了支援從 repo root
+# 或 backend/ 兩種啟動方式。但第三段的 stub 會讓功能靜默消失：例如
+# swarm_logic 若載入失敗，update_swarm_state 會變成原樣返回，Boids 完全不動
+# 卻沒有任何錯誤訊息。這裡確保每次退化都大聲說出來，並在啟動時彙總。
+_DEGRADED: List[str] = []
+
+
+def _degraded(feature: str, exc: BaseException) -> None:
+    _DEGRADED.append(feature)
+    print(f"[app] ⚠️  {feature} 載入失敗，已退化為 stub —— "
+          f"{type(exc).__name__}: {exc}", file=sys.stderr)
+
 
 try:
     import cv2  # type: ignore
@@ -30,30 +71,104 @@ except ModuleNotFoundError:
 try:
     from backend.cv_module import get_clothing_features  # type: ignore
 except Exception:
-    from cv_module import get_clothing_features  # type: ignore
+    try:
+        from cv_module import get_clothing_features  # type: ignore
+    except Exception as _e:
+        _degraded("cv_module.get_clothing_features（服裝特徵提取）", _e)
+        get_clothing_features = None
 
 try:
     from backend.swarm_logic import update_swarm_state  # type: ignore
 except Exception:
-    from swarm_logic import update_swarm_state  # type: ignore
+    try:
+        from swarm_logic import update_swarm_state  # type: ignore
+    except Exception as _e:
+        # 最嚴重的一項：Boids 完全停擺（角色不動、不觸發 GREETING、無相遇 log）
+        _degraded("swarm_logic.update_swarm_state（Boids 群聚演算法）", _e)
+        update_swarm_state = lambda chars: chars  # type: ignore
 
 try:
+    from backend.event_logger import log_event, Timer  # type: ignore
+except Exception:
+    try:
+        from event_logger import log_event, Timer  # type: ignore
+    except Exception as _e:
+        _degraded("event_logger（事件 log 落地，報告指標來源）", _e)
+        log_event = lambda *a, **k: None  # type: ignore
+        Timer = None
+
+try:
+    from backend.swarm_snapshot import save_snapshot, load_snapshot  # type: ignore
+    from backend.photo_composer import compose_group_photo  # type: ignore
+    from backend.bot_simulator import inject_bots, remove_bots  # type: ignore
+    from backend.circuit_breaker import gemini_breaker  # type: ignore
+except Exception:
+    try:
+        from swarm_snapshot import save_snapshot, load_snapshot  # type: ignore
+        from photo_composer import compose_group_photo  # type: ignore
+        from bot_simulator import inject_bots, remove_bots  # type: ignore
+        from circuit_breaker import gemini_breaker  # type: ignore
+    except Exception as _e:
+        # 熔斷器變成 None 後，後續 .call() 會拋出難以理解的
+        # 'NoneType' object has no attribute 'call'，所以更需要在這裡講清楚
+        _degraded("swarm_snapshot / photo_composer / bot_simulator / circuit_breaker", _e)
+        save_snapshot = lambda *a, **k: False  # type: ignore
+        load_snapshot = lambda *a, **k: None  # type: ignore
+        compose_group_photo = lambda *a, **k: {"ok": False}  # type: ignore
+        inject_bots = lambda *a, **k: []  # type: ignore
+        remove_bots = lambda *a, **k: 0  # type: ignore
+        gemini_breaker = None
+
+# vlm_module 與 face_module 必須分開 import：vlm_module 在缺少 GEMINI_API_KEY
+# 時會於 import 階段 raise，而 face_module 是純 MediaPipe、與 Gemini 無關。
+# 兩者原本共用同一個 try 區塊，導致沒設金鑰時臉部偵測也一起被停用。
+try:
     from backend.vlm_module import analyze_outfit, analyze_face
+except Exception:
+    try:
+        from vlm_module import analyze_outfit, analyze_face
+    except Exception as _e:
+        # 常見原因：GEMINI_API_KEY 未設定（vlm_module 於 import 時即 raise）
+        _degraded("vlm_module（VLM 服裝分析）", _e)
+        analyze_outfit = lambda *a, **k: {"ok": False}
+        analyze_face = lambda *a, **k: {"ok": False}
+
+# 這三份色表原本在 app.py 與 avatar_pipeline 各有一份完全相同的副本。
+# 以 avatar_pipeline 為單一來源，避免兩邊日後各自漂移。
+try:
+    from backend.avatar_pipeline import (  # type: ignore
+        decode_frame,
+        HAIR_HEX as _HAIR_HEX, SKIN_HEX as _SKIN_HEX, EYE_HEX as _EYE_HEX,
+    )
+except ImportError:
+    from avatar_pipeline import (  # type: ignore
+        decode_frame,
+        HAIR_HEX as _HAIR_HEX, SKIN_HEX as _SKIN_HEX, EYE_HEX as _EYE_HEX,
+    )
+
+try:
     from backend.face_module import get_face_features
 except Exception:
-    from vlm_module import analyze_outfit, analyze_face
-    from face_module import get_face_features
+    try:
+        from face_module import get_face_features
+    except Exception as _e:
+        _degraded("face_module（MediaPipe 臉部特徵）", _e)
+        get_face_features = lambda *a, **k: {"ok": False}
 
 try:
     from backend.garment_gen import generate_full_character_png  # type: ignore
 except Exception:
-    from garment_gen import generate_full_character_png  # type: ignore
+    try:
+        from garment_gen import generate_full_character_png  # type: ignore
+    except Exception as _e:
+        _degraded("garment_gen（AI 角色圖像生成）", _e)
+        generate_full_character_png = None
 
 try:
     from backend.avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
     from backend.capture_quality import mean_landmark_displacement  # type: ignore
     from backend.generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, input_directory, list_runs, mark_render_failure, output_directory, record_attempt, save_input_photo, save_rendered_output, save_review, save_visitor_measurement, start_run, update_run_experiment  # type: ignore
-    from backend.blind_review import blind_payload, create_review_session, delete_review_sources, get_review_session, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
+    from backend.blind_review import blind_payload, create_review_session, delete_review_sources, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
     from backend.height_profiles import classify_height, get_height_profile  # type: ignore
     from backend.metrics_logger import log_metric  # type: ignore
     from backend.style_registry import get_event_style_id, get_style  # type: ignore
@@ -61,61 +176,94 @@ except Exception:
     from avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
     from capture_quality import mean_landmark_displacement  # type: ignore
     from generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, input_directory, list_runs, mark_render_failure, output_directory, record_attempt, save_input_photo, save_rendered_output, save_review, save_visitor_measurement, start_run, update_run_experiment  # type: ignore
-    from blind_review import blind_payload, create_review_session, delete_review_sources, get_review_session, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
+    from blind_review import blind_payload, create_review_session, delete_review_sources, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
     from height_profiles import classify_height, get_height_profile  # type: ignore
     from metrics_logger import log_metric  # type: ignore
     from style_registry import get_event_style_id, get_style  # type: ignore
 
-
-app = Flask(__name__)
 CAPTURE_PROTOCOL_VERSION = "height-recent-3-v1"
-app.config["SECRET_KEY"] = "personaflow-dev-secret"
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", max_http_buffer_size=20 * 1024 * 1024)
 
-# VLM colour name → hex (used instead of CV colour sampling)
-_HAIR_HEX = {
-    "black":       "#1C1008",
-    "dark_brown":  "#3B2314",
-    "brown":       "#6B3A2A",
-    "light_brown": "#A0602A",
-    "blonde":      "#D4A843",
-    "red":         "#A0391A",
-    "gray":        "#888888",
-    "white":       "#E8E0D8",
-}
-_SKIN_HEX = {
-    "fair":   "#FFE5D0",
-    "light":  "#FFD0A8",
-    "medium": "#D4956A",
-    "tan":    "#C08040",
-    "brown":  "#8D5524",
-    "dark":   "#4A2912",
-}
-_EYE_HEX = {
-    "dark_brown": "#3B1C12",
-    "brown":      "#7A4A28",
-    "hazel":      "#8B6914",
-    "green":      "#4A7A50",
-    "blue":       "#4472A8",
-    "gray":       "#6B7A8D",
-}
+if _DEGRADED:
+    print(f"[app] ⚠️  共 {len(_DEGRADED)} 個模組以降級模式啟動，"
+          f"相關功能將無法運作：{', '.join(_DEGRADED)}", file=sys.stderr)
+
+
+if Flask is not None:
+    app = Flask(__name__)
+    # SECRET_KEY 原本是寫死並提交進版控的字串。展場雖是封閉 LAN，但金鑰進了
+    # 公開 repo 就等於沒有金鑰，且未來若要加活動身分驗證會直接建立在其上。
+    app.config["SECRET_KEY"] = config.SECRET_KEY
+    # CORS 預設維持 "*"：展場靠 LAN 讓賓客手機連進來，來源 IP 事前無法列舉。
+    # 需要收斂時用 CORS_ALLOWED_ORIGINS 逗號分隔指定。
+    _cors = (config.CORS_ALLOWED_ORIGINS if isinstance(config.CORS_ALLOWED_ORIGINS, str)
+             else list(config.CORS_ALLOWED_ORIGINS))
+    socketio = SocketIO(app, cors_allowed_origins=_cors,
+                        async_mode="threading",
+                        max_http_buffer_size=20 * 1024 * 1024)
+else:
+    app = None
+    socketio = None
+
+
+def _route(path, **kwargs):
+    def decorator(fn):
+        if app is not None:
+            app.route(path, **kwargs)(fn)
+        return fn
+    return decorator
+
+
+# 顏色名稱 → hex 的對照表已移至 avatar_pipeline（連同使用它們的 build_face_data）
 
 # --- per-socket M1 preview state ---
+# 這份 per-connection 狀態同時是「上次成功特徵」的來源（見 _merge_fallback_payload），
+# 因此必須以 sid 分隔：否則某位訪客偵測失敗時，會拿另一位訪客的服裝顏色去頂替。
 _preview_sessions: Dict[str, Dict[str, Any]] = {}
 _preview_in_flight: set[str] = set()
 _preview_lock = threading.Lock()
 
+_PHOTOS_DIR = os.path.join(os.path.dirname(__file__), "photos")
+os.makedirs(_PHOTOS_DIR, exist_ok=True)
+
 # --- swarm state ---
-_swarm_chars: Dict[str, Any] = {
-    "system_bot": {
-        "id": "system_bot", "x": 500, "y": 500, "vx": 1, "vy": 1,
-        "upper": {"hex": "#FFFFFF"}, "lower": {"hex": "#444444"},
-        "outfit": {"inner_color": "#FF0000", "lower_color": "#0000FF"},
-        "height_class": "medium", "height_profile": get_height_profile("medium"),
-        "character_mode": "full_character",
+# 啟動時自動還原快照（若有），否則預設 system_bot
+_restored_chars = load_snapshot()
+if _restored_chars:
+    # 補上 last_seen：TTL 掃描以 c.get("last_seen", now) 判斷，缺這個欄位的
+    # 角色會被永遠視為「剛剛才出現」而不會過期。舊快照或早期版本寫入的角色
+    # 都沒有這個欄位，不補的話會在場上不死不滅。此處讓它們從啟動時重新計時。
+    _now = time.time()
+    for _c in _restored_chars.values():
+        _c.setdefault("last_seen", _now)
+    _swarm_chars: Dict[str, Any] = _restored_chars
+else:
+    _swarm_chars: Dict[str, Any] = {
+        "system_bot": {
+            "id": "system_bot", "room": "default", "x": 500, "y": 500, "vx": 1, "vy": 1,
+            "upper": {"hex": "#FFFFFF"}, "lower": {"hex": "#444444"},
+            "outfit": {"inner_color": "#FF0000", "lower_color": "#0000FF"},
+            "height_class": "medium", "height_profile": get_height_profile("medium"),
+            "character_mode": "full_character",
+            "height_measurement_valid": True,
+            "style_id": "lego",
+            "last_seen": time.time(),
+        }
     }
-}
+
+# 支援 AUTO_BOTS 設定在啟動時自動注入指定數量之虛擬角色
+if config.AUTO_BOTS > 0:
+    inject_bots(_swarm_chars, count=config.AUTO_BOTS)
+
 _swarm_lock = threading.Lock()
+
+# --- swarm 容量上限 ---
+MAX_SWARM_SIZE = config.MAX_SWARM_SIZE
+MAX_BOTS_PER_INJECT = config.MAX_BOTS_PER_INJECT
+
+
+# 三個獨立的執行緒池，而非共用一池：共用時生成流程的 VLM 任務會佔滿整池，
+# 讓即時預覽的 CV 任務在佇列裡空等並燒掉自己的 timeout —— 失敗原因看起來
+# 與 CV 有關，實際上是資源飢餓。分池讓兩者互不影響。
 
 # Keep real-time CV from starving formal AI generation.
 _cv_executor = ThreadPoolExecutor(max_workers=1)
@@ -223,7 +371,16 @@ def _merge_fallback_payload(sid: str, features: Dict[str, Any]) -> Dict[str, Any
     }
 
 
-@app.route("/health", methods=["GET"])
+# --- generate_avatar 併發控制 ---
+_GEN_MAX_CONCURRENT = config.GEN_MAX_CONCURRENT
+_gen_semaphore = threading.Semaphore(_GEN_MAX_CONCURRENT)
+_gen_waiting = 0                      # 目前排隊中（尚未取得 slot）的請求數
+_gen_waiting_lock = threading.Lock()
+
+
+
+
+@_route("/health", methods=["GET"])
 def health_check():
     return jsonify({
         "status": "ok",
@@ -563,29 +720,45 @@ def _history_call(function, *args, **kwargs):
         return None
 
 
-@socketio.on("connect")
+@_route("/photos/<path:filename>", methods=["GET"])
+def serve_photo(filename):
+    return send_from_directory(_PHOTOS_DIR, filename)
+
+
+
+@_on_socket("connect")
 def handle_connect():
     emit("server_message", {"message": "Connected to PersonaFlow backend."})
+    log_event("connect", pid=request.sid)
     with _swarm_lock:
         chars = list(_swarm_chars.values())
     if chars:
         emit("update_positions", {"characters": chars})
 
 
-@socketio.on("disconnect")
+@_on_socket("disconnect")
 def handle_disconnect():
+    # 角色 id 已與連線 id 脫鉤（char_<uuid>），因此斷線不再移除任何角色 ——
+    # 賓客關掉分頁不代表離開現場，作品不該因此少一個人。舊版角色 id 沿用 sid，
+    # 這裡保留相容處理：改為續命而非刪除，交由 TTL 掃描回收。
     sid = request.sid
+    with _swarm_lock:
+        if sid in _swarm_chars:
+            _swarm_chars[sid]["last_seen"] = time.time()
+    # 預覽階段的 per-connection 狀態則必須清掉：它是這條連線專屬的拍攝閘門進度，
+    # 留著會讓同一個 sid 被重用時繼承上一位訪客的穩定度計數。
     with _preview_lock:
         _preview_sessions.pop(sid, None)
         _preview_in_flight.discard(sid)
+    log_event("disconnect", pid=sid, removed_char=False)
 
 
-@socketio.on("client_event")
+@_on_socket("client_event")
 def handle_client_event(payload):
     socketio.emit("server_message", {"message": "Event received", "payload": payload})
 
 
-@socketio.on("process_frame")
+@_on_socket("process_frame")
 def handle_process_frame(payload):
     sid = request.sid
     if cv2 is None:
@@ -610,12 +783,9 @@ def handle_process_frame(payload):
                 previous = _preview_sessions.setdefault(sid, {"stable_count": 0}).get("landmarks")
             frame_id = frame_payload.get("frame_id")
 
-            if img_str.startswith("data:image"):
-                img_str = img_str.split(",")[1]
-
-            img_bytes = base64.b64decode(img_str)
-            np_arr = np.frombuffer(img_bytes, np.uint8)
-            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            frame, _decode_err = decode_frame(img_str)
+            if frame is None:
+                print(f"[preview] 影像解碼失敗: {_decode_err}")
 
             if frame is not None:
                 features = get_clothing_features(frame, max_width=360, previous_landmarks=previous)
@@ -720,7 +890,7 @@ def handle_process_frame(payload):
     _cv_executor.submit(_process_in_background, payload)
 
 
-@socketio.on("generate_avatar")
+@_on_socket("generate_avatar")
 def handle_generate_avatar(payload):
     if cv2 is None:
         emit("avatar_generated", {"ok": False, "error": "opencv_missing"})
@@ -796,6 +966,11 @@ def handle_generate_avatar(payload):
 
     def _background():
         total_start = time.perf_counter()
+        # 各子流程里程碑毫秒數，最後一起寫進 avatar_generated 事件 log。
+        # analyze_log.py / report_html.py 的效能報告就是讀這些欄位。
+        _timings: Dict[str, Any] = {}
+        global _gen_waiting
+        acquired_slot = False
         retry_count = 0
         fallback_used = False
         final_status = "failed"
@@ -820,6 +995,23 @@ def handle_generate_avatar(payload):
                 except Exception as exc:
                     return {"ok": False, "error": error, "detail": type(exc).__name__}
 
+            # --- 併發閘門：多人同時拍照時排隊，避免單點瓶頸卡死 ---
+            if not _gen_semaphore.acquire(blocking=False):
+                with _gen_waiting_lock:
+                    _gen_waiting += 1
+                    ahead = _gen_waiting
+                try:
+                    _progress("queued", 2, f"生成中人數已滿，排隊中（前面還有 {ahead} 人）")
+                    log_event("generate_queued", pid=sid, ahead=ahead, mode=mode)
+                except Exception as pe:
+                    print(f"[generate_avatar] queue progress error: {pe}")
+                _queue_wait_start = time.perf_counter()
+                _gen_semaphore.acquire(blocking=True)
+                with _gen_waiting_lock:
+                    _gen_waiting = max(0, _gen_waiting - 1)
+                _timings["queue_wait_ms"] = round((time.perf_counter() - _queue_wait_start) * 1000.0, 1)
+            acquired_slot = True
+
             _progress("received", 5, "照片已接收，準備分析人物特徵")
             vlm_start = time.perf_counter()
             _progress("analyzing", 12, "正在分析人體輪廓、服裝區域與色彩")
@@ -827,14 +1019,27 @@ def handle_generate_avatar(payload):
             # so the two extra VLM endpoints duplicate visual analysis. They stay
             # off unless explicitly re-enabled.
             use_vlm = os.environ.get("FULL_MODE_VLM_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
-            fut_outfit = _vlm_executor.submit(analyze_outfit, img_str) if use_vlm else None
-            fut_face_vlm = _vlm_executor.submit(analyze_face, img_str) if use_vlm else None
+            # 經熔斷器呼叫：Gemini 連續失敗時快速失敗並回傳 fallback，避免
+            # executor 執行緒被無效等待佔住。只用在這兩支便宜的分析 API 上 ——
+            # 付費生圖那條刻意不接：CircuitBreaker.call 預設會自動重試一次
+            # （等於多付一次錢），且它的 circuit_open 會蓋掉底下依錯誤類型
+            # 給前端的重拍指引。生圖自有 _await_generation 的逾時與重試。
+            def _vlm(fn, kind):
+                if gemini_breaker is None:
+                    return _vlm_executor.submit(fn, img_str)
+                return _vlm_executor.submit(
+                    gemini_breaker.call, fn, img_str, max_retries=0,
+                    fallback={"ok": False, "error": "circuit_open", kind: {}},
+                )
 
-            # Decode image
-            img_b64 = img_str.split(",")[1] if img_str.startswith("data:image") else img_str
-            img_bytes = base64.b64decode(img_b64)
-            np_arr = np.frombuffer(img_bytes, np.uint8)
-            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            fut_outfit = _vlm(analyze_outfit, "outfit") if use_vlm else None
+            fut_face_vlm = _vlm(analyze_face, "face") if use_vlm else None
+
+            # Decode image（Pillow→OpenCV 兩段式，含 iPhone HEIC 與 base64
+            # padding/'+' 修正；見 avatar_pipeline.decode_frame）
+            frame, _decode_err = decode_frame(img_str)
+            if frame is None:
+                print(f"[generate_avatar] 影像解碼失敗: {_decode_err}")
 
             cv_result      = {}
             face_cv_result = {}
@@ -1107,6 +1312,12 @@ def handle_generate_avatar(payload):
                     ), to=sid)
 
             generation_ms = int((time.perf_counter() - generation_start) * 1000)
+            _timings.update(cv_ms=cv_ms, vlm_ms=vlm_ms, generation_ms=generation_ms)
+            # 生成延遲與真實成敗落地，供 analyze_log 統計誠實的失敗率
+            log_event("avatar_generated", pid=sid,
+                      latency_ms=round((time.perf_counter() - total_start) * 1000.0, 1),
+                      mode=mode, ok=(final_status == "success"), error=final_error,
+                      retry_count=retry_count, **_timings)
             log_metric({
                 "ts": time.time(), "request_id": request_id, "mode": mode,
                 "style_id": style_id, "height_class": height_class, "stage": "final",
@@ -1154,20 +1365,34 @@ def handle_generate_avatar(payload):
                 retry_count=retry_count, validation=final_validation,
                 error_code=type(e).__name__, guidance=str(e), output_png=final_output,
             )
+            # 失敗也要落地，否則報告算出來的失敗率會是假的
+            log_event("avatar_generated", pid=sid,
+                      latency_ms=round((time.perf_counter() - total_start) * 1000.0, 1),
+                      mode=mode, ok=False, error=str(e), **_timings)
+        finally:
+            if acquired_slot:
+                _gen_semaphore.release()
 
     threading.Thread(target=_background, daemon=True).start()
 
 
-@socketio.on("join_swarm")
+@_on_socket("join_swarm")
 def handle_join_swarm(payload):
-    char_id = payload.get("id") or request.sid
+    # 角色 id 必須與連線 id 脫鉤：沿用 sid 會讓角色在賓客關掉分頁時一起消失
+    # （sid 每次連線都不同）。前端會把 swarm_joined 回傳的 id 存進 sessionStorage，
+    # 重新連線時帶回來認領同一個角色，避免產生分身。
+    char_id = payload.get("id") or f"char_{uuid.uuid4().hex[:12]}"
+    room = payload.get("room", "default")
+    # 投影牆的角色比例由固定站位量測的身高等級決定，量不到就不讓它進場 ——
+    # 否則角色會以預設比例混進去，而現場無從得知那是量測失敗還是真實體型。
     height_class = payload.get("height_class")
     if not payload.get("height_measurement_valid") or height_class not in {"short", "medium", "tall"}:
-        emit("swarm_join_failed", {
-            "id": char_id,
-            "error": "valid_height_measurement_required",
-            "guidance": "請先完成固定站位身高量測，再匯入投影牆。",
-        })
+        if emit is not None:
+            emit("swarm_join_failed", {
+                "id": char_id,
+                "error": "valid_height_measurement_required",
+                "guidance": "請先完成固定站位身高量測，再匯入投影牆。",
+            })
         return
     height_profile = get_height_profile(height_class)
     with _swarm_lock:
@@ -1175,6 +1400,7 @@ def handle_join_swarm(payload):
         _swarm_chars[char_id] = {
             **existing,
             "id": char_id,
+            "room": room,
             "x": float(payload.get("x", 960)),
             "y": float(payload.get("y", 540)),
             "vx": existing.get("vx", random.uniform(-1.0, 1.0)),
@@ -1195,73 +1421,277 @@ def handle_join_swarm(payload):
             "height_profile": height_profile,
             "height_measurement_valid": True,
             "style_id": payload.get("style_id", existing.get("style_id", "lego")),
+            "last_seen": time.time(),
         }
-        snapshot = list(_swarm_chars.values())
-    emit("swarm_joined", {"id": char_id})
+        snapshot = [c for c in _swarm_chars.values()
+                    if c.get("room", "default") == room]
+        total = len(_swarm_chars)
+    if join_room is not None:
+        join_room(room)
+    if emit is not None:
+        emit("swarm_joined", {"id": char_id, "room": room})
+    log_event("join_swarm", pid=char_id, room=room,
+              x=float(payload.get("x", 960)), y=float(payload.get("y", 540)),
+              character_mode=payload.get("character_mode", "full_character"),
+              swarm_size=total)
     # Send large immutable assets once when a character joins. Regular Boids
     # ticks omit body_png to avoid rebroadcasting megabytes ten times per second.
-    socketio.emit("update_positions", {"characters": snapshot})
+    if socketio is not None:
+        socketio.emit("update_positions", {"characters": snapshot}, room=room)
 
 
-@socketio.on("get_swarm")
-def handle_get_swarm(_payload=None):
-    with _swarm_lock:
-        snapshot = list(_swarm_chars.values())
-    emit("update_positions", {"characters": snapshot})
-
-
-@socketio.on("leave_swarm")
+@_on_socket("leave_swarm")
 def handle_leave_swarm(payload):
-    char_id = payload.get("id") or request.sid
+    char_id = payload.get("id") or (request.sid if request else None)
     with _swarm_lock:
-        _swarm_chars.pop(char_id, None)
+        removed = _swarm_chars.pop(char_id, None) is not None
+        total = len(_swarm_chars)
+    log_event("leave_swarm", pid=char_id, removed=removed, swarm_size=total)
 
 
-@socketio.on("update_character")
+@_on_socket("update_character")
 def handle_update_character(payload):
     char_id = payload.get("id")
     if not char_id:
         return
+    changed = []
     with _swarm_lock:
         if char_id in _swarm_chars:
-            for k in ("upper", "lower", "upper_type", "lower_type", "accessories", "accessory", "arm_color", "face", "outfit", "body_png", "body_bbox", "character_mode", "height_class", "height_profile", "height_measurement_valid", "style_id"):
+            for k in ("upper", "lower", "upper_type", "lower_type", "accessories",
+                      "accessory", "arm_color", "face", "outfit", "body_png",
+                      "body_bbox", "character_mode", "height_class", "height_profile",
+                      "height_measurement_valid", "style_id", "room"):
                 if k in payload:
                     _swarm_chars[char_id][k] = payload[k]
+                    changed.append(k)
+    if changed:
+        log_event("update_character", pid=char_id, fields=",".join(changed))
+
+
+@_on_socket("get_swarm")
+def handle_get_swarm(payload=None):
+    payload = payload or {}
+    room = payload.get("room")
+    with _swarm_lock:
+        if room:
+            chars = [c for c in _swarm_chars.values() if c.get("room", "default") == room]
+        else:
+            chars = list(_swarm_chars.values())
+    if emit is not None:
+        emit("update_positions", {"characters": chars})
+
+    # 純觀看端（投影牆）只 emit get_swarm、不會 join_swarm，因此原本不在任何
+    # room 裡 —— 而 _swarm_background 的週期廣播是 room-scoped 的，導致它在
+    # 開頭兩次之後再也收不到更新（前端 watchdog 會因此永久誤報斷線）。
+    # 這裡把連線加入它要觀看的 room；不帶 room 時視為 default。
+    # 只影響「之後」收得到什麼，不改變本次回傳內容，故上面的語意保持不變。
+    if join_room is not None:
+        join_room(room or "default")
+
+    log_event("get_swarm", pid=(request.sid if request else None), room=room, swarm_size=len(chars))
+
+
+@_on_socket("trigger_photo")
+def handle_trigger_photo(payload=None):
+    """
+    大合照合成觸發事件 (M6 核心)。
+    收集在場角色、進行智慧排版合成高解析度圖片與 QR Code，並廣播 photo_ready。
+    """
+    payload = payload or {}
+    room = payload.get("room", "default")
+    with _swarm_lock:
+        chars = [c for c in _swarm_chars.values() if c.get("room", "default") == room]
+        if not chars and room == "default":
+            chars = list(_swarm_chars.values())
+
+    host = request.host if request else f"127.0.0.1:{config.PORT}"
+    photo_url_base = f"http://{host}/photos"
+    res = compose_group_photo(chars, photo_url_base=photo_url_base)
+
+    if res.get("ok") and "photo_bytes" in res:
+        photo_filename = f"{res['photo_id']}.png"
+        photo_filepath = os.path.join(_PHOTOS_DIR, photo_filename)
+        try:
+            with open(photo_filepath, "wb") as pf:
+                pf.write(res["photo_bytes"])
+        except Exception as pe:
+            print(f"[trigger_photo] Failed to save photo file: {pe}")
+
+    log_event("group_photo_composed", photo_id=res.get("photo_id"), count=len(chars), room=room)
+    if socketio is not None:
+        socketio.emit("photo_ready", {
+            "ok": res.get("ok", False),
+            "photo_id": res.get("photo_id"),
+            "photo_url": res.get("photo_url"),
+            "photo_b64": res.get("photo_b64"),
+            "qr_b64": res.get("qr_b64"),
+            "character_count": len(chars),
+            "room": room,
+        })
+
+
+@_on_socket("inject_bots")
+def handle_inject_bots(payload=None):
+    payload = payload or {}
+    # 這是任何已連線客戶端都能觸發的控制端事件，且 swarm 計算為 O(n^2)，
+    # 因此必須驗證 count 並限制總量，避免單一請求讓背景迴圈卡死服務。
+    try:
+        count = int(payload.get("count", 10))
+    except (TypeError, ValueError):
+        if emit is not None:
+            emit("inject_bots_rejected", {"reason": "invalid_count"})
+        return
+    if count <= 0:
+        if emit is not None:
+            emit("inject_bots_rejected", {"reason": "invalid_count"})
+        return
+
+    count = min(count, MAX_BOTS_PER_INJECT)
+    room = payload.get("room", "default")
+    with _swarm_lock:
+        available = MAX_SWARM_SIZE - len(_swarm_chars)
+        count = min(count, max(0, available))
+        if count == 0:
+            if emit is not None:
+                emit("inject_bots_rejected", {
+                    "reason": "swarm_full",
+                    "max_swarm_size": MAX_SWARM_SIZE,
+                })
+            return
+        bot_ids = inject_bots(_swarm_chars, count=count)
+        for bid in bot_ids:
+            if bid in _swarm_chars:
+                _swarm_chars[bid]["room"] = room
+        total = len(_swarm_chars)
+    log_event("inject_bots", count=count, total=total, room=room)
+    with _swarm_lock:
+        chars = list(_swarm_chars.values())
+    if socketio is not None:
+        socketio.emit("update_positions", {"characters": chars})
+
+
+@_on_socket("remove_bots")
+def handle_remove_bots(_payload=None):
+    with _swarm_lock:
+        removed = remove_bots(_swarm_chars)
+        total = len(_swarm_chars)
+    log_event("remove_bots", removed=removed, total=total)
+    with _swarm_lock:
+        chars = list(_swarm_chars.values())
+    if socketio is not None:
+        socketio.emit("update_positions", {"characters": chars})
+
+
+@_on_socket("save_snapshot")
+def handle_save_snapshot(_payload=None):
+    with _swarm_lock:
+        ok = save_snapshot(_swarm_chars)
+    if emit is not None:
+        emit("snapshot_saved", {"ok": ok})
+
+
+# 上一個 tick 處於 GREETING 狀態的角色集合，用來只 log「新發生」的相遇，
+# 避免每 0.1s tick 對持續靠近中的角色重複寫 log 灌爆檔案。
+_prev_greeting: set = set()
+_last_summary_ts: float = 0.0
+_last_snapshot_ts: float = 0.0
+_last_ttl_sweep_ts: float = 0.0
 
 
 def _swarm_background():
+    global _prev_greeting, _last_summary_ts, _last_snapshot_ts, _last_ttl_sweep_ts
     while True:
         time.sleep(0.1)
         with _swarm_lock:
             chars = list(_swarm_chars.values())
         if not chars:
             continue
-        updated = update_swarm_state(chars)
+
+        # 依 room 分組計算：不同展區的角色不應互相避讓、對齊或觸發 GREETING，
+        # 位置事件也只送給對應 room 的投影端。
+        by_room: Dict[str, List[Dict[str, Any]]] = {}
+        for c in chars:
+            by_room.setdefault(c.get("room", "default"), []).append(c)
+
+        updated: List[Dict[str, Any]] = []
+        for room_name, room_chars in by_room.items():
+            room_updated = update_swarm_state(room_chars)
+            if socketio is not None:
+                # Large immutable assets are sent once, when a character joins.
+                # Regular Boids ticks omit body_png so the wall does not
+                # re-receive megabytes ten times per second.
+                lightweight = [
+                    {k: v for k, v in character.items() if k != "body_png"}
+                    for character in room_updated
+                ]
+                socketio.emit("update_positions",
+                              {"characters": lightweight}, room=room_name)
+            updated.extend(room_updated)
+
+        _BOIDS_KEYS = ("x", "y", "vx", "vy", "state", "greeting_ticks")
         with _swarm_lock:
             for c in updated:
                 cid = c["id"]
                 if cid in _swarm_chars:
-                    _swarm_chars[cid].update(c)
-        lightweight = [
-            {key: value for key, value in character.items() if key != "body_png"}
-            for character in updated
-        ]
-        socketio.emit("update_positions", {"characters": lightweight})
+                    for k in _BOIDS_KEYS:
+                        if k in c:
+                            _swarm_chars[cid][k] = c[k]
+
+        # --- 相遇事件：只記錄本 tick 新進入 GREETING 的角色 ---
+        now_greeting = {c["id"] for c in updated if c.get("state") == "GREETING"}
+        newly = now_greeting - _prev_greeting
+        for cid in newly:
+            log_event("character_encounter", pid=cid, swarm_size=len(updated))
+        _prev_greeting = now_greeting
+
+        # --- 移動彙總與定時快照（每 5s 彙總、每 30s 快照持久化）---
+        now = time.time()
+        if now - _last_summary_ts >= 5.0:
+            _last_summary_ts = now
+            log_event("swarm_summary", swarm_size=len(updated),
+                      greeting_count=len(now_greeting))
+
+        if now - _last_snapshot_ts >= 30.0:
+            _last_snapshot_ts = now
+            with _swarm_lock:
+                save_snapshot(_swarm_chars)
+
+        # --- TTL 清場 ---
+        # 角色不再隨連線消失（見 handle_disconnect），因此需要另一個回收機制，
+        # 否則長時間運行或跨場次會無限累積直到撞上 MAX_SWARM_SIZE。
+        if config.CHARACTER_TTL_SEC > 0 and now - _last_ttl_sweep_ts >= 60.0:
+            _last_ttl_sweep_ts = now
+            cutoff = now - config.CHARACTER_TTL_SEC
+            with _swarm_lock:
+                stale = [cid for cid, c in _swarm_chars.items()
+                         if c.get("last_seen", now) < cutoff]
+                for cid in stale:
+                    _swarm_chars.pop(cid, None)
+            if stale:
+                log_event("character_ttl_expired", count=len(stale))
 
 
-threading.Thread(target=_swarm_background, daemon=True).start()
+if socketio is not None:
+    threading.Thread(target=_swarm_background, daemon=True).start()
 
 
 if __name__ == "__main__":
+    if socketio is None or app is None:
+        print("[PersonaFlow] Flask or Flask-SocketIO is missing. Please run: pip install -r requirements.txt")
+        raise SystemExit(1)
     # Werkzeug on Windows can leave several development processes sharing the
     # same port. Refuse a second launch so browsers cannot randomly reconnect to
     # an older copy of the capture logic.
     probe = network_socket.socket(network_socket.AF_INET, network_socket.SOCK_STREAM)
     probe.settimeout(0.4)
     try:
-        port_is_busy = probe.connect_ex(("127.0.0.1", 5001)) == 0
+        port_is_busy = probe.connect_ex(("127.0.0.1", config.PORT)) == 0
     finally:
         probe.close()
     if port_is_busy:
-        raise SystemExit("Port 5001 already has a PersonaFlow backend. Stop it before starting another instance.")
-    socketio.run(app, host="0.0.0.0", port=5001, debug=True, use_reloader=False, allow_unsafe_werkzeug=True)
+        raise SystemExit(
+            f"Port {config.PORT} already has a PersonaFlow backend. "
+            "Stop it before starting another instance."
+        )
+    socketio.run(app, host=config.HOST, port=config.PORT, debug=config.DEBUG,
+                 use_reloader=False, allow_unsafe_werkzeug=True)

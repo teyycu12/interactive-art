@@ -213,9 +213,9 @@ SQLite 每次 attempt 可記錄：
 | 感知層 | Python、MediaPipe、OpenCV | 姿勢、人體遮罩、服裝色彩、臉部與局部區域 |
 | 邏輯層 | Python、Flask、Flask-SocketIO | session 隔離、生成流程、驗證、歷史 API、Socket 通訊 |
 | 生成層 | OpenRouter、OpenAI-compatible SDK | 完整角色一次生成 |
-| 資料層 | SQLite、Rotating JSONL | 開發歷史、token／cost、人工審查及匿名 metrics |
+| 資料層 | SQLite、Rotating JSONL | 開發歷史、token／cost、人工審查、匿名 metrics 與事件 log |
 | 主畫面 | JavaScript、p5.js、Socket.io | 攝影／上傳、進度條與角色預覽 |
-| 投影頁 | JavaScript、p5.js | 2D sprite 群聚投影與 Boids 座標 |
+| 投影頁 | JavaScript、PixiJS | 2D sprite 群聚投影與 Boids 座標 |
 
 後端使用 Flask-SocketIO 的 `threading` async mode。CV preview、VLM 與正式 image generation 使用不同 executor，避免即時預覽佇列阻塞正式生成。
 
@@ -224,39 +224,64 @@ SQLite 每次 attempt 可記錄：
 ```text
 PersonaFlow/
 ├── backend/
-│   ├── app.py                  # Flask、Socket、M1/M2 orchestration、進度事件
+│   ├── app.py                  # Flask、Socket、生成 orchestration、併發閘門、進度事件
+│   ├── config.py               # 集中式環境設定（型別轉換與驗證）
 │   ├── cv_module.py            # 人體、服裝色彩、輪廓與局部區域
 │   ├── face_module.py          # 本機臉部特徵
 │   ├── vlm_module.py           # 可選 Gemini 語意分析
+│   ├── avatar_pipeline.py      # generate_avatar 的純資料處理（影像解碼、色表、特徵合併）
 │   ├── garment_gen.py          # 完整角色生圖流程與 prompt 模板
 │   ├── style_base.py           # 從參考圖量出的風格標準（數值化）
 │   ├── style_fingerprint.py    # 風格指紋與跨角色漂移量測
 │   ├── style_normalizer.py     # 方向性明暗量測與正規化
+│   ├── style_probe.py          # 把指紋接到實際生成圖上的漂移量測
+│   ├── reference_bleed.py      # 參考圖滲漏偵測
+│   ├── identity_fidelity.py    # 個體特徵保真度量測
 │   ├── avatar_quality.py       # 本機生成圖 validator
 │   ├── capture_quality.py      # 拍攝站位與穩定度規則
+│   ├── detail_quality.py       # 最終畫面細節指標
 │   ├── generation_history.py   # SQLite run／attempt／人工審查
+│   ├── blind_review.py         # 外部結果匯入與多人匿名盲評
 │   ├── height_profiles.py      # short／medium／tall profiles
 │   ├── metrics_logger.py       # 隱私保護 JSONL 指標
+│   ├── event_logger.py         # 結構化事件 log 落地（JSON lines）
+│   ├── analyze_log.py          # 效能指標分析（延遲／失敗率）
+│   ├── report_html.py          # HTML 效能報告產生器
+│   ├── stress_test.py          # 承載量壓測工具
+│   ├── bench_generate.py       # 生成延遲基準線量測
+│   ├── e2e_smoke.py            # 端到端煙霧測試（對真的跑起來的後端）
 │   ├── style_registry.py       # 後端生成風格 registry
-│   ├── swarm_logic.py          # Boids 群聚演算法
-│   └── tests/                  # M1、M2、validator、history、registry 測試
+│   ├── swarm_logic.py          # Boids 群聚演算法（含邊界柔性轉向、打招呼持續）
+│   ├── swarm_snapshot.py       # swarm 狀態持久化，重啟自動還原
+│   ├── photo_composer.py       # 大合照合成（排版、QR、中文字型後備鏈）
+│   ├── bot_simulator.py        # 壓測用虛擬角色注入／移除
+│   ├── circuit_breaker.py      # 外部 API 熔斷器與退避重試
+│   └── tests/                  # pytest：CV、生成、validator、history、registry、Socket handler
 ├── frontend/
-│   ├── index.html              # 主操作頁與生成模式選擇
+│   ├── index.html              # 主操作頁
 │   ├── dev.html                # 生成歷史、成本、圖片比較與人工審查
-│   ├── projection.html         # 投影頁（2D sprite 群聚）
+│   ├── projection.html         # 投影頁（2D sprite 群聚，PixiJS）
 │   ├── sketch.js               # p5.js 狀態、攝影、上傳、進度與渲染
-│   ├── character.js            # Person 角色資料與渲染接點
-│   ├── socket.js               # Socket.io client
-│   └── themes/
-│       ├── registry.js         # 前端 renderer registry
-│       └── lego.js             # LEGO renderer
+│   ├── character.js            # class Character 角色資料與渲染接點
+│   ├── socket.js               # Socket.io client（自動偵測 LAN）
+│   ├── themes/
+│   │   ├── registry.js         # 前端 renderer registry
+│   │   └── lego.js             # LEGO renderer
+│   └── tests/                  # 前端測試（Node 內建執行器）
+├── scripts/                    # 參考圖集與髮色取樣的離線檢查工具
+├── docs/m3/                    # M3 交接文件與效能報告
+├── .github/workflows/ci.yml    # CI：前端 Node 測試＋後端 pytest
+├── start.sh                    # 一鍵啟動（後端＋前端＋顯示 LAN IP）
+├── CLAUDE.md                   # 專案結構、規範與啟動方式
 ├── PRD.md
+├── INTERFACES.md               # Socket.io 事件與 payload 介面規格
 ├── STYLE_BASE.md               # 基底風格標準（量測方法與數值）
+├── STYLE_PROBE_FOLLOWUPS.md    # 已知但刻意延後的量測與管線細節
 ├── EXTERNAL_AI_RESEARCH_BRIEF.md
-├── AGENTS.md
 ├── TechStack.md
 ├── .env.example
-└── requirements.txt
+├── requirements.txt
+└── requirements-dev.txt
 ```
 
 ## 快速啟動
@@ -270,7 +295,11 @@ pip install -r requirements.txt
 Copy-Item .env.example backend\.env
 ```
 
-在 `backend/.env` 填入 API key 與模型設定。不要提交 `.env`。
+在 `backend/.env` 填入 API key 與模型設定。**不要提交 `.env`。**
+
+放在專案根目錄的 `.env` 同樣有效：`app.py` 會先讀根目錄那份，再由
+`load_dotenv()` 以 `backend/app.py` 為起點往上尋找，因此 `backend/.env`
+也會被載入。兩處都有時，先載入的根目錄版本優先。
 
 ### 2. 啟動後端
 
@@ -279,6 +308,23 @@ python backend/app.py
 ```
 
 後端位於 `http://127.0.0.1:5001`。
+
+### 3. 啟動前端
+
+```powershell
+python -m http.server 8000 --directory frontend
+```
+
+### 一鍵啟動（macOS／Linux）
+
+```bash
+cp .env.example .env          # 填入你的 API key
+bash start.sh                 # 同時啟動後端與前端，並顯示 LAN IP
+```
+
+啟動後終端會顯示 LAN IP，現場手機／平板可直接用該 IP 連入互動端。
+
+---
 
 ### 3. 啟動前端
 
@@ -346,7 +392,11 @@ python -m unittest discover -s backend\tests -v
 - SQLite token／cost 聚合與人工審查。
 - style registry 與 Socket metadata 保存。
 
-目前共有 73 項測試。這些測試涵蓋程式契約、資料介面與錯誤阻擋；**不代表角色外觀已通過人工視覺驗收。**
+- Socket handler 契約：角色與連線脫鉤、重連認領同一角色、身高量測閘門。
+- 事件 log 落地、併發寫入與隱私遮除。
+- Boids 分房隔離、swarm 快照還原與大合照合成。
+
+目前共有 299 項後端測試與 4 項前端測試。這些測試涵蓋程式契約、資料介面與錯誤阻擋；**不代表角色外觀已通過人工視覺驗收。**
 
 ## 已知限制與下一步
 
@@ -354,7 +404,7 @@ python -m unittest discover -s backend\tests -v
 - **畫風已定案為光澤 3D 渲染感**（2026-08）：`garment_gen.py` 的 ART STYLE GUIDELINES 原本要求「扁平向量、無漸層、無陰影」，與 `style_base.py` 量到的 0.21–0.24 立體明暗互相矛盾；現已改寫成材質光澤排序、正面柔光與「印刷不帶光向」三條規則，並由 `test_prompt_style_agreement.py` 鎖住。**效果仍待真人生成驗證。**
 - **幾何一致性失去免費保證**：移除固定 3D 網格後，「兩隻手、兩條腿、比例一致」要靠 prompt 與 `avatar_quality.py` 的結構檢查去爭取；多肢問題會回來。
 - **個體特徵部分流失**：服裝顏色走 CV 量測，但膚色髮色仍被 VLM 量化成 6–8 個桶，抹平個體差異。
-- **漂移無法量測**：`fingerprint_spread` 已寫好但尚未接入生成管線，目前沒有數字能回答「這批角色有多不一致」。
+- **漂移數字尚未累積**：`style_probe.py` 已把 `fingerprint_spread` 接上真實輸出，但要有足夠批量的生成結果才能回答「這批角色有多不一致」。
 - **效能瓶頸**：50／100人 FPS 尚未完成正式量測。
 - 拍攝品質閘門與身高門檻仍需固定攝影站實測校正。
 - 本機 validator 能判斷格式與部分結構，不能可靠判斷是否像本人或是否達到目標參考圖。
@@ -374,4 +424,10 @@ python -m unittest discover -s backend\tests -v
 4. 到需要真人生成時停止於 `USER_MANUAL_GENERATION_REQUIRED`，由專案負責人手動生成並提供結果；系統不得自行假設成功。
 5. 結果納入 `dev.html` 盲評，至少5位評分者完成後比較物種一致性、個體可分辨度、成本與延遲。
 
-更完整的產品規格與欄位定義請參考 [PRD.md](./PRD.md)，風格標準請參考 [STYLE_BASE.md](./STYLE_BASE.md)，開發操作請參考 [AGENTS.md](./AGENTS.md)。
+更完整的產品規格與欄位定義請參考 [PRD.md](./PRD.md)，風格標準請參考 [STYLE_BASE.md](./STYLE_BASE.md)，開發操作請參考 [CLAUDE.md](./CLAUDE.md)，Socket 介面請參考 [INTERFACES.md](./INTERFACES.md)。
+
+### 已預留但尚未實作
+
+- 角色骨架／IK 繫結（`Character.skeleton` 已預留欄位）
+- 動畫狀態機（`Character.animState` 已預留欄位）
+- 從生成圖反推 landmark 以套用骨架動畫

@@ -8,6 +8,34 @@ _API_KEY = os.environ.get("GEMINI_API_KEY")
 if _API_KEY:
     genai.configure(api_key=_API_KEY)
 
+def strip_json_fence(text: str) -> str:
+    """把模型回應中的 markdown code fence 去掉，取出純 JSON。
+
+    即使 prompt 明確要求不要加 fence，模型仍常常會加上 ```json ... ```。
+
+    先前 analyze_outfit 與 analyze_face 各有一套實作，行為並不一致；
+    analyze_face 那套用的是 text.lstrip("json") —— lstrip 的參數是「字元集合」
+    而非前綴，語意上是錯的（只是多數輸入剛好看不出差別）。此處統一為一份，
+    並改用明確的前綴移除。
+    """
+    if not text:
+        return ""
+    t = text.strip()
+
+    if "```" in t:
+        parts = t.split("```")
+        # fence 之間的內容；沒有成對 fence 時退回原文
+        t = parts[1] if len(parts) > 1 else parts[0]
+
+    t = t.strip()
+    # 去掉語言標籤（```json / ```JSON）
+    for tag in ("json", "JSON"):
+        if t.startswith(tag):
+            t = t[len(tag):]
+            break
+    return t.strip()
+
+
 def analyze_outfit(base64_image: str) -> Dict[str, Any]:
     """
     Sends the base64 image to Gemini 1.5 Flash to analyze the outfit components.
@@ -55,18 +83,7 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
         
         response = model.generate_content([prompt, image_part], request_options={"timeout": 40})
         
-        text_resp = response.text.strip()
-        # Clean up in case the model returns markdown code blocks despite instructions
-        if text_resp.startswith("```json"):
-            text_resp = text_resp[7:]
-        if text_resp.startswith("```"):
-            text_resp = text_resp[3:]
-        if text_resp.endswith("```"):
-            text_resp = text_resp[:-3]
-            
-        text_resp = text_resp.strip()
-        
-        data = json.loads(text_resp)
+        data = json.loads(strip_json_fence(response.text))
         return {
             "ok": True,
             "outfit": data
@@ -143,12 +160,7 @@ skin_tone guide (judge by face, not lighting):
 Respond ONLY with the JSON object, no markdown fences."""
 
         response = model.generate_content([prompt, image_part], request_options={"timeout": 40})
-        text = response.text.strip()
-        if "```" in text:
-            parts = text.split("```")
-            text = parts[1] if len(parts) > 1 else parts[0]
-            text = text.lstrip("json").strip()
-        data = json.loads(text)
+        data = json.loads(strip_json_fence(response.text))
         return {"ok": True, "face": {**_DEFAULTS, **data}}
     except Exception as e:
         print(f"[VLM face Error] {e}")

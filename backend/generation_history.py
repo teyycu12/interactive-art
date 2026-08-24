@@ -18,7 +18,7 @@ import statistics
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from PIL import Image, ImageOps
 
