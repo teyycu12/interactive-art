@@ -216,5 +216,107 @@ CV 層的問題。要定位 (a)/(b)/(c)，必須拿使用者上傳的**原始檔
 
 ---
 
-以上四點目前都只是記錄問題，尚未排入實作。等主計畫（`pivot-full-character` 分支）
+## 5. 臉部膚色與表情：量到的東西大半沒送進 prompt
+
+**這一點與第 4 點同源**（都卡在 `get_face_features` 這個單點），但多了兩件第 4 點沒有的事：
+一份量測證據，以及一個與髮色無關的獨立缺口。
+
+### 5.1 量測證據
+
+`backend/identity_fidelity.py`（commit `07fc6d3`）對歷史上 26 張成功輸出做了內容離散度量測，
+以風格參考圖組導入時間（2026-08-22 17:08）切成前 12 / 後 14 兩組：
+
+| 區域 | 特徵 | before | after | 方向 |
+|---|---|---|---|---|
+| garment_torso | 色相離散（環形） | 0.320 | 0.731 | ↑ 個體保留 |
+| garment_torso | 彩度離散 | 0.702 | 1.015 | ↑ |
+| denim_leg | 彩度離散 | 0.703 | 0.963 | ↑ |
+| **face** | **彩度離散** | **0.686** | **0.146** | **↓ −79%** |
+| face | 色相離散（環形） | 0.022 | 0.008 | ↓（本來就極小） |
+
+服裝的個體差異全面上升——這是好結果。**只有臉部反向崩塌。**
+
+色相離散本來就極小是正常的（人的膚色都落在同一個橘色系），**彩度崩塌才是訊號**。
+
+**但這個數字有兩種解釋，數字本身分不出來**：
+
+- (甲) 個體流失——膚色正在收斂到單一膚色。
+- (乙) 風格收斂——舊的平塗 prompt 把皮膚畫得飽和度亂跳，新的光澤 prompt 畫得一致，
+  這反而是 Stage 0 想要的效果。
+
+能區分兩者的唯一判準是「輸出膚色有沒有跟著量到的訪客膚色走」。
+`backend/reference_bleed.py` 的 `color_allegiance()` face 區判定正是為此而寫，
+但**無法回溯執行**——訪客的 CV 量測色從未存進 `generation_history`。
+要判定必須等新的 run 累積，或在量測落地時一併補存。
+
+### 5.2 四個量到的臉部特徵從來沒進過 prompt
+
+`face_module.get_face_features()` 回傳 8 個欄位，[`backend/app.py:951-961`](./backend/app.py#L951-L961)
+把其中 5 個寫進 `face_data`。但 [`backend/garment_gen.py:714-745`](./backend/garment_gen.py#L714-L745)
+的 `_attr_lines()` 只讀其中一部分：
+
+| 欄位 | 有量測 | 寫進 face_data | **送進 prompt** |
+|---|---|---|---|
+| `skin_tone` | ✓ | ✓ | ✓ |
+| `hair_color` | ✓ | ✓ | ✓ |
+| `eye_color` | ✓ | ✓ | ✓ |
+| `smile_score` | ✓ | ✓ | ✓（但被壓成二元，見 5.3） |
+| `face_shape` | ✓ | ✓ | **✗** |
+| `eye_shape` | ✓ | ✓ | **✗** |
+| `eyebrow_style` | ✓ | ✓ | **✗** |
+| `lip_color` | ✓ | ✓ | **✗** |
+
+驗證方式：`grep -c` 這四個鍵在 `garment_gen.py` 中的出現次數皆為 **0**。
+
+也就是說，MediaPipe 算出臉型（round／square／oval）、眼型（round／narrow／almond）、
+眉型（thick／normal）與唇色之後，這些值被存進字典、隨 `face_data` 傳進
+`generate_full_character_png()`，然後**在組 prompt 時被靜默丟棄**。
+模型收到的臉部個體資訊只剩三個顏色加一個二元表情。
+
+這是「看起來還活著的死路徑」，和第 3 點的 `torso_scale_y`／`leg_scale_y` 同一類陷阱：
+從 `app.py` 讀起來像是有在用，要追到 `_attr_lines` 才會發現沒有。
+
+### 5.3 表情被壓成兩個字
+
+[`backend/garment_gen.py:730-732`](./backend/garment_gen.py#L730-L732)：
+
+```python
+if f.get("smile_score") is not None:
+    smiling = "smiling" if float(f.get("smile_score", 0)) > 0.4 else "neutral expression"
+    lines.append(f"- Expression: {smiling}")
+```
+
+連續的 0–1 blendshape 分數被 0.4 這個門檻壓成 **2 個桶**。
+
+**這與 commit `4d0bd99` 已經否決過的做法是同一件事，而且更極端。**
+那次拿掉的是把量到的膚色套進 6 色調色盤（髮色 8 色），理由是
+「量化掉了角色本來要保留的個體差異」。表情現在是 **2 個桶**，比率更差，而且還在線上。
+
+另外兩個獨立問題：
+
+- **只看嘴角**。[`backend/face_module.py:210-216`](./backend/face_module.py#L210-L216) 取的是
+  `max(mouthSmileLeft, mouthSmileRight)`。MediaPipe 的 blendshape 還有抬眉、瞇眼、張嘴、
+  嘟嘴等數十項，全部沒用。結果是驚訝、皺眉、大笑、面無表情**都會變成同兩個字之一**。
+- **0.4 沒有來源**。門檻沒有註解說明怎麼決定的，也沒有對照真人樣本校準過。
+
+### 5.4 可行的解決方式（依成本排序，尚未評估優先序）
+
+| # | 做法 | 成本 | 解決哪一段 | 風險／代價 |
+|---|---|---|---|---|
+| 1 | **先分層定位**：拿原始上傳檔跑 `scripts/check_hair_sampling.py`，確認 `get_face_features` 到底有沒有成功 | 近乎零 | 5.1 的前置 | 在這之前的任何修改都是猜的 |
+| 2 | **偵測失敗要出聲**：`get_face_features` 回 `no_face_detected` 時回報並顯示，不要靜默降級 | 很低 | 5.1 (甲)(乙) 之外的第三種可能 | 無。目前靜默降級讓「沒量到」偽裝成「模型畫錯」，是整條問題最貴的部分 |
+| 3 | **把 5.2 的四個欄位接進 `_attr_lines`** | 低（約 8 行） | 5.2 | 需確認 prompt 變長不會稀釋其他指令；建議做 A/B |
+| 4 | **表情改送連續值或多級**，例如直接給 `smile_score` 數值或改 4–5 級描述 | 低 | 5.3 | 門檻仍需校準；但比 2 個桶難更差 |
+| 5 | **表情改用多個 blendshape**，取前 N 高的類別組成描述 | 中 | 5.3 | 要決定哪些類別有意義，且 LEGO 臉本身表達力有限 |
+| 6 | **一併補存訪客 CV 量測色進 `generation_history`**，讓 `color_allegiance` 對新 run 生效 | 中 | 5.1 的判定 | 存的是真人量測到的顏色，屬個資範疇，需與 `DEV_HISTORY_SAVE_INPUTS` 同級對待 |
+
+**建議順序**：先做 1 和 2（在知道是哪一層壞掉之前，3–6 都可能是在修沒壞的東西），
+再依 1 的結果決定要不要做 3–6。
+
+> ⚠️ 5.1 的兩種解釋若最後證實是 (乙)（風格收斂、非個體流失），
+> 則 5.2 和 5.3 仍然成立且仍值得修——它們是獨立的缺口，不依賴 5.1 的結論。
+
+---
+
+以上五點目前都只是記錄問題，尚未排入實作。等主計畫（`pivot-full-character` 分支）
 的主要功能完成後,再回來決定要不要做、做哪一個方向。
