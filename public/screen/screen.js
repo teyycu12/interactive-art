@@ -101,12 +101,43 @@ const avatarImage = (avatar) => buildAvatarImage(avatar, { enhance: true });
 
 let screenReconnectDelay = 1000;
 
+const offlineEl = document.getElementById('offline');
+const offlineTextEl = document.getElementById('offline-text');
+/** 重連倒數的計時器，重連成功或下一次斷線時都必須清掉 */
+let offlineTimer = null;
+
+/**
+ * 顯示／隱藏斷線提示。
+ *
+ * 這個提示不是可有可無的裝飾：IDLE_MOTION 預設為靜止待機，因此伺服器掛掉時
+ * 畫面與「健康但沒人操控」完全相同 —— 角色都停在原地，也沒有任何錯誤訊息。
+ * 現場操作者需要一個能一眼分辨兩者的訊號。
+ */
+function setOffline(on, secondsLeft = 0) {
+  if (offlineTimer) { clearInterval(offlineTimer); offlineTimer = null; }
+  if (!offlineEl) return;
+  offlineEl.hidden = !on;
+  if (!on) return;
+
+  let left = secondsLeft;
+  const paint = () => {
+    offlineTextEl.textContent = left > 0
+      ? `與伺服器斷線，${left} 秒後重新連線…`
+      : '與伺服器斷線，正在重新連線…';
+    left -= 1;
+    if (left < 0 && offlineTimer) { clearInterval(offlineTimer); offlineTimer = null; }
+  };
+  paint();
+  offlineTimer = setInterval(paint, 1000);
+}
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}`);
 
   ws.addEventListener('open', () => {
     screenReconnectDelay = 1000;
+    setOffline(false);
     ws.send(JSON.stringify({ type: EV.SCREEN_HELLO }));
   });
 
@@ -210,7 +241,9 @@ function connect() {
 
   ws.addEventListener('close', () => {
     const delay = screenReconnectDelay + Math.floor(Math.random() * 500);
+    // #meta 在除錯面板裡（預設 hidden），所以另外顯示常駐的斷線提示
     metaEl.textContent = `與伺服器斷線，${(delay / 1000).toFixed(1)} 秒後重連…`;
+    setOffline(true, Math.round(delay / 1000));
     setTimeout(connect, delay);
     screenReconnectDelay = Math.min(screenReconnectDelay * 1.5, 6000);
   });
