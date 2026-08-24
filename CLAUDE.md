@@ -3,7 +3,21 @@
 ## 專案概述
 將實體穿著透過視覺識別技術數位化，轉譯為插畫角色，並在公共空間中透過群體演算法生成集體共創視覺圖。
 
-**期中審查截止日：2025/5/7** ⚠️ 此日期已過期（版控紀錄顯示開發持續至 2026/8），請更新為實際期限
+**本專案已與 PersonaFlow2（Node.js 互動層）整合**，合成單一展場作品。
+依 v4.0 計畫書決議：**PF2 為主幹**，本專案的 CV/VLM/生圖管線退為角色資產生成服務。
+
+**校內實測期限：2026/9/30**
+
+### 兩套系統並存，不要混淆
+
+| | 整合版（主線） | 2D 備援（保留，不要刪） |
+|---|---|---|
+| 互動層 | `server/`（Node.js + ws） | `backend/app.py`（Flask + Socket.io） |
+| 前端 | `public/`（controller / screen / host） | `frontend/`（p5.js + PixiJS） |
+| 群聚 | `server/` 的 M2 α 仲裁 + Boids | `backend/swarm_logic.py` |
+| 啟動 | `npm start` + `python backend/service.py` | `bash start.sh` |
+
+備援版是「3D 若來不及，仍能完成實測」的保險，整套測試都還在跑，**請勿刪除**。
 
 ---
 
@@ -12,9 +26,10 @@
 | 層級 | 技術 | 職責 |
 |------|------|------|
 | 感知層 | Python + MediaPipe / OpenCV | 服裝色調、輪廓、姿勢提取 |
-| 邏輯層 | Python + Flask | CV 數據處理、Boids 演算法、Socket 通訊 |
-| 渲染層 | JavaScript + p5.js + Socket.io | 角色動態渲染、群體互動 |
-| 輸出層 | Node.js + Canvas API | 大合照生成、QR Code |
+| 生成層 | Python + Gemini / 生圖 API | 去背人偶圖生成、切片成三張貼圖 |
+| 互動層 | Node.js + ws | α 仲裁共治、任務、配對、問答、計分、社交圖譜 |
+| 渲染層 | Canvas2D（3D/Three.js 為進行中的重寫） | 角色與場景呈現 |
+| 輸出層 | Python + Pillow | 大合照生成、QR Code |
 
 ---
 
@@ -22,7 +37,12 @@
 ```
 /PersonaFlow
 ├── /backend
-│   ├── app.py                    # Flask、Socket.io、生成併發閘門與開發 API
+/PersonaFlow
+├── /backend
+│   ├── app.py                    # 2D 備援版 Flask／Socket.io、生成併發閘門與開發 API
+│   ├── service.py                # ★ 整合版角色資產生成 HTTP 服務（只綁 127.0.0.1:5055）
+│   ├── slicer.py                 # ★ 生成圖正規化 + 切成 head/torso/legs 三張貼圖
+│   ├── validate_cuts.py          # ★ 切片比例穩定度驗證工具
 │   ├── config.py                 # 集中式環境設定（型別轉換與驗證，單一 config 物件）
 │   ├── cv_module.py              # MediaPipe 人體、服裝色彩、區域與姿勢特徵
 │   ├── face_module.py            # 本機臉部特徵
@@ -40,7 +60,7 @@
 │   ├── capture_quality.py        # 拍攝品質、站位與穩定度判定
 │   ├── detail_quality.py         # 最終畫面細節指標
 │   ├── height_profiles.py        # short／medium／tall 身高校正
-│   ├── swarm_logic.py            # Boids 群聚演算法（含邊界柔性轉向、打招呼持續）
+│   ├── swarm_logic.py            # Boids 群聚演算法（2D 備援版用；整合版走 server/boids.js）
 │   ├── swarm_snapshot.py         # swarm 狀態持久化，重啟自動還原
 │   ├── photo_composer.py         # 大合照合成（LEGO 排版、QR Code、中文字型後備鏈）
 │   ├── bot_simulator.py          # 壓測用虛擬角色注入／移除
@@ -61,36 +81,62 @@
 │       ├── generation_history.sqlite3
 │       ├── /generated            # AI attempt 與最終角色快照
 │       └── /review_sources       # 經同意、去 EXIF 的評測縮圖，可批次刪除
-├── /frontend
+├── /server                       # ★ 整合版互動層（Node.js）
+│   ├── index.js                  # Gateway：靜態服務、WebSocket、/api/generate 代理、TLS
+│   ├── arbiter.js                # α 權重仲裁與速度合成
+│   ├── boids.js  state.js        # 群聚引擎與狀態矩陣
+│   ├── missions.js  pairing.js  quiz.js  scores.js  socialgraph.js
+│   └── persistence.js  scheduler.js  ratelimit.js  config.js
+├── /shared                       # ★ 前後端共用的單一事實來源
+│   ├── protocol.js               # 事件名、節流頻率、場域尺寸
+│   ├── avatars.js                # 捏臉素材 + CV 角色驗證 + CV_CUTS 切片比例
+│   └── scene.js                  # 場景障礙物佈局
+├── /public                       # ★ 整合版前端
+│   ├── controller/               # 手機端：拍照生成／捏臉（備援）、搖桿、任務
+│   ├── screen/                   # 大螢幕
+│   ├── host/                     # 主辦端控制台
+│   └── assets/gen/               # 生成貼圖落地處（gitignored，每場重新產生）
+├── /frontend                     # 2D 備援版前端
 │   ├── index.html                # 拍攝與生成主操作頁
 │   ├── sketch.js                 # p5.js 畫面、狀態與拍攝流程（只放渲染）
 │   ├── character.js              # class Character（角色資料模型）與組件繪製
 │   ├── socket.js                 # Socket.io 前後端事件橋接（自動偵測 LAN）
 │   ├── projection.html           # 2D sprite 群聚投影牆（PixiJS，自有格柵實作）
 │   ├── dev.html                  # 生成歷史、成本、外部匯入與盲評操作台
+│   ├── package.json              # 只做一件事：把此目錄標回 CommonJS（見下方注意事項）
 │   ├── /themes
 │   │   ├── lego.js               # LEGO 主題渲染
 │   │   └── registry.js           # 前端主題註冊表
 │   ├── /tests                    # Node 內建測試執行器（harness.js 提供 p5 樁）
 │   └── wedding_bg.png            # 投影背景素材
-├── /scripts                      # 參考圖集與髮色取樣的離線檢查工具
+├── /test                         # ★ 整合版 Node 單元測試（node --test）
+├── /scripts
+│   ├── e2e.mjs                   # ★ 端對端測試（會自行啟動伺服器）
+│   ├── make-cert.sh              # ★ 現場用 TLS 憑證產生
+│   ├── scene-preview.mjs         # ★ 場景離線預覽
+│   └── ...                       # 參考圖集與髮色取樣的離線檢查工具
 ├── /docs
 │   ├── INTERFACES.md             # Socket.io 事件與 payload 介面規格
 │   ├── STYLE_BASE.md             # 基底風格標準與量測方法
 │   ├── STYLE_PROBE_FOLLOWUPS.md  # 已知但刻意延後的量測與管線細節
 │   ├── TECHNICAL_ARCHITECTURE.md # 技術架構文件
+│   ├── TECH-PersonaFlow2.md      # ★ 整合版互動層技術說明
+│   ├── README-PersonaFlow2.md    # ★ 整合版說明
 │   ├── PRD.md                    # 產品需求與驗收定義（驗收條件仍寫在已退役模式上，待重寫）
 │   ├── TechStack.md              # 技術選型
 │   ├── /m3                       # M3 交接說明與效能報告
 │   └── /style_reference          # 風格參考圖集；圖檔本身不進版控（見下）
-├── /.github/workflows/ci.yml     # CI：前端 Node 測試＋後端 pytest（skip 一律視為失敗）
-├── start.sh                      # 一鍵啟動腳本（macOS／Linux）
+├── /.github/workflows/ci.yml     # CI：前端 Node 測試＋整合版 npm test＋後端 pytest
+├── package.json                  # ★ 整合版 Node 相依與指令
+├── start.sh                      # 2D 備援版一鍵啟動腳本（macOS／Linux）
 ├── CLAUDE.md                     # 本檔：專案結構、規範與啟動方式
 ├── README.md                     # 安裝、設定、流程與使用說明
 ├── .env.example                  # 環境變數範本
 ├── requirements.txt              # Python 執行相依（mediapipe 已釘 <1.0）
 └── requirements-dev.txt          # 測試相依（pytest）
 ```
+
+> ★ 為整合後新增。文件已全數移入 `docs/`，根目錄只留 README 與本檔。
 
 ---
 
@@ -173,7 +219,7 @@ gevent.exceptions.LoopExit: This operation would block forever
 **已知代價**：Werkzeug 開發伺服器 + threading 在約 50 條並行 WebSocket 連線
 時會開始崩潰（伺服器 log 出現 WebSocket 幀被當成 HTTP 解析的 400 錯誤）。
 目前的因應方式是**降低所需連線數**而非提高上限：角色 id 已與連線脫鉤，
-賓客關掉分頁角色仍留在場上（見 INTERFACES.md §4），因此同時在線數只取決於
+賓客關掉分頁角色仍留在場上（見 docs/INTERFACES.md §4），因此同時在線數只取決於
 「正在拍照的人 + 投影牆」，不隨賓客總數成長。
 
 ### ⚠️ 投影牆目前不使用後端座標
@@ -187,7 +233,21 @@ gevent.exceptions.LoopExit: This operation would block forever
 
 ## 常用指令
 
+### 整合版（主線）
+
 ```bash
+# 一次安裝
+npm install
+pip install -r requirements.txt requirements-dev.txt   # mediapipe 已釘 <1.0，見下方
+
+# 啟動：兩個行程
+npm start                          # 互動層，印出大螢幕/手機/主辦端三個網址
+python backend/service.py          # 角色生成服務（127.0.0.1:5055）
+
+# 現場要用手機相機就必須有 HTTPS（getUserMedia 的硬性要求）
+bash scripts/make-cert.sh
+TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start
+
 # 後端啟動
 python backend/app.py
 
@@ -198,14 +258,71 @@ python -m http.server 8000 --directory frontend
 pip install -r requirements-dev.txt
 python -m pytest backend/tests
 
-# 前端測試（Node 內建執行器，無需 npm 安裝）
-node --test frontend/tests/
+# 測試
+npm test                           # Node 單元測試（188）
+npm run test:e2e                   # 端對端，會自行啟動伺服器（87）
+cd backend && pytest tests/        # Python（170）
+
+# 切片比例驗證（計畫書 §3.3 的 R1 驗收項）
+python backend/validate_cuts.py --sprites samples/ --sheet report.png
+python backend/validate_cuts.py --photos photos/ --out samples/
+```
+
+### 2D 備援版
+
+```bash
+bash start.sh                      # 後端 5001 + 前端 8080
+python backend/e2e_smoke.py        # 煙霧測試（需後端已啟動）
+node --test frontend/tests/        # 前端測試
+```
+
+> **埠號**：備援版後端佔用 5001，生成服務刻意改用 5055，兩者可並存。
+
+---
+
+## 整合後的注意事項
+
+### 切片比例是跨語言耦合
+
+`backend/slicer.py` 的 `CUTS` 與 `shared/avatars.js` 的 `CV_CUTS` 必須完全一致 ——
+一邊照比例切、一邊照比例疊回去。對不上時角色會脖子錯位或腿被壓扁，
+**而且兩邊都不會報錯**。`backend/tests/test_slicer.py` 有測試直接比對兩邊數值。
+
+### 貼圖走 URL，不走 base64
+
+30 人的貼圖若內嵌進 `STAGE_ROSTER`，名冊訊息會膨脹到現場無線網路難以負荷。
+`roster()` 只在名冊變動時廣播，`snapshot()` 每幀 30Hz 只送座標 —— 這個分離要維持。
+
+### 連線角色不可中途轉換
+
+`CLIENT_JOIN` / `SCREEN_HELLO` / `HOST_AUTH` 三者互斥，已在 `server/index.js`
+加上守衛。拿掉任何一個都會讓 agent 的 `disconnectedAt` 永遠是 null，
+`AGENT_TTL` 不回收，反覆操作即可耗盡 120 人上限。端對端測試有回歸防護。
+
+### frontend/ 必須維持 CommonJS
+
+根目錄的 `package.json` 帶著 `"type": "module"`（PF2 全套是 ESM）。
+Node 會據此把**所有**子目錄的 `.js` 當成 ES module —— 但 `frontend/` 是
+2D 備援版的瀏覽器腳本與 `require()` 寫成的測試，整合當下就整批壞掉
+（`ReferenceError: require is not defined`，CI 的 `node --test frontend/tests/` 失敗）。
+
+`frontend/package.json` 只做一件事：把模組型別重新限定成 `commonjs`。
+**不要刪除它**，也不要在 `frontend/` 底下改用 `import`／`export`。
+
+### 掃描失敗一律降級，不擋人進場
+
+相機權限被拒、非安全情境、生成失敗、生成服務未啟動 —— 全部退回捏臉流程。
+捏臉是刻意保留的備援路徑，**不要移除**。
 
 # 端到端煙霧測試（需後端已啟動）
 python backend/e2e_smoke.py
 ```
 
-## 本機預覽：開啟與關閉
+## 本機預覽：開啟與關閉（2D 備援版）
+
+以下是 2D 備援版（`backend/app.py` + `frontend/`）的本機操作。整合版請改用上方
+「常用指令 → 整合版（主線）」，兩者的埠不同（備援 5001／8000，整合版 3000／5055），
+可並存。
 
 請在專案根目錄 `PersonaFlow` 開啟兩個終端機視窗，各自執行一個服務：
 

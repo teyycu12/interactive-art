@@ -1,0 +1,6 @@
+{
+  "//": "2D 備援版的前端腳本是瀏覽器 <script> 直接載入的 CommonJS，測試也以 require 撰寫。整合 PersonaFlow2 時根目錄新增了 \"type\": \"module\" 的 package.json，Node 會據此把此目錄下的 .js 一律當成 ES module，frontend/tests/ 便整批壞掉（CI 的 node --test frontend/tests/ 失敗）。這個檔案把模組型別重新限定在本子樹，恢復整合前的行為。",
+  "name": "personaflow-frontend-2d",
+  "private": true,
+  "type": "commonjs"
+}

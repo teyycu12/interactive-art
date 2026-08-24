@@ -1,8 +1,48 @@
 # PersonaFlow · 數位轉譯角色空間互動系統
 
-PersonaFlow 將參與者的全身影像轉譯為 LEGO 風格插畫角色，並透過 Boids 群聚演算法讓角色進入公共投影空間，形成集體共創畫面。
+將實體穿著透過視覺識別技術數位化，轉譯為樂高風格插畫角色，並透過群體演算法在公共空間中生成集體共創視覺圖。
 
-目前開發重點集中在 M1（攝影、人體與服裝特徵）及 M2（角色生成穩定度、品質與成本）。M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 renderer 的可擴充性。
+---
+
+## 📌 整合現況
+
+本專案已與 **PersonaFlow2**（Node.js 互動層）整合為單一展場作品。
+依 v4.0 計畫書決議：PF2 為主幹，本專案的 CV/VLM/生圖管線退為**角色資產生成服務**。
+
+| | 整合版（主線） | 2D 備援（保留） |
+|---|---|---|
+| 互動層 | `server/` — α 仲裁共治、任務、配對、問答、計分、社交圖譜 | `backend/app.py` |
+| 前端 | `public/` — 手機控制器 / 大螢幕 / 主辦端 | `frontend/` |
+| 啟動 | `npm start` + `python backend/service.py` | `bash start.sh` |
+| 測試 | 188 單元 + 87 端對端 + 170 Python | 同左（共用） |
+
+**參與者有兩條入場路徑**：拍照掃描生成角色，或模組捏臉。
+掃描失敗（相機權限被拒、非 HTTPS、生成服務未啟動）一律降級回捏臉，不會擋人進場。
+
+```bash
+npm install && pip install -r requirements.txt
+npm start                     # 互動層，印出三個網址
+python backend/service.py     # 角色生成服務（127.0.0.1:5055）
+```
+
+> **現場要用手機相機必須有 HTTPS** —— `getUserMedia` 在 `http://192.168.x.x` 上會被瀏覽器直接拒絕。
+> 執行 `bash scripts/make-cert.sh` 產生憑證後，以
+> `TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start` 啟動。
+
+完整說明見 [CLAUDE.md](CLAUDE.md) 與 [docs/](docs/)。
+
+---
+
+## 以下為 2D 備援版說明
+
+2D 備援版將參與者的全身影像轉譯為 LEGO 風格插畫角色，並透過 Boids 群聚演算法讓角色
+進入公共投影空間，形成集體共創畫面。
+
+目前開發重點集中在 M1（攝影、人體與服裝特徵）及 M2（角色生成穩定度、品質與成本）。
+M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 renderer 的可擴充性。
+
+
+## ✨ 核心功能
 
 > [!WARNING]
 > **角色物種一致性尚未達成，不可對外展示。** 目前 `full_character` 能穩定產出構圖完整的角色，但不同人生成出來的畫風仍會漂移（線寬、明暗、五官畫法各不相同）。跨角色的物種一致性是現階段的核心研究問題，尚未解決。
@@ -239,7 +279,10 @@ SQLite 每次 attempt 可記錄：
 ```text
 PersonaFlow/
 ├── backend/
-│   ├── app.py                  # Flask、Socket、生成 orchestration、併發閘門、進度事件
+│   ├── app.py                  # 2D 備援版 Flask、Socket、生成 orchestration、併發閘門
+│   ├── service.py              # 整合版角色資產生成 HTTP 服務（只綁 127.0.0.1:5055）
+│   ├── slicer.py               # 生成圖正規化 + 切成 head/torso/legs 三張貼圖
+│   ├── validate_cuts.py        # 切片比例穩定度驗證工具
 │   ├── config.py               # 集中式環境設定（型別轉換與驗證）
 │   ├── cv_module.py            # 人體、服裝色彩、輪廓與局部區域
 │   ├── face_module.py          # 本機臉部特徵
@@ -283,7 +326,14 @@ PersonaFlow/
 │   │   ├── registry.js         # 前端 renderer registry
 │   │   └── lego.js             # LEGO renderer
 │   └── tests/                  # 前端測試（Node 內建執行器）
-├── scripts/                    # 參考圖集與髮色取樣的離線檢查工具
+├── server/                     # 整合版互動層（Node.js）：仲裁、任務、配對、問答、計分
+├── shared/                     # 前後端共用：protocol.js、avatars.js（含 CV_CUTS）、scene.js
+├── public/                     # 整合版前端：controller／screen／host，assets/gen 為貼圖落地處
+├── test/                       # 整合版 Node 單元測試（node --test）
+├── scripts/
+│   ├── e2e.mjs                 # 整合版端對端測試（會自行啟動伺服器）
+│   ├── make-cert.sh            # 現場用 TLS 憑證產生
+│   └── ...                     # 參考圖集與髮色取樣的離線檢查工具
 ├── docs/
 │   ├── INTERFACES.md           # Socket.io 事件與 payload 介面規格
 │   ├── STYLE_BASE.md           # 基底風格標準（量測方法與數值）
@@ -291,10 +341,13 @@ PersonaFlow/
 │   ├── TECHNICAL_ARCHITECTURE.md
 │   ├── PRD.md                  # 產品需求與驗收定義
 │   ├── TechStack.md            # 技術選型
+│   ├── README-PersonaFlow2.md  # 整合版說明
+│   ├── TECH-PersonaFlow2.md    # 整合版互動層技術說明
 │   ├── m3/                     # M3 交接文件與效能報告
 │   └── style_reference/        # 風格參考圖集；圖檔本身不進版控（見下）
-├── .github/workflows/ci.yml    # CI：前端 Node 測試＋後端 pytest
-├── start.sh                    # 一鍵啟動（後端＋前端＋顯示 LAN IP）
+├── .github/workflows/ci.yml    # CI：前端 Node 測試＋整合版 npm test＋後端 pytest
+├── package.json                # 整合版 Node 相依與指令
+├── start.sh                    # 2D 備援版一鍵啟動（後端＋前端＋顯示 LAN IP）
 ├── CLAUDE.md                   # 專案結構、規範與啟動方式
 ├── .env.example
 ├── requirements.txt

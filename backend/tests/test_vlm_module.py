@@ -7,7 +7,12 @@ import json
 import os
 import unittest
 
-os.environ.setdefault("GEMINI_API_KEY", "test-key-not-used-for-network")
+# 不能用 setdefault：.env 裡若有一行 GEMINI_API_KEY=（值為空），這個 key
+# 就「存在」，setdefault 不會覆寫，vlm_module 仍會因空字串而在 import 時 raise。
+# 以 or 判斷真值才同時涵蓋「未設定」與「設了但為空」兩種情況。
+os.environ["GEMINI_API_KEY"] = (
+    os.environ.get("GEMINI_API_KEY") or "test-key-not-used-for-network"
+)
 
 from backend import vlm_module  # noqa: E402
 from backend.vlm_module import strip_json_fence  # noqa: E402

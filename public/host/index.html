@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#FAF8F5">
+<title>PersonaFlow 主辦端</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── 認證 ─────────────────────────────────────────────── -->
+<section id="auth">
+  <div class="auth-card">
+    <h1>主辦端控制台</h1>
+    <p class="lede">請輸入伺服器終端機顯示的通行密鑰</p>
+    <input id="key-input" maxlength="6" placeholder="6 碼" autocomplete="off"
+           autocapitalize="characters" spellcheck="false">
+    <p class="err" id="auth-err" hidden></p>
+    <button class="btn-primary" id="btn-auth">進入控制台</button>
+  </div>
+</section>
+
+<!-- ── 控制台 ───────────────────────────────────────────── -->
+<section id="console" hidden>
+  <header class="topbar">
+    <div>
+      <h1>主辦端控制台</h1>
+      <p class="sub" id="conn-status">已連線</p>
+    </div>
+    <div class="stats">
+      <div class="stat"><b id="stat-people">0</b><span>在場</span></div>
+      <div class="stat"><b id="stat-edges">0</b><span>社交連結</span></div>
+      <div class="stat"><b id="stat-questions">0</b><span>已出題</span></div>
+    </div>
+  </header>
+
+  <div class="cols">
+
+   <div class="col">
+    <!-- 任務控制 -->
+    <div class="panel">
+      <h2>任務</h2>
+
+      <div id="mission-idle">
+        <p class="hint">目前沒有進行中的任務。同時只能有一項任務進行，
+          這符合實體活動「宣布 → 執行 → 收掉 → 下一項」的節奏。</p>
+        <label class="field">
+          <span>任務類型</span>
+          <select id="mission-type"></select>
+        </label>
+        <p class="brief" id="mission-brief"></p>
+        <label class="field">
+          <span>每人目標次數</span>
+          <input type="number" id="mission-target" min="1" max="10" value="2">
+        </label>
+        <button class="btn-primary" id="btn-publish">發布任務</button>
+      </div>
+
+      <div id="mission-live" hidden>
+        <div class="live-head">
+          <b id="live-title">—</b>
+          <span class="tag" id="live-target">—</span>
+        </div>
+        <div class="progress-row">
+          <div class="bar"><i id="live-bar"></i></div>
+          <span class="mono" id="live-frac">0 / 0</span>
+        </div>
+        <p class="hint" id="live-detail">—</p>
+        <button class="btn-danger" id="btn-close">結算並關閉</button>
+      </div>
+
+      <p class="err" id="mission-err" hidden></p>
+    </div>
+
+    <!-- 即時問答 -->
+    <div class="panel">
+      <h2>即時問答</h2>
+
+      <div id="quiz-compose">
+        <label class="field">
+          <span>題目</span>
+          <input id="q-text" maxlength="80" placeholder="例：Boids 演算法的三條規則不包含哪一項？"
+                 autocomplete="off">
+        </label>
+
+        <p class="field-label">選項　<em>點左側圓圈標記正確答案</em></p>
+        <div id="q-options"></div>
+
+        <label class="field">
+          <span>作答時間</span>
+          <select id="q-duration">
+            <option value="10000">10 秒</option>
+            <option value="20000" selected>20 秒</option>
+            <option value="30000">30 秒</option>
+            <option value="60000">60 秒</option>
+          </select>
+        </label>
+
+        <div class="row-actions">
+          <button class="btn-primary" id="btn-quiz-start">出題</button>
+          <button class="btn-ghost" id="btn-quiz-save">存入題庫</button>
+        </div>
+
+        <p class="hint" id="quiz-rule">答對得分，愈快得分愈高。</p>
+
+        <div class="bank-head">
+          <span>題庫 <b id="bank-count">0</b></span>
+          <button class="btn-link" id="btn-bank-clear">清空</button>
+        </div>
+        <ul class="bank" id="quiz-bank"></ul>
+        <p class="hint tiny">題庫存在這台電腦的瀏覽器裡，可以在活動前先把題目都打好。</p>
+      </div>
+
+      <div id="quiz-live" hidden>
+        <div class="live-head">
+          <b id="quiz-live-q">—</b>
+          <span class="tag" id="quiz-countdown">—</span>
+        </div>
+        <div class="progress-row">
+          <div class="bar"><i id="quiz-bar"></i></div>
+          <span class="mono" id="quiz-answered">0 / 0</span>
+        </div>
+        <ul class="q-result" id="quiz-result"></ul>
+        <button class="btn-primary" id="btn-quiz-reveal">提前公布答案</button>
+        <button class="btn-danger" id="btn-quiz-end" hidden>收題，準備下一題</button>
+      </div>
+
+      <p class="err" id="quiz-err" hidden></p>
+    </div>
+   </div>
+
+   <div class="col">
+    <!-- 參與者 -->
+    <div class="panel">
+      <h2>參與者 <span class="count" id="people-count">0</span></h2>
+      <div class="table-wrap">
+        <table id="people">
+          <thead>
+            <tr><th>名稱</th><th>積分</th><th>任務</th><th>連結</th><th>操控</th><th></th></tr>
+          </thead>
+          <tbody id="people-body"></tbody>
+        </table>
+      </div>
+      <p class="hint" id="people-empty">還沒有人進場。</p>
+    </div>
+   </div>
+
+   <div class="col">
+    <!-- 排行榜 -->
+    <div class="panel">
+      <h2>積分排行</h2>
+      <ol class="ranks" id="ranks"></ol>
+      <p class="hint tiny" id="ranks-empty">還沒有人得分。任務與問答都會計分。</p>
+    </div>
+
+    <!-- 現場動態 -->
+    <div class="panel">
+      <h2>現場動態</h2>
+      <ul class="feed" id="feed"></ul>
+    </div>
+   </div>
+
+  </div>
+</section>
+
+<script type="module" src="host.js"></script>
+</body>
+</html>

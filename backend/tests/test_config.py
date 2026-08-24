@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest import mock
 
-from backend.config import AppConfig, _get_int, _get_bool
+from backend.config import AppConfig, _get_int, _get_bool, _get_str
 
 
 class TestConfig(unittest.TestCase):
@@ -49,6 +49,55 @@ class TestConfig(unittest.TestCase):
         for field in ("HOST", "PORT", "DEBUG"):
             self.assertTrue(hasattr(cfg, field), f"AppConfig 缺少 {field}")
         self.assertIsInstance(cfg.DEBUG, bool)
+
+
+class TestEmptyEnvFallsBackToDefault(unittest.TestCase):
+    """「變數存在但值為空」必須等同於未設定。
+
+    .env 裡留一行 KEY= 是很自然的寫法 —— 從 .env.example 補設定進去時
+    產生的就是這個形狀。但 os.environ.get(key, default) 在這種情況下會回傳
+    空字串而非預設值。實際造成過兩次故障：模型名稱變成空字串導致生成全部
+    失敗，以及 VISION_PORT= 讓 int('') 在啟動時就把生成服務打掛。
+    """
+
+    def test_get_str_treats_blank_as_unset(self):
+        for blank in ("", "   ", "\t"):
+            with mock.patch.dict(os.environ, {"TEST_STR": blank}):
+                self.assertEqual(_get_str("TEST_STR", "fallback"), "fallback")
+
+    def test_get_str_strips_and_returns_value(self):
+        with mock.patch.dict(os.environ, {"TEST_STR": "  value  "}):
+            self.assertEqual(_get_str("TEST_STR", "fallback"), "value")
+
+    def test_get_str_missing_key(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_get_str("TEST_STR", "fallback"), "fallback")
+
+    def test_model_names_survive_blank_env(self):
+        """三個模型名稱都不可為空 —— 空字串會讓 API 回 404。"""
+        blanks = {
+            "OUTFIT_GEN_MODEL": "",
+            "FULL_CHARACTER_MODEL": "",
+            "GENERATION_MODE": "",
+        }
+        with mock.patch.dict(os.environ, blanks):
+            cfg = AppConfig()
+            self.assertTrue(cfg.OUTFIT_GEN_MODEL.strip())
+            self.assertTrue(cfg.FULL_CHARACTER_MODEL.strip())
+            # 預設模式改為 full_character：body_sprite 與 brick_ai_texture 已退役，
+            # app.py 會在付費呼叫前直接拒絕它們。這支測試釘的是「空字串不得覆寫
+            # 程式預設值」，而非某個特定模式名。
+            self.assertEqual(cfg.GENERATION_MODE, "full_character")
+
+    def test_refine_model_blank_becomes_none(self):
+        """未指定精修模型時應為 None，讓解析鏈往下退回主模型。"""
+        with mock.patch.dict(os.environ, {"REFINE_CHARACTER_MODEL": ""}):
+            self.assertIsNone(AppConfig().REFINE_CHARACTER_MODEL)
+
+    def test_int_and_bool_already_handle_blank(self):
+        with mock.patch.dict(os.environ, {"TEST_N": "", "TEST_B": ""}):
+            self.assertEqual(_get_int("TEST_N", 7), 7)
+            self.assertIs(_get_bool("TEST_B", True), True)
 
 
 if __name__ == "__main__":

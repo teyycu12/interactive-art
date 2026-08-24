@@ -1,8 +1,8 @@
 # 換行符號正規化。
 #
-# 這個專案同時在 Windows（開發）與 Ubuntu（CI）上跑。沒有這份設定時，儲存庫裡
-# 存的是哪種換行取決於當初提交者的 core.autocrlf，同一個檔案在不同人手上會出現
-# 「整檔都變更」的假 diff，也會讓 shell script 因為結尾的 CR 而無法執行。
+# 這個專案同時在 Windows 與 macOS 上開發、在 Ubuntu 上跑 CI。沒有這份設定時，
+# 儲存庫裡存的是哪種換行取決於當初提交者的 core.autocrlf，組員互推時會整份檔案
+# 被判成有改動，也會讓 shell script 因為結尾的 CR 而無法執行。
 # 這裡強制版本庫內一律存 LF，工作區則交由各自平台的 autocrlf 決定。
 * text=auto eol=lf
 

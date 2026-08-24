@@ -32,6 +32,18 @@ def _get_bool(key: str, default: bool) -> bool:
     return val.strip().lower() not in ("0", "false", "no", "off", "")
 
 
+def _get_str(key: str, default: str) -> str:
+    """讀取字串設定；空字串視同未設定。
+
+    os.environ.get(key, default) 在「變數存在但值為空」時會回傳空字串而非
+    預設值。.env 裡留一行 KEY= 是很自然的寫法（範本補進去就是這個形狀），
+    卻會把程式裡的預設值整個蓋掉 —— 實際發生過的後果是模型名稱變成空字串，
+    以及 VISION_PORT 讓 int('') 直接把服務打掛。
+    """
+    val = os.environ.get(key)
+    return default if val is None or val.strip() == "" else val.strip()
+
+
 _DEV_SECRET = "personaflow-dev-secret"
 
 
@@ -74,12 +86,14 @@ class AppConfig:
     # full_character 是唯一還在線上的模式；body_sprite 與 brick_ai_texture 已退役，
     # app.py 會在付費呼叫前直接拒絕它們。預設值必須跟著改，否則沒設這個環境變數
     # 的人一啟動就落在被拒絕的模式上。
-    GENERATION_MODE: str = os.environ.get("GENERATION_MODE", "full_character").strip()
+    # 用 _get_str 而非 os.environ.get：.env 裡留一行「GENERATION_MODE=」會產生
+    # 空字串，直接讀會讓它覆寫掉這個預設值。
+    GENERATION_MODE: str = _get_str("GENERATION_MODE", "full_character")
     GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
     OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
-    OUTFIT_GEN_MODEL: str = os.environ.get("OUTFIT_GEN_MODEL", "google/gemini-3.1-flash-image-preview")
-    FULL_CHARACTER_MODEL: str = os.environ.get("FULL_CHARACTER_MODEL", "google/gemini-3-pro-image-preview")
-    REFINE_CHARACTER_MODEL: Optional[str] = os.environ.get("REFINE_CHARACTER_MODEL")
+    OUTFIT_GEN_MODEL: str = _get_str("OUTFIT_GEN_MODEL", "google/gemini-3.1-flash-image-preview")
+    FULL_CHARACTER_MODEL: str = _get_str("FULL_CHARACTER_MODEL", "google/gemini-3-pro-image-preview")
+    REFINE_CHARACTER_MODEL: Optional[str] = _get_str("REFINE_CHARACTER_MODEL", "") or None
 
 
 # 全域單例
