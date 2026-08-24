@@ -247,6 +247,16 @@ node --test frontend/tests/        # 前端測試
 加上守衛。拿掉任何一個都會讓 agent 的 `disconnectedAt` 永遠是 null，
 `AGENT_TTL` 不回收，反覆操作即可耗盡 120 人上限。端對端測試有回歸防護。
 
+### frontend/ 必須維持 CommonJS
+
+根目錄的 `package.json` 帶著 `"type": "module"`（PF2 全套是 ESM）。
+Node 會據此把**所有**子目錄的 `.js` 當成 ES module —— 但 `frontend/` 是
+2D 備援版的瀏覽器腳本與 `require()` 寫成的測試，整合當下就整批壞掉
+（`ReferenceError: require is not defined`，CI 的 `node --test frontend/tests/` 失敗）。
+
+`frontend/package.json` 只做一件事：把模組型別重新限定成 `commonjs`。
+**不要刪除它**，也不要在 `frontend/` 底下改用 `import`／`export`。
+
 ### 掃描失敗一律降級，不擋人進場
 
 相機權限被拒、非安全情境、生成失敗、生成服務未啟動 —— 全部退回捏臉流程。
