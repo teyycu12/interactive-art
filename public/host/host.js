@@ -108,8 +108,56 @@ function handle(msg, key) {
     case EV.SCORE_BOARD:
       renderRanks(msg.leaderboard ?? []);
       break;
+
+    case EV.HOST_PHOTO_STATE:
+      renderPhotoState(msg);
+      break;
   }
 }
+
+// ── 大合照 ───────────────────────────────────────────────────
+const PHOTO_PHASES = {
+  STAGING: (m) => `正在把 ${m.count ?? 0} 位角色帶到定位…`,
+  COMPOSING: () => '角色已就位，合成中…',
+};
+
+function renderPhotoState(msg) {
+  const btn = $('#btn-photo');
+  const status = $('#photo-status');
+  const err = $('#photo-err');
+  const result = $('#photo-result');
+
+  if (msg.phase === 'DONE') {
+    btn.disabled = false;
+    status.hidden = true;
+    err.hidden = true;
+    $('#photo-img').src = msg.photoB64 || '';
+    $('#photo-qr').src = msg.qrB64 || '';
+    const dl = $('#photo-download');
+    dl.href = msg.photoB64 || '#';
+    dl.download = `${msg.photoId || 'personaflow'}.png`;
+    result.hidden = false;
+    return;
+  }
+  if (msg.phase === 'ERROR') {
+    btn.disabled = false;
+    status.hidden = true;
+    err.textContent = `合照失敗：${msg.error ?? '未知原因'}`;
+    err.hidden = false;
+    return;
+  }
+  // 進行中
+  btn.disabled = true;
+  err.hidden = true;
+  result.hidden = true;
+  status.textContent = (PHOTO_PHASES[msg.phase] ?? (() => '處理中…'))(msg);
+  status.hidden = false;
+}
+
+$('#btn-photo').addEventListener('click', () => {
+  $('#btn-photo').disabled = true;
+  ws?.send(JSON.stringify({ type: EV.HOST_TAKE_PHOTO }));
+});
 
 const setConn = (text, warn) => {
   const el = $('#conn-status');

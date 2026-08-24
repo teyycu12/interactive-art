@@ -159,10 +159,25 @@ def slice_character(
     os.makedirs(out_dir, exist_ok=True)
     textures: Dict[str, str] = {}
     for part in PARTS:
-        parts[part].save(os.path.join(out_dir, f"{part}.png"), "PNG", optimize=True)
-        textures[part] = f"{url_prefix}/{asset_id}/{part}.png"
+        parts[part].save(os.path.join(out_dir, f"{part}.webp"), "WEBP", quality=92)
+        textures[part] = f"{url_prefix}/{asset_id}/{part}.webp"
 
-    return {"ok": True, "assetId": asset_id, "textures": textures, "fallbackColors": colors}
+    # 另存一份未切片的全身圖供大合照使用。
+    #
+    # 大合照在 Python 端以 Pillow 無頭合成，拿不到瀏覽器那套疊圖邏輯；
+    # 若只留三張切片，Python 就得依 CUTS 比例把它們重疊回去 —— 那等於
+    # 把 shared/avatars.js 的疊法在第二個語言再實作一次，正是本專案
+    # 一再警告的跨語言耦合（對不上時角色會脖子錯位，兩邊都不會報錯）。
+    # 多存一張檔案的成本遠低於維護第二套疊圖程式碼。
+    img.save(os.path.join(out_dir, "full.webp"), "WEBP", quality=92)
+
+    return {
+        "ok": True,
+        "assetId": asset_id,
+        "textures": textures,
+        "fallbackColors": colors,
+        "fullPng": f"{url_prefix}/{asset_id}/full.webp",
+    }
 
 
 def _detect_waist(img: PILImage.Image, start: float) -> Optional[float]:

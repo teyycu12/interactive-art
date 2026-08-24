@@ -14,6 +14,7 @@
   "dependencies": {
     "nipplejs": "^0.10.2",
     "roughjs": "^4.6.6",
+    "three": "^0.160.0",
     "ws": "^8.18.0"
   }
 }

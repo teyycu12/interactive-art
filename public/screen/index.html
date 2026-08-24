@@ -7,11 +7,19 @@
 <style>
   :root { --paper: #FAF8F5; --ink: #2F2A26; --soft: #7A716A; --line: #D8D0C6; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); }
+  /* body 不可有不透明背景。此處原為 #d9cfc0，配上 #bg3d 的 z-index:-1，
+     3D 場景會被壓在 body 背景之後 —— 整個大螢幕只剩一片米色，
+     而且不會有任何 console 錯誤。背景色現由 RoomScene 的
+     scene.background 決定。 */
+  html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
   body {
     color: var(--ink);
     font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
   }
+  /* 兩層都用非負 z-index：3D 在下、2D 角色在上。
+     #bg3d 若用負值就會掉到 body 背景之後。 */
+  #bg3d { position: fixed; inset: 0; z-index: 0; }
+  #stage { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
   canvas { display: block; width: 100vw; height: 100vh; }
 
   .hud {
@@ -162,8 +170,18 @@
     font-variant-numeric: tabular-nums; font-weight: 900;
   }
 </style>
+<!-- three 由本機 node_modules 直出，不走 CDN。
+     現場網路不通或 CDN 被擋時，大螢幕的整個 3D 背景會消失 ——
+     而本機開發永遠測不出這個狀況（見 §6 風險 1，同 nipplejs 的處置）。 -->
+<script type="importmap">
+{ "imports": {
+  "three": "/vendor/three.module.js",
+  "three/addons/": "/vendor/three-addons/"
+}}
+</script>
 </head>
 <body>
+<div id="bg3d"></div>
 <canvas id="stage"></canvas>
 
 <div class="mission" id="mission" hidden>

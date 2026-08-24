@@ -16,6 +16,21 @@ import {
 
 const $ = (sel) => document.querySelector(sel);
 
+// ── 防止手機休眠 (Wake Lock) ───────────────────────────────────
+let wakeLock = null;
+async function requestWakeLock() {
+  if ('wakeLock' in navigator) {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+    } catch {}
+  }
+}
+document.addEventListener('visibilitychange', async () => {
+  if (wakeLock !== null && document.visibilityState === 'visible') {
+    await requestWakeLock();
+  }
+});
+
 // ─────────────────────────────────────────────────────────────
 // 本地狀態
 // ─────────────────────────────────────────────────────────────
@@ -132,9 +147,21 @@ nameInput.addEventListener('keydown', (e) => {
 syncStartButton();
 
 /** 兩條入場路徑共用：確認名字、收鍵盤。回傳 false 表示名字還沒填 */
+const LEGO_PREFIXES = ['快樂的', '無敵', '魔法', '酷炫', '光速', '熱血', '創意', '宇宙', '調皮的', '神秘'];
+const LEGO_NOUNS = ['樂高', '工程師', '積木人', '拼裝者', '方塊', '大師', '探險家', '騎士', '魔法師', '小天才'];
+
+function generateLegoName() {
+  const p = LEGO_PREFIXES[Math.floor(Math.random() * LEGO_PREFIXES.length)];
+  const n = LEGO_NOUNS[Math.floor(Math.random() * LEGO_NOUNS.length)];
+  return p + n;
+}
+
 function commitName() {
-  const name = nameInput.value.trim();
-  if (!name) { nameInput.focus(); return false; }
+  let name = nameInput.value.trim();
+  if (!name) { 
+    name = generateLegoName();
+    nameInput.value = name;
+  }
   displayName = name;
   try { localStorage.setItem(LS.name, name); } catch { /* 略 */ }
   nameInput.blur(); // 收起鍵盤，否則下一個畫面一開場就被鍵盤蓋掉半個螢幕
@@ -165,6 +192,23 @@ function showToast(text, durationMs = 3200) {
 }
 
 let scanStream = null;
+/** 生成成功但尚未被本人確認的外觀。按下「進場」才會寫入 config */
+let pendingScanConfig = null;
+
+/**
+ * 切換掃描畫面的階段。
+ *
+ * 四個階段共用同一個左右分欄，只換右欄內容 —— 整塊重繪會讓畫面跳動，
+ * 而左邊的取景框在拍照前後必須留在原位（拍完顯示成果圖，位置不變）。
+ */
+function showScanPhase(phase) {
+  for (const el of document.querySelectorAll('#scan .scan-panel')) {
+    el.hidden = el.dataset.phase !== phase;
+  }
+  // 輔助線只在取景時有意義，其餘階段會擋住成果圖
+  const guide = $('#scan-guide');
+  if (guide) guide.hidden = phase !== 'aim';
+}
 
 function stopScanStream() {
   if (!scanStream) return;
@@ -193,17 +237,30 @@ $('#btn-scan').addEventListener('click', async () => {
   }
 
   showScreen('scan');
-  $('#scan-overlay').hidden = true;
+  await openCamera();
+});
+
+/** 開啟相機並回到取景階段。重拍會再次呼叫，因此不能寫在事件處理器裡。 */
+async function openCamera() {
+  stopScanStream();
+  pendingScanConfig = null;
+  $('#scan-result').hidden = true;
+  $('#scan-video').hidden = false;
+  $('#btn-capture').disabled = false;
+  $('#btn-capture').textContent = '拍照';
+  showScanPhase('aim');
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { facingMode: 'environment', width: { ideal: 720 }, height: { ideal: 1280 } },
       audio: false,
     });
     $('#scan-video').srcObject = scanStream;
+    return true;
   } catch {
     fallbackToBuilder('沒有取得相機權限，先用捏臉進場。');
+    return false;
   }
-});
+}
 
 $('#btn-scan-back').addEventListener('click', () => fallbackToBuilder(null));
 
@@ -211,18 +268,54 @@ $('#btn-capture').addEventListener('click', async () => {
   const video = $('#scan-video');
   if (!video.videoWidth) return;
 
-  // 先把畫面定格成 JPEG。長邊限制在 1280：再大只是讓上傳變慢，
-  // 生圖模型看到的解析度並不會因此提升。
-  const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+  const btn = $('#btn-capture');
+  if (btn.disabled) return;
+  btn.disabled = true;
+
+  const display = $('#countdown-display');
+  display.hidden = false;
+
+  for (let i = 5; i > 0; i--) {
+    display.textContent = i;
+    btn.textContent = `倒數 ${i} 秒`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  display.hidden = true;
+  btn.textContent = '拍照';
+
+  // 裁切成 9:16 長方細長型：聚焦在人物，捨棄無用的左右背景，減少 API 負擔與上傳成本
+  const TARGET_RATIO = 9 / 16;
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  let sx = 0, sy = 0, sw = vw, sh = vh;
+
+  if (vw / vh > TARGET_RATIO) {
+    sw = vh * TARGET_RATIO;
+    sx = (vw - sw) / 2;
+  } else {
+    sh = vw / TARGET_RATIO;
+    sy = (vh - sh) / 2;
+  }
+
+  // 長邊限制在 1280，再大只是讓上傳變慢，生圖模型看到的解析度並不會因此提升。
+  const scale = Math.min(1, 1280 / Math.max(sw, sh));
   const canvas = document.createElement('canvas');
-  canvas.width = Math.round(video.videoWidth * scale);
-  canvas.height = Math.round(video.videoHeight * scale);
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+  
+  canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   const image = canvas.toDataURL('image/jpeg', 0.85);
 
   stopScanStream();
-  $('#scan-overlay').hidden = false;
-  $('#scan-status').textContent = '正在生成你的角色…';
+  // 凍結剛拍下的那張照片留在取景框裡 —— 等待的 25 秒有東西可看，
+  // 也讓人知道系統正在處理的是哪一張。
+  $('#scan-video').hidden = true;
+  $('#scan-result').src = image;
+  $('#scan-result').hidden = false;
+  showScanPhase('working');
+
+  const stopProgress = startScanProgress();
 
   let body;
   try {
@@ -233,21 +326,91 @@ $('#btn-capture').addEventListener('click', async () => {
     });
     body = await res.json();
   } catch {
-    fallbackToBuilder('生成服務連不上，先用捏臉進場。');
+    stopProgress();
+    showScanFailure('生成服務連不上。');
     return;
   }
+
+  stopProgress();
 
   if (!body?.ok) {
-    fallbackToBuilder('這張照片沒能生成角色，先用捏臉進場。');
+    showScanFailure(SCAN_ERRORS[body?.error] ?? '這張照片沒能生成角色。');
     return;
   }
 
-  config = { source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors };
+  // 生成完成不直接進場：讓本人看過再決定。
+  // 「數位轉譯成什麼樣子」正是這件作品的核心體驗，跳過等於白等 25 秒。
+  pendingScanConfig = {
+    source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors,
+  };
+  if (body.fullPng) $('#scan-result').src = body.fullPng;
+  showScanPhase('done');
+});
+
+/** 生成失敗：保留重拍的機會，而不是逕自把人踢回捏臉 */
+function showScanFailure(message) {
+  $('#scan-error').textContent = `${message}再試一次通常就好了。`;
+  showScanPhase('failed');
+}
+
+/** 後端回報的錯誤碼 → 看得懂的說明 */
+const SCAN_ERRORS = {
+  too_busy: '現在同時生成的人太多。',
+  rate_limited: '太快連續拍照了，稍等一下。',
+  photo_too_large: '照片檔案太大。',
+  generation_timeout: '生成等太久逾時了。',
+  vision_service_unavailable: '生成服務連不上。',
+  imagegen_unavailable: '生成服務尚未就緒。',
+  circuit_open: '生成服務暫時過載。',
+  no_person: '照片裡沒有偵測到人。',
+};
+
+/**
+ * 生成進度提示。
+ *
+ * 後端沒有回報真實進度，這裡是依實測耗時（約 25 秒）推進的估計值，
+ * 因此刻意在 92% 前停住 —— 進度條先滿了卻還沒好，比沒有進度條更糟。
+ */
+function startScanProgress() {
+  const STEPS = [
+    [0, '正在分析服裝特徵…'],
+    [22, '正在辨識臉部特徵…'],
+    [45, 'AI 正在挑選樂高積木…'],
+    [68, '積木拼裝與上色中…'],
+    [86, '即將完成，準備登場…'],
+  ];
+  const bar = $('#scan-progress');
+  const statusEl = $('#scan-status');
+  const elapsedEl = $('#scan-elapsed');
+  const t0 = Date.now();
+
+  const tick = setInterval(() => {
+    const sec = (Date.now() - t0) / 1000;
+    const pct = Math.min(92, (sec / 25) * 100);
+    bar.style.width = `${pct}%`;
+    const step = STEPS.filter(([p]) => pct >= p).at(-1);
+    if (step) statusEl.textContent = step[1];
+    elapsedEl.textContent = sec < 30
+      ? `已等待 ${Math.floor(sec)} 秒　約需 25 秒`
+      : `已等待 ${Math.floor(sec)} 秒　比平常久一些，請再等等`;
+  }, 250);
+
+  return () => { clearInterval(tick); bar.style.width = '100%'; };
+}
+
+// 確認、重拍、放棄
+$('#btn-accept').addEventListener('click', () => {
+  if (!pendingScanConfig) return;
+  config = pendingScanConfig;
+  pendingScanConfig = null;
   // 與捏臉路徑一致：存下外觀後由 enterStage 統一處理進場
   // （縮圖、搖桿初始化、舊 socket 清理都在那裡）
   try { localStorage.setItem(LS.avatar, JSON.stringify(config)); } catch { /* 略 */ }
   enterStage();
 });
+$('#btn-retake').addEventListener('click', () => openCamera());
+$('#btn-retry').addEventListener('click', () => openCamera());
+$('#btn-give-up').addEventListener('click', () => fallbackToBuilder(null));
 
 // ── 捏臉 ──────────────────────────────────────────────────
 $('#btn-random').addEventListener('click', () => { config = randomAvatarConfig(); refresh(); });
@@ -290,6 +453,8 @@ function connect() {
   const sock = ws;
 
   ws.addEventListener('open', () => {
+    const overlay = $('#reconnect-overlay');
+    if (overlay) overlay.hidden = true;
     reconnectDelay = 500;
     setStatus('登入中…');
     // 帶上舊 userId 與重連憑證：若伺服器上的角色還在（斷線 45 秒內），
@@ -329,6 +494,10 @@ function connect() {
     if (hasLeft) return;
     // 已被新連線取代的舊 socket 也不重連（見 enterStage）
     if (sock.superseded) return;
+    
+    const overlay = $('#reconnect-overlay');
+    if (overlay) overlay.hidden = false;
+
     setStatus('重新連線中…', 'warn');
     // 指數退避上限 5 秒：現場 Wi-Fi 壅塞時避免所有手機同頻重連加劇擁塞
     setTimeout(connect, reconnectDelay);
@@ -631,6 +800,7 @@ document.addEventListener('visibilitychange', () => {
 // ─────────────────────────────────────────────────────────────
 function enterStage() {
   showScreen('controller');
+  requestWakeLock();
   $('#mini-avatar').innerHTML = renderAvatarSVG(config);
   $('#my-name').textContent = displayName;
   $('#my-id').textContent = '—';

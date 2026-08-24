@@ -56,3 +56,6 @@ public/assets/gen/*
 # TLS 憑證與私鑰（scripts/make-cert.sh 產生）。私鑰絕不進版控。
 certs/
 
+
+# 3D 背景的參考原型（RoomScene.js 已從中提取所需邏輯，執行期不引用）
+background_repo/

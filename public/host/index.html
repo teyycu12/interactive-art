@@ -154,6 +154,22 @@
       <p class="hint tiny" id="ranks-empty">還沒有人得分。任務與問答都會計分。</p>
     </div>
 
+    <!-- 大合照 -->
+    <div class="panel">
+      <h2>大合照</h2>
+      <p class="hint tiny">所有角色會原地定住並轉向鏡頭，就定位後自動拍攝。</p>
+      <button class="btn-primary" id="btn-photo">拍大合照</button>
+      <p class="hint" id="photo-status" hidden></p>
+      <div id="photo-result" hidden>
+        <img id="photo-img" alt="大合照">
+        <div class="photo-actions">
+          <a class="btn-ghost" id="photo-download" download>下載合照</a>
+          <img id="photo-qr" alt="下載用 QR Code">
+        </div>
+      </div>
+      <p class="err" id="photo-err" hidden></p>
+    </div>
+
     <!-- 現場動態 -->
     <div class="panel">
       <h2>現場動態</h2>

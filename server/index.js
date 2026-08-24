@@ -141,6 +141,7 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
+  '.webp': 'image/webp',
   '.ico': 'image/x-icon',
 };
 
@@ -155,6 +156,19 @@ function resolveStatic(urlPath) {
   }
   if (urlPath === '/vendor/rough.esm.js') {
     return path.join(ROOT, 'node_modules', 'roughjs', 'bundled', 'rough.esm.js');
+  }
+  if (urlPath === '/vendor/three.module.js') {
+    return path.join(ROOT, 'node_modules', 'three', 'build', 'three.module.js');
+  }
+  // three 的 addons 是整棵目錄樹：OrbitControls 等檔案會再 import 同目錄下的
+  // 其他模組，逐檔白名單列不完，因此整個目錄開放。但也因為是目錄映射，
+  // 這裡必須自己做穿越防護 —— 下方那套通用檢查只涵蓋 PUBLIC_DIR 與 shared。
+  if (urlPath.startsWith('/vendor/three-addons/')) {
+    if (urlPath.includes('\0')) return null;
+    const addonsRoot = path.join(ROOT, 'node_modules', 'three', 'examples', 'jsm');
+    const target = path.resolve(addonsRoot, urlPath.slice('/vendor/three-addons/'.length));
+    if (target !== addonsRoot && !target.startsWith(addonsRoot + path.sep)) return null;
+    return target;
   }
 
   // NUL 位元組會讓底層 fs 呼叫的路徑在 C 層被截斷，先擋掉
@@ -374,6 +388,42 @@ function handleRequest(req, res) {
   // 控制字元對合法的靜態資源路徑一律無用，在入口擋掉最乾淨。
   if (/[\u0000-\u001f\u007f]/.test(urlPath)) {
     res.writeHead(400).end('Bad Request');
+    return;
+  }
+
+  // 大螢幕上傳合照底圖。走 HTTP 而非 WebSocket：一張 1080p 截圖遠大於
+  // MAX_MESSAGE_BYTES(4KB)，而那個上限是擋惡意客戶端灌爆記憶體用的，
+  // 不該為了單一功能對所有連線放寬。
+  if (urlPath === '/api/screen-capture' && req.method === 'POST') {
+    const chunks = [];
+    let size = 0;
+    let aborted = false;
+    req.on('data', (chunk) => {
+      if (aborted) return;
+      size += chunk.length;
+      if (size > MAX_PHOTO_BYTES) {
+        aborted = true;
+        sendJSON(res, 413, { ok: false, error: 'capture_too_large' });
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (aborted) return;
+      let msg;
+      try { msg = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { sendJSON(res, 400, { ok: false, error: 'bad_json' }); return; }
+
+      const pending = pendingCaptures.get(msg?.requestId);
+      // requestId 認不得就丟掉：它是伺服器剛剛才發出去的隨機值，
+      // 猜不中等於這不是我們要的那張截圖。
+      if (!pending) { sendJSON(res, 200, { ok: false, error: 'unknown_request' }); return; }
+      pendingCaptures.delete(msg.requestId);
+      clearTimeout(pending.timer);
+      pending.resolve(typeof msg.image === 'string' ? msg.image : null);
+      sendJSON(res, 200, { ok: true });
+    });
     return;
   }
 
@@ -886,6 +936,12 @@ function handleHostMessage(ws, msg) {
       break;
     }
 
+    case EV.HOST_TAKE_PHOTO:
+      // 刻意不 await：合照要等角色就定位，await 會讓這條 WebSocket 的
+      // 訊息處理停擺數秒，期間主辦端的其他操作全部沒有回應。
+      takeGroupPhoto(ws);
+      break;
+
     case EV.HOST_REVEAL_QUIZ:
       revealQuiz();
       break;
@@ -1058,6 +1114,7 @@ wss.on('connection', (ws) => {
       case EV.HOST_REVEAL_QUIZ:
       case EV.HOST_END_QUIZ:
       case EV.HOST_KICK:
+      case EV.HOST_TAKE_PHOTO:
         // 未通過認證的連線一律忽略，不回應也不透露任何狀態
         if (ws.role !== 'host') return;
         handleHostMessage(ws, msg);
@@ -1215,6 +1272,155 @@ server.listen(PORT, '0.0.0.0', () => {
   }
   console.log('');
 });
+
+// ── 大合照（M6）─────────────────────────────────────────────
+//
+// 流程：鎖定場域把角色定住並全部面向鏡頭 → 輪詢到位 → 帶著場上座標
+// 呼叫生成服務合成 → 解除鎖定。
+//
+// 排版採角色的實際座標而非重排隊形：這件作品要記錄的是集體共創的
+// 當下樣貌，誰跟誰聚在一起正是重點，排整齊會把那個訊息抹掉。
+// 因此 lockStage() 這裡的用途是「原地定住並轉向鏡頭」，不是排隊形。
+const PHOTO_TIMEOUT_MS = 60000;   // 合成含外部圖床上傳，比生成寬鬆
+const PHOTO_SETTLE_MS = 12000;    // 等到位的上限；逾時就照現況拍，不卡住現場
+const PHOTO_POLL_MS = 200;
+let photoInFlight = false;
+
+/** 面向鏡頭（畫面下方＝觀眾席）的朝向角 */
+const FACING_CAMERA = Math.PI / 2;
+
+// 大螢幕交回的截圖暫存區：requestId → { resolve, timer }
+// 只在一次合照流程中短暫存在，用完即刪。
+const pendingCaptures = new Map();
+const CAPTURE_TIMEOUT_MS = 8000;
+
+/**
+ * 向大螢幕要一張當下畫面。
+ *
+ * 為什麼是「跟大螢幕要」而不是伺服器自己畫：3D 房間跑在瀏覽器的 WebGL 上，
+ * 伺服器端沒有等價的渲染路徑。要在 Node 端重畫一次，等於把 RoomScene、
+ * 光照、GLTF 載入與角色貼圖疊合全部再實作一遍 —— 而且兩份必然會漂移，
+ * 合照裡的場景會跟觀眾前一秒看到的不一樣（arbiter.js 的註解警告過同一件事）。
+ *
+ * 沒有大螢幕連線時回 null，呼叫端會退回 Python 端的舞台底圖。
+ */
+const requestScreenCapture = () => new Promise((resolve) => {
+  const screen = [...screens].find((ws) => ws.readyState === ws.OPEN);
+  if (!screen) { resolve(null); return; }
+
+  const requestId = randomBytes(8).toString('hex');
+  const timer = setTimeout(() => {
+    pendingCaptures.delete(requestId);
+    resolve(null);          // 逾時就用沒有底圖的版本，不要卡住現場
+  }, CAPTURE_TIMEOUT_MS);
+
+  pendingCaptures.set(requestId, { resolve, timer });
+  send(screen, EV.SCREEN_CAPTURE_REQ, { requestId });
+});
+
+const photoRoster = () => {
+  const byId = new Map(stage.roster().map((a) => [a.id, a]));
+  return stage.snapshot().map((s) => {
+    const meta = byId.get(s.id) || {};
+    const avatar = meta.avatar || {};
+    const out = { id: s.id, name: meta.name || '', x: s.x, y: s.y };
+    // CV 角色：由貼圖路徑推導出同目錄的未切片全身圖。
+    // avatar 白名單只保留 textures / fallbackColors（shared/avatars.js），
+    // fullPng 不在其中，因此不能直接取。
+    const head = avatar.textures?.head;
+    if (typeof head === 'string') out.fullPng = head.replace(/\/head\.webp$/, '/full.webp');
+    // 捏臉角色沒有生成圖，交給 photo_composer 程式化繪製樂高人偶
+    if (avatar.fallbackColors) {
+      out.outfit = {
+        inner_color: avatar.fallbackColors.torso,
+        lower_color: avatar.fallbackColors.legs,
+      };
+      out.face = {
+        skin_tone: avatar.fallbackColors.skin,
+        hair_color: avatar.fallbackColors.hair,
+      };
+    }
+    return out;
+  });
+};
+
+const requestCompose = (characters, backdrop) => new Promise((resolve) => {
+  const body = Buffer.from(JSON.stringify({
+    characters,
+    backdrop,
+    photoUrlBase: `http://${VISION_HOST}:${VISION_PORT}/photos`,
+  }), 'utf8');
+  const up = http.request({
+    host: VISION_HOST, port: VISION_PORT, path: '/compose', method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
+    timeout: PHOTO_TIMEOUT_MS,
+  }, (res) => {
+    const chunks = [];
+    res.on('data', (c) => chunks.push(c));
+    res.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+      catch { resolve({ ok: false, error: 'bad_response' }); }
+    });
+  });
+  up.on('timeout', () => { up.destroy(); resolve({ ok: false, error: 'compose_timeout' }); });
+  up.on('error', () => resolve({ ok: false, error: 'vision_service_unavailable' }));
+  up.end(body);
+});
+
+const takeGroupPhoto = async (ws) => {
+  // 合成期間場域是鎖住的，重入會讓第二次的 unlockStage 提前解鎖第一次
+  if (photoInFlight) {
+    send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error: '合照進行中' });
+    return;
+  }
+  const agents = stage.snapshot();
+  if (agents.length === 0) {
+    send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error: '場上沒有角色' });
+    return;
+  }
+  photoInFlight = true;
+  try {
+    // 原地定住並全部轉向鏡頭
+    const assignments = new Map(
+      agents.map((a) => [a.id, { x: a.x, y: a.y, heading: FACING_CAMERA }]),
+    );
+    const n = stage.lockStage(assignments);
+    send(ws, EV.HOST_PHOTO_STATE, { phase: 'STAGING', count: n });
+    console.log(`[photo] 定位 ${n} 位角色…`);
+
+    // 輪詢到位而非固定秒數等待：移動時間取決於角色原本散得多開。
+    // 但仍設上限 —— 現場不能因為某個角色卡住就永遠拍不成。
+    const deadline = Date.now() + PHOTO_SETTLE_MS;
+    while (!stage.allArrived() && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, PHOTO_POLL_MS));
+    }
+
+    // 先跟大螢幕要一張當下畫面當底圖，角色與 3D 房間都已經在上面了。
+    // 拿不到（沒有大螢幕連線、逾時）就傳 null，Python 端會退回自己畫的舞台。
+    const backdrop = await requestScreenCapture();
+    send(ws, EV.HOST_PHOTO_STATE, { phase: 'COMPOSING' });
+    const res = await requestCompose(photoRoster(), backdrop);
+    if (res && res.ok) {
+      console.log(`[photo] 完成　${res.character_count} 人　${res.photo_id}`);
+      send(ws, EV.HOST_PHOTO_STATE, {
+        phase: 'DONE',
+        photoId: res.photo_id,
+        photoUrl: res.photo_url,
+        photoB64: res.photo_b64,
+        qrB64: res.qr_b64,
+        count: res.character_count,
+      });
+    } else {
+      const error = res?.error || 'compose_failed';
+      console.warn(`[photo] 失敗：${error}`);
+      send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error });
+    }
+  } finally {
+    // 無論成功或失敗都必須解鎖，否則場域永遠卡在 STAGED、所有人都動不了
+    stage.unlockStage();
+    photoInFlight = false;
+  }
+};
 
 const shutdown = () => {
   loop.stop();

@@ -531,6 +531,22 @@ function httpStatus(rawPath) {
   });
 }
 
+function httpBody(pathname) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { host: '127.0.0.1', port: PORT, path: pathname, method: 'GET' },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve(body));
+      },
+    );
+    req.on('error', () => resolve(''));
+    req.end();
+  });
+}
+
 // 曾可讀到 .env 與 data/state.json（內含主辦密鑰與所有重連憑證）
 check('路徑穿越讀不到 .env',
   (await httpStatus('/shared/..%2f.env')) === 403);
@@ -538,6 +554,22 @@ check('路徑穿越讀不到活動快照',
   (await httpStatus('/shared/..%2fdata%2fstate.json')) === 403);
 check('正常的 /shared/ 資源仍可載入',
   (await httpStatus('/shared/avatars.js')) === 200);
+
+// three 一度指向 jsdelivr CDN：本機開發正常，但展場網路不通時大螢幕的
+// 整個 3D 背景會消失 —— 而那是本機永遠測不出來的故障。
+check('three 由本機直出，不依賴 CDN',
+  (await httpStatus('/vendor/three.module.js')) === 200);
+check('three addons 由本機直出',
+  (await httpStatus('/vendor/three-addons/controls/OrbitControls.js')) === 200);
+check('大螢幕頁面不含任何 CDN 連結',
+  !(await httpBody('/screen/')).includes('jsdelivr'));
+
+// addons 走目錄映射而非逐檔白名單，穿越防護是該分支自己做的，
+// 不受下方那套只涵蓋 PUBLIC_DIR 與 shared 的通用檢查保護。
+check('addons 路徑穿越讀不到 .env',
+  (await httpStatus('/vendor/three-addons/..%2f..%2f..%2f.env')) === 403);
+check('addons 路徑穿越讀不到活動快照',
+  (await httpStatus('/vendor/three-addons/..%2f..%2f..%2f..%2fdata%2fstate.json')) !== 200);
 
 // 曾可用一個壞掉的網址讓整個 Gateway 行程結束
 check('無效百分比編碼回 400 而非終止行程',
