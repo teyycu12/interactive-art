@@ -32,6 +32,24 @@ except ImportError:
 _client: Optional["OpenAI"] = None
 
 
+# 模型名稱一律由 config 決定。此檔原本自行讀 os.environ 並各自寫死一組
+# 後備值，與 config.py 的預設不一致 —— 實際發生過的後果是三條生成路徑
+# 全都落到 google/gemini-2.5-flash-image-preview（該 ID 不存在，
+# OpenRouter 回 404），而熔斷器只會回報 circuit_open，看不出真正原因。
+try:
+    from backend.config import config as _config  # type: ignore
+except Exception:  # pragma: no cover - 直接以 backend/ 為工作目錄時
+    from config import config as _config  # type: ignore
+
+
+def _resolve_model(*candidates: Optional[str]) -> str:
+    """取第一個非空的模型名，全空時退回 OUTFIT_GEN_MODEL。"""
+    for c in candidates:
+        if c and c.strip():
+            return c.strip()
+    return _config.OUTFIT_GEN_MODEL
+
+
 def _get_client() -> Optional["OpenAI"]:
     """Build an OpenAI-SDK client. Auto-detects OpenRouter from key prefix."""
     global _client
@@ -311,7 +329,7 @@ def _call_image_chat_multi(
         return None
 
     if model is None:
-        model = os.environ.get("OUTFIT_GEN_MODEL", "google/gemini-2.5-flash-image-preview").strip()
+        model = _resolve_model(_config.OUTFIT_GEN_MODEL)
 
     content: list = [{"type": "text", "text": prompt}]
     for url in image_data_urls:
@@ -459,11 +477,7 @@ def generate_full_character_png(
         return out
 
     h, w = rgb.shape[:2]
-    model = (
-        os.environ.get("FULL_CHARACTER_MODEL", "").strip()
-        or os.environ.get("OUTFIT_GEN_MODEL", "").strip()
-        or "google/gemini-2.5-flash-image-preview"
-    )
+    model = _resolve_model(_config.FULL_CHARACTER_MODEL, _config.OUTFIT_GEN_MODEL)
     print(f"[garment_gen] start full-character (frame={w}x{h}, model={model}, remove_bg={remove_bg})")
     t_start = time.perf_counter()
 
@@ -617,11 +631,10 @@ def generate_refine_character_png(
         return out
 
     h, w = rgb.shape[:2]
-    model = (
-        os.environ.get("REFINE_CHARACTER_MODEL", "").strip()
-        or os.environ.get("FULL_CHARACTER_MODEL", "").strip()
-        or os.environ.get("OUTFIT_GEN_MODEL", "").strip()
-        or "google/gemini-2.5-flash-image-preview"
+    model = _resolve_model(
+        _config.REFINE_CHARACTER_MODEL,
+        _config.FULL_CHARACTER_MODEL,
+        _config.OUTFIT_GEN_MODEL,
     )
     print(f"[garment_gen] start refine pass (frame={w}x{h}, model={model})")
     t_start = time.perf_counter()
