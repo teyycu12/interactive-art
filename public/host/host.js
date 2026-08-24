@@ -7,6 +7,7 @@
  */
 
 import { EV, MISSION_TYPES, QUIZ, QUIZ_CHOICES, QUIZ_PHASE } from '/shared/protocol.js';
+import { renderAvatarSVG, CV_FULL_PART } from '/shared/avatars.js';
 
 const $ = (s) => document.querySelector(s);
 const SS_KEY = 'personaflow.hostKey';
@@ -206,6 +207,50 @@ function renderMission(m) {
 // ─────────────────────────────────────────────────────────────
 // 參與者列表
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * 名冊縮圖。
+ *
+ * 掃描生成的角色用未切割的整張圖，不用 head.png —— 切線在全身高度的 0.30，
+ * 而實測肩線落在 0.490，head 貼圖裡只有額頭到鼻子，當縮圖反而認不出人
+ * （見 backend/slicer.py 的 CUTS 與 test_slicer 的量測）。
+ *
+ * 改版前生成的資產沒有整張圖，退回用取樣色堆出的色塊：認不出五官，
+ * 但衣服顏色仍能對上大螢幕上的人，比一格空白有用。
+ */
+function avatarThumb(avatar) {
+  if (!avatar) return document.createTextNode('');
+
+  if (avatar.source === 'CV') {
+    const url = avatar.textures?.[CV_FULL_PART];
+    if (url) {
+      const img = document.createElement('img');
+      img.className = 'thumb';
+      img.alt = '';
+      img.src = url;
+      return img;
+    }
+    const c = avatar.fallbackColors ?? {};
+    const box = document.createElement('span');
+    box.className = 'swatch';
+    // 比例與 shared/avatars.js 的 CV_CUTS 一致，讓色塊對得上大螢幕的角色
+    for (const [hex, frac] of [[c.hair, 0.12], [c.skin, 0.18], [c.torso, 0.34], [c.legs, 0.36]]) {
+      const band = document.createElement('i');
+      band.style.height = `${frac * 100}%`;
+      band.style.background = hex ?? 'transparent';
+      box.append(band);
+    }
+    return box;
+  }
+
+  // 捏臉角色：沿用大螢幕那支 SVG 產生器，兩邊不會畫出不同的人
+  const img = document.createElement('img');
+  img.className = 'thumb';
+  img.alt = '';
+  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(renderAvatarSVG(avatar, { width: 34, height: 44 }))}`;
+  return img;
+}
+
 function renderState(state) {
   $('#stat-people').textContent = state.agents.length;
   $('#stat-edges').textContent = state.graphEdges;
@@ -219,6 +264,10 @@ function renderState(state) {
 
   for (const a of state.agents) {
     const tr = document.createElement('tr');
+
+    const face = document.createElement('td');
+    face.className = 'face';
+    face.append(avatarThumb(a.avatar));
 
     // 名稱一律以 textContent 寫入：它來自使用者輸入，
     // 伺服器只剝除控制字元並未跳脫 HTML
@@ -265,7 +314,7 @@ function renderState(state) {
     });
     act.append(kick);
 
-    tr.append(name, score, prog, conn, active, act);
+    tr.append(face, name, score, prog, conn, active, act);
     body.append(tr);
   }
 

@@ -456,6 +456,10 @@ function hostState() {
     agents: [...stage.agents.values()].map((a) => ({
       id: a.id,
       name: a.name,
+      // 主辦端要能認出「這一列是誰」—— 名字是自填的，現場常常重複或看不懂，
+      // 頭像才是參與者在大螢幕上實際的樣子。CV 角色只帶 URL，捏臉只帶 token，
+      // 兩者都很小，不會讓這份狀態訊息膨脹。
+      avatar: a.avatar,
       offline: a.offline,
       progress: missions.progressOf(a.id),
       connections: graph.degree(a.id),

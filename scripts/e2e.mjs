@@ -402,6 +402,10 @@ check('排行榜第一名分數最高',
   scoreBoard?.leaderboard?.map((r) => `${r.name} ${r.score}`).join('　'));
 check('主辦端現況帶有每人積分',
   (hostStates.at(-1)?.agents ?? []).every((a) => typeof a.score === 'number'));
+// 名冊縮圖靠這個欄位。少了它，主辦端只剩一串自填的名字 ——
+// 現場那些名字常常重複或看不懂，等於認不出要踢的是誰。
+check('主辦端現況帶有每人外觀',
+  (hostStates.at(-1)?.agents ?? []).every((a) => a.avatar && typeof a.avatar === 'object'));
 
 host.send(JSON.stringify({ type: 'HOST_END_QUIZ' }));
 await sleep(400);

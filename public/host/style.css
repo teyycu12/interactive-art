@@ -194,6 +194,16 @@ th {
 td { padding: 9px 10px; border-bottom: 1px solid var(--sunk); vertical-align: middle; }
 tr:last-child td { border-bottom: none; }
 td.name { font-weight: 700; }
+/* 頭像欄：主辦端要認出「這一列是誰」，名字是自填的，常常重複或看不懂 */
+td.face { width: 44px; padding-right: 0; }
+td.face .thumb {
+  width: 34px; height: 44px;
+  display: block; object-fit: contain; object-position: bottom;
+  border-radius: 4px; background: var(--sunk);
+}
+/* 沒有整張圖時（改版前生成的資產）以取樣色堆出可辨識的色塊 */
+td.face .swatch { display: block; width: 34px; height: 44px; border-radius: 4px; overflow: hidden; }
+td.face .swatch i { display: block; }
 td.num { font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
 td.act { text-align: right; }
 .badge-off {
