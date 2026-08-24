@@ -215,6 +215,16 @@ export const STAGE = { width: 1920, height: 1080 };
  */
 export const MAX_SPEED = 190;
 
+/**
+ * 行走判定門檻（邏輯單位／秒）。低於此速度視為靜止。
+ *
+ * 與 MAX_SPEED 同樣放在協定層：伺服器用它決定回報 IDLE 或 WALK，
+ * shared/character.js 用同一個值把程式化步態淡出到零。兩邊必須一致 ——
+ * 對不上時會出現「伺服器說 IDLE、畫面上卻還在擺動」的矛盾，
+ * 而且兩邊都不會報錯。server/config.js 直接再匯出本常數，不另行定義。
+ */
+export const WALK_THRESHOLD = 18;
+
 /** 角色渲染狀態，供 M3 決定是否播放彈跳步態（IDLE 為完全靜止） */
 export const AGENT_STATE = { IDLE: 'IDLE', WALK: 'WALK' };
 

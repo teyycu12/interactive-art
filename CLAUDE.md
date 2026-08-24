@@ -86,7 +86,9 @@
 │   │   └── 3d/RoomScene.js # ★ Three.js 場景、燈光、透視投影 projectToScreen()
 │   ├── host/               # 主辦端控制台
 │   └── assets/gen/         # 生成貼圖落地處（gitignore，每場重新產生）
-├── /test                   # ★ Node 單元測試（215 個，node --test）
+├── /test                   # ★ Node 單元測試（228 個，node --test）
+│   ├── idle-still.test.mjs # ★ 靜止待機（預設 IDLE_MOTION）
+│   └── wander-mode.test.mjs # ★ 漫遊模式，需 npm run test:wander
 ├── /scripts
 │   ├── e2e.mjs             # ★ 端對端測試（103 項，會自行啟動伺服器）
 │   ├── make-cert.sh        # ★ 現場用 TLS 憑證產生
@@ -215,7 +217,8 @@ bash scripts/make-cert.sh
 TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start
 
 # 測試
-npm test                           # Node 單元測試（215）
+npm test                           # Node 單元測試（228 + wander 模式 5）
+npm run test:wander                # 只跑漫遊模式那一組（PERSONAFLOW_IDLE_MOTION=wander）
 npm run test:e2e                   # 端對端，會自行啟動伺服器（103）
 pytest backend/                    # Python（236）
 
@@ -298,6 +301,49 @@ Node 會據此把**所有**子目錄的 `.js` 當成 ES module —— 但 `front
 
 `frontend/package.json` 只做一件事：把模組型別重新限定成 `commonjs`。
 **不要刪除它**，也不要在 `frontend/` 底下改用 `import`／`export`。
+
+### 閒置時角色靜止（IDLE_MOTION，預設 'still'）
+
+沒有人操控時角色**停在原地**，不再自動漫遊。由 `server/config.js` 的
+`IDLE_MOTION` 控制，可用環境變數覆寫：
+
+```bash
+PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
+```
+
+| 值 | 行為 |
+|---|---|
+| `still`（預設） | 完全靜止，只播 IDLE 待機 |
+| `wander` | 原始設計：Boids 三力 + 漫遊擾動 |
+| `flock` | 保留三力但關掉漫遊擾動：有鄰居才動，孤身一人時停下 |
+
+原始設計刻意讓閒置角色漫遊（`boids.js` 的 `wanderForce` 就是為此存在），
+理由是「有人掛機時畫面不要死寂」；代價是參與者分不清畫面上的移動是自己
+造成的還是系統自己在動。兩種取捨都成立，所以保留成參數而非寫死。
+
+**三個踩過的坑**，測試都有回歸防護：
+
+1. **煞停不能只靠 α 衰減。** α 要閒置滿 `IDLE_THRESHOLD_MS` 才開始衰減，
+   而 `inputIntensity` 在手指離開搖桿的當下就歸零 —— 那一瞬間 α 還是 1，
+   兩者相乘會讓速度從全速直接掉到 0。`wander` 模式看不出來，因為空缺由
+   Boids 影子速度補上；自主項一旦歸零，缺口就直接變成畫面上的急煞。
+   因此 `arbiter.js` 另外對「上一幀的實際速度」做餘弦煞停。
+
+2. **靜止模式關掉的是「自主意圖」，不是「碰撞處理」。** 把整個自主項乘 0
+   會連帶抹掉道具斥力的側向分量，而正面推向圓形道具時，位置修正只消去朝內
+   的分量 —— 側向為零就沒有繞行方向，角色會卡在道具正面推不過去。
+   故另備 `obstacleAvoidance()` 回傳**切向**速度，且疊加後要正規化回原速率
+   （直接相加會超過 `MAX_SPEED`，也會讓煞停曲線彈回去）。
+
+3. **影子速度仍要持續整合**，不要為了省事跳過 `integrateBoids()` ——
+   否則現場把參數改回 `wander` 時，第一次交接會從一個過期的速度接手。
+
+測試分成兩檔，因為 `IDLE_MOTION` 在模組載入時就定案，同一個行程內無法切換：
+`test/idle-still.test.mjs`（預設）與 `test/wander-mode.test.mjs`
+（需 `npm run test:wander`，`npm test` 已把兩輪都串起來）。
+
+手機端的操控提示**不要寫死「放手後角色會漫遊」** —— 手機讀不到伺服器的
+`IDLE_MOTION`，寫死其中一種，另一種模式下就成了假訊息。
 
 ### 場域人數上限刻意壓在 10
 

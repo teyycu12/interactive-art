@@ -22,7 +22,7 @@
 import { drawCharacter } from '/shared/character.js';
 import { avatarImage } from '/shared/avatarSprite.js';
 import {
-  MAX_SPEED, CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS, EMOTE_GLYPH,
+  MAX_SPEED, CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS, EMOTE_GLYPH, WALK_THRESHOLD,
 } from '/shared/protocol.js';
 
 const GRID_SIZE = 72;          // 背景網格間距（CSS px）
@@ -275,8 +275,11 @@ export class AvatarRenderer {
 
     // drawCharacter 需要一份 agent 形狀的狀態。速度換算回場域單位，
     // 讓 cadence() 的內插與大螢幕落在同一個尺度上。
+    // 門檻用場域單位比較（this.vx 是正規化速度，×MAX_SPEED 才是場域單位），
+    // 與伺服器的 WALK_THRESHOLD 同一把尺 —— 否則手機會說 WALK、
+    // 大螢幕說 IDLE，同一個角色在兩個畫面上狀態不一致。
     const agent = {
-      state: speed > 0.05 ? 'WALK' : 'IDLE',
+      state: speed * MAX_SPEED > WALK_THRESHOLD ? 'WALK' : 'IDLE',
       vx: this.vx * MAX_SPEED,
       vy: this.vy * MAX_SPEED,
       facing: this.facing,

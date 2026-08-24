@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
-import { CLIENT_SYNC_RADIUS } from '../shared/protocol.js';
+import { CLIENT_SYNC_RADIUS, STAGE, MAX_SPEED } from '../shared/protocol.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 3199;
@@ -220,10 +220,16 @@ check('模式切換為湧現漫遊態', idle.mode === 'SWARM');
   });
   await sleep(600);
 
-  // 兩人的初始位置由 spawnPoint() 隨機決定，加上先前測項留下的 Boids 漂移，
-  // 距離可能一開始就超過可見半徑。這裡主動把手機推向對方，
-  // 讓測項驗證的是「半徑內看得見」而不是「隨機生成剛好夠近」。
-  for (let i = 0; i < 40; i++) {
+  // 兩人的初始位置由 spawnPoint() 隨機決定，距離可能一開始就超過可見半徑。
+  // 這裡主動把手機推向對方，讓測項驗證的是「半徑內看得見」而不是
+  // 「隨機生成剛好夠近」。
+  //
+  // 迴圈次數必須夠走完整個場域對角線（約 2200 單位）。IDLE_MOTION 預設為
+  // 'still' 之後，閒置角色不再漂移 —— 過去有一部分距離是靠 Boids 漂移
+  // 湊巧拉近的，現在全得靠這個迴圈自己走完。次數不足時兩人會停在半徑外，
+  // 失敗訊息卻只說「看不到鄰居」，看不出是測試沒走到位。
+  const walkSteps = Math.ceil((STAGE.width + STAGE.height) / (MAX_SPEED * 0.05)) + 20;
+  for (let i = 0; i < walkSteps; i++) {
     const me = phoneSyncs.at(-1)?.self;
     const you = mateSyncs.at(-1)?.self;
     if (!me || !you) break;

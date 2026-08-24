@@ -16,12 +16,23 @@
  * 此處全部改為時間基準，並以 60fps 換算出等價常數，維持文件指定的觀感。
  */
 
+import { WALK_THRESHOLD } from '/shared/protocol.js';
+
 const INK = '#2F2A26';
 
 // 技術文件：ω = 0.2 rad/frame。以 60fps 換算 → 12 rad/s
 const BOB_OMEGA = 0.2 * 60;
 const BOB_AMPLITUDE = 6;        // 文件：A = 6px
 const WOBBLE_DEGREES = 5;       // 文件：±5°
+
+/**
+ * 步態淡出的速度基準：直接沿用協定層的行走門檻。
+ *
+ * 低於它伺服器就回報 IDLE，因此步態也在同一點收斂到零 ——
+ * 兩者才不會出現「已回報 IDLE、畫面卻還在擺動」的矛盾。
+ * 不要在這裡另外寫死數字（見 CLAUDE.md 的單一事實來源原則）。
+ */
+const GAIT_FADE_SPEED = WALK_THRESHOLD;
 
 /**
  * 依速度調節步頻。技術文件未指定，但固定步頻會讓緩慢移動的角色
@@ -47,17 +58,25 @@ function cadence(speed, maxSpeed) {
  */
 export function drawCharacter(ctx, agent, pos, sprite, opts) {
   const { time, maxSpeed, height = 150 } = opts;
-  const walking = agent.state === 'WALK';
   const speed = Math.hypot(agent.vx, agent.vy);
+
+  // 步態強度：不用 state === 'WALK' 這個布林開關，改為隨速度連續淡出。
+  //
+  // 開關式的寫法會在停下的瞬間把擺動硬切成 0，而 sin(phase/2) 當下是任意
+  // 值 —— 最壞情況角色正傾到滿幅 ±5°，卻在一幀之內被扳正，看起來就是
+  // 「停下來時突然左右擺一下」。同理，速度在門檻附近來回時 state 會反覆
+  // 翻轉，角色會持續抽動。
+  //
+  // 以 WALK_THRESHOLD 為終點線性淡出，擺動幅度隨速度一起歸零，
+  // 停下時自然收束到直立，不需要任何額外的過渡狀態。
+  const gait = Math.min(1, speed / GAIT_FADE_SPEED);
 
   // ── 垂直彈跳：Y_offset = -|sin(t·ω)| · A ──
   const phase = time * BOB_OMEGA * cadence(speed, maxSpeed);
-  const lift = walking ? Math.abs(Math.sin(phase)) * BOB_AMPLITUDE : 0;
+  const lift = Math.abs(Math.sin(phase)) * BOB_AMPLITUDE * gait;
 
   // ── 左右擺動：Rotation = sin(t·ω/2) · 5° ──
-  const wobble = walking
-    ? Math.sin(phase / 2) * WOBBLE_DEGREES * (Math.PI / 180)
-    : 0;
+  const wobble = Math.sin(phase / 2) * WOBBLE_DEGREES * (Math.PI / 180) * gait;
 
   // 靜止時不做任何動畫。
   //

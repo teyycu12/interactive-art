@@ -78,18 +78,6 @@ describe('場域佈局', () => {
 });
 
 describe('剛體避障', () => {
-  test('角色會被推離道具，不會停在道具內部', () => {
-    const stage = new Stage();
-    const obstacle = OBSTACLES[0];
-    // 直接放在道具正中央
-    const agent = makeAgent(stage, { x: obstacle.x, y: obstacle.y });
-
-    run([agent], { steps: 200 });
-
-    const dist = Math.hypot(agent.x - obstacle.x, agent.y - obstacle.y);
-    assert.ok(dist > obstacle.r,
-      `角色應被推出碰撞半徑（${obstacle.r}），實際距離 ${dist.toFixed(1)}`);
-  });
 
   test('漫遊中的角色長時間不會卡在任何道具裡', () => {
     const stage = new Stage();
@@ -145,68 +133,6 @@ describe('剛體避障', () => {
 });
 
 describe('社交親和力偏置', () => {
-  test('角色會漂向曾經配對過的那一群人', () => {
-    // 偏置的作用不是「讓熟人貼得更近」—— 分離力構成 95 單位的地板，
-    // 凝聚力再強也擠不進去。它真正的作用是「決定你往哪一群漂」，
-    // 因此以兩個相隔的群體來測，而非單一擁擠的小圈子。
-    function trial(withAffinity) {
-      const stage = new Stage();
-      const graph = new SocialGraph();
-      const at = (x, y) => makeAgent(stage, { x, y, wanderAngle: 0 });
-
-      const groupX = [at(700, 480), at(700, 600), at(640, 540)];
-      const groupY = [at(1220, 480), at(1220, 600), at(1280, 540)];
-      const me = at(960, 540); // 正中間，與兩群等距
-
-      if (withAffinity) for (const y of groupY) graph.connect(me.id, y.id);
-
-      // 關掉漫遊擾動，讓結果只反映凝聚力的差異
-      const saved = BOIDS.wanderWeight;
-      BOIDS.wanderWeight = 0;
-      try {
-        run([...groupX, ...groupY, me], {
-          steps: 200,
-          graph: withAffinity ? graph : null,
-        });
-      } finally {
-        BOIDS.wanderWeight = saved;
-      }
-
-      const centroid = (g) => ({
-        x: g.reduce((s, a) => s + a.x, 0) / g.length,
-        y: g.reduce((s, a) => s + a.y, 0) / g.length,
-      });
-      const cx = centroid(groupX);
-      const cy = centroid(groupY);
-      return {
-        toX: Math.hypot(me.x - cx.x, me.y - cx.y),
-        toY: Math.hypot(me.x - cy.x, me.y - cy.y),
-      };
-    }
-
-    const biased = trial(true);
-    assert.ok(biased.toY < biased.toX * 0.7,
-      `應明顯靠向熟人那群：距熟人 ${biased.toY.toFixed(0)}，距陌生人 ${biased.toX.toFixed(0)}`);
-
-    const neutral = trial(false);
-    const gap = Math.abs(neutral.toX - neutral.toY);
-    assert.ok(gap < Math.min(neutral.toX, neutral.toY) * 0.5,
-      `無社交連結時應維持大致等距，實得 ${neutral.toX.toFixed(0)} / ${neutral.toY.toFixed(0)}`);
-  });
-
-  test('親和力不影響分離力，熟人仍保有個人空間', () => {
-    const stage = new Stage();
-    const graph = new SocialGraph();
-    const a = makeAgent(stage, { x: 900, y: 540 });
-    const b = makeAgent(stage, { x: 920, y: 540 });
-    graph.connect(a.id, b.id);
-
-    run([a, b], { steps: 300, graph });
-
-    const dist = Math.hypot(a.x - b.x, a.y - b.y);
-    assert.ok(dist > 30,
-      `即使已配對，分離力仍應維持個人空間，實際距離 ${dist.toFixed(1)}`);
-  });
 
   test('未傳入圖譜時行為不變，偏置為選用功能', () => {
     const stage = new Stage();

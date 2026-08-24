@@ -264,14 +264,23 @@ function fallbackToBuilder(message) {
 $('#btn-scan').addEventListener('click', async () => {
   if (!commitName()) return;
 
+  showScreen('scan');
+
   // getUserMedia 要求安全情境。場館用 http://192.168.x.x 時瀏覽器會直接
   // 拒絕，且錯誤訊息相當隱晦 —— 這裡先明講，免得現場以為是相機壞了。
+  //
+  // 但沒有相機**不等於**不能生成角色：從相簿上傳這條路徑完全不需要相機。
+  // 因此這裡不再直接踢回捏臉，而是停在失敗畫面上 —— 那個畫面同時放了
+  // 「從相簿選」與「改用捏臉」，由使用者自己選，而不是系統代為決定。
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-    fallbackToBuilder('這個網址無法使用相機（需要 HTTPS），先用捏臉進場。');
+    showScanFailure(
+      '這個網址無法使用相機（需要 HTTPS）。',
+      '你仍然可以從相簿選一張全身照來生成角色，或改用捏臉。',
+      { title: '相機無法使用', emptyStage: true, noRetry: true },
+    );
     return;
   }
 
-  showScreen('scan');
   await openCamera();
 });
 
@@ -310,9 +319,63 @@ async function openCamera() {
 
 $('#btn-scan-back').addEventListener('click', () => fallbackToBuilder(null));
 
-/** 倒數中被按下取消時設為 true，讓倒數迴圈中止 */
+/** 倒數中被按下取消時設為 true，讓倒數迴圈中止。
+    宣告必須排在下方上傳處理器之前 —— let 不會提升，放在後面會落入
+    暫時性死區（TDZ）。 */
 let countdownCancelled = false;
 let counting = false;
+
+// ── 從相簿選一張照片 ─────────────────────────────────────────
+//
+// 與拍照並存而非取代：現場有人不想當場被拍、光線不夠、或相機權限被拒，
+// 上傳既有照片仍能走完同一條生成流程。
+//
+// 這條路徑**不需要相機**，因此在 getUserMedia 不可用時（http 非安全情境、
+// 權限被拒、相機被其他程式占用）依然成立 —— 相機失敗畫面上也放了這個入口。
+$('#btn-upload')?.addEventListener('click', () => $('#upload-input').click());
+$('#btn-upload-alt')?.addEventListener('click', () => $('#upload-input').click());
+
+$('#upload-input')?.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  // 先清空 value，否則連續選同一個檔案不會再次觸發 change
+  e.target.value = '';
+  if (!file) return;
+
+  if (!file.type.startsWith('image/')) {
+    showToast('請選擇圖片檔。');
+    return;
+  }
+
+  // 倒數中切走會讓倒數繼續跑並拍下空畫面，先中止它
+  if (counting) countdownCancelled = true;
+
+  let img;
+  try {
+    img = await loadImageFromFile(file);
+  } catch {
+    showScanFailure('讀不到這張照片。', '換一張圖片試試，或改用拍照。', {
+      title: '照片打不開', retryLabel: '重新選擇',
+    });
+    return;
+  }
+
+  // 相機若正開著就關掉：接下來取景框顯示的是選來的照片，
+  // 讓串流繼續跑只是白耗電。
+  stopScanStream();
+  const image = cropToPortraitJpeg(img, img.naturalWidth, img.naturalHeight);
+  await submitScanImage(image);
+});
+
+/** 讀取本機圖片檔成 <img>。用完必須釋放 objectURL，否則整張原檔會留在記憶體裡。 */
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode_failed')); };
+    img.src = url;
+  });
+}
 
 $('#btn-capture').addEventListener('click', async () => {
   const btn = $('#btn-capture');
@@ -366,35 +429,50 @@ $('#btn-capture').addEventListener('click', async () => {
   void stage.offsetWidth;
   stage.classList.add('shutter');
 
+  const image = cropToPortraitJpeg(video, video.videoWidth, video.videoHeight);
+
+  stopScanStream();
+  await submitScanImage(image);
+});
+
+/**
+ * 把來源（<video> 或 <img>）裁成 9:16 並編成 JPEG data URL。
+ *
+ * 相機與相簿上傳共用這一份：兩者送進 /api/generate 的格式必須一致，
+ * 否則後端 slicer 的切片比例會對不上其中一邊（見 CLAUDE.md 的跨語言耦合）。
+ */
+function cropToPortraitJpeg(source, sw0, sh0) {
   // 裁切成 9:16 長方細長型：聚焦在人物，捨棄無用的左右背景，減少 API 負擔與上傳成本
   const TARGET_RATIO = 9 / 16;
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  let sx = 0, sy = 0, sw = vw, sh = vh;
+  let sx = 0, sy = 0, sw = sw0, sh = sh0;
 
-  if (vw / vh > TARGET_RATIO) {
-    sw = vh * TARGET_RATIO;
-    sx = (vw - sw) / 2;
+  if (sw0 / sh0 > TARGET_RATIO) {
+    sw = sh0 * TARGET_RATIO;
+    sx = (sw0 - sw) / 2;
   } else {
-    sh = vw / TARGET_RATIO;
-    sy = (vh - sh) / 2;
+    sh = sw0 / TARGET_RATIO;
+    sy = (sh0 - sh) / 2;
   }
 
   // 長邊限制在 1280，再大只是讓上傳變慢，生圖模型看到的解析度並不會因此提升。
+  // 上傳的相簿原檔可能是好幾千萬畫素，這一步同時把它壓回伺服器收得下的大小。
   const scale = Math.min(1, 1280 / Math.max(sw, sh));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(sw * scale);
   canvas.height = Math.round(sh * scale);
-  
-  canvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-  const image = canvas.toDataURL('image/jpeg', 0.85);
 
-  stopScanStream();
-  // 凍結剛拍下的那張照片留在取景框裡 —— 等待的 25 秒有東西可看，
+  canvas.getContext('2d').drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.85);
+}
+
+/** 送出照片並走完生成流程。相機與上傳共用。 */
+async function submitScanImage(image) {
+  // 凍結送出的那張照片留在取景框裡 —— 等待的 25 秒有東西可看，
   // 也讓人知道系統正在處理的是哪一張。
   $('#scan-video').hidden = true;
   $('#scan-result').src = image;
   $('#scan-result').hidden = false;
+  $('.scan-stage')?.classList.remove('is-empty');
   showScanPhase('working');
 
   const stopProgress = startScanProgress();
@@ -433,7 +511,7 @@ $('#btn-capture').addEventListener('click', async () => {
   };
   if (body.fullPng) $('#scan-result').src = body.fullPng;
   showScanPhase('done');
-});
+}
 
 /**
  * 失敗畫面：保留重試的機會，而不是逕自把人踢回捏臉。
@@ -451,7 +529,11 @@ function showScanFailure(message, hint = '', opts = {}) {
   const hintEl = $('#fail-hint');
   hintEl.textContent = hint;
   hintEl.hidden = !hint;
-  $('#btn-retry').textContent = opts.retryLabel ?? '重拍一次';
+  // 非安全情境下相機永遠開不起來（那個檢查是同步且必然的），
+  // 留一個按了必定再次失敗的「重新嘗試」只是在浪費現場的時間。
+  const retryBtn = $('#btn-retry');
+  retryBtn.textContent = opts.retryLabel ?? '重拍一次';
+  retryBtn.hidden = !!opts.noRetry;
   showScanPhase('failed');
 }
 
@@ -961,9 +1043,13 @@ $('#emotes').addEventListener('click', (e) => {
 
 /**
  * 操控權提示。
- * 這是純本地的顯示邏輯，鏡射伺服器 M2 的閒置門檻，用意是讓使用者理解
- * 「放手後角色會自己走」是設計而非故障。它不是控制權的真實來源 ——
- * 真正的 α 權重永遠由伺服器計算。
+ * 這是純本地的顯示邏輯，鏡射伺服器 M2 的閒置門檻。它不是控制權的真實來源
+ * —— 真正的 α 權重永遠由伺服器計算。
+ *
+ * 文案刻意不描述「放手之後角色會做什麼」：那由伺服器的 IDLE_MOTION 決定
+ * （預設 'still' 靜止待機，可改為 'wander' 自由漫遊），而手機端讀不到那個值。
+ * 寫死其中一種，另一種模式下就會變成假訊息 —— 使用者看著站著不動的角色，
+ * 卻被告知它正在漫遊。因此只陳述這端能確定的事：現在是不是你在操控。
  */
 setInterval(() => {
   const el = $('#agency');
@@ -972,7 +1058,7 @@ setInterval(() => {
   el.classList.toggle('active', active);
   el.textContent = active
     ? '你正在操控'
-    : '角色正在自由漫遊中 — 推動搖桿即可接手';
+    : '推動搖桿即可操控你的角色';
 }, 200);
 
 // 手機息屏或切換到其他 App 時主動歸零，避免角色維持在最後的推桿方向

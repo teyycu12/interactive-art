@@ -38,12 +38,23 @@ body {
 
 #app { height: 100dvh; display: flex; flex-direction: column; }
 
-/* 五個畫面共用同一個版面外殼：撐滿視窗、不捲動、底部固定操作列 */
+/* 五個畫面共用同一個版面外殼：撐滿視窗、不捲動、底部固定操作列
+   四邊都要留安全區：iPhone 的 Home indicator 會壓在 #emotes 的表情鍵
+   與各畫面的 .foot 按鈕上，橫置時瀏海側也會吃掉一段。
+   env() 在不支援的瀏覽器上求值為 0，因此不需要 @supports 分支。
+
+   ⚠ 頂端的 safe-area 不能漏。少了它，瀏海／動態島／瀏覽器網址列會直接
+   蓋掉最上面那一列（.bar 的頭像、積分、連線狀態與離開鍵），而且因為
+   html 設了 overflow:hidden，被切掉的部分是捲不出來的 —— 使用者按不到
+   離開鍵，也看不到自己是否還連著線。 */
 #entry, #builder, #scan, #controller, #farewell {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 14px 16px;
+  padding: calc(14px + env(safe-area-inset-top))
+           calc(16px + env(safe-area-inset-right))
+           calc(14px + env(safe-area-inset-bottom))
+           calc(16px + env(safe-area-inset-left));
   gap: 10px;
   min-height: 0;
 }
@@ -160,11 +171,32 @@ button:disabled { opacity: .35; border-style: dashed; }
 #name-input::placeholder { color: var(--line); font-weight: 500; }
 
 /* ── 控制器 ─────────────────────────────────────────────── */
-.bar { display: flex; align-items: center; gap: 10px; }
+/* 狀態列。
+   flex-shrink: 0 讓它在視窗變矮時不被壓扁（該讓出空間的是搖桿區，
+   #joystick-zone 有 flex: 1）；但**不能**用 flex: none —— 那會連同
+   flex-basis 一起鎖成 auto 且完全不可收縮，視窗極矮時所有列的高度
+   總和超過 100dvh，配上 html 的 overflow:hidden，最上面這一列就會
+   被整個切掉（頭像、名字、積分、離開鍵全部消失）。
+   改為只鎖 shrink 並給一個最小高度，內容永遠有地方站。 */
+.bar {
+  display: flex; align-items: center; gap: 10px;
+  flex-shrink: 0;
+  min-height: 46px;
+}
 .bar svg { height: 42px; width: auto; }
+.bar #mini-avatar { flex: none; display: flex; align-items: center; }
+/* 名字是唯一可以被犧牲的元素：其餘（積分、連線狀態、離開鍵）都是
+   固定寬度的功能性元件，min-width: 0 讓過長的名字在這裡截斷，
+   而不是把右側的離開鍵推出畫面外。 */
 .bar .who { flex: 1; min-width: 0; }
-.bar .who b { display: block; font-size: 16px; }
-.bar .who small { font-size: 11px; color: var(--ink-soft); }
+.bar .who b {
+  display: block; font-size: 16px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bar .who small {
+  display: block; font-size: 11px; color: var(--ink-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .pill {
   font-size: 11px; font-weight: 700; padding: 5px 11px;
@@ -174,7 +206,7 @@ button:disabled { opacity: .35; border-style: dashed; }
 .pill.ok { border-color: var(--ok); color: var(--ok); }
 .pill.warn { border-color: var(--warn); color: var(--warn); }
 
-/* 操控權提示：讓使用者理解「放手後角色會自己漫遊」是設計而非故障 */
+/* 操控權提示：告訴使用者現在是不是自己在操控（文案見 app.js 的說明） */
 .agency {
   text-align: center; font-size: 12px; font-weight: 700;
   padding: 8px; border-radius: 12px;
@@ -183,7 +215,7 @@ button:disabled { opacity: .35; border-style: dashed; }
 }
 .agency.active { color: var(--accent); border-color: var(--accent); border-style: solid; }
 
-.agency-row { display: flex; gap: 8px; align-items: stretch; }
+.agency-row { display: flex; gap: 8px; align-items: stretch; flex-shrink: 0; }
 .agency-row .agency { flex: 1; }
 
 /* 震動開關。與離開鍵同樣走「小而不搶眼」的樣式，避免與搖桿爭注意力。 */
@@ -236,7 +268,13 @@ button:disabled { opacity: .35; border-style: dashed; }
   text-shadow: 0 0 4px var(--paper), 0 0 8px var(--paper);
 }
 
-#emotes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+/* 表情鍵列。與 .bar 同理只鎖 shrink，不用 flex: none（理由見上）。
+   按鍵被壓扁會直接影響點擊命中率，所以不讓它被擠，
+   但視窗極矮時仍允許整體版面正常收斂。 */
+#emotes {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  flex-shrink: 0;
+}
 #emotes button { padding: 14px 4px; font-size: 13px; line-height: 1.5; }
 #emotes button em { display: block; font-size: 22px; font-style: normal; }
 
@@ -254,12 +292,40 @@ button:disabled { opacity: .35; border-style: dashed; }
   flex: none;
 }
 
+/* ── 極矮視窗的降級 ─────────────────────────────────────
+   桌機把視窗拉扁、或手機橫置時，可用高度可能只剩兩三百 px。
+   此時所有固定列的高度總和會超過 100dvh，而 html 是 overflow:hidden，
+   溢出的部分不會有捲軸可以救 —— 最上面的狀態列會整個被切掉，
+   使用者看不到自己的名字與積分，也按不到離開鍵。
+
+   因此在這個尺寸下改為：縮小非必要的留白與字級，並允許整個外殼捲動。
+   捲動在這裡是可接受的：控制器禁止捲動的理由是「推搖桿時不要誤觸頁面
+   滾動」，而視窗矮到這個程度時本來就不是實際的操作情境（現場是直立
+   手機），能看到完整資訊比維持不可捲更重要。 */
+@media (max-height: 420px) {
+  #entry, #builder, #scan, #controller, #farewell {
+    padding-top: calc(8px + env(safe-area-inset-top));
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+    gap: 6px;
+    overflow-y: auto;
+  }
+  .bar { min-height: 40px; }
+  .bar svg { height: 32px; }
+  .bar .who b { font-size: 14px; }
+  /* 搖桿區在這個高度已經沒有實際操作空間，讓它退到最小而不是佔走版面 */
+  #joystick-zone { min-height: 90px; }
+  #emotes button { padding: 8px 4px; font-size: 12px; }
+  #emotes button em { font-size: 18px; }
+  .agency { padding: 5px; font-size: 11px; }
+}
+
 /* ── 任務橫幅 ───────────────────────────────────────────── */
 .mission-banner {
   display: flex;
   flex-direction: column;
   gap: 4px;
   width: 100%;
+  flex-shrink: 0;
   text-align: left;
   padding: 11px 14px;
   border: 2.5px solid var(--accent);
@@ -738,6 +804,7 @@ button:disabled { opacity: .35; border-style: dashed; }
   justify-content: space-between;
   gap: 10px;
   width: 100%;
+  flex-shrink: 0;
   padding: 8px 12px;
   border: 1px dashed var(--line);
   border-radius: 12px;
@@ -748,7 +815,7 @@ button:disabled { opacity: .35; border-style: dashed; }
 }
 .links-strip[hidden] { display: none; }
 .ls-label b { color: #2A8C80; font-size: 15px; }
-.ls-faces { display: flex; gap: -6px; }
+.ls-faces { display: flex; }
 .ls-face {
   width: 30px;
   height: 30px;

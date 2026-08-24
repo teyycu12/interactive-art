@@ -71,10 +71,14 @@
           </ol>
           <p class="note">
             按下拍照後會 <b>倒數 5 秒</b>，接著約需 <b>25 秒</b> 生成。
-            生成完成會先讓你看過，不滿意可以重拍。
+            生成完成會先讓你看過，不滿意可以重來。
+            不方便當場拍的話，也可以 <b>從相簿選一張全身照</b>。
           </p>
           <div class="foot">
             <button class="btn-primary" id="btn-capture">拍照</button>
+            <button class="btn-ghost" id="btn-upload">從相簿選</button>
+          </div>
+          <div class="foot">
             <button class="btn-ghost" id="btn-scan-back">改用捏臉</button>
           </div>
         </div>
@@ -104,12 +108,19 @@
           <p class="note" id="fail-hint" hidden></p>
           <div class="foot">
             <button class="btn-primary" id="btn-retry">重拍一次</button>
+            <button class="btn-ghost" id="btn-upload-alt">從相簿選</button>
+          </div>
+          <div class="foot">
             <button class="btn-ghost" id="btn-give-up">改用捏臉</button>
           </div>
         </div>
 
       </div>
     </div>
+
+    <!-- 相簿上傳。accept 限定圖片；刻意不加 capture 屬性 ——
+         加了會在手機上直接開相機，反而蓋掉「選現有照片」這個目的。 -->
+    <input type="file" id="upload-input" accept="image/*" hidden>
   </section>
 
   <!-- ── 捏臉流程（3 步）────────────────────────────────── -->
@@ -184,7 +195,7 @@
     </button>
 
     <div class="agency-row">
-      <div class="agency" id="agency">放開搖桿 3 秒後，角色會自己加入人群漫遊</div>
+      <div class="agency" id="agency">推動搖桿即可操控你的角色</div>
       <!-- 震動開關。iOS 不支援 navigator.vibrate，該裝置上此鍵會隱藏。 -->
       <button class="btn-haptics" id="btn-haptics" hidden
               aria-pressed="false" aria-label="腳步震動">震動</button>
@@ -215,8 +226,8 @@
 
 <!-- ── 即時問答 ─────────────────────────────────────────────
      全螢幕覆蓋而非橫幅：問答是「全場一起停下來看大螢幕」的時刻，
-     此時手上的搖桿本來就不該再是視線焦點。角色會自動回到 Boids 漫遊，
-     所以蓋住控制器不會讓誰在畫面上呆站著。 -->
+     此時手上的搖桿本來就不該再是視線焦點 —— 全場角色本來就會停在原地
+     （伺服器 IDLE_MOTION 預設為靜止待機），蓋住控制器不影響任何人。 -->
 <div class="quiz" id="quiz-panel" hidden>
   <div class="quiz-inner">
     <div class="quiz-head">

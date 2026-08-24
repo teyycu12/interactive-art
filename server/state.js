@@ -85,6 +85,10 @@ export class Stage {
       alpha: 0,
       decayStartAt: null,
       decayFrom: 0,
+      // 靜止模式的煞停狀態（IDLE_MOTION === 'still'，見 arbiter.js）。
+      // null 代表沒有正在進行的煞停。
+      brakeFrom: null,
+      brakeStartAt: 0,
       // 定位鎖定。targetX 為 null 代表角色自由活動；
       // 合照等情境由 lockStage() 指派目標，見該方法的說明。
       targetX: null,
@@ -95,6 +99,10 @@ export class Stage {
       inputX: 0,
       inputY: 0,
       inputIntensity: 0,
+      // 平滑後的手動速度（見 arbiter.js）。原始輸入是單位向量，
+      // 直接使用會讓回中時的手指抖動變成全速的方向反轉。
+      manualVx: 0,
+      manualVy: 0,
       lastInputAt: 0, // 0 代表從未輸入過 → 一出生即為漫遊態
       // 連線狀態
       disconnectedAt: null,
@@ -103,6 +111,9 @@ export class Stage {
       state: AGENT_STATE.IDLE,
       mode: AGENT_MODE.SWARM,
       facing: 1,
+      // 翻面防抖：累積中的反向與其持續時間（見 arbiter.js 的 updateFacing）
+      facingPendingDir: null,
+      facingPendingMs: 0,
       emote: null,
       lastEmoteAt: 0,
       // 行為 Log（WP-C 數據收集 / M4 活躍度加權的原始資料）
