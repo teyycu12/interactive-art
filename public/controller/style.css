@@ -183,6 +183,44 @@ button:disabled { opacity: .35; border-style: dashed; }
 }
 .agency.active { color: var(--accent); border-color: var(--accent); border-style: solid; }
 
+.agency-row { display: flex; gap: 8px; align-items: stretch; }
+.agency-row .agency { flex: 1; }
+
+/* 震動開關。與離開鍵同樣走「小而不搶眼」的樣式，避免與搖桿爭注意力。 */
+.btn-haptics {
+  flex: none;
+  padding: 8px 12px;
+  font-size: 12px; font-weight: 700;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink-soft);
+}
+.btn-haptics[aria-pressed="true"] {
+  border-style: solid; border-color: var(--ok); color: var(--ok);
+}
+
+/* ── 個人視角畫布 ─────────────────────────────────────────
+   絕對定位鋪滿 #controller，壓在所有控制元件底下。
+   pointer-events: none 是必要的：少了它，畫布會吃掉搖桿的觸控事件。
+
+   刻意**不**在上層元件加 backdrop-filter：style.css 開頭的低階裝置支援
+   限制（§6 風險 3）仍然成立，全螢幕 blur 是低階 Android 上最貴的效果之一；
+   而且半透明的搖桿在現場強光下對比度會掉到看不清。畫布只做背景。 */
+#controller { position: relative; }
+
+#pov-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* 控制元件一律浮在畫布之上 */
+#controller > *:not(#pov-canvas) { position: relative; z-index: 1; }
+
 #joystick-zone {
   flex: 1;
   position: relative;
@@ -193,7 +231,9 @@ button:disabled { opacity: .35; border-style: dashed; }
   touch-action: none; /* 必要：否則 iOS 會把推桿手勢解讀為頁面捲動 */
 }
 #joystick-zone .hint {
-  font-size: 13px; color: var(--line); font-weight: 700; pointer-events: none;
+  font-size: 13px; color: var(--ink-soft); font-weight: 700; pointer-events: none;
+  /* 底下是網格畫布，純色文字會與線條交疊；加一圈米白襯底維持可讀性 */
+  text-shadow: 0 0 4px var(--paper), 0 0 8px var(--paper);
 }
 
 #emotes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -472,8 +512,16 @@ button:disabled { opacity: .35; border-style: dashed; }
 .scan-split {
   flex: 1;
   display: flex;
-  gap: 16px;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(20px, 4vw, 56px);
   min-height: 0;
+  /* 整組內容置中並設上限。原本左欄貼齊最左緣、右欄 flex:1 吃掉所有剩餘寬度，
+     在寬螢幕上就變成「照片擠在角落、右邊一大片空白」——
+     文字行長也會拉到難以閱讀。 */
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
 }
 
 .scan-stage {
@@ -482,10 +530,16 @@ button:disabled { opacity: .35; border-style: dashed; }
      原本這裡是撐滿寬度的橫框，object-fit:cover 會把直式畫面上下裁掉一大截，
      於是「看到的取景」與「實際拍到的」對不上，使用者永遠拍不到全身。 */
   aspect-ratio: 9 / 16;
-  height: 100%;
+  /* 高度取「可用高度」與「上限」的較小者：不設上限時，超高的視窗會把
+     取景框拉成一條細長的柱子，人在裡面反而更小。 */
+  height: min(100%, 74vh);
   border-radius: 14px;
   overflow: hidden;
+  /* 取景時用深色：相機畫面 letterbox 的留白不會搶走注意力。
+     成果階段改用白底（.is-result）—— 生成出來的角色是透明背景，
+     襯在深色上會顯得沉，白底才是樂高人偶該有的呈現。 */
   background: #1a1713;
+  transition: background .25s ease;
   flex: 0 0 auto;
 }
 .scan-stage video,
@@ -496,6 +550,21 @@ button:disabled { opacity: .35; border-style: dashed; }
   object-fit: contain;
   display: block;
 }
+/* 這條必須排在上面那組之後。
+   `display: block` 的優先序與 `[hidden]` 的 UA 樣式相同，後宣告者勝 ——
+   少了這條，取景中的 video 與成果圖會同時可見（設了 .hidden 也沒用），
+   而且不會有任何錯誤訊息。 */
+/* 相機開不起來時不顯示空的取景框（見 app.js 的 showScanFailure） */
+.scan-stage.is-empty { display: none; }
+
+/* 成果展示：白底襯托透明背景的角色 */
+.scan-stage.is-result {
+  background: #FFFFFF;
+  border: 1px solid var(--line);
+}
+
+.scan-stage video[hidden],
+.scan-stage img[hidden] { display: none; }
 #scan-guide {
   position: absolute;
   inset: 8% 0;
@@ -503,7 +572,8 @@ button:disabled { opacity: .35; border-style: dashed; }
   height: 84%;
   pointer-events: none;
 }
-#scan-guide[hidden] { display: none; }
+/* SVG 不支援 hidden 屬性，因此用 class 控制（見 app.js 的 showScanPhase） */
+#scan-guide.is-off { display: none; }
 
 #countdown-display {
   position: absolute;
@@ -514,12 +584,44 @@ button:disabled { opacity: .35; border-style: dashed; }
   font-weight: 900;
   color: #fff;
   text-shadow: 0 4px 24px rgba(0, 0, 0, .5);
+  /* 倒數期間讓背景稍暗，數字才讀得清楚 */
+  background: rgba(26, 23, 19, .28);
 }
 #countdown-display[hidden] { display: none; }
+/* 每秒重播一次，數字才有跳動感而不是靜靜地換字 */
+#countdown-display.tick { animation: count-tick .9s ease-out; }
+@keyframes count-tick {
+  0%   { transform: scale(1.35); opacity: .35; }
+  22%  { transform: scale(1);    opacity: 1; }
+  100% { transform: scale(1);    opacity: 1; }
+}
 
-/* 右欄 */
+/* 快門：白閃一下。拍完直接跳到生成中，少了這個回饋會不確定到底有沒有拍到 */
+.scan-stage.shutter::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  pointer-events: none;
+  animation: shutter-flash .32s ease-out forwards;
+}
+@keyframes shutter-flash {
+  0%   { opacity: .92; }
+  100% { opacity: 0; }
+}
+
+/* 名字：貫穿整條流程的識別 */
+.who-name {
+  color: var(--ink);
+  border-bottom: 3px solid var(--line);
+  padding-bottom: 1px;
+  margin-right: 6px;
+}
+.who-name:empty { display: none; }
+
+/* 右欄。不吃滿剩餘寬度 —— 上限之外的空間留給整組置中。 */
 .scan-side {
-  flex: 1;
+  flex: 0 1 460px;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -545,6 +647,19 @@ button:disabled { opacity: .35; border-style: dashed; }
   color: var(--ink-soft);
 }
 .tips b { color: var(--ink); }
+
+/* 事前說明等待時間，減少現場「是不是當掉了」的焦慮 */
+.note {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(47, 42, 38, .05);
+  border: 1px dashed var(--line);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+.note b { color: var(--ink); }
 
 .bar {
   height: 8px;
@@ -614,4 +729,47 @@ button:disabled { opacity: .35; border-style: dashed; }
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, -12px); }
   to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ── 社交連結列 ─────────────────────────────────────────── */
+.links-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: rgba(42, 140, 128, .07);
+  font-size: 13px;
+  color: var(--ink-soft);
+  text-align: left;
+}
+.links-strip[hidden] { display: none; }
+.ls-label b { color: #2A8C80; font-size: 15px; }
+.ls-faces { display: flex; gap: -6px; }
+.ls-face {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--paper);
+  border: 2px solid var(--paper);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .14);
+  margin-left: -8px;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  color: var(--ink-soft);
+}
+.ls-face:first-child { margin-left: 0; }
+/* 角色圖是 200×260 的全身，只取上緣的頭部當頭像 */
+.ls-face-img {
+  width: 100%;
+  height: auto;
+  object-fit: cover;
+  object-position: top center;
+  transform: scale(1.9);
+  transform-origin: top center;
 }
