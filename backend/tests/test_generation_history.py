@@ -19,6 +19,7 @@ from backend.generation_history import (
     save_input_photo,
     save_rendered_output,
     save_review,
+    save_visitor_measurement,
     start_run,
 )
 from backend.tests.test_style_probe import _sprite
@@ -193,6 +194,91 @@ class GenerationHistoryTests(unittest.TestCase):
         self.assertEqual(first, 1)
         self.assertEqual(second, 0, "backfill must not re-measure rows it already filled")
         self.assertEqual(measured, 1)
+
+    def test_style_and_content_are_measured_from_the_same_attempts(self):
+        # Fetched separately the two halves could describe different casts, and
+        # the trade-off would then be read across two populations while looking
+        # like one comparison.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "history.sqlite3"
+            with patch("backend.generation_history._OUTPUT_DIR", root / "generated"):
+                for index, stroke in enumerate((5, 9, 14)):
+                    request_id = f"pair-{index}"
+                    start_run(
+                        request_id, mode="full_character", style_id="lego",
+                        source_type="upload", db_path=db_path,
+                    )
+                    record_attempt(
+                        request_id, phase="full_character", attempt_index=0,
+                        result={"ok": True, "body_png": _sprite(stroke=stroke), "api_usage": {}},
+                        validation={"passed": True, "errors": [], "warnings": []},
+                        db_path=db_path,
+                    )
+                drift = get_cast_drift(db_path=db_path)
+
+        self.assertEqual(drift["characters"], 3)
+        self.assertEqual(drift["content_characters"], 3)
+        self.assertTrue(drift["content_regions"]["garment_torso"]["measurable"])
+
+    def test_backfill_fills_content_for_rows_that_already_have_style(self):
+        # The content column arrived later, so rows written before it exist
+        # carry a fingerprint and no signature. Skipping them because the style
+        # column is already set would leave the content half permanently blank.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "history.sqlite3"
+            with patch("backend.generation_history._OUTPUT_DIR", root / "generated"):
+                start_run(
+                    "legacy-1", mode="full_character", style_id="lego",
+                    source_type="upload", db_path=db_path,
+                )
+                with patch(
+                    "backend.generation_history._content_signature_for_output",
+                    return_value=None,
+                ):
+                    record_attempt(
+                        "legacy-1", phase="full_character", attempt_index=0,
+                        result={"ok": True, "body_png": _sprite(), "api_usage": {}},
+                        validation={"passed": True, "errors": [], "warnings": []},
+                        db_path=db_path,
+                    )
+                self.assertEqual(get_cast_drift(db_path=db_path)["content_characters"], 0)
+                first = backfill_style_fingerprints(db_path=db_path)
+                second = backfill_style_fingerprints(db_path=db_path)
+                drift = get_cast_drift(db_path=db_path)
+
+        self.assertEqual(first, 1)
+        self.assertEqual(second, 0, "backfill must not re-measure rows it already filled")
+        self.assertEqual(drift["content_characters"], 1)
+
+    def test_face_measurement_rate_counts_only_runs_that_recorded_the_flag(self):
+        # Runs from before the column existed must not be counted as successful
+        # face reads, or the rate would look healthy purely because it is old.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            db_path = root / "history.sqlite3"
+            with patch("backend.generation_history._OUTPUT_DIR", root / "generated"):
+                for index, measurement in enumerate([
+                    {"skin_tone": "#C98A5F", "face_measured": True},
+                    {"skin_tone": None, "face_measured": False, "face_error": "no_face_detected"},
+                    None,   # a run from before the flag existed
+                ]):
+                    request_id = f"face-{index}"
+                    start_run(
+                        request_id, mode="full_character", style_id="lego",
+                        source_type="upload", db_path=db_path,
+                    )
+                    save_visitor_measurement(request_id, measurement, db_path=db_path)
+                    record_attempt(
+                        request_id, phase="full_character", attempt_index=0,
+                        result={"ok": True, "body_png": _sprite(), "api_usage": {}},
+                        validation={"passed": True, "errors": [], "warnings": []},
+                        db_path=db_path,
+                    )
+                drift = get_cast_drift(db_path=db_path)
+
+        self.assertEqual(drift["face_measured"], {"measured": 1, "known": 2, "rate": 0.5})
 
     def test_browser_composite_replaces_final_output_without_adding_api_call(self):
         with tempfile.TemporaryDirectory() as directory:

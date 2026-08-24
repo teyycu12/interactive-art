@@ -137,6 +137,8 @@ def init_history_db(db_path: Optional[Path] = None) -> None:
             connection.execute("ALTER TABLE generation_attempts ADD COLUMN output_path TEXT")
         if "style_fingerprint" not in attempt_columns:
             connection.execute("ALTER TABLE generation_attempts ADD COLUMN style_fingerprint TEXT")
+        if "content_signature" not in attempt_columns:
+            connection.execute("ALTER TABLE generation_attempts ADD COLUMN content_signature TEXT")
         run_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(generation_runs)")
         }
@@ -158,6 +160,8 @@ def init_history_db(db_path: Optional[Path] = None) -> None:
             connection.execute("ALTER TABLE generation_runs ADD COLUMN external_metadata TEXT")
         if "input_path" not in run_columns:
             connection.execute("ALTER TABLE generation_runs ADD COLUMN input_path TEXT")
+        if "visitor_measurement" not in run_columns:
+            connection.execute("ALTER TABLE generation_runs ADD COLUMN visitor_measurement TEXT")
 
 
 def start_run(
@@ -218,8 +222,9 @@ def record_attempt(
                 started_at, duration_ms, ok, prompt_tokens, completion_tokens,
                 total_tokens, image_tokens, cached_tokens, cost_usd,
                 upstream_cost_usd, error_code, validation_errors,
-                validation_warnings, output_path, style_fingerprint
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                validation_warnings, output_path, style_fingerprint,
+                content_signature
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -242,6 +247,7 @@ def record_attempt(
                 _json_list(validation.get("warnings")),
                 output_path,
                 _style_fingerprint_for_output(output_path),
+                _content_signature_for_output(output_path),
             ),
         )
 
@@ -719,24 +725,98 @@ def _style_fingerprint_for_output(output_path: Optional[str]) -> Optional[str]:
         return None
 
 
+def _content_signature_for_output(output_path: Optional[str]) -> Optional[str]:
+    """Measure one stored sprite's colour identity, for individual spread.
+
+    The mirror of ``_style_fingerprint_for_output`` and stored beside it on
+    purpose. Style drift read on its own can be won by drawing the same person
+    every time, so the two are only safe to interpret together -- keeping them
+    in one row means a query can never accidentally return one without the
+    other.
+    """
+    if not output_path:
+        return None
+    try:
+        from backend.identity_fidelity import sprite_content_signature  # type: ignore
+    except Exception:
+        try:
+            from identity_fidelity import sprite_content_signature  # type: ignore
+        except Exception:
+            return None
+    try:
+        target = _OUTPUT_DIR / output_path
+        if not target.is_file():
+            return None
+        signature = sprite_content_signature(target.read_bytes())
+        if not signature.get("valid"):
+            return None
+        return json.dumps(signature, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return None
+
+
+def save_visitor_measurement(
+    request_id: str,
+    measurement: Optional[Dict[str, Any]],
+    *,
+    db_path: Optional[Path] = None,
+) -> None:
+    """Record what CV measured on the visitor, and whether the face was read at all.
+
+    Two questions need this and neither can be answered afterwards without it.
+
+    ``reference_bleed.color_allegiance`` compares a generated garment against
+    the colour measured on the person; with no stored measurement there is no
+    second hypothesis and the check cannot run. Every sprite generated before
+    this column existed is therefore permanently unanalysable for bleed.
+
+    The other is quieter. When ``get_face_features`` fails, skin tone, hair
+    colour and expression are never measured, those lines vanish from the
+    prompt, and the model invents all three. Nothing distinguishes that from a
+    model ignoring instructions it was given, so the failure has been arriving
+    disguised as a rendering fault. Storing ``face_measured`` makes the rate
+    countable instead of anecdotal.
+
+    Colours measured off a real person are personal data in the same sense the
+    stored input photo is, and they live under the same gitignored directory.
+    """
+    if not measurement:
+        return
+    init_history_db(db_path)
+    with _db(db_path) as connection:
+        connection.execute(
+            "UPDATE generation_runs SET visitor_measurement=? WHERE request_id=?",
+            (json.dumps(measurement, ensure_ascii=False, separators=(",", ":")), request_id),
+        )
+
+
 def backfill_style_fingerprints(*, db_path: Optional[Path] = None) -> int:
-    """Measure historical attempts once so pre-change drift stays comparable."""
+    """Measure historical attempts once so pre-change drift stays comparable.
+
+    Fills the content signature in the same pass. They are measured from the
+    same stored PNG by the same region cut, so splitting them into two walks
+    would double the image decoding to no benefit and risk the two columns
+    disagreeing about which rows have been done.
+    """
     init_history_db(db_path)
     updated = 0
     with _db(db_path) as connection:
         rows = connection.execute(
             """
-            SELECT id, output_path FROM generation_attempts
-            WHERE output_path IS NOT NULL AND style_fingerprint IS NULL
+            SELECT id, output_path, style_fingerprint, content_signature
+            FROM generation_attempts
+            WHERE output_path IS NOT NULL
+              AND (style_fingerprint IS NULL OR content_signature IS NULL)
             """
         ).fetchall()
         for row in rows:
-            fingerprint = _style_fingerprint_for_output(row["output_path"])
-            if not fingerprint:
+            fingerprint = row["style_fingerprint"] or _style_fingerprint_for_output(row["output_path"])
+            signature = row["content_signature"] or _content_signature_for_output(row["output_path"])
+            if not fingerprint and not signature:
                 continue
             connection.execute(
-                "UPDATE generation_attempts SET style_fingerprint=? WHERE id=?",
-                (fingerprint, row["id"]),
+                "UPDATE generation_attempts SET style_fingerprint=?, content_signature=? WHERE id=?",
+                (fingerprint, signature, row["id"]),
             )
             updated += 1
     return updated
@@ -749,12 +829,23 @@ def get_cast_drift(
     limit: int = 50,
     db_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Cross-character style drift over the most recent successful attempts."""
+    """Style drift and content spread over the same recent successful attempts.
+
+    Both halves come from one query on purpose. Fetched separately they could
+    end up describing different casts -- one row measured and the other not --
+    and the trade-off between them would then be read across two populations
+    while looking like a single comparison.
+
+    Read them in opposite directions: a small style spread is the goal, a small
+    content spread means the cast has been flattened into one person.
+    """
     init_history_db(db_path)
     try:
         from backend.style_probe import cast_drift_by_region  # type: ignore
+        from backend.identity_fidelity import content_spread_by_region  # type: ignore
     except Exception:
         from style_probe import cast_drift_by_region  # type: ignore
+        from identity_fidelity import content_spread_by_region  # type: ignore
 
     clauses = ["a.style_fingerprint IS NOT NULL", "a.ok = 1"]
     params: List[Any] = []
@@ -769,7 +860,9 @@ def get_cast_drift(
     with _db(db_path) as connection:
         rows = connection.execute(
             f"""
-            SELECT a.style_fingerprint FROM generation_attempts a
+            SELECT a.style_fingerprint, a.content_signature,
+                   r.visitor_measurement
+            FROM generation_attempts a
             JOIN generation_runs r ON r.request_id = a.request_id
             WHERE {' AND '.join(clauses)}
             ORDER BY a.started_at DESC LIMIT ?
@@ -777,17 +870,47 @@ def get_cast_drift(
             params,
         ).fetchall()
 
-    fingerprints = []
+    fingerprints: List[Dict[str, Any]] = []
+    signatures: List[Dict[str, Any]] = []
+    face_measured = 0
+    face_known = 0
     for row in rows:
         try:
             fingerprints.append(json.loads(row["style_fingerprint"]))
         except (TypeError, ValueError):
             continue
+        if row["content_signature"]:
+            try:
+                signatures.append(json.loads(row["content_signature"]))
+            except (TypeError, ValueError):
+                pass
+        try:
+            measurement = json.loads(row["visitor_measurement"]) if row["visitor_measurement"] else None
+        except (TypeError, ValueError):
+            measurement = None
+        if measurement and "face_measured" in measurement:
+            face_known += 1
+            face_measured += 1 if measurement.get("face_measured") else 0
+
     return {
         "mode": mode,
         "experiment_id": experiment_id,
         "characters": len(fingerprints),
         "regions": cast_drift_by_region(fingerprints),
+        # Deliberately a separate count. Older attempts carry a style
+        # fingerprint and no content signature, and reporting the style
+        # character count for both would overstate what the content half
+        # was measured from.
+        "content_characters": len(signatures),
+        "content_regions": content_spread_by_region(signatures),
+        # How often CV actually read the face. When this is low, skin tone,
+        # hair colour and expression were never measured and the model chose
+        # them freely -- which looks exactly like a model ignoring the prompt.
+        "face_measured": {
+            "measured": face_measured,
+            "known": face_known,
+            "rate": round(face_measured / face_known, 3) if face_known else None,
+        },
     }
 
 

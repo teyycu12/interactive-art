@@ -52,7 +52,7 @@ except Exception:
 try:
     from backend.avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
     from backend.capture_quality import mean_landmark_displacement  # type: ignore
-    from backend.generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, input_directory, list_runs, mark_render_failure, output_directory, record_attempt, save_input_photo, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
+    from backend.generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, input_directory, list_runs, mark_render_failure, output_directory, record_attempt, save_input_photo, save_rendered_output, save_review, save_visitor_measurement, start_run, update_run_experiment  # type: ignore
     from backend.blind_review import blind_payload, create_review_session, delete_review_sources, get_review_session, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
     from backend.height_profiles import classify_height, get_height_profile  # type: ignore
     from backend.metrics_logger import log_metric  # type: ignore
@@ -60,7 +60,7 @@ try:
 except Exception:
     from avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
     from capture_quality import mean_landmark_displacement  # type: ignore
-    from generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, input_directory, list_runs, mark_render_failure, output_directory, record_attempt, save_input_photo, save_rendered_output, save_review, start_run, update_run_experiment  # type: ignore
+    from generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, input_directory, list_runs, mark_render_failure, output_directory, record_attempt, save_input_photo, save_rendered_output, save_review, save_visitor_measurement, start_run, update_run_experiment  # type: ignore
     from blind_review import blind_payload, create_review_session, delete_review_sources, get_review_session, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
     from height_profiles import classify_height, get_height_profile  # type: ignore
     from metrics_logger import log_metric  # type: ignore
@@ -961,6 +961,30 @@ def handle_generate_avatar(payload):
                         face_data[key] = measured
                         face_data.setdefault("color_source", {})[key] = "cv_measured"
 
+            # What CV actually read off this visitor, kept so a generated
+            # sprite can be compared against the person later. Without it
+            # reference_bleed has only one hypothesis and cannot run at all.
+            #
+            # face_measured is the more important half. A failed face read is
+            # currently silent: skin tone, hair colour and expression simply
+            # stop appearing in the prompt and the model picks its own, which
+            # is indistinguishable from a model ignoring instructions it was
+            # given. Recording the flag turns that into a countable rate.
+            face_measured = bool(face_cv_result.get("ok"))
+            visitor_measurement = {
+                "upper": (cv_result.get("upper") or {}).get("hex"),
+                "lower": (cv_result.get("lower") or {}).get("hex"),
+                "skin_tone": face_data.get("skin_tone"),
+                "hair_color": face_data.get("hair_color"),
+                "face_measured": face_measured,
+                "face_error": None if face_measured else (face_cv_result.get("error") or "unknown"),
+                "color_source": face_data.get("color_source") or {},
+            }
+            _history_call(save_visitor_measurement, request_id, visitor_measurement)
+            if not face_measured:
+                print(f"[app] face not measured ({visitor_measurement['face_error']}); "
+                      f"skin tone, hair colour and expression are unmeasured for {request_id}")
+
             height_class = cv_result.get("height_class")
             height_profile = get_height_profile(height_class) if height_class else None
             upper_rgb = (cv_result.get("upper") or {}).get("rgb")
@@ -986,6 +1010,10 @@ def handle_generate_avatar(payload):
                 "stencil": cv_result.get("stencil"),
                 "arm_color": cv_result.get("arm_color"),
                 "face":  face_data or None,
+                # Surfaced so a wrong skin tone can be told from an unmeasured
+                # one. Without it both arrive looking like a rendering fault.
+                "face_measured": face_measured,
+                "face_measure_error": visitor_measurement["face_error"],
                 "upper_type": sleeve_kind,
                 "lower_type": cv_result.get("lower_type", "shorts"),
                 "body_png":  garment_result.get("body_png"),

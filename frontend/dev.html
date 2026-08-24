@@ -61,6 +61,8 @@
       <div class="card"><span class="label">已人工審查</span><strong class="value" id="reviewedCount">—</strong></div>
       <div class="card"><span class="label">人工通過率</span><strong class="value" id="reviewPassRate">—</strong></div>
       <div class="card"><span class="label">物種離散度<br><span class="muted" style="font-weight:400">線寬·軀幹</span></span><strong class="value" id="castDrift">—</strong></div>
+      <div class="card"><span class="label">個體離散度<br><span class="muted" style="font-weight:400">色相·軀幹（越大越好）</span></span><strong class="value" id="castContent">—</strong></div>
+      <div class="card"><span class="label">臉部量測率<br><span class="muted" style="font-weight:400">CV 讀到臉的比例</span></span><strong class="value" id="faceMeasured">—</strong></div>
     </div>
     <div class="panel" id="driftPanel" style="display:none">
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap">
@@ -70,6 +72,22 @@
       </div>
       <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>部位</th><th>樣本</th><th>方向性明暗</th><th>線寬</th><th>印刷佔比</th><th>邊緣密度</th><th>飽和度</th></tr></thead><tbody id="driftRows"></tbody></table></div>
       <div class="muted" id="driftNote" style="margin-top:8px"></div>
+      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-top:18px;border-top:1px solid #e3e3e0;padding-top:14px">
+        <strong>個體差異保留度</strong>
+        <span class="muted">內容離散度 — 越大代表每個人越保有自己的顏色。與上表相反：上表越小越好，這裡越大越好。</span>
+      </div>
+      <div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>部位</th><th>樣本</th><th>色相離散<br><span class="muted" style="font-weight:400">0–1 環形</span></th><th>彩度</th><th>明度</th><th>色塊數</th></tr></thead><tbody id="contentRows"></tbody></table></div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;margin-top:16px">
+        <canvas id="tradeoffChart" width="420" height="300" style="max-width:100%"></canvas>
+        <div class="muted" style="flex:1;min-width:220px;line-height:1.7">
+          <strong>怎麼讀這張圖</strong><br>
+          橫軸是畫風離散（軀幹線寬），越左越像同一個物種。<br>
+          縱軸是內容離散（色相），越上代表每個人的顏色差異保留得越多。<br>
+          <span style="color:#22863a">左上角是目標區</span>：畫風收斂、個體保留。<br>
+          <span style="color:#d73a49">往下移動是警訊</span>——即使同時往左，那代表一致性是靠抹平個體換來的。
+          <br><br><span id="tradeoffNote"></span>
+        </div>
+      </div>
     </div>
     <div class="panel" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <select id="modeFilter" style="max-width:230px"><option value="">全部模式</option><option value="full_character">full_character</option><option value="brick_ai_texture">已退役 brick_ai_texture</option><option value="body_sprite">已退役 body_sprite</option><option value="full_character_refined">已退役 refined</option><option value="external_import">外部匯入</option></select>
@@ -129,6 +147,80 @@
       $('driftNote').textContent=notes.size?`注意 — ${[...notes].join('；')}`:'';
       const headline=drift.regions.garment_torso?.features?.stroke_width_rel?.relative_spread;
       $('castDrift').textContent=headline==null?'—':Number(headline).toFixed(2);
+      renderContent(drift);
+      drawTradeoff(drift);
+    }
+
+    // Content spread reads the opposite way to style drift, so it gets its own
+    // colouring rather than reusing spreadCell -- one green scale meaning
+    // "small" in one table and "large" in the other would be a trap.
+    function contentCell(stats,key){
+      const v=stats?.[key];
+      if(v==null)return '<td class="muted">—</td>';
+      return `<td>${Number(v).toFixed(2)}</td>`;
+    }
+    function hueCell(stats){
+      if(!stats||stats.circular_spread==null)return '<td class="muted">無色相</td>';
+      const v=Number(stats.circular_spread);
+      const colour=v<0.10?'#d73a49':(v<0.25?'#b08800':'#22863a');
+      return `<td style="color:${colour}">${v.toFixed(2)}<span class="muted"> (n=${stats.sample_count})</span></td>`;
+    }
+    function renderContent(drift){
+      const content=drift.content_regions||{};
+      const rows=[];
+      for(const [name,label] of Object.entries(REGION_LABEL)){
+        const region=content[name];
+        if(!region)continue;
+        if(!region.measurable){rows.push(`<tr><td>${label}</td><td>${region.characters||0}</td><td colspan="4" class="muted">樣本不足（需 2 個以上）</td></tr>`);continue}
+        const f=region.features||{};
+        rows.push(`<tr><td>${label}</td><td>${region.characters}</td>${hueCell(f.hue_deg)}${contentCell(f.chroma_median,'relative_spread')}${contentCell(f.lightness_median,'relative_spread')}${contentCell(f.colour_count,'relative_spread')}</tr>`);
+      }
+      $('contentRows').innerHTML=rows.join('')||'<tr><td colspan="6" class="muted">尚無內容簽章，請按「量測歷史紀錄」</td></tr>';
+      const headline=content.garment_torso?.features?.hue_deg?.circular_spread;
+      $('castContent').textContent=headline==null?'—':Number(headline).toFixed(2);
+      const face=drift.face_measured||{};
+      $('faceMeasured').textContent=face.rate==null?'—':`${Math.round(face.rate*100)}%`;
+      $('faceMeasured').style.color=face.rate!=null&&face.rate<0.8?'#d73a49':'';
+    }
+
+    function drawTradeoff(drift){
+      const canvas=$('tradeoffChart'),ctx=canvas.getContext('2d');
+      const W=canvas.width,H=canvas.height,pad=42;
+      ctx.clearRect(0,0,W,H);
+      const points=[],skipped=[];
+      for(const [name,label] of Object.entries(REGION_LABEL)){
+        const x=drift.regions?.[name]?.features?.stroke_width_rel?.relative_spread;
+        const y=drift.content_regions?.[name]?.features?.hue_deg?.circular_spread;
+        // A region with no hue (all-grey shoes) is left out rather than given a
+        // substitute axis, which would put it on a different scale to the rest.
+        if(x==null||y==null){if(x!=null||y!=null)skipped.push(label);continue}
+        points.push({label,x:Number(x),y:Number(y)});
+      }
+      $('tradeoffNote').textContent=skipped.length?`未列入：${skipped.join('、')}（該部位無色相，例如灰階鞋）`:'';
+      const maxX=Math.max(0.6,...points.map(p=>p.x))*1.1;
+      const px=v=>pad+(v/maxX)*(W-pad-14);
+      const py=v=>H-pad-(v)*(H-pad-14);   // content spread is already 0..1
+      // Target quadrant: converged style, preserved content.
+      ctx.fillStyle='rgba(34,134,58,0.07)';
+      ctx.fillRect(pad,py(1),px(maxX*0.35)-pad,py(0.4)-py(1));
+      ctx.strokeStyle='#c9c9c4';ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(pad,14);ctx.lineTo(pad,H-pad);ctx.lineTo(W-14,H-pad);ctx.stroke();
+      ctx.fillStyle='#6a6a66';ctx.font='11px system-ui,sans-serif';
+      ctx.fillText('畫風離散 →（越左越一致）',pad,H-pad+26);
+      ctx.save();ctx.translate(13,H-pad);ctx.rotate(-Math.PI/2);
+      ctx.fillText('個體離散 →（越上越保留）',0,0);ctx.restore();
+      ctx.fillText('0',pad-8,H-pad+14);ctx.fillText(maxX.toFixed(1),W-30,H-pad+14);
+      ctx.fillText('1.0',pad-26,py(1)+4);
+      for(const p of points){
+        ctx.fillStyle='#2f6feb';
+        ctx.beginPath();ctx.arc(px(p.x),py(p.y),5,0,Math.PI*2);ctx.fill();
+        ctx.fillStyle='#33332f';ctx.font='12px system-ui,sans-serif';
+        ctx.fillText(p.label,px(p.x)+9,py(p.y)+4);
+      }
+      if(!points.length){
+        ctx.fillStyle='#6a6a66';ctx.font='12px system-ui,sans-serif';
+        ctx.fillText('尚無足夠資料',W/2-40,H/2);
+      }
     }
     $('backfillDrift').onclick=async()=>{
       const button=$('backfillDrift');button.disabled=true;button.textContent='量測中…';

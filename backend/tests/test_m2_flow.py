@@ -69,6 +69,7 @@ class M2FlowTests(unittest.TestCase):
             patch.object(app_module, "log_metric"),
             patch.object(app_module, "start_run"),
             patch.object(app_module, "save_input_photo"),
+            patch.object(app_module, "save_visitor_measurement"),
             patch.object(app_module, "record_attempt"),
             patch.object(app_module, "finish_run"),
         ]
@@ -153,6 +154,50 @@ class M2FlowTests(unittest.TestCase):
         self.assertEqual(face_data["skin_tone"], app_module._SKIN_HEX["dark"])
         self.assertEqual(face_data["hair_color"], app_module._HAIR_HEX["black"])
         self.assertNotIn("color_source", face_data)
+
+    def test_an_unmeasured_face_is_reported_instead_of_failing_silently(self):
+        # When CV cannot read the face, skin tone, hair colour and expression
+        # never reach the prompt and the model invents all three. That looked
+        # identical to a model ignoring instructions, so the flag is what makes
+        # the two tellable apart -- and countable.
+        with patch.object(
+            app_module, "get_face_features",
+            return_value={"ok": False, "error": "no_face_detected"},
+        ), patch.object(
+            app_module, "generate_full_character_png",
+            return_value={"ok": True, "body_png": _avatar_png()},
+        ), patch.object(app_module, "save_visitor_measurement") as saved:
+            self._emit("full_character", "face-unmeasured")
+            event = _received(self.client)[-1]
+
+        self.assertFalse(event["face_measured"])
+        self.assertEqual(event["face_measure_error"], "no_face_detected")
+        measurement = saved.call_args[0][1]
+        self.assertFalse(measurement["face_measured"])
+        self.assertEqual(measurement["face_error"], "no_face_detected")
+
+    def test_a_measured_face_records_the_colours_bleed_detection_needs(self):
+        measured = {
+            "ok": True, "face_shape": "oval", "eye_shape": "almond",
+            "eyebrow_style": "straight", "smile_score": 0.7,
+            "lip_color": "#B4675E", "skin_tone": "#C98A5F",
+            "hair_color": "#2E1B10", "eye_color": "#5B3A21",
+        }
+        with patch.object(app_module, "get_face_features", return_value=measured), patch.object(
+            app_module, "generate_full_character_png",
+            return_value={"ok": True, "body_png": _avatar_png()},
+        ), patch.object(app_module, "save_visitor_measurement") as saved:
+            self._emit("full_character", "face-measured")
+            event = _received(self.client)[-1]
+
+        self.assertTrue(event["face_measured"])
+        self.assertIsNone(event["face_measure_error"])
+        measurement = saved.call_args[0][1]
+        # color_allegiance compares a generated garment against these; with no
+        # stored measurement there is no second hypothesis and it cannot run.
+        self.assertEqual(measurement["skin_tone"], "#C98A5F")
+        self.assertEqual(measurement["upper"], "#2864B4")
+        self.assertEqual(measurement["lower"], "#1E1E1E")
 
     def test_camera_generation_requires_valid_height_station(self):
         invalid_height = {**_cv_result(), "height_class": None, "height_measurement_valid": False}
