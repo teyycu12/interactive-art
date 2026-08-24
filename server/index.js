@@ -24,6 +24,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 import {
   EV, ACTIONS, STAGE, SYNC_FPS, PAIR_ERRORS, MISSION_TYPES,
+  CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS,
   SCORE_SOURCES,
 } from '../shared/protocol.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
@@ -595,6 +596,8 @@ function handleJoin(ws, msg) {
         name: existing.name,
         stage: STAGE,
       });
+      // 重連的人可能已經累積了社交連結（邊是既成事實，不隨斷線消失）
+      sendSocialSelf(existing.id);
       return;
     }
     ws.agentId = null; // 角色已被回收，往下走正常入場流程
@@ -783,6 +786,12 @@ function handlePairConfirm(ws, msg) {
     b: { id: result.to, name: b?.name ?? '' },
     edgeCount: graph.size,
   });
+  // 大螢幕的連線圖要重畫
+  linksDirty = true;
+  // 雙方各自看到「我認識了誰」—— 手機端在進場後除了搖桿與分數之外
+  // 看不到任何社交狀態，但那正是這場活動真正在累積的東西。
+  sendSocialSelf(result.from);
+  sendSocialSelf(result.to);
   markDirty();
   broadcastMissionState();
   console.log(`[pair] ${a?.name} × ${b?.name}　社交圖譜 ${graph.size} 條連結`);
@@ -1019,6 +1028,9 @@ wss.on('connection', (ws) => {
         screens.add(ws);
         send(ws, EV.STAGE_META, { stage: STAGE, fps: SYNC_FPS });
         send(ws, EV.STAGE_ROSTER, { agents: stage.roster() });
+        // 連線圖是累積了整場的資料，投影機中途重開必須補送，
+        // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
+        send(ws, EV.STAGE_LINKS, { edges: graphEdges() });
         // 投影機在活動中途被重開是常態，補送當下的問答與排行榜，
         // 大螢幕才不會停在空白畫面等下一題
         if (quiz.isActive) {
@@ -1155,6 +1167,8 @@ const heartbeat = setInterval(() => {
 // （實測有效頻率由 27.3 Hz 修正為 30.0 Hz，詳見 scheduler.js）
 let lastTallyAt = 0;
 let lastScoreAt = 0;
+/** CLIENT_SYNC 的節流基準。主迴圈是 30Hz，個人視角只需 10Hz。 */
+let lastClientSyncAt = 0;
 
 const loop = startTicker({
   intervalMs: TICK_MS,
@@ -1203,6 +1217,25 @@ const loop = startTicker({
       broadcastScoreBoard();
     }
 
+    // 手機端個人視角（10Hz）。
+    //
+    // 必須放在下面那道 `screens.size === 0` 早退之前 ——
+    // 放在後面的話，大螢幕沒連上時所有手機的畫面會整個凍結，
+    // 而這正是佈場與除錯時最常見的狀態（先開手機、投影機還沒接）。
+    // 半個 tick 的容差：主迴圈是 30Hz（33.3ms），而 CLIENT_SYNC_MS 是 100ms。
+    // 用嚴格的 `>= 100` 比較時，第 3 個 tick 只累積到 99.9ms 而擋下，
+    // 於是實際變成每 4 個 tick 送一次 —— 7.5Hz 而非 10Hz，
+    // 且會隨 tick 抖動在 7.5～10Hz 之間跳動。
+    if (controllers.size && now - lastClientSyncAt >= CLIENT_SYNC_MS - TICK_MS / 2) {
+      lastClientSyncAt = now;
+      for (const [id, sock] of controllers) {
+        if (sock.readyState !== sock.OPEN) continue;
+        const view = stage.personalSnapshot(id, CLIENT_SYNC_RADIUS);
+        // 角色可能已被 TTL 回收，但連線還在（下一次 CLIENT_JOIN 會重建）
+        if (view) send(sock, EV.CLIENT_SYNC, view);
+      }
+    }
+
     if (screens.size === 0) return;
     // 沒有大螢幕連線時不廣播，rosterDirty 保持為 true，待螢幕接上後補送
 
@@ -1210,6 +1243,13 @@ const loop = startTicker({
       const roster = JSON.stringify({ type: EV.STAGE_ROSTER, agents: stage.roster() });
       for (const ws of screens) if (ws.readyState === ws.OPEN) ws.send(roster);
       stage.rosterDirty = false;
+    }
+    // 社交圖譜與名冊一樣走「變動才送」，不塞進 30Hz 的 sync ——
+    // 邊只在有人配對成功時增加，每幀重送整張圖是純粹的浪費。
+    if (linksDirty) {
+      const links = JSON.stringify({ type: EV.STAGE_LINKS, edges: graphEdges() });
+      for (const ws of screens) if (ws.readyState === ws.OPEN) ws.send(links);
+      linksDirty = false;
     }
     const sync = JSON.stringify({
       type: EV.STAGE_SYNC, agents: stage.snapshot(), t: Date.now(),
@@ -1317,6 +1357,29 @@ const requestScreenCapture = () => new Promise((resolve) => {
   pendingCaptures.set(requestId, { resolve, timer });
   send(screen, EV.SCREEN_CAPTURE_REQ, { requestId });
 });
+
+/**
+ * 社交圖譜的邊，供大螢幕繪製連線。
+ *
+ * 只帶 id：姓名已經在名冊裡，重複送會讓訊息無謂變大；
+ * `at` 讓前端能把剛建立的邊畫得亮一些，隨時間淡成常駐細線。
+ */
+const graphEdges = () => graph.export().edges.map((e) => ({ a: e.a, b: e.b, at: e.at }));
+
+/** 圖譜有變動、待廣播。與 stage.rosterDirty 同樣的節流策略 */
+let linksDirty = true;
+
+/** 推送「我認識了誰」給單一參與者。帶對方姓名，手機端才顯示得出來。 */
+function sendSocialSelf(agentId) {
+  const ids = [...graph.neighbors(agentId)];
+  sendToAgent(agentId, EV.SOCIAL_SELF, {
+    count: ids.length,
+    peers: ids.map((id) => {
+      const peer = stage.agents.get(id);
+      return { id, name: peer?.name ?? '', avatar: peer?.avatar ?? null };
+    }),
+  });
+}
 
 const photoRoster = () => {
   const byId = new Map(stage.roster().map((a) => [a.id, a]));

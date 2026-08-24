@@ -3,16 +3,16 @@
  *
  * 渲染分兩層：
  *   靜態場景　由 scene.js 離屏渲染一次，每幀貼圖（見該檔的說明）
- *   角色　　　由 character.js 逐幀以變換矩陣算出步態
+ *   角色　　　由 shared/character.js 逐幀以變換矩陣算出步態（手機端 POV 共用同一份）
  *
  * 除錯視圖（按 D）保留自 M2 開發期，用於檢查 α 權重、避障半徑與速度向量。
  */
 
-import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES } from '/shared/protocol.js';
-import { renderAvatarSVG, CV_CUTS, CV_PARTS } from '/shared/avatars.js';
+import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protocol.js';
+import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
 import { RoomScene, populateProps } from './3d/RoomScene.js';
-import { drawCharacter, drawNameplate, drawEmote, drawOffline } from './character.js';
+import { drawCharacter, drawNameplate, drawEmote, drawOffline } from '/shared/character.js';
 
 let roomScene = null;
 
@@ -31,6 +31,10 @@ addEventListener('keydown', (e) => {
     debug = !debug;
     document.getElementById('hud').hidden = !debug;
   }
+  if (e.key === '1') roomScene?.applyLight('day');
+  if (e.key === '2') roomScene?.applyLight('evening');
+  if (e.key === '3') roomScene?.applyLight('night');
+  if (e.key === 'r' || e.key === 'R') roomScene?.resetCamera();
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -71,6 +75,17 @@ const roster = new Map();
 const view = new Map();
 /** 剛完成配對的角色，用於畫面上的短暫強調 */
 const pulse = new Map();
+/**
+ * 社交圖譜的邊。
+ *
+ * 這是整件作品真正在累積的東西 —— 每一條線都對應現場實際發生過的一次
+ * 交談（配對必須雙方確認）。角色會走動、會加分，但「誰跟誰認識」若不畫
+ * 出來，那張集體共創的關係圖就只存在於伺服器的記憶體裡。
+ */
+let links = [];
+/** 剛完成配對的連線特效，播完即丟 */
+const sparks = [];
+const SPARK_MS = 1400;
 const PULSE_MS = 2600;
 
 let latest = [];
@@ -78,84 +93,11 @@ let syncCount = 0;
 let lastSyncAt = 0;
 let syncHz = 0;
 
-const AVATAR_W = 200;
-const AVATAR_H = 260;
-
 /**
- * 掃描生成的角色：把三張貼圖依 CV_CUTS 的比例疊回一張畫布。
- *
- * 回傳 canvas 而非 Image —— drawCharacter 只要求 sprite 有 complete 與
- * naturalWidth（character.js:82），canvas 兩者都能自行掛上，
- * 這樣就不必為了取得 Image 物件多繞一次 toDataURL 編解碼。
- *
- * 貼圖尚未載入時先用取樣色畫一個替身：現場的參與者在生成完成的瞬間
- * 就會看著大螢幕找自己，不能讓角色有一段時間是空白的。
+ * 大螢幕的角色圖像。組裝邏輯共用 shared/avatarSprite.js，
+ * enhance 打開對比補償 —— 投影機的實際亮度遠低於製作時的螢幕。
  */
-function cvAvatarImage(avatar) {
-  const canvas = document.createElement('canvas');
-  canvas.width = AVATAR_W;
-  canvas.height = AVATAR_H;
-  const ctx = canvas.getContext('2d');
-
-  const paintPlaceholder = () => {
-    const c = avatar.fallbackColors;
-    for (const part of CV_PARTS) {
-      const [top, bottom] = CV_CUTS[part];
-      ctx.fillStyle = part === 'head' ? c.skin : (part === 'torso' ? c.torso : c.legs);
-      ctx.fillRect(AVATAR_W * 0.25, AVATAR_H * top, AVATAR_W * 0.5, AVATAR_H * (bottom - top));
-    }
-    // 頭部上緣的髮色帶，比例與 slicer 取樣 hair 的區域一致
-    const [, headBottom] = CV_CUTS.head;
-    ctx.fillStyle = c.hair;
-    ctx.fillRect(AVATAR_W * 0.25, 0, AVATAR_W * 0.5, AVATAR_H * headBottom * 0.35);
-  };
-
-  paintPlaceholder();
-  // 先讓替身可被繪製；貼圖到齊後原地重畫，roster 不需要重新建立條目
-  canvas.complete = true;
-  canvas.naturalWidth = canvas.width;
-
-  const loaded = {};
-  let pending = CV_PARTS.length;
-  const composite = () => {
-    if (!CV_PARTS.some((p) => loaded[p])) return; // 三張都載入失敗就留著替身
-    // 清空後必須先把替身畫回去，再疊上載入成功的貼圖。
-    // 少了這一步，只要有一張載入失敗（單一資產讀取失敗、網路瞬斷），
-    // 該部位就會變成全透明 —— 角色在大螢幕上缺頭或缺腿，
-    // 比維持取樣色的替身難看得多。
-    ctx.clearRect(0, 0, AVATAR_W, AVATAR_H);
-    paintPlaceholder();
-    
-    // 視覺強化：增加投影大螢幕上的對比度與飽和度
-    ctx.filter = 'contrast(1.15) saturate(1.15) brightness(1.05)';
-    
-    for (const part of CV_PARTS) {
-      const img = loaded[part];
-      if (!img) continue;
-      const [top, bottom] = CV_CUTS[part];
-      ctx.drawImage(img, 0, AVATAR_H * top, AVATAR_W, AVATAR_H * (bottom - top));
-    }
-    ctx.filter = 'none'; // reset filter
-  };
-
-  for (const part of CV_PARTS) {
-    const img = new Image();
-    img.addEventListener('load', () => { loaded[part] = img; if (--pending === 0) composite(); });
-    img.addEventListener('error', () => { if (--pending === 0) composite(); });
-    img.src = avatar.textures[part];
-  }
-
-  return canvas;
-}
-
-function avatarImage(avatar) {
-  // 兩種來源：掃描生成走貼圖，模組捏臉（備援路徑）走原本的 SVG
-  if (avatar?.source === 'CV') return cvAvatarImage(avatar);
-  const svg = renderAvatarSVG(avatar, { width: AVATAR_W, height: AVATAR_H });
-  const img = new Image();
-  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  return img;
-}
+const avatarImage = (avatar) => buildAvatarImage(avatar, { enhance: true });
 
 let screenReconnectDelay = 1000;
 
@@ -203,6 +145,10 @@ function connect() {
         break;
       }
 
+      case EV.STAGE_LINKS:
+        links = Array.isArray(msg.edges) ? msg.edges : [];
+        break;
+
       case EV.MISSION_ANNOUNCE:
         showMission(msg.mission);
         break;
@@ -217,6 +163,9 @@ function connect() {
         toast(`${msg.a.name} 和 ${msg.b.name} 認識了！`);
         pulse.set(msg.a.id, performance.now());
         pulse.set(msg.b.id, performance.now());
+        // 兩個各自擴散的環看不出「是這兩人連上了」——
+        // 補一道從 A 射向 B 的光束，把關係本身畫出來
+        sparks.push({ a: msg.a.id, b: msg.b.id, at: performance.now() });
         break;
 
       case EV.MISSION_CLOSED:
@@ -304,7 +253,6 @@ function toast(text) {
 // ─────────────────────────────────────────────────────────────
 // 繪製
 // ─────────────────────────────────────────────────────────────
-const EMOTE_GLYPH = { CHEERS: '🍻', HEART: '💗', WAVE: '👋' };
 
 /** 邏輯座標 → 螢幕座標 (3D 空間投影) */
 const toScreen = (v) => {
@@ -324,6 +272,92 @@ function characterHeightAt(v) {
   if (!roomScene || !v) return CHARACTER_HEIGHT * scale;
   const px = roomScene.scaleAt(v.x, v.y, CHARACTER_WORLD_HEIGHT);
   return px > 1 ? px : CHARACTER_HEIGHT * scale;
+}
+
+/** 新建立的邊會亮著這麼久，之後淡成常駐細線 */
+const LINK_FRESH_MS = 6000;
+
+/**
+ * 畫出社交圖譜。
+ *
+ * 剛建立的邊亮而粗，隨時間淡成細線 —— 這讓「剛剛有兩個人認識了」在滿場
+ * 連線中仍然看得出來，同時整場累積的關係網也一直留在畫面上。
+ *
+ * 只畫兩端都在場的邊：邊本身是既成事實（人離場也不刪），但畫一條連到
+ * 空無一人處的線只會讓畫面變髒。
+ */
+function drawLinks(now) {
+  if (links.length === 0) return;
+  const wallNow = Date.now();
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (const e of links) {
+    const va = view.get(e.a);
+    const vb = view.get(e.b);
+    if (!va || !vb) continue;
+
+    const pa = toScreen(va);
+    const pb = toScreen(vb);
+    if (!Number.isFinite(pa.x) || !Number.isFinite(pb.x)) continue;
+
+    // 0 = 剛建立，1 = 已成為背景的一部分
+    const age = Math.min(1, Math.max(0, (wallNow - (e.at ?? 0)) / LINK_FRESH_MS));
+    const fresh = 1 - age;
+    // 剛連上時脈動一下，讓現場注意到
+    const pulseAmt = fresh > 0 ? (0.5 + 0.5 * Math.sin(now / 140)) * fresh : 0;
+
+    ctx.strokeStyle = `rgba(42, 140, 128, ${0.16 + fresh * 0.5 + pulseAmt * 0.2})`;
+    ctx.lineWidth = (1.2 + fresh * 2.4 + pulseAmt * 1.2) * scale;
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(pb.x, pb.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/**
+ * 配對瞬間的連線特效：一道沿著兩人之間快速掃過的亮線。
+ *
+ * 與常駐連線分開處理 —— 那條線負責「他們認識」，這道光束負責
+ * 「他們剛剛認識」。全場需要在那一兩秒內知道有事發生。
+ */
+function drawSparks(now) {
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const sp = sparks[i];
+    const t = (now - sp.at) / SPARK_MS;
+    if (t >= 1) { sparks.splice(i, 1); continue; }
+
+    const va = view.get(sp.a);
+    const vb = view.get(sp.b);
+    if (!va || !vb) continue;
+    const pa = toScreen(va);
+    const pb = toScreen(vb);
+    if (!Number.isFinite(pa.x) || !Number.isFinite(pb.x)) continue;
+
+    // 前 45% 是光束射出，其餘時間整條線發亮後淡出
+    const head = Math.min(1, t / 0.45);
+    const ease = 1 - Math.pow(1 - head, 3);
+    const hx = pa.x + (pb.x - pa.x) * ease;
+    const hy = pa.y + (pb.y - pa.y) * ease;
+    const fade = t < 0.45 ? 1 : 1 - (t - 0.45) / 0.55;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = `rgba(42, 140, 128, ${0.9 * fade})`;
+    ctx.lineWidth = 5 * scale;
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(hx, hy);
+    ctx.stroke();
+    // 光點在前端
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * fade})`;
+    ctx.beginPath();
+    ctx.arc(hx, hy, 5 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 }
 
 function drawDebugOverlay(a, pos) {
@@ -408,6 +442,10 @@ function render(now) {
     v.x += (a.x - v.x) * 0.35;
     v.y += (a.y - v.y) * 0.35;
   }
+
+  // 連線畫在角色底下：關係是背景脈絡，不該蓋住人臉
+  drawLinks(now);
+  drawSparks(now);
 
   // 依 Y 軸排序，讓視覺上較近（偏下）的角色蓋住較遠的（§6 風險 2）
   const sorted = [...latest].sort((p, q) => p.y - q.y);
