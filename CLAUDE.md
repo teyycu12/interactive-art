@@ -59,7 +59,7 @@
 │   ├── service.py          # ★ 角色資產生成 HTTP 服務（整合版用，只綁 127.0.0.1）
 │   ├── slicer.py           # ★ 生成圖正規化 + 切成 head/torso/legs 三張貼圖
 │   ├── validate_cuts.py    # ★ 切片比例穩定度驗證工具（計畫書 §3.3 驗收項）
-│   └── tests/              # 單元測試（225 個，pytest；conftest.py 提供 fixture）
+│   └── tests/              # 單元測試（236 個，pytest；conftest.py 提供 fixture）
 ├── /frontend
 │   ├── index.html          # 互動端主頁
 │   ├── projection.html     # 投影牆渲染（PixiJS）
@@ -74,18 +74,21 @@
 │   ├── missions.js pairing.js quiz.js scores.js socialgraph.js
 │   └── persistence.js scheduler.js ratelimit.js config.js
 ├── /shared                 # ★ 前後端共用的單一事實來源
-│   ├── protocol.js         # 事件名、節流頻率、場域尺寸
+│   ├── protocol.js         # 事件名、節流頻率、場域尺寸、EMOTE_GLYPH
 │   ├── avatars.js          # 捏臉素材 + CV 角色驗證 + CV_CUTS 切片比例
+│   ├── character.js        # ★ 程式化步態（大螢幕與手機 POV 共用）
+│   ├── avatarSprite.js     # ★ 角色圖像組裝（兩端共用）
 │   └── scene.js            # 場景障礙物佈局
 ├── /public                 # ★ 整合版前端
 │   ├── controller/         # 手機端：拍照生成 / 捏臉（備援）、搖桿、任務
+│   │   └── avatarRenderer.js # ★ 個人視角畫布（CLIENT_SYNC、鄰居、腳步震動）
 │   ├── screen/             # 大螢幕（3D 房間背景 + 2D 角色疊加）
 │   │   └── 3d/RoomScene.js # ★ Three.js 場景、燈光、透視投影 projectToScreen()
 │   ├── host/               # 主辦端控制台
 │   └── assets/gen/         # 生成貼圖落地處（gitignore，每場重新產生）
-├── /test                   # ★ Node 單元測試（198 個，node --test）
+├── /test                   # ★ Node 單元測試（215 個，node --test）
 ├── /scripts
-│   ├── e2e.mjs             # ★ 端對端測試（93 項，會自行啟動伺服器）
+│   ├── e2e.mjs             # ★ 端對端測試（103 項，會自行啟動伺服器）
 │   ├── make-cert.sh        # ★ 現場用 TLS 憑證產生
 │   └── scene-preview.mjs   # 場景離線預覽
 ├── /docs                   # 所有規格與設計文件（PRD、TechStack、INTERFACES、SPEC…）
@@ -212,9 +215,9 @@ bash scripts/make-cert.sh
 TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start
 
 # 測試
-npm test                           # Node 單元測試（198）
-npm run test:e2e                   # 端對端，會自行啟動伺服器（93）
-pytest backend/                    # Python（225）
+npm test                           # Node 單元測試（215）
+npm run test:e2e                   # 端對端，會自行啟動伺服器（103）
+pytest backend/                    # Python（236）
 
 # 切片比例驗證（計畫書 §3.3 的 R1 驗收項）
 python backend/validate_cuts.py --sprites samples/ --sheet report.png
@@ -245,6 +248,40 @@ node --test frontend/tests/        # 前端測試
 
 30 人的貼圖若內嵌進 `STAGE_ROSTER`，名冊訊息會膨脹到現場無線網路難以負荷。
 `roster()` 只在名冊變動時廣播，`snapshot()` 每幀 30Hz 只送座標 —— 這個分離要維持。
+
+### 渲染程式碼放 shared/，兩端 import 同一份
+
+`shared/character.js`（程式化步態）與 `shared/avatarSprite.js`（貼圖組裝）
+同時被大螢幕與手機端 POV 畫布使用。**不要為了方便在手機端另抄一份。**
+
+抄一份之後 `BOB_OMEGA` 之類的常數就成了第二份事實來源 —— 改了一邊另一邊
+不會報錯，只會默默走出不同步頻，或讓「手機上的我」與「大螢幕上的我」長得不一樣。
+與上面的切片比例是同一類跨檔案耦合。`EMOTE_GLYPH` 因為同樣理由放在 `shared/protocol.js`。
+
+### CLIENT_SYNC：手機端個人視角（10Hz）
+
+手機除了送搖桿輸入，也會收到自己的座標與半徑內的鄰居（相對座標），
+供 `public/controller/avatarRenderer.js` 繪製個人視角畫布。
+
+**兩個容易改壞的地方**，端對端測試都有回歸防護：
+
+1. 推送必須放在主迴圈 `screens.size === 0` 早退**之前**。放在後面的話，
+   大螢幕沒接上時所有手機畫面會整個凍結 —— 而「先開手機、投影機還沒接」
+   正是佈場時最常見的狀態。
+2. 節流比較要帶半個 tick 的容差（`>= CLIENT_SYNC_MS - TICK_MS / 2`）。
+   主迴圈是 30Hz（33.3ms），嚴格的 `>= 100` 會讓第 3 個 tick 差 0.1ms 被擋下，
+   實際變成每 4 個 tick 送一次 —— 7.5Hz 而非 10Hz。
+
+手機端**不自行模擬位置**，這與 issue #8（投影牆跑自己的 Boids）刻意相反：
+本地模擬會讓使用者低頭看到自己穿牆、抬頭卻看見角色卡在牆邊。
+伺服器狀態過期時收斂到靜止，不以最後速度外推（否則角色會飄出場外）。
+
+### navigator.vibrate 在 iOS 完全不支援
+
+不是降級，是沒有。震動只能是加分項，不能是任何互動的唯一回饋 ——
+每個震動點都另有畫面上的變化。腳步震動預設**關閉**並附開關：
+走路時每秒約 2–3 次的持續震動，對電池與體感疲勞都有實際代價。
+不支援的裝置上開關直接隱藏，而不是給一個按了沒反應的按鈕。
 
 ### 連線角色不可中途轉換
 
