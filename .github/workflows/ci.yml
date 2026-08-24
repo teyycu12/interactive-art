@@ -55,28 +55,39 @@ jobs:
     # 的合成測試、socketio handler 測試）。若相依安裝出問題，CI 會顯示綠燈
     # 但其實什麼都沒測到 —— 綠燈卻沒測到比紅燈更危險。
     # requirements.txt 已包含這些套件，因此在 CI 裡出現 skip 一律視為失敗。
+    #
+    # 唯一的例外是風格參考圖集：那些圖檔依授權判定不可散布，被 .gitignore
+    # 排除，任何 checkout（包含 CI）都不會有。那不是環境沒裝好，是設計如此，
+    # 因此以確切的 skip 理由列入白名單 —— 用理由字串而非測試名稱比對，
+    # 新增的測試若用同一個理由也會被涵蓋，用別的理由則仍會讓 CI 失敗。
     - name: Fail if any test was skipped
       run: |
         cd backend
         python - <<'PY'
         import sys, xml.etree.ElementTree as ET
 
+        # 已知且可接受的 skip 理由；其餘一律視為環境問題。
+        EXPECTED = {"the curated set is not present in this checkout"}
+
         root = ET.parse("test-results.xml").getroot()
         suites = root.iter("testsuite") if root.tag == "testsuites" else [root]
 
-        skipped = []
+        skipped, expected = [], []
         for suite in suites:
             for case in suite.iter("testcase"):
                 for sk in case.findall("skipped"):
-                    skipped.append(
-                        f"{case.get('classname')}.{case.get('name')}: "
-                        f"{sk.get('message', 'no reason given')}"
-                    )
+                    name = f"{case.get('classname')}.{case.get('name')}"
+                    reason = sk.get("message", "no reason given")
+                    (expected if reason in EXPECTED else skipped).append(
+                        f"{name}: {reason}")
+
+        for line in expected:
+            print(f"  (預期內的 skip) {line}")
 
         if skipped:
-            print(f"CI 中有 {len(skipped)} 個測試被 skip —— 相依套件可能未正確安裝：")
+            print(f"CI 中有 {len(skipped)} 個非預期的測試被 skip —— 相依套件可能未正確安裝：")
             for line in skipped:
                 print(f"  - {line}")
             sys.exit(1)
-        print("沒有測試被 skip，全部實際執行。")
+        print(f"沒有非預期的 skip（預期內 {len(expected)} 個），其餘全部實際執行。")
         PY
