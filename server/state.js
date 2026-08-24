@@ -334,6 +334,62 @@ export class Stage {
     }));
   }
 
+  /**
+   * 個人視角快照：某個角色自己 + 半徑內的鄰居。
+   *
+   * 與 snapshot() 的差別不只是過濾 —— 回傳的鄰居座標是**相對於自己**的。
+   * 手機端把自己畫在畫面中央，需要的本來就是相對位移；
+   * 在伺服器換算可以少送一組絕對座標，也讓手機端不必知道場域原點。
+   *
+   * 鄰居欄位刻意比 snapshot() 更精簡：手機上的鄰居只有幾十像素高，
+   * alpha / mode / emoteT 之類的欄位在那個尺寸下完全看不出來。
+   *
+   * @param {string} id 觀察者的角色 id
+   * @param {number} radius 可見半徑（邏輯單位）
+   * @returns {{self: object, neighbors: object[]}|null} 角色不存在時回傳 null
+   */
+  personalSnapshot(id, radius) {
+    const me = this.agents.get(id);
+    if (!me) return null;
+
+    const round = (n) => Math.round(n * 10) / 10;
+    const round3 = (n) => Math.round(n * 1000) / 1000;
+    const r2 = radius * radius;
+
+    const neighbors = [];
+    for (const a of this.agents.values()) {
+      if (a.id === id) continue;
+      const dx = a.x - me.x;
+      const dy = a.y - me.y;
+      if (dx * dx + dy * dy > r2) continue;
+      neighbors.push({
+        id: a.id,
+        dx: round(dx),
+        dy: round(dy),
+        facing: a.facing,
+        state: a.state,
+        // 有社交動作時才帶，與 snapshot() 同一個省頻寬的理由
+        ...(a.emote && { emote: a.emote.action }),
+      });
+    }
+
+    return {
+      self: {
+        x: round(me.x),
+        y: round(me.y),
+        vx: round(me.vx),
+        vy: round(me.vy),
+        heading: round3(me.heading),
+        state: me.state,
+        mode: me.mode,
+        // α 是手機端唯一需要的仲裁資訊：它決定「你正在操控」的提示
+        alpha: Math.round(me.alpha * 100) / 100,
+        facing: me.facing,
+      },
+      neighbors,
+    };
+  }
+
   /** 參與者名冊：id、顯示名稱與捏臉設定，僅在成員變動時廣播 */
   roster() {
     return [...this.agents.values()].map((a) => ({

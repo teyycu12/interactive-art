@@ -1,8 +1,13 @@
 /**
  * 模組 M3 — 程式化 2D 步態渲染（技術文件 §程式化步態）
  *
+ * 放在 shared/ 而非 public/screen/ 的理由：大螢幕與手機端 POV 畫布
+ * 必須畫出**同一個角色**。若手機另抄一份步態常數，BOB_OMEGA 之類的數值
+ * 就成了第二份事實來源 —— 改了一邊另一邊不會報錯，只會默默走出不同步頻，
+ * 與 slicer.py / avatars.js 的切片比例是同一類跨檔案耦合。兩端一律 import 此檔。
+ *
  * 「無逐格動畫成本」是這套作法的重點：角色只有一張靜態 SVG，
- * 走路、擺動、呼吸、轉向全部由變換矩陣即時算出，
+ * 走路、擺動、轉向全部由變換矩陣即時算出，
  * 因此新增一種髮型不需要重畫任何一格動畫。
  *
  * 與技術文件的一處刻意差異：文件的公式以 frameCount 為自變數
@@ -17,8 +22,6 @@ const INK = '#2F2A26';
 const BOB_OMEGA = 0.2 * 60;
 const BOB_AMPLITUDE = 6;        // 文件：A = 6px
 const WOBBLE_DEGREES = 5;       // 文件：±5°
-const BREATH_OMEGA = 2.2;       // 待機呼吸，明顯慢於步頻
-const BREATH_RANGE = 0.02;      // 文件：垂直比例 0.98 ~ 1.02
 
 /**
  * 依速度調節步頻。技術文件未指定，但固定步頻會讓緩慢移動的角色
@@ -32,7 +35,7 @@ function cadence(speed, maxSpeed) {
  * 繪製單一角色。
  *
  * 變換順序（由外而內）：
- *   平移到腳底位置 → 畫地面投影 → 垂直彈跳 → 左右擺動 → 轉向鏡像與呼吸縮放
+ *   平移到腳底位置 → 畫地面投影 → 垂直彈跳 → 左右擺動 → 轉向鏡像
  * 投影必須在彈跳之前繪製，它屬於地面而非角色；
  * 擺動的旋轉樞紐設在腳底附近，否則角色會看起來像在原地打轉。
  *
@@ -56,8 +59,12 @@ export function drawCharacter(ctx, agent, pos, sprite, opts) {
     ? Math.sin(phase / 2) * WOBBLE_DEGREES * (Math.PI / 180)
     : 0;
 
-  // ── 呼吸待機：靜止時垂直比例在 0.98 ~ 1.02 之間緩慢縮放 ──
-  const breath = walking ? 1 : 1 + Math.sin(time * BREATH_OMEGA) * BREATH_RANGE;
+  // 靜止時不做任何動畫。
+  //
+  // 原本這裡有「呼吸待機」：垂直比例在 0.98~1.02 之間緩慢縮放。單看一個
+  // 角色是細微的，但場上多人各自以不同相位縮放時，整片畫面會持續蠕動 ——
+  // 觀眾的視線被那個動態一直拉走，反而看不出誰真的在移動。
+  // 角色是貼圖而非骨架，縮放也會讓邊緣輕微抖動。
 
   const w = height * 0.77;   // 捏臉 SVG 的 viewBox 為 200×260
   const h = height;
@@ -77,7 +84,7 @@ export function drawCharacter(ctx, agent, pos, sprite, opts) {
   ctx.translate(0, -lift);
   ctx.rotate(wobble);
   // 轉向鏡像：Vx > 0 → ScaleX = 1；Vx < 0 → ScaleX = -1
-  ctx.scale(agent.facing, breath);
+  ctx.scale(agent.facing, 1);
 
   if (sprite?.complete && sprite.naturalWidth) {
     ctx.drawImage(sprite, -w / 2, -h, w, h);
