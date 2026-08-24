@@ -74,17 +74,18 @@
 │   ├── /tests                    # Node 內建測試執行器（harness.js 提供 p5 樁）
 │   └── wedding_bg.png            # 投影背景素材
 ├── /scripts                      # 參考圖集與髮色取樣的離線檢查工具
+├── /docs
+│   ├── INTERFACES.md             # Socket.io 事件與 payload 介面規格
+│   ├── STYLE_BASE.md             # 基底風格標準與量測方法
+│   ├── STYLE_PROBE_FOLLOWUPS.md  # 已知但刻意延後的量測與管線細節
+│   ├── TECHNICAL_ARCHITECTURE.md # 技術架構文件
+│   ├── /m3                       # M3 交接說明與效能報告
+│   └── /style_reference          # 風格參考圖集；圖檔本身不進版控（見下）
 ├── /.github/workflows/ci.yml     # CI：前端 Node 測試＋後端 pytest（skip 一律視為失敗）
-├── start.sh                      # 一鍵啟動腳本
+├── start.sh                      # 一鍵啟動腳本（macOS／Linux）
 ├── CLAUDE.md                     # 本檔：專案結構、規範與啟動方式
 ├── README.md                     # 安裝、設定、流程與使用說明
-├── PRD.md                        # 產品需求與驗收定義
-├── TechStack.md                  # 技術選型
-├── STYLE_BASE.md                 # 基底風格標準與量測方法
-├── STYLE_PROBE_FOLLOWUPS.md      # 已知但刻意延後的量測與管線細節
-├── INTERFACES.md                 # Socket.io 事件與 payload 介面規格
-├── EXTERNAL_AI_RESEARCH_BRIEF.md # 提供外部研究 AI 的研究任務說明
-├── RESUME_PROJECT.md             # 專案接續與目前狀態
+├── .env.example                  # 環境變數範本
 ├── requirements.txt              # Python 執行相依（mediapipe 已釘 <1.0）
 └── requirements-dev.txt          # 測試相依（pytest）
 ```

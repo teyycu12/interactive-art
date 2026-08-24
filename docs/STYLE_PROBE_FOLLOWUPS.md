@@ -1,6 +1,6 @@
 # 待精修細節
 
-背景：[`backend/style_probe.py`](./backend/style_probe.py) 把 [`backend/style_fingerprint.py`](./backend/style_fingerprint.py)
+背景：[`backend/style_probe.py`](../backend/style_probe.py) 把 [`backend/style_fingerprint.py`](../backend/style_fingerprint.py)
 的 `fingerprint_spread` 接到實際生成的 `full_character` 角色圖上，用來量測一批角色之間的
 畫風/物種漂移（commit `8391e79`）。這份文件從那裡的兩個量測細節問題開始，後來擴充成
 `pivot-full-character` 主線上「已知、但刻意延後」的清單（第 1、2 點屬 style_probe，
@@ -46,7 +46,7 @@
 
 **現況**
 
-`directional_gradient`（[`backend/style_normalizer.py:36-48`](./backend/style_normalizer.py#L36-L48)）
+`directional_gradient`（[`backend/style_normalizer.py:36-48`](../backend/style_normalizer.py#L36-L48)）
 量的是「模糊後，畫面左右兩端／上下兩端的平均明度差多少」。這個量測方式只看明度變化的
 形狀，不管造成變化的原因。
 
@@ -82,12 +82,12 @@
 
 | 環節 | 事實 |
 |---|---|
-| [`backend/garment_gen.py:503`](./backend/garment_gen.py#L503) `_attr_lines()` | 只吐膚色／髮色／髮型／眼／鬍／表情／服裝，**沒有身高欄位** |
+| [`backend/garment_gen.py:503`](../backend/garment_gen.py#L503) `_attr_lines()` | 只吐膚色／髮色／髮型／眼／鬍／表情／服裝，**沒有身高欄位** |
 | `generate_full_character_png()` | 參數列**沒有 height** |
-| [`backend/height_profiles.py:9`](./backend/height_profiles.py#L9) | 提供 `display_scale`／`torso_scale_y`／`leg_scale_y` 三個係數 |
-| [`frontend/themes/lego.js:14-16`](./frontend/themes/lego.js#L14-L16) | 後兩者被 `renderMode === 'body_sprite'` 條件擋住 |
+| [`backend/height_profiles.py:9`](../backend/height_profiles.py#L9) | 提供 `display_scale`／`torso_scale_y`／`leg_scale_y` 三個係數 |
+| [`frontend/themes/lego.js:14-16`](../frontend/themes/lego.js#L14-L16) | 後兩者被 `renderMode === 'body_sprite'` 條件擋住 |
 | commit `241ea26` | 該模式已退役，`full_character` 是唯一模式 |
-| [`frontend/sketch.js:160`](./frontend/sketch.js#L160) | 實際只剩 `scale(scaleFactor * heightScale)` |
+| [`frontend/sketch.js:160`](../frontend/sketch.js#L160) | 實際只剩 `scale(scaleFactor * heightScale)` |
 
 也就是說：圖生模型從來沒有被要求畫身高（這是對的，身高屬於管線事後套用的變數）；
 但 `torso_scale_y`（0.96／1.00／1.02）與 `leg_scale_y`（0.90／1.00／1.12）在現行路徑裡
@@ -133,7 +133,7 @@
   量到就回報其高度比例、量不到就標記「分部位縮放不可用」，而不是靜默套用錯誤的切割線。
   這可以跟第 1 點提的「`validate_avatar_png` 順便回報比例偏差」合併成同一件事做。
 - **在生成前的姿勢參考圖（Image 3）上做身高比例，取代生成後偵測**：`_canonical_lego_pose()`
-  （[`backend/garment_gen.py:151-169`](./backend/garment_gen.py#L151-L169)）現在是固定座標，
+  （[`backend/garment_gen.py:151-169`](../backend/garment_gen.py#L151-L169)）現在是固定座標，
   不論訪客身高一律送同一張骨架圖當 Image 3。可以依這位訪客量到的 `height_class`，套用
   `height_profiles.py` 裡本來就存在、但在 `full_character` 下已死掉的 `torso_scale_y`／
   `leg_scale_y` 係數，畫出對應比例的骨架版本（例如 tall 版本腿部座標拉長 12%）再送進去。
@@ -157,14 +157,14 @@
 
 | 環節 | 事實 |
 |---|---|
-| [`backend/app.py:829-831`](./backend/app.py#L829-L831) | `FULL_MODE_VLM_ENABLED` 預設 `0`，`fut_face_vlm` 為 `None` |
-| [`backend/app.py:894`](./backend/app.py#L894) | 因此 `vlm_face_result` 恆為 `{"ok": False, "error": "disabled_for_full_mode"}` |
-| [`backend/app.py:939`](./backend/app.py#L939) | VLM 調色盤那段（`_HAIR_HEX` 八色）**從不執行** |
-| [`backend/app.py:846`](./backend/app.py#L846) | 所以 `get_face_features(frame, max_width=480)` 是髮色的**唯一**來源 |
-| [`backend/face_module.py:108-114`](./backend/face_module.py#L108-L114) | 進 MediaPipe 前先把畫面寬度壓到 480px |
-| [`backend/face_module.py:188-193`](./backend/face_module.py#L188-L193) | 髮色取樣：額頭 landmark 往上 `face_h * 0.18`，radius 20 方框，**直接平均** |
-| [`backend/app.py:950-962`](./backend/app.py#L950-L962) | 量到才寫入 `face_data` 並標記 `color_source = cv_measured` |
-| [`backend/garment_gen.py:722`](./backend/garment_gen.py#L722)／[`745`](./backend/garment_gen.py#L745) | 有值印 `- Hair colour: #XXXXXX`；沒值整段消失，落到 `- (no extra attributes — infer from the photo)` |
+| [`backend/app.py:829-831`](../backend/app.py#L829-L831) | `FULL_MODE_VLM_ENABLED` 預設 `0`，`fut_face_vlm` 為 `None` |
+| [`backend/app.py:894`](../backend/app.py#L894) | 因此 `vlm_face_result` 恆為 `{"ok": False, "error": "disabled_for_full_mode"}` |
+| [`backend/app.py:939`](../backend/app.py#L939) | VLM 調色盤那段（`_HAIR_HEX` 八色）**從不執行** |
+| [`backend/app.py:846`](../backend/app.py#L846) | 所以 `get_face_features(frame, max_width=480)` 是髮色的**唯一**來源 |
+| [`backend/face_module.py:108-114`](../backend/face_module.py#L108-L114) | 進 MediaPipe 前先把畫面寬度壓到 480px |
+| [`backend/face_module.py:188-193`](../backend/face_module.py#L188-L193) | 髮色取樣：額頭 landmark 往上 `face_h * 0.18`，radius 20 方框，**直接平均** |
+| [`backend/app.py:950-962`](../backend/app.py#L950-L962) | 量到才寫入 `face_data` 並標記 `color_source = cv_measured` |
+| [`backend/garment_gen.py:722`](../backend/garment_gen.py#L722)／[`745`](../backend/garment_gen.py#L745) | 有值印 `- Hair colour: #XXXXXX`；沒值整段消失，落到 `- (no extra attributes — infer from the photo)` |
 
 `face_module` **不做頭髮分割**。它取一個固定偏移的方框然後平均，唯一的防呆是
 「平均亮度 > 215 就改用 temple、radius 12 重取一次」。
@@ -181,7 +181,7 @@
   「取到深色背景」——後兩者算出來的 hex 看起來完全合理，卻是假的。
 - **(c) 渲染層**：hex 正確，模型沒照做。只有排除 (a)(b) 之後，這一層才值得動。
 
-[`scripts/check_hair_sampling.py`](./scripts/check_hair_sampling.py) 就是為了把這三層分開而寫的。
+[`scripts/check_hair_sampling.py`](../scripts/check_hair_sampling.py) 就是為了把這三層分開而寫的。
 它包住 `face_module._sample_color` 去旁觀（不重算 landmark，所以不會跟正式程式碼分岔），
 輸出 `spread`＝方框內每通道標準差：頭髮是單一材質，方框真的落在頭髮上就該均勻，
 `spread` 高即代表這個平均值是混色、不是真實顏色。
@@ -190,7 +190,7 @@
 
 repo 裡唯一的照片是 `backend/logs/inputs/*.webp`，兩張都回 `no_face_detected`，
 在原生尺寸與 `--max-width` 720/960/1280 下也一樣。**但不能據此推論正式路徑**：
-[`backend/generation_history.py:269`](./backend/generation_history.py#L269) 存的是
+[`backend/generation_history.py:269`](../backend/generation_history.py#L269) 存的是
 `thumbnail((640, 640))` + WEBP quality 78 的縮圖，不是管線當下處理的 1024×1536／1488×2232 原幀。
 
 這本身就是一個附帶發現：**log 沒有保留管線實際看到的東西**，導致事後無法重現任何
@@ -251,8 +251,8 @@ CV 層的問題。要定位 (a)/(b)/(c)，必須拿使用者上傳的**原始檔
 
 ### 5.2 四個量到的臉部特徵從來沒進過 prompt
 
-`face_module.get_face_features()` 回傳 8 個欄位，[`backend/app.py:951-961`](./backend/app.py#L951-L961)
-把其中 5 個寫進 `face_data`。但 [`backend/garment_gen.py:714-745`](./backend/garment_gen.py#L714-L745)
+`face_module.get_face_features()` 回傳 8 個欄位，[`backend/app.py:951-961`](../backend/app.py#L951-L961)
+把其中 5 個寫進 `face_data`。但 [`backend/garment_gen.py:714-745`](../backend/garment_gen.py#L714-L745)
 的 `_attr_lines()` 只讀其中一部分：
 
 | 欄位 | 有量測 | 寫進 face_data | **送進 prompt** |
@@ -278,7 +278,7 @@ CV 層的問題。要定位 (a)/(b)/(c)，必須拿使用者上傳的**原始檔
 
 ### 5.3 表情被壓成兩個字
 
-[`backend/garment_gen.py:730-732`](./backend/garment_gen.py#L730-L732)：
+[`backend/garment_gen.py:730-732`](../backend/garment_gen.py#L730-L732)：
 
 ```python
 if f.get("smile_score") is not None:
@@ -294,7 +294,7 @@ if f.get("smile_score") is not None:
 
 另外兩個獨立問題：
 
-- **只看嘴角**。[`backend/face_module.py:210-216`](./backend/face_module.py#L210-L216) 取的是
+- **只看嘴角**。[`backend/face_module.py:210-216`](../backend/face_module.py#L210-L216) 取的是
   `max(mouthSmileLeft, mouthSmileRight)`。MediaPipe 的 blendshape 還有抬眉、瞇眼、張嘴、
   嘟嘴等數十項，全部沒用。結果是驚訝、皺眉、大笑、面無表情**都會變成同兩個字之一**。
 - **0.4 沒有來源**。門檻沒有註解說明怎麼決定的，也沒有對照真人樣本校準過。

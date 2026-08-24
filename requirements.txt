@@ -1,12 +1,17 @@
 # PersonaFlow 後端相依套件
 # 安裝：pip install -r requirements.txt
+#
+# 版本策略：全部套件都給上界，避免下一個 major 版本在沒人動程式碼的情況下
+# 讓 clone 下來的環境跑不起來。下界取「已知可運作」的版本，不是最新版。
+# 這裡給的是相容區間，不是 lockfile —— 若要讓每台機器裝到位元相同的版本，
+# 在一台驗證過的環境跑 `pip freeze > requirements.lock.txt` 並改用它安裝。
 
 # Web / 通訊層（M3）
-Flask
-Flask-SocketIO
-python-socketio        # Flask-SocketIO 的 server transport 依賴
-websocket-client       # python-socketio 走 websocket transport 所需
-python-dotenv          # 讀取 .env 的 API 金鑰（見 .env.example）
+Flask>=3.0,<4
+Flask-SocketIO>=5.3,<6
+python-socketio>=5.11,<6   # Flask-SocketIO 的 server transport 依賴；stress_test 的壓測 client 也用到
+websocket-client>=1.7,<2   # python-socketio 走 websocket transport 所需
+python-dotenv>=1.0,<2      # 讀取 .env 的 API 金鑰（見 .env.example）
 
 # 感知層（M1）
 # mediapipe 必須釘在 1.0 以下：1.0.1 在 macOS arm64 上初始化 Metal 失敗，
@@ -14,14 +19,13 @@ python-dotenv          # 讀取 .env 的 API 金鑰（見 .env.example）
 # 那是 C++ 層的 abort，Python 的 try/except 完全攔不到 —— 後端會整個死掉，
 # 連帶所有已連線的客戶端與投影牆。0.10.35 實測正常。
 mediapipe>=0.10.35,<1.0
-opencv-python
-numpy
-pillow                 # generate_avatar 影像解碼
-pillow-heif            # iPhone HEIC/HEIF 照片支援
+opencv-python>=4.8,<5
+numpy>=1.26,<3
+pillow>=10,<13             # generate_avatar 影像解碼
+pillow-heif>=0.16,<2       # iPhone HEIC/HEIF 照片支援；缺少時 decode_frame 會靜默失去 HEIC 能力
 
 # AI 生成與排版（M2 / M6）
-google-generativeai    # Gemini：服裝 / 臉部特徵分類
-openai                 # OpenRouter 相容 fallback client（見 vlm_module）
-requests
-qrcode[pil]            # M6 集體記憶大合照 QR Code 下載產生
-
+google-generativeai>=0.8,<0.9   # Gemini：服裝／臉部特徵分類（0.x，minor 版本會破壞相容）
+openai>=1.40,<3                 # OpenRouter 相容 fallback client（見 vlm_module）
+requests>=2.31,<3
+qrcode[pil]>=7.4,<9             # 集體記憶大合照的 QR Code 下載連結

@@ -1,7 +1,7 @@
 # PersonaFlow 基底風格標準
 
-參考檔案：[`docs/style_reference/base_character.png`](./docs/style_reference/base_character.png)
-機器可讀版本：[`backend/style_base.py`](./backend/style_base.py)
+參考檔案：[`docs/style_reference/base_character.png`](./style_reference/base_character.png)
+機器可讀版本：[`backend/style_base.py`](../backend/style_base.py)
 
 這份文件定義的是**風格語言**，不是某一個角色。高矮胖瘦等個體差異由生成
 prompt 攜帶，本文件的任何數值都不隨體型改變。
@@ -98,7 +98,7 @@ prompt 攜帶，本文件的任何數值都不隨體型改變。
 頭髮 0.068 與橡膠 0.063 的差距在雜訊內，算平手而不是先後。排序依據是
 標記為 `ordinal` 的 roughness 判斷。
 
-現行 [`brick_v2_spec.py:145-153`](./backend/brick_v2_spec.py#L145-L153) 只有一組全域
+現行 `brick_v2_spec.py:145-153`（已隨固定幾何 3D 路線移除） 只有一組全域
 `base_roughness` 0.30 與 `print_roughness` 0.36。單一數值不可能重現這個分布，
 這是目前渲染與參考圖之間**視覺差距最大的一項**。
 
@@ -107,7 +107,7 @@ roughness 欄位標記為 `ordinal`：排序可信，絕對值需要渲染端跑
 ## 4. 印刷線寬 —— 「有些比較 2D」的真正來源
 
 線寬與其他印刷特徵，一律由
-[`backend/style_fingerprint.py`](./backend/style_fingerprint.py) 的
+[`backend/style_fingerprint.py`](../backend/style_fingerprint.py) 的
 `panel_fingerprint` 量測，**參考圖與候選圖走同一段程式**。第一版曾用另一套
 手寫量法定目標值，結果目標與候選不可比，band 沒有任何東西滿足得了。
 
@@ -122,7 +122,7 @@ roughness 欄位標記為 `ordinal`：排序可信，絕對值需要渲染端跑
 | 鞋 | 0.070 | 0.080 | 0.005 | 3.6 |
 
 臉部 `stroke_width_rel` 0.050 換算 512px panel 約 **26 px**，容許範圍
-±45%（約 14–37 px）。現行 [`style_family.py:33`](./backend/style_family.py#L33)
+±45%（約 14–37 px）。現行 `style_family.py:33`（已隨固定幾何 3D 路線移除）
 定義 `line_width_px: [4, 18]` —— **參考圖的線比規格允許的最粗值還粗。**
 細線讀起來像插畫草稿，粗線才讀起來像玩具印刷，這是同一批生成裡
 「有些比較 2D」最直接的成因。
@@ -144,7 +144,7 @@ roughness 欄位標記為 `ordinal`：排序可信，絕對值需要渲染端跑
 
 第 6 節的渲染邊緣密度（臉 0.063、軀幹 0.037、牛仔腿 0.101、鞋 0.116）
 保留為文件，不再用於判定。腿部密度全身最高，說明現行
-[`brick_v2_spec.py:91-100`](./backend/brick_v2_spec.py#L91-L100)
+`brick_v2_spec.py:91-100`（已隨固定幾何 3D 路線移除）
 每條腿 256×512 的貼圖預算偏低。
 
 ## 6. 調色盤
@@ -218,9 +218,9 @@ roughness 欄位標記為 `ordinal`：排序可信，絕對值需要渲染端跑
 
 | 模組 | 職責 |
 |---|---|
-| [`backend/style_normalizer.py`](./backend/style_normalizer.py) | 確定性壓平：移除平滑方向性光場，保留磨白等風化 |
-| [`backend/style_fingerprint.py`](./backend/style_fingerprint.py) | 風格指紋量測、對基底標準的距離、跨角色離散度 |
-| [`backend/ai_texture_gen.py`](./backend/ai_texture_gen.py) | 先壓平再判定；出貨的貼圖是壓平後的 panel |
+| [`backend/style_normalizer.py`](../backend/style_normalizer.py) | 確定性壓平：移除平滑方向性光場，保留磨白等風化 |
+| [`backend/style_fingerprint.py`](../backend/style_fingerprint.py) | 風格指紋量測、對基底標準的距離、跨角色離散度 |
+| `backend/ai_texture_gen.py`（已隨固定幾何 3D 路線移除） | 先壓平再判定；出貨的貼圖是壓平後的 panel |
 
 流程是**先壓平、壓不動才判失敗**：可用程式移除的打光不值得付費重生，
 壓平之後還超標的才是模型真的做錯。壓平是冪等的，乾淨的 panel 原封不動。

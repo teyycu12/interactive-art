@@ -23,9 +23,9 @@ PersonaFlow 將參與者的全身影像轉譯為 LEGO 風格插畫角色，並�
 |---|---|---|
 | 攝影、站位與 CV | 可開發測試 | 可取得人體、服裝區域、顏色與有限體型資訊，現場門檻仍需校正 |
 | `full_character` 構圖完整度 | 大致可用 | 比例正確、五官乾淨；多肢與缺鞋由 validator＋重試處理 |
-| **跨角色物種一致性** | **未解決（核心問題）** | 目前無風格參考圖，畫風只靠文字描述，因此必然漂移 |
+| **跨角色物種一致性** | **未解決（核心問題）** | 已改為條件化於策展參考圖集，但尚未經真人盲評驗證；圖集不在版控內（見下） |
 | 個體特徵保真 | 部分 | 服裝顏色走 CV 量測；膚色髮色仍被量化成 6–8 個桶 |
-| 物種漂移量測 | 建置中 | `style_fingerprint.fingerprint_spread` 是量化定義，正在接入生成管線 |
+| 物種漂移量測 | 可用 | `style_probe.py` 已把 `fingerprint_spread` 接上真實輸出，數字需累積批量才有意義 |
 | 正式對外展示 | **不可用** | 必須先解決物種一致性並通過真人盲評 |
 
 目前最重要的原則是：**測試通過只代表資料與程式契約沒有破壞，不代表角色視覺品質已成功。**
@@ -71,7 +71,22 @@ PersonaFlow 將參與者的全身影像轉譯為 LEGO 風格插畫角色，並�
 - 結果經 `avatar_quality.py` 檢查透明背景、構圖、碎裂、左右腿與鞋；失敗回傳明確原因。
 - 以 2D sprite 進入 Boids 投影牆。
 
-**已知缺口**：目前**沒有任何風格參考圖**送進模型，畫風完全只靠 prompt 文字描述，這是跨角色物種漂移的直接原因。
+**風格參考圖**：除了上述三張，模型還會收到一張由策展參考圖集拼成的風格參考表
+（`STYLE_REFERENCE_MODE=sheet`，預設集 `STYLE_REFERENCE_SET=2026q3_owner_curated`）。
+設為 `off` 可退回三張圖的送法做對照實驗。
+
+> [!IMPORTANT]
+> **從 GitHub clone 下來不會拿到參考圖集。** `docs/style_reference/` 底下的圖檔
+> 依授權判定不可散布，因此被 `.gitignore` 排除（只有 `PROVENANCE.md` 進版控）。
+> 缺少圖集時程式**不會報錯**，而是靜默退回「不送參考圖」的生成方式 —— 畫風一致性
+> 會明顯變差，但看起來像是模型變爛，不像是缺檔。啟動時後端會印出
+> `[garment_gen] style reference set '<id>': not found, sending without it`，
+> 那行就是唯一的徵兆。
+>
+> 要自備圖集：在 `docs/style_reference/<你的 set_id>/` 放入 `full_body_*.png`
+> （或 `.webp`），照 `PROVENANCE.md` 的格式記錄來源與授權，再把
+> `STYLE_REFERENCE_SET` 指向它。放進去前可用
+> `python scripts/check_reference_set.py docs/style_reference/<set_id>` 檢查。
 
 ### 已退役
 
@@ -269,16 +284,16 @@ PersonaFlow/
 │   │   └── lego.js             # LEGO renderer
 │   └── tests/                  # 前端測試（Node 內建執行器）
 ├── scripts/                    # 參考圖集與髮色取樣的離線檢查工具
-├── docs/m3/                    # M3 交接文件與效能報告
+├── docs/
+│   ├── INTERFACES.md           # Socket.io 事件與 payload 介面規格
+│   ├── STYLE_BASE.md           # 基底風格標準（量測方法與數值）
+│   ├── STYLE_PROBE_FOLLOWUPS.md# 已知但刻意延後的量測與管線細節
+│   ├── TECHNICAL_ARCHITECTURE.md
+│   ├── m3/                     # M3 交接文件與效能報告
+│   └── style_reference/        # 風格參考圖集；圖檔本身不進版控（見下）
 ├── .github/workflows/ci.yml    # CI：前端 Node 測試＋後端 pytest
 ├── start.sh                    # 一鍵啟動（後端＋前端＋顯示 LAN IP）
 ├── CLAUDE.md                   # 專案結構、規範與啟動方式
-├── PRD.md
-├── INTERFACES.md               # Socket.io 事件與 payload 介面規格
-├── STYLE_BASE.md               # 基底風格標準（量測方法與數值）
-├── STYLE_PROBE_FOLLOWUPS.md    # 已知但刻意延後的量測與管線細節
-├── EXTERNAL_AI_RESEARCH_BRIEF.md
-├── TechStack.md
 ├── .env.example
 ├── requirements.txt
 └── requirements-dev.txt
@@ -340,7 +355,7 @@ python -m http.server 8000 --directory frontend
 Start-Process 'http://127.0.0.1:8000/index.html'
 ```
 
-要停止服務，回到各自終端機按 `Ctrl+C`。完整的啟動、開啟與依 PID 關閉方式請參考 `AGENTS.md`。
+要停止服務，回到各自終端機按 `Ctrl+C`。完整的啟動、開啟與依 PID 關閉方式請參考 `CLAUDE.md`。
 
 ## 環境變數
 
@@ -400,7 +415,7 @@ python -m unittest discover -s backend\tests -v
 
 ## 已知限制與下一步
 
-- **物種一致性未解決（核心問題）**：目前沒有任何風格參考圖送進模型，畫風只由 prompt 文字描述決定，不同人之間的線寬、明暗與五官畫法必然漂移。
+- **物種一致性未解決（核心問題）**：生成已條件化於策展參考圖集，但成效尚未經真人盲評驗證；且參考圖集不在版控內，clone 下來的環境預設是沒有參考圖的狀態。
 - **畫風已定案為光澤 3D 渲染感**（2026-08）：`garment_gen.py` 的 ART STYLE GUIDELINES 原本要求「扁平向量、無漸層、無陰影」，與 `style_base.py` 量到的 0.21–0.24 立體明暗互相矛盾；現已改寫成材質光澤排序、正面柔光與「印刷不帶光向」三條規則，並由 `test_prompt_style_agreement.py` 鎖住。**效果仍待真人生成驗證。**
 - **幾何一致性失去免費保證**：移除固定 3D 網格後，「兩隻手、兩條腿、比例一致」要靠 prompt 與 `avatar_quality.py` 的結構檢查去爭取；多肢問題會回來。
 - **個體特徵部分流失**：服裝顏色走 CV 量測，但膚色髮色仍被 VLM 量化成 6–8 個桶，抹平個體差異。
@@ -418,13 +433,13 @@ python -m unittest discover -s backend\tests -v
 
 ### 下一階段順序
 
-1. **參考圖條件化**：上傳同一畫風、不同角色的樂高風格參考圖，作為第四張輸入送進模型；同時加上抄襲偵測（第一輪只收 warning）。
+1. **驗證參考圖條件化的成效**：參考圖與滲漏偵測（`reference_bleed.py`）都已實作，缺的是一批真人生成結果與盲評數字。
 2. **幾何防護**：補上肢體數量與比例一致性檢查，接進既有的修正重試迴圈。
 3. **個體忠實度指標**：與物種漂移成對量測，避免一致性把個體差異吃掉。
 4. 到需要真人生成時停止於 `USER_MANUAL_GENERATION_REQUIRED`，由專案負責人手動生成並提供結果；系統不得自行假設成功。
 5. 結果納入 `dev.html` 盲評，至少5位評分者完成後比較物種一致性、個體可分辨度、成本與延遲。
 
-更完整的產品規格與欄位定義請參考 [PRD.md](./PRD.md)，風格標準請參考 [STYLE_BASE.md](./STYLE_BASE.md)，開發操作請參考 [CLAUDE.md](./CLAUDE.md)，Socket 介面請參考 [INTERFACES.md](./INTERFACES.md)。
+風格標準請參考 [docs/STYLE_BASE.md](./docs/STYLE_BASE.md)，Socket 介面請參考 [docs/INTERFACES.md](./docs/INTERFACES.md)，已知但刻意延後的細節請參考 [docs/STYLE_PROBE_FOLLOWUPS.md](./docs/STYLE_PROBE_FOLLOWUPS.md)，開發操作請參考 [CLAUDE.md](./CLAUDE.md)。
 
 ### 已預留但尚未實作
 

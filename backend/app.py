@@ -944,7 +944,7 @@ def handle_generate_avatar(payload):
     # full_character is the only live path: one AI image covers the whole
     # figure. body_sprite and brick_ai_texture are retired -- old history stays
     # readable, but new requests must not spend API budget on them.
-    mode = (payload.get("mode") or os.environ.get("GENERATION_MODE", "full_character")).strip()
+    mode = (payload.get("mode") or config.GENERATION_MODE).strip()
     if mode in {"body_sprite", "brick_ai_texture"}:
         emit("avatar_generated", {
             "ok": False,

@@ -5,8 +5,11 @@ number is dangerous, because the cheapest way to drive it to zero is to draw the
 same person every time. This module measures the opposite quantity -- how much
 the characters differ in *content* -- so the two can be read together. A style
 spread that falls while content spread falls with it is not success; it is the
-individuality being flattened, which ``EXTERNAL_AI_RESEARCH_BRIEF.md`` section 2
-names as the thing consistency must not eliminate.
+individuality being flattened. The project has two consistency goals that pull
+against each other, and only one of them is allowed to win: characters made from
+different people must read as one species, *and* height, build, clothing and
+appearance must still be distinguishable within that species. Consistency that
+achieves the first by erasing the second is a failure, not a success.
 
 Orthogonality is the whole point of the feature choice. ``panel_fingerprint``
 reads *spatial* statistics -- stroke width, edge density, how the light falls,
