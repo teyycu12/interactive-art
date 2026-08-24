@@ -479,7 +479,10 @@ button:disabled { opacity: .35; border-style: dashed; }
 .scan-stage video {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* contain 而非 cover：cover 會裁掉畫面，於是參考圈畫在「看得到的那一塊」上，
+     而 CV 分析的是「整張影格」—— 兩者的 95.5% 不是同一條線，腳印會騙人。
+     寧可留黑邊，也不能讓引導指向錯的位置。 */
+  object-fit: contain;
   display: block;
 }
 #scan-overlay {
@@ -554,3 +557,26 @@ button:disabled { opacity: .35; border-style: dashed; }
   font-size: 96px; font-weight: 900; color: #fff;
   text-shadow: 0 4px 18px rgba(0,0,0,.55);
 }
+
+
+/* 站位參考。preserveAspectRatio="none" 讓 viewBox 的百分比直接對應容器，
+   而 video 是 contain，因此兩者的座標系一致。 */
+/* 位置與尺寸由 layoutStencil() 在執行期算出：video 是 contain，實際顯示的
+   影像矩形通常小於容器，參考圈必須貼著影像而不是容器，否則腳印會落在黑邊上。 */
+#scan-stencil {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+  pointer-events: none;
+}
+#scan-stencil ellipse, #scan-stencil line {
+  fill: none;
+  stroke: rgba(88, 166, 255, .55);
+  stroke-width: .5;
+  stroke-dasharray: 2.2 1.7;
+  vector-effect: non-scaling-stroke;
+  transition: stroke .25s;
+}
+#scan-stencil .st-head { fill: rgba(88, 166, 255, .06); }
+/* 就緒轉綠，與 2D 版一致：餘光就能判斷，不必把視線移到文字上 */
+.scan-stage.ready #scan-stencil ellipse,
+.scan-stage.ready #scan-stencil line { stroke: rgba(46, 160, 67, .75); }
+.scan-stage.ready #scan-stencil .st-head { fill: rgba(46, 160, 67, .10); }

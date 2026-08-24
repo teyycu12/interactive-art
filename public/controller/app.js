@@ -187,6 +187,9 @@ const COUNTDOWN_SEC = 3;
 let previewTimer = null;
 let previewInFlight = false;
 let previewSessionId = null;
+/** 連續幾張空影格之後才提示 —— 剛開鏡頭時空一兩張是正常的 */
+const BLANK_FRAME_WARN = 12;
+let blankFrames = 0;
 let countdownLeft = 0;
 let countdownTimer = null;
 let capturing = false;
@@ -203,6 +206,8 @@ function stopPreviewLoop() {
   previewTimer = null;
   previewInFlight = false;
   previewSessionId = null;
+  blankFrames = 0;
+  $('.scan-stage')?.classList.remove('ready');
   cancelCountdown();
 }
 
@@ -213,6 +218,53 @@ function cancelCountdown() {
   const el = $('#scan-countdown');
   if (el) el.hidden = true;
 }
+
+/**
+ * 等到 video 真的有影格為止。
+ *
+ * autoplay 在某些瀏覽器上不會自動觸發（尤其是動態指派 srcObject 的情況），
+ * 因此明確呼叫 play()；再等 loadedmetadata 拿到實際尺寸。逾時就放行，
+ * 讓後續的「拿不到影像」提示接手，而不是永遠卡在這裡。
+ */
+function waitForVideo(video, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); video.removeEventListener('loadedmetadata', done); resolve(); };
+    const timer = setTimeout(done, timeoutMs);
+    if (video.videoWidth) { done(); return; }
+    video.addEventListener('loadedmetadata', done);
+    video.play().catch(() => { /* 由 loadedmetadata 或逾時收尾 */ });
+  });
+}
+
+/**
+ * 讓參考圈貼齊影片實際顯示的矩形。
+ *
+ * video 用 contain，容器通常比影像大（手機直式、桌機橫式都會留黑邊）。
+ * 參考圈若鋪滿容器，腳印會落在黑邊上，指到的位置與 CV 分析的影格對不上 ——
+ * 這正是 2D 版把 (ix, iy, vw, vh) 傳給 _drawCaptureGuide 的原因。
+ */
+function layoutStencil() {
+  const stage = document.querySelector('.scan-stage');
+  const video = $('#scan-video');
+  const svg = $('#scan-stencil');
+  if (!stage || !video?.videoWidth || !svg) return;
+  const sw = stage.clientWidth;
+  const sh = stage.clientHeight;
+  const scale = Math.min(sw / video.videoWidth, sh / video.videoHeight);
+  const w = video.videoWidth * scale;
+  const h = video.videoHeight * scale;
+  svg.style.left = `${Math.round((sw - w) / 2)}px`;
+  svg.style.top = `${Math.round((sh - h) / 2)}px`;
+  svg.style.width = `${Math.round(w)}px`;
+  svg.style.height = `${Math.round(h)}px`;
+
+  // 頭部參考圈在 2D 版是 ellipse(cx, cy, vh*0.12, vh*0.15) —— 寬與高都取自
+  // 影片「高度」，所以它在畫面上是圓的。viewBox 的 x 單位是寬度百分比，
+  // 直接寫死 rx 會讓它隨畫面比例被拉扁，因此換算後在執行期設定。
+  svg.querySelector('.st-head')?.setAttribute('rx', String((h * 0.06 / w) * 100));
+}
+
+window.addEventListener('resize', layoutStencil);
 
 /** 把 video 目前的畫面縮成小張 JPEG */
 function grabFrame(maxEdge, quality) {
@@ -261,7 +313,16 @@ async function previewTick() {
   // 參與者照著三秒前的畫面調整站位，永遠對不上。
   if (previewInFlight || capturing || !scanStream) return;
   const image = grabFrame(PREVIEW_MAX_EDGE, 0.6);
-  if (!image) return;
+  if (!image) {
+    // 相機開著卻拿不到影格（虛擬鏡頭、被其他程式佔用）。靜靜什麼都不做的話
+    // 參與者只會看到一個沒有反應的黑畫面，不知道該等還是該重來。
+    blankFrames += 1;
+    if (blankFrames === BLANK_FRAME_WARN) {
+      $('#scan-guide-text').textContent = '讀不到相機畫面，請確認沒有其他程式正在使用鏡頭';
+    }
+    return;
+  }
+  blankFrames = 0;
 
   previewInFlight = true;
   try {
@@ -279,12 +340,15 @@ async function previewTick() {
       // 限流、逾時、服務未啟動都只是這一幀沒有結果，不是錯誤 ——
       // 引導維持原狀，下一幀補上；只有確定偵測不到人時才更新文字。
       if (features?.guidance_reason) renderGuide(features);
+      $('.scan-stage').classList.remove('ready');
       cancelCountdown();
       return;
     }
 
     renderGuide(features);
-    if (allCaptureIndicatorsPassed(features)) startCountdown();
+    const ready = allCaptureIndicatorsPassed(features);
+    $('.scan-stage').classList.toggle('ready', ready);
+    if (ready) startCountdown();
     else cancelCountdown();
   } catch {
     // 網路瞬斷：下一輪會再試
@@ -324,10 +388,18 @@ $('#btn-scan').addEventListener('click', async () => {
   $('#scan-overlay').hidden = true;
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      // ideal 而非固定值：桌機通常只有前鏡頭，寫死 environment 在某些裝置上
+      // 會挑到輸出黑畫面的虛擬鏡頭。
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
       audio: false,
     });
-    $('#scan-video').srcObject = scanStream;
+    const video = $('#scan-video');
+    video.srcObject = scanStream;
+    // srcObject 設好不代表已經有影格。少了這一步，預覽迴圈每次都在
+    // videoWidth === 0 提早 return，畫面全黑而且一盞指示燈都不會亮 ——
+    // 看起來像引導壞了，其實是還沒開始播。
+    await waitForVideo(video);
+    layoutStencil();
     startPreviewLoop();
   } catch {
     fallbackToBuilder('沒有取得相機權限，先用捏臉進場。');

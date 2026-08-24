@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#FAF8F5">
 <title>PersonaFlow 控制器</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20260825-capture-guide">
 </head>
 <body>
 <div id="app">
@@ -37,6 +37,16 @@
     </div>
     <div class="scan-stage">
       <video id="scan-video" playsinline muted autoplay></video>
+      <!-- 站位參考：頭部圈與腳印。刻意只給頭與腳兩個參考，不畫全身人形 ——
+           那會被誤讀成姿勢範本，但這裡要的只是「站在固定位置」，
+           固定的地面腳點正是相對身高量測能成立的前提。
+           比例與 2D 版 _drawCaptureGuide 一致（頭 9.5%、腳 95.5%、線 97.5%）。 -->
+      <svg id="scan-stencil" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <ellipse class="st-head" cx="50" cy="9.5" rx="6" ry="7.5" />
+        <ellipse class="st-foot" cx="44.5" cy="95.5" rx="3.75" ry="1.25" />
+        <ellipse class="st-foot" cx="55.5" cy="95.5" rx="3.75" ry="1.25" />
+        <line class="st-base" x1="37" y1="97.5" x2="63" y2="97.5" />
+      </svg>
       <!-- 站位引導：文字說明目前該怎麼調整，燈號說明還差哪一項 -->
       <div id="scan-guide">
         <p id="scan-guide-text">正在啟動鏡頭…</p>
@@ -224,6 +234,6 @@
 <!-- nipplejs 由本機 node_modules 直出，不走 CDN（現場網路不穩時仍可載入） -->
 
 <script src="/vendor/nipplejs.js"></script>
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=20260825-capture-guide"></script>
 </body>
 </html>
