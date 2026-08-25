@@ -130,7 +130,7 @@
 │   ├── PRD.md                    # 產品需求與驗收定義（驗收條件仍寫在已退役模式上，待重寫）
 │   ├── TechStack.md              # 技術選型
 │   ├── /m3                       # M3 交接說明與效能報告
-│   └── /style_reference          # 風格參考圖集；圖檔本身不進版控（見下）
+│   └── /style_reference          # 風格參考圖集（含圖檔，見 PROVENANCE.md）
 ├── /.github/workflows/ci.yml     # CI：前端 Node 測試＋整合版 npm test＋後端 pytest
 ├── package.json                  # ★ 整合版 Node 相依與指令
 ├── start.sh                      # 2D 備援版一鍵啟動腳本（macOS／Linux）

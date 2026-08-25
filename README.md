@@ -63,7 +63,7 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 |---|---|---|
 | 攝影、站位與 CV | 可開發測試 | 可取得人體、服裝區域、顏色與有限體型資訊，現場門檻仍需校正 |
 | `full_character` 構圖完整度 | 大致可用 | 比例正確、五官乾淨；多肢與缺鞋由 validator＋重試處理 |
-| **跨角色物種一致性** | **未解決（核心問題）** | 已改為條件化於策展參考圖集，但尚未經真人盲評驗證；圖集不在版控內（見下） |
+| **跨角色物種一致性** | **未解決（核心問題）** | 已改為條件化於策展參考圖集，但尚未經真人盲評驗證 |
 | 個體特徵保真 | 部分 | 服裝顏色走 CV 量測；膚色髮色仍被量化成 6–8 個桶 |
 | 物種漂移量測 | 可用 | `style_probe.py` 已把 `fingerprint_spread` 接上真實輸出，數字需累積批量才有意義 |
 | 正式對外展示 | **不可用** | 必須先解決物種一致性並通過真人盲評 |
@@ -116,14 +116,18 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 設為 `off` 可退回三張圖的送法做對照實驗。
 
 > [!IMPORTANT]
-> **從 GitHub clone 下來不會拿到參考圖集。** `docs/style_reference/` 底下的圖檔
-> 依授權判定不可散布，因此被 `.gitignore` 排除（只有 `PROVENANCE.md` 進版控）。
-> 缺少圖集時程式**不會報錯**，而是靜默退回「不送參考圖」的生成方式 —— 畫風一致性
-> 會明顯變差，但看起來像是模型變爛，不像是缺檔。啟動時後端會印出
-> `[garment_gen] style reference set '<id>': not found, sending without it`，
-> 那行就是唯一的徵兆。
+> **參考圖集自 2026-08-25 起隨 repo 一起發布**（先前因授權判定不進版控）。
+> 依據與殘留風險記在 `docs/style_reference/2026q3_owner_curated/PROVENANCE.md`；
+> 那組圖是 Elser AI 生成的 Output，本專案以學術、非商業用途納入版控，
+> **不是可自由再利用的素材**——要在本專案以外使用請自行確認授權。
 >
-> 要自備圖集：在 `docs/style_reference/<你的 set_id>/` 放入 `full_body_*.png`
+> 圖集若缺席（自行刪除、或 `STYLE_REFERENCE_MODE=off`），程式**不會報錯**，
+> 而是退回「不送參考圖」的生成方式 —— 畫風一致性會明顯變差，但看起來像是模型
+> 變爛，不像是缺檔。兩個徵兆：啟動時的
+> `[garment_gen] style reference set '<id>': not found, sending without it`，
+> 以及生成服務 `/health` 的 `degraded` 會列出 `style_reference（…）`。
+>
+> 要換自己的圖集：在 `docs/style_reference/<你的 set_id>/` 放入 `full_body_*.png`
 > （或 `.webp`），照 `PROVENANCE.md` 的格式記錄來源與授權，再把
 > `STYLE_REFERENCE_SET` 指向它。放進去前可用
 > `python scripts/check_reference_set.py docs/style_reference/<set_id>` 檢查。
@@ -344,7 +348,7 @@ PersonaFlow/
 │   ├── README-PersonaFlow2.md  # 整合版說明
 │   ├── TECH-PersonaFlow2.md    # 整合版互動層技術說明
 │   ├── m3/                     # M3 交接文件與效能報告
-│   └── style_reference/        # 風格參考圖集；圖檔本身不進版控（見下）
+│   └── style_reference/        # 風格參考圖集（含圖檔，見 PROVENANCE.md）
 ├── .github/workflows/ci.yml    # CI：前端 Node 測試＋整合版 npm test＋後端 pytest
 ├── package.json                # 整合版 Node 相依與指令
 ├── start.sh                    # 2D 備援版一鍵啟動（後端＋前端＋顯示 LAN IP）
@@ -470,7 +474,7 @@ python -m unittest discover -s backend\tests -v
 
 ## 已知限制與下一步
 
-- **物種一致性未解決（核心問題）**：生成已條件化於策展參考圖集，但成效尚未經真人盲評驗證；且參考圖集不在版控內，clone 下來的環境預設是沒有參考圖的狀態。
+- **物種一致性未解決（核心問題）**：生成已條件化於策展參考圖集，但成效尚未經真人盲評驗證。參考圖集本身另有兩項已記錄的缺陷（4/5 張雙腿併攏、髮色集中於單一色帶），見該目錄的 `PROVENANCE.md`。
 - **畫風已定案為光澤 3D 渲染感**（2026-08）：`garment_gen.py` 的 ART STYLE GUIDELINES 原本要求「扁平向量、無漸層、無陰影」，與 `style_base.py` 量到的 0.21–0.24 立體明暗互相矛盾；現已改寫成材質光澤排序、正面柔光與「印刷不帶光向」三條規則，並由 `test_prompt_style_agreement.py` 鎖住。**效果仍待真人生成驗證。**
 - **幾何一致性失去免費保證**：移除固定 3D 網格後，「兩隻手、兩條腿、比例一致」要靠 prompt 與 `avatar_quality.py` 的結構檢查去爭取；多肢問題會回來。
 - **個體特徵部分流失**：服裝顏色走 CV 量測，但膚色髮色仍被 VLM 量化成 6–8 個桶，抹平個體差異。

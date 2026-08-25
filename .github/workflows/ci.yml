@@ -87,7 +87,13 @@ jobs:
         import sys, xml.etree.ElementTree as ET
 
         # 已知且可接受的 skip 理由；其餘一律視為環境問題。
-        EXPECTED = {"the curated set is not present in this checkout"}
+        #
+        # 這裡原本放著 "the curated set is not present in this checkout" ——
+        # 風格參考圖集當時因授權判定不進版控，那兩支測試在任何 checkout 上
+        # 都必定 skip。圖集已於 2026-08-25 納入版控（見該目錄的 PROVENANCE.md），
+        # 那個理由因此不該再出現：它若再出現，代表圖檔真的掉了或 checkout 不完整，
+        # 而那正是要讓 CI 擋下來的事，不是要放行的事。
+        EXPECTED = set()
 
         root = ET.parse("test-results.xml").getroot()
         suites = root.iter("testsuite") if root.tag == "testsuites" else [root]

@@ -40,18 +40,18 @@ backend.log
 backend/diagnostic_img_str.txt
 stash.diff
 
-# Style reference sets: image files stay out of version control. This is a
-# settled answer, not a pending TODO -- 2026q3_owner_curated/PROVENANCE.md
-# records that its source grants commercial use but no explicit right to
-# redistribute, and that the shipped crops have the source watermark removed.
-# Git keeps whatever is pushed forever, so a set may only be un-ignored once
-# its own PROVENANCE.md records redistribution as permitted. PROVENANCE.md is
-# tracked; base_character.png predates this rule and is already tracked, so it
-# is unaffected.
-docs/style_reference/**/*.png
-docs/style_reference/**/*.webp
-docs/style_reference/**/*.jpg
-docs/style_reference/**/*.jpeg
+# Style reference sets used to be excluded here. That rule was lifted on
+# 2026-08-25 after re-reading the source terms: the clause that appeared to ban
+# redistribution (Elser ToS 5.2(i)) prohibits "license, sell, ... reproduce,
+# distribute, host or otherwise commercially exploit **the Service** or any part
+# of it" -- "otherwise" marks the listed verbs as instances of commercial
+# exploitation, and the object is the platform, not the Outputs it produces.
+# This project's use is academic and non-commercial.
+#
+# Each set still needs its own PROVENANCE.md recording source, licence reading
+# and residual risk before it is committed -- git keeps whatever is pushed
+# forever. See 2026q3_owner_curated/PROVENANCE.md for the full determination,
+# including the watermark question, which that clause does not settle.
 
 # 測試產出
 .pytest_cache/
