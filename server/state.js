@@ -85,6 +85,10 @@ export class Stage {
       alpha: 0,
       decayStartAt: null,
       decayFrom: 0,
+      // 靜止模式的煞停狀態（IDLE_MOTION === 'still'，見 arbiter.js）。
+      // null 代表沒有正在進行的煞停。
+      brakeFrom: null,
+      brakeStartAt: 0,
       // 定位鎖定。targetX 為 null 代表角色自由活動；
       // 合照等情境由 lockStage() 指派目標，見該方法的說明。
       targetX: null,
@@ -95,6 +99,10 @@ export class Stage {
       inputX: 0,
       inputY: 0,
       inputIntensity: 0,
+      // 平滑後的手動速度（見 arbiter.js）。原始輸入是單位向量，
+      // 直接使用會讓回中時的手指抖動變成全速的方向反轉。
+      manualVx: 0,
+      manualVy: 0,
       lastInputAt: 0, // 0 代表從未輸入過 → 一出生即為漫遊態
       // 連線狀態
       disconnectedAt: null,
@@ -103,6 +111,9 @@ export class Stage {
       state: AGENT_STATE.IDLE,
       mode: AGENT_MODE.SWARM,
       facing: 1,
+      // 翻面防抖：累積中的反向與其持續時間（見 arbiter.js 的 updateFacing）
+      facingPendingDir: null,
+      facingPendingMs: 0,
       emote: null,
       lastEmoteAt: 0,
       // 行為 Log（WP-C 數據收集 / M4 活躍度加權的原始資料）
@@ -332,6 +343,62 @@ export class Stage {
       // 定位鎖定時才有意義，供合照流程判斷是否可以拍
       ...(a.arrived && { arrived: true }),
     }));
+  }
+
+  /**
+   * 個人視角快照：某個角色自己 + 半徑內的鄰居。
+   *
+   * 與 snapshot() 的差別不只是過濾 —— 回傳的鄰居座標是**相對於自己**的。
+   * 手機端把自己畫在畫面中央，需要的本來就是相對位移；
+   * 在伺服器換算可以少送一組絕對座標，也讓手機端不必知道場域原點。
+   *
+   * 鄰居欄位刻意比 snapshot() 更精簡：手機上的鄰居只有幾十像素高，
+   * alpha / mode / emoteT 之類的欄位在那個尺寸下完全看不出來。
+   *
+   * @param {string} id 觀察者的角色 id
+   * @param {number} radius 可見半徑（邏輯單位）
+   * @returns {{self: object, neighbors: object[]}|null} 角色不存在時回傳 null
+   */
+  personalSnapshot(id, radius) {
+    const me = this.agents.get(id);
+    if (!me) return null;
+
+    const round = (n) => Math.round(n * 10) / 10;
+    const round3 = (n) => Math.round(n * 1000) / 1000;
+    const r2 = radius * radius;
+
+    const neighbors = [];
+    for (const a of this.agents.values()) {
+      if (a.id === id) continue;
+      const dx = a.x - me.x;
+      const dy = a.y - me.y;
+      if (dx * dx + dy * dy > r2) continue;
+      neighbors.push({
+        id: a.id,
+        dx: round(dx),
+        dy: round(dy),
+        facing: a.facing,
+        state: a.state,
+        // 有社交動作時才帶，與 snapshot() 同一個省頻寬的理由
+        ...(a.emote && { emote: a.emote.action }),
+      });
+    }
+
+    return {
+      self: {
+        x: round(me.x),
+        y: round(me.y),
+        vx: round(me.vx),
+        vy: round(me.vy),
+        heading: round3(me.heading),
+        state: me.state,
+        mode: me.mode,
+        // α 是手機端唯一需要的仲裁資訊：它決定「你正在操控」的提示
+        alpha: Math.round(me.alpha * 100) / 100,
+        facing: me.facing,
+      },
+      neighbors,
+    };
   }
 
   /** 參與者名冊：id、顯示名稱與捏臉設定，僅在成員變動時廣播 */

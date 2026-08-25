@@ -15,7 +15,7 @@
 | 互動層 | `server/`（Node.js + ws） | `backend/app.py`（Flask + Socket.io） |
 | 前端 | `public/`（controller / screen / host） | `frontend/`（p5.js + PixiJS） |
 | 群聚 | `server/` 的 M2 α 仲裁 + Boids | `backend/swarm_logic.py` |
-| 啟動 | `npm start` + `python backend/service.py` | `bash start.sh` |
+| 啟動 | `bash start.sh` | `bash start-2d.sh` |
 
 備援版是「3D 若來不及，仍能完成實測」的保險，整套測試都還在跑，**請勿刪除**。
 
@@ -28,7 +28,7 @@
 | 感知層 | Python + MediaPipe / OpenCV | 服裝色調、輪廓、姿勢提取 |
 | 生成層 | Python + Gemini / 生圖 API | 去背人偶圖生成、切片成三張貼圖 |
 | 互動層 | Node.js + ws | α 仲裁共治、任務、配對、問答、計分、社交圖譜 |
-| 渲染層 | Canvas2D（3D/Three.js 為進行中的重寫） | 角色與場景呈現 |
+| 渲染層 | Three.js 3D 場景 + Canvas2D 角色圖層 | 角色與場景呈現 |
 | 輸出層 | Python + Pillow | 大合照生成、QR Code |
 
 ---
@@ -58,6 +58,7 @@
 │   ├── identity_fidelity.py      # 個體特徵保真度量測
 │   ├── avatar_quality.py         # 生成角色圖結構完整性驗證
 │   ├── capture_quality.py        # 拍攝品質、站位與穩定度判定
+│   ├── capture_session.py        # ★ 跨影格的可拍攝判定（站位引導的時序邏輯）
 │   ├── detail_quality.py         # 最終畫面細節指標
 │   ├── height_profiles.py        # short／medium／tall 身高校正
 │   ├── swarm_logic.py            # Boids 群聚演算法（2D 備援版用；整合版走 server/boids.js）
@@ -90,10 +91,14 @@
 ├── /shared                       # ★ 前後端共用的單一事實來源
 │   ├── protocol.js               # 事件名、節流頻率、場域尺寸
 │   ├── avatars.js                # 捏臉素材 + CV 角色驗證 + CV_CUTS 切片比例
+│   ├── avatarSprite.js           # 角色圖組裝（整張圖優先，缺它才疊三張切片）
+│   ├── character.js              # 角色與名牌繪製（大螢幕與控制器共用）
+│   ├── capture-guidance.js       # 站位引導文案與指示燈判定
 │   └── scene.js                  # 場景障礙物佈局
 ├── /public                       # ★ 整合版前端
 │   ├── controller/               # 手機端：拍照生成／捏臉（備援）、搖桿、任務
 │   ├── screen/                   # 大螢幕
+│   │   └── 3d/RoomScene.js       # three.js 房間場景
 │   ├── host/                     # 主辦端控制台
 │   └── assets/gen/               # 生成貼圖落地處（gitignored，每場重新產生）
 ├── /frontend                     # 2D 備援版前端
@@ -240,7 +245,10 @@ gevent.exceptions.LoopExit: This operation would block forever
 npm install
 pip install -r requirements.txt requirements-dev.txt   # mediapipe 已釘 <1.0，見下方
 
-# 啟動：兩個行程
+# 啟動：一行帶起兩個行程
+bash start.sh                      # 生成服務 :5055 + 互動層 :3000
+
+# 或分別啟動（除錯時比較好看 log）
 npm start                          # 互動層，印出大螢幕/手機/主辦端三個網址
 python backend/service.py          # 角色生成服務（127.0.0.1:5055）
 
@@ -259,9 +267,10 @@ pip install -r requirements-dev.txt
 python -m pytest backend/tests
 
 # 測試
-npm test                           # Node 單元測試（188）
-npm run test:e2e                   # 端對端，會自行啟動伺服器（87）
-cd backend && pytest tests/        # Python（170）
+npm test                           # Node 單元測試（228 + wander 模式 5）
+npm run test:wander                # 只跑漫遊模式那一組（PERSONAFLOW_IDLE_MOTION=wander）
+npm run test:e2e                   # 端對端，會自行啟動伺服器（103）
+pytest backend/                    # Python（236）
 
 # 切片比例驗證（計畫書 §3.3 的 R1 驗收項）
 python backend/validate_cuts.py --sprites samples/ --sheet report.png
@@ -271,7 +280,7 @@ python backend/validate_cuts.py --photos photos/ --out samples/
 ### 2D 備援版
 
 ```bash
-bash start.sh                      # 後端 5001 + 前端 8080
+bash start-2d.sh                   # 後端 5001 + 前端 8080
 python backend/e2e_smoke.py        # 煙霧測試（需後端已啟動）
 node --test frontend/tests/        # 前端測試
 ```
@@ -293,11 +302,45 @@ node --test frontend/tests/        # 前端測試
 30 人的貼圖若內嵌進 `STAGE_ROSTER`，名冊訊息會膨脹到現場無線網路難以負荷。
 `roster()` 只在名冊變動時廣播，`snapshot()` 每幀 30Hz 只送座標 —— 這個分離要維持。
 
+### 渲染程式碼放 shared/，兩端 import 同一份
+
+`shared/character.js`（程式化步態）與 `shared/avatarSprite.js`（貼圖組裝）
+同時被大螢幕與手機端 POV 畫布使用。**不要為了方便在手機端另抄一份。**
+
+抄一份之後 `BOB_OMEGA` 之類的常數就成了第二份事實來源 —— 改了一邊另一邊
+不會報錯，只會默默走出不同步頻，或讓「手機上的我」與「大螢幕上的我」長得不一樣。
+與上面的切片比例是同一類跨檔案耦合。`EMOTE_GLYPH` 因為同樣理由放在 `shared/protocol.js`。
+
+### CLIENT_SYNC：手機端個人視角（10Hz）
+
+手機除了送搖桿輸入，也會收到自己的座標與半徑內的鄰居（相對座標），
+供 `public/controller/avatarRenderer.js` 繪製個人視角畫布。
+
+**兩個容易改壞的地方**，端對端測試都有回歸防護：
+
+1. 推送必須放在主迴圈 `screens.size === 0` 早退**之前**。放在後面的話，
+   大螢幕沒接上時所有手機畫面會整個凍結 —— 而「先開手機、投影機還沒接」
+   正是佈場時最常見的狀態。
+2. 節流比較要帶半個 tick 的容差（`>= CLIENT_SYNC_MS - TICK_MS / 2`）。
+   主迴圈是 30Hz（33.3ms），嚴格的 `>= 100` 會讓第 3 個 tick 差 0.1ms 被擋下，
+   實際變成每 4 個 tick 送一次 —— 7.5Hz 而非 10Hz。
+
+手機端**不自行模擬位置**，這與 issue #8（投影牆跑自己的 Boids）刻意相反：
+本地模擬會讓使用者低頭看到自己穿牆、抬頭卻看見角色卡在牆邊。
+伺服器狀態過期時收斂到靜止，不以最後速度外推（否則角色會飄出場外）。
+
+### navigator.vibrate 在 iOS 完全不支援
+
+不是降級，是沒有。震動只能是加分項，不能是任何互動的唯一回饋 ——
+每個震動點都另有畫面上的變化。腳步震動預設**關閉**並附開關：
+走路時每秒約 2–3 次的持續震動，對電池與體感疲勞都有實際代價。
+不支援的裝置上開關直接隱藏，而不是給一個按了沒反應的按鈕。
+
 ### 連線角色不可中途轉換
 
 `CLIENT_JOIN` / `SCREEN_HELLO` / `HOST_AUTH` 三者互斥，已在 `server/index.js`
 加上守衛。拿掉任何一個都會讓 agent 的 `disconnectedAt` 永遠是 null，
-`AGENT_TTL` 不回收，反覆操作即可耗盡 120 人上限。端對端測試有回歸防護。
+`AGENT_TTL` 不回收，反覆操作即可耗盡 `MAX_AGENTS` 上限。端對端測試有回歸防護。
 
 ### frontend/ 必須維持 CommonJS
 
@@ -308,6 +351,77 @@ Node 會據此把**所有**子目錄的 `.js` 當成 ES module —— 但 `front
 
 `frontend/package.json` 只做一件事：把模組型別重新限定成 `commonjs`。
 **不要刪除它**，也不要在 `frontend/` 底下改用 `import`／`export`。
+
+### 閒置時角色靜止（IDLE_MOTION，預設 'still'）
+
+沒有人操控時角色**停在原地**，不再自動漫遊。由 `server/config.js` 的
+`IDLE_MOTION` 控制，可用環境變數覆寫：
+
+```bash
+PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
+```
+
+| 值 | 行為 |
+|---|---|
+| `still`（預設） | 完全靜止，只播 IDLE 待機 |
+| `wander` | 原始設計：Boids 三力 + 漫遊擾動 |
+| `flock` | 保留三力但關掉漫遊擾動：有鄰居才動，孤身一人時停下 |
+
+原始設計刻意讓閒置角色漫遊（`boids.js` 的 `wanderForce` 就是為此存在），
+理由是「有人掛機時畫面不要死寂」；代價是參與者分不清畫面上的移動是自己
+造成的還是系統自己在動。兩種取捨都成立，所以保留成參數而非寫死。
+
+**三個踩過的坑**，測試都有回歸防護：
+
+1. **煞停不能只靠 α 衰減。** α 要閒置滿 `IDLE_THRESHOLD_MS` 才開始衰減，
+   而 `inputIntensity` 在手指離開搖桿的當下就歸零 —— 那一瞬間 α 還是 1，
+   兩者相乘會讓速度從全速直接掉到 0。`wander` 模式看不出來，因為空缺由
+   Boids 影子速度補上；自主項一旦歸零，缺口就直接變成畫面上的急煞。
+   因此 `arbiter.js` 另外對「上一幀的實際速度」做餘弦煞停。
+
+2. **靜止模式關掉的是「自主意圖」，不是「碰撞處理」。** 把整個自主項乘 0
+   會連帶抹掉道具斥力的側向分量，而正面推向圓形道具時，位置修正只消去朝內
+   的分量 —— 側向為零就沒有繞行方向，角色會卡在道具正面推不過去。
+   故另備 `obstacleAvoidance()` 回傳**切向**速度，且疊加後要正規化回原速率
+   （直接相加會超過 `MAX_SPEED`，也會讓煞停曲線彈回去）。
+
+3. **影子速度仍要持續整合**，不要為了省事跳過 `integrateBoids()` ——
+   否則現場把參數改回 `wander` 時，第一次交接會從一個過期的速度接手。
+
+測試分成兩檔，因為 `IDLE_MOTION` 在模組載入時就定案，同一個行程內無法切換：
+`test/idle-still.test.mjs`（預設）與 `test/wander-mode.test.mjs`
+（需 `npm run test:wander`，`npm test` 已把兩輪都串起來）。
+
+手機端的操控提示**不要寫死「放手後角色會漫遊」** —— 手機讀不到伺服器的
+`IDLE_MOTION`，寫死其中一種，另一種模式下就成了假訊息。
+
+### 場域人數上限刻意壓在 10
+
+`MAX_AGENTS = 10`（原本 120）。這是「少而精緻」的取捨：角色數降下來之後，
+每個人都負擔得起即時陰影、高解析度貼圖與後製效果，畫面質感遠勝過塞滿
+一百個扁平貼紙。3D 房間、bloom、vignette 都建立在這個前提上。
+
+**測試不要寫死角色數量**。曾有三處測試硬寫 12 / 50 個角色，上限降到 10 時
+`addAgent` 開始回傳 null，整組測試以 `TypeError: Cannot set properties of null`
+失敗 —— 而錯誤訊息完全看不出跟人數上限有關。需要「一群角色」時請用
+`MAX_AGENTS` 當迴圈上界。
+
+注意這是「同時在場」而非「總參與人數」：賓客關掉分頁後角色仍留在場上，
+要等 `AGENT_TTL_MS`（45 秒）才回收，現場輪替速度取決於那個值。
+
+### 前端相依一律由 node_modules 直出，不走 CDN
+
+`nipplejs`、`roughjs`、`three` 都經由 `/vendor/*` 從本機 `node_modules` 提供
+（見 `server/index.js` 的 `resolveStatic`）。**不要為了省事改用 CDN。**
+
+3D 整合初期曾把 three 指向 jsdelivr，本機開發完全正常 —— 因為開發機有網路。
+但展場網路不通、或 CDN 被校園防火牆擋下時，大螢幕的整個 3D 背景會直接消失，
+而這是**本機永遠測不出來的故障**。HTTPS 模式下（現場要用手機相機就必須開）
+還會多一層混合內容風險。
+
+`three/addons/` 是整棵目錄樹（OrbitControls 會再 import 同目錄的其他模組），
+因此 `/vendor/three-addons/` 走的是目錄映射而非逐檔白名單，該分支自己做了
+路徑穿越防護 —— 下方那套通用檢查只涵蓋 PUBLIC_DIR 與 shared，別誤以為它罩得到。
 
 ### 掃描失敗一律降級，不擋人進場
 

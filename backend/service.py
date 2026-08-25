@@ -132,6 +132,12 @@ def _history_call(function, *args, **kwargs):
         print(f"[generation_history] {function.__name__} failed: {exc}", file=sys.stderr)
         return None
 
+try:
+    from photo_composer import compose_group_photo
+except Exception as _e:  # 最常見：Pillow 或 qrcode 未安裝
+    _degraded("photo_composer（大合照合成）", _e)
+    compose_group_photo = None
+
 # 貼圖落地位置：Node 端以靜態檔案服務 public/，因此寫進 public/assets/gen/
 # 之後立刻就能用 /assets/gen/<assetId>/<part>.png 取得（見契約 4）。
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -246,7 +252,62 @@ def preview():
         print(f"[vision] /preview 未預期失敗：{e!r}", file=sys.stderr)
         return jsonify({"ok": False, "error": "internal_error"})
 
+@app.route("/compose", methods=["POST"])
+def compose():
+    """大合照：互動層送來在場名冊與座標，回傳合成好的 PNG。
 
+    互動層（Node）已經把角色定住並全部面向鏡頭，此處只負責繪製。
+    排版採「角色在場上的實際座標」而非階梯式重排 —— 這件作品的主題
+    是集體共創的當下樣貌，把人重新排成整齊隊形會把那個訊息抹掉。
+
+    與 /generate 一致：任何失敗都回 200 + {ok: false}，讓主辦端顯示
+    「合照失敗」而不是看到一個解不出 JSON 的 5xx。
+    """
+    if compose_group_photo is None:
+        return jsonify({"ok": False, "error": "composer_unavailable"})
+    try:
+        payload = request.get_json(silent=True) or {}
+        chars = payload.get("characters")
+        if not isinstance(chars, list):
+            return jsonify({"ok": False, "error": "characters 必須是陣列"})
+
+        # 貼圖以檔案路徑傳遞（契約 4），此處轉成本機絕對路徑再讀進來 ——
+        # 生成服務只綁 127.0.0.1，不該為了讀自己剛寫下的檔案而繞一趟 HTTP。
+        for c in chars:
+            if isinstance(c, dict):
+                c["body_path"] = _asset_path(c.get("fullPng"))
+
+        res = compose_group_photo(
+            chars,
+            photo_url_base=payload.get("photoUrlBase") or "",
+            title=payload.get("title") or "PersonaFlow 集體記憶",
+            backdrop=payload.get("backdrop"),
+        )
+        if not (isinstance(res, dict) and res.get("ok")):
+            return jsonify({"ok": False, "error": "compose_failed"})
+        # photo_bytes 是 bytes，不能進 JSON；photo_b64 已含同樣內容
+        res.pop("photo_bytes", None)
+        return jsonify(res)
+    except Exception as e:
+        print(f"[vision] /compose 未預期失敗：{e!r}", file=sys.stderr)
+        return jsonify({"ok": False, "error": "internal_error"})
+
+
+def _asset_path(url):
+    """把 /assets/gen/<id>/full.webp 轉成本機絕對路徑。
+
+    只接受落在 ASSET_DIR 底下的結果：這個值來自互動層轉發的名冊，
+    不做邊界檢查等於讓上游的任意字串決定要讀哪個檔案。
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    prefix = "/assets/gen/"
+    if not url.startswith(prefix):
+        return None
+    path = os.path.normpath(os.path.join(ASSET_DIR, url[len(prefix):]))
+    if not path.startswith(os.path.realpath(ASSET_DIR) + os.sep) and not path.startswith(ASSET_DIR + os.sep):
+        return None
+    return path if os.path.isfile(path) else None
 @app.route("/generate", methods=["POST"])
 def generate():
     """一張照片進、三張貼圖出。

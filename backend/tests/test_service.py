@@ -87,8 +87,8 @@ class TestGenerateSuccess:
         asset_id = body["assetId"]
         assert len(asset_id) == 32
         for part in PARTS:
-            assert body["textures"][part] == f"/assets/gen/{asset_id}/{part}.png"
-            assert os.path.exists(tmp_path / asset_id / f"{part}.png")
+            assert body["textures"][part] == f"/assets/gen/{asset_id}/{part}.webp"
+            assert os.path.exists(tmp_path / asset_id / f"{part}.webp")
         assert set(body["fallbackColors"]) == {"skin", "hair", "torso", "legs"}
         assert body["elapsedMs"] >= 0
 

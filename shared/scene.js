@@ -43,8 +43,8 @@ export const ZONES = [
  */
 export const PROPS = [
   // 舞台兩側的音箱
-  { id: 'spk_l', type: 'speaker', x: 600, y: 210, r: 46 },
-  { id: 'spk_r', type: 'speaker', x: 1320, y: 210, r: 46 },
+  { id: 'spk_l', type: 'speaker', x: 600, y: 210, r: 46, ry: Math.PI / 4 },
+  { id: 'spk_r', type: 'speaker', x: 1320, y: 210, r: 46, ry: -Math.PI / 4 },
 
   // 暢飲區的高腳桌
   { id: 'tbl_1', type: 'table', x: 186, y: 452, r: 62 },
@@ -52,8 +52,8 @@ export const PROPS = [
   { id: 'tbl_3', type: 'table', x: 386, y: 548, r: 62 },
 
   // 聊天區的沙發與矮桌
-  { id: 'sofa_1', type: 'sofa', x: 1452, y: 622, r: 84 },
-  { id: 'sofa_2', type: 'sofa', x: 1716, y: 812, r: 84 },
+  { id: 'sofa_1', type: 'sofa', x: 1452, y: 622, r: 84, ry: Math.PI / 2 },
+  { id: 'sofa_2', type: 'sofa', x: 1716, y: 812, r: 84, ry: 0 },
   { id: 'ctbl_1', type: 'lowtable', x: 1560, y: 856, r: 54 },
 
   // 散落的植栽

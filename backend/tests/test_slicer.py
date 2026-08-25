@@ -145,46 +145,64 @@ class TestSliceCharacter:
         assert out["ok"] is True
         assert out["assetId"] == asset_id
         for part in PARTS:
-            assert os.path.exists(tmp_path / asset_id / f"{part}.png")
-            assert out["textures"][part] == f"/assets/gen/{asset_id}/{part}.png"
+            assert os.path.exists(tmp_path / asset_id / f"{part}.webp")
+            assert out["textures"][part] == f"/assets/gen/{asset_id}/{part}.webp"
         assert set(out["fallbackColors"]) == {"skin", "hair", "torso", "legs"}
 
     def test_writes_full_image_alongside_the_slices(self, figure, tmp_path):
-        """整張圖是 2D 大螢幕實際要畫的那一張，必須與正規化結果逐像素相同。
+        """整張圖是大螢幕與大合照共用的那一張，必須是完整的正規化結果。
 
         切片在 2D 這條路上是純成本：screen.js 又照同一組比例把三張疊回去，
-        構圖與原圖相同，卻換來三個請求、三次載入失敗風險，以及三張各自被
-        拉伸到固定寬度造成的整體變形。三張切片保留給之後貼到 3D 部件、
-        做肢體動作的用途。
+        構圖與原圖相同，卻換來三個請求與整體變形；大合照那邊則是不想把
+        shared/avatars.js 的疊法在 Python 再實作一次（跨語言耦合）。
+        三張切片保留給之後貼到 3D 部件、做肢體動作的用途。
+
+        比對方式：alpha 必須逐像素相同 —— 它決定輪廓，而 WEBP 的 alpha 是
+        無損的。RGB 只要求接近，quality=92 是有損壓縮，逐像素比對會失敗於
+        壓縮誤差而不是真正的錯誤。
         """
         asset_id = "e" * 32
         out = slice_character(to_b64(figure), str(tmp_path), asset_id)
-        assert out["textures"]["full"] == f"/assets/gen/{asset_id}/full.png"
+        assert out["textures"]["full"] == f"/assets/gen/{asset_id}/full.webp"
+        assert out["fullPng"] == out["textures"]["full"], "大合照那條呼叫端的別名要一致"
 
-        written = PILImage.open(tmp_path / asset_id / "full.png").convert("RGBA")
-        expected = normalize(decode_png(to_b64(figure)))
-        assert written.size == expected.size
-        assert np.array_equal(np.asarray(written), np.asarray(expected)),             "整張圖必須是未經裁切縮放的正規化結果"
+        written = np.asarray(
+            PILImage.open(tmp_path / asset_id / "full.webp").convert("RGBA")
+        ).astype(int)
+        expected = np.asarray(
+            normalize(decode_png(to_b64(figure))).convert("RGBA")
+        ).astype(int)
+        assert written.shape == expected.shape
+        assert np.array_equal(written[:, :, 3], expected[:, :, 3]), "輪廓不得改變"
+        assert np.abs(written[:, :, :3] - expected[:, :, :3]).mean() < 15
 
     def test_full_image_keeps_the_figure_aspect_ratio(self, figure, tmp_path):
         """整張圖不得被壓成畫布比例 —— 那正是要避免的橫向拉伸。"""
         asset_id = "f" * 32
         slice_character(to_b64(figure), str(tmp_path), asset_id)
-        written = PILImage.open(tmp_path / asset_id / "full.png")
+        written = PILImage.open(tmp_path / asset_id / "full.webp")
         source = normalize(decode_png(to_b64(figure)))
-        assert abs(written.size[0] / written.size[1] - source.size[0] / source.size[1]) < 1e-9
+        assert written.size == source.size
 
     def test_slices_reassemble_into_the_full_image(self, figure, tmp_path):
-        """三張切片疊回去必須等於整張圖 —— 兩條路徑不得畫出不同的角色。"""
+        """三張切片疊回去必須等於整張圖 —— 兩條路徑不得畫出不同的角色。
+
+        大螢幕走整張圖、3D 之後走三張切片，兩者若不一致，同一個人在不同
+        畫面上會長得不一樣，而且沒有任何錯誤訊息。
+        """
         asset_id = "0" * 32
         slice_character(to_b64(figure), str(tmp_path), asset_id)
-        full = np.asarray(PILImage.open(tmp_path / asset_id / "full.png").convert("RGBA"))
+        full = np.asarray(
+            PILImage.open(tmp_path / asset_id / "full.webp").convert("RGBA")
+        ).astype(int)
         rebuilt = np.concatenate(
-            [np.asarray(PILImage.open(tmp_path / asset_id / f"{p}.png").convert("RGBA"))
+            [np.asarray(PILImage.open(tmp_path / asset_id / f"{p}.webp").convert("RGBA")).astype(int)
              for p in PARTS],
             axis=0,
         )
-        assert np.array_equal(rebuilt, full)
+        assert rebuilt.shape == full.shape
+        assert np.array_equal(rebuilt[:, :, 3], full[:, :, 3]), "輪廓必須完全一致"
+        assert np.abs(rebuilt - full).mean() < 2
 
     def test_accepts_data_uri_prefix(self, figure, tmp_path):
         b64 = "data:image/png;base64," + to_b64(figure)
@@ -194,7 +212,38 @@ class TestSliceCharacter:
     def test_written_files_are_valid_pngs_with_alpha(self, figure, tmp_path):
         asset_id = "c" * 32
         slice_character(to_b64(figure), str(tmp_path), asset_id)
-        img = PILImage.open(tmp_path / asset_id / "head.png")
+        img = PILImage.open(tmp_path / asset_id / "head.webp")
+        assert img.mode == "RGBA"
+
+
+class TestFullImageForGroupPhoto:
+    """大合照在 Python 端合成，需要未切片的全身圖。
+
+    只留三張切片的話，Python 就得依 CUTS 比例把它們疊回去 —— 等於把
+    shared/avatars.js 的疊法在第二個語言再實作一次，正是本專案一再
+    警告的跨語言耦合（對不上時角色會脖子錯位，兩邊都不會報錯）。
+    """
+
+    def test_full_image_is_written(self, tmp_path):
+        res = slice_character(to_b64(make_figure()), str(tmp_path), "aid")
+        assert (tmp_path / "aid" / "full.webp").is_file()
+
+    def test_full_image_url_is_returned(self, tmp_path):
+        res = slice_character(to_b64(make_figure()), str(tmp_path), "aid")
+        assert res["fullPng"] == "/assets/gen/aid/full.webp"
+
+    def test_full_image_is_not_a_slice(self, tmp_path):
+        """全身圖必須比任一切片高，否則就是存錯了東西。"""
+        slice_character(to_b64(make_figure()), str(tmp_path), "aid")
+        d = tmp_path / "aid"
+        full_h = PILImage.open(d / "full.webp").height
+        for part in PARTS:
+            assert full_h > PILImage.open(d / f"{part}.webp").height
+
+    def test_full_image_keeps_transparency(self, tmp_path):
+        """去背結果不能在存檔時被壓成不透明，否則合照會有白方塊。"""
+        slice_character(to_b64(make_figure()), str(tmp_path), "aid")
+        img = PILImage.open(tmp_path / "aid" / "full.webp")
         assert img.mode == "RGBA"
 
 

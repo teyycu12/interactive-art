@@ -16,8 +16,46 @@ import {
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
 } from '/shared/capture-guidance.js';
+import { avatarImage } from '/shared/avatarSprite.js';
+import { AvatarRenderer } from './avatarRenderer.js';
 
 const $ = (sel) => document.querySelector(sel);
+
+// ─────────────────────────────────────────────────────────────
+// 觸覺回饋
+// ─────────────────────────────────────────────────────────────
+/**
+ * iOS Safari **完全不支援** navigator.vibrate —— 不是降級，是沒有。
+ * 現場若有 iPhone，這條路徑對他們是靜默的，因此震動只能是加分項，
+ * 不能是任何互動的唯一回饋（每個震動點都另有畫面上的變化）。
+ *
+ * 另設開關並預設關閉腳步震動：走路時每秒約 2–3 次的持續震動
+ * 對電池與體感疲勞都有實際代價，該由使用者決定要不要開。
+ */
+const HAPTICS_KEY = 'personaflow.haptics';
+const canVibrate = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
+let hapticsOn = false;
+try { hapticsOn = localStorage.getItem(HAPTICS_KEY) === 'on'; } catch { /* 隱私模式 */ }
+
+function vibrate(pattern) {
+  if (!canVibrate || !hapticsOn) return;
+  try { navigator.vibrate(pattern); } catch { /* 部分瀏覽器在背景分頁會拋錯 */ }
+}
+
+// ── 防止手機休眠 (Wake Lock) ───────────────────────────────────
+let wakeLock = null;
+async function requestWakeLock() {
+  if ('wakeLock' in navigator) {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+    } catch {}
+  }
+}
+document.addEventListener('visibilitychange', async () => {
+  if (wakeLock !== null && document.visibilityState === 'visible') {
+    await requestWakeLock();
+  }
+});
 
 // ─────────────────────────────────────────────────────────────
 // 本地狀態
@@ -135,9 +173,21 @@ nameInput.addEventListener('keydown', (e) => {
 syncStartButton();
 
 /** 兩條入場路徑共用：確認名字、收鍵盤。回傳 false 表示名字還沒填 */
+const LEGO_PREFIXES = ['快樂的', '無敵', '魔法', '酷炫', '光速', '熱血', '創意', '宇宙', '調皮的', '神秘'];
+const LEGO_NOUNS = ['樂高', '工程師', '積木人', '拼裝者', '方塊', '大師', '探險家', '騎士', '魔法師', '小天才'];
+
+function generateLegoName() {
+  const p = LEGO_PREFIXES[Math.floor(Math.random() * LEGO_PREFIXES.length)];
+  const n = LEGO_NOUNS[Math.floor(Math.random() * LEGO_NOUNS.length)];
+  return p + n;
+}
+
 function commitName() {
-  const name = nameInput.value.trim();
-  if (!name) { nameInput.focus(); return false; }
+  let name = nameInput.value.trim();
+  if (!name) { 
+    name = generateLegoName();
+    nameInput.value = name;
+  }
   displayName = name;
   try { localStorage.setItem(LS.name, name); } catch { /* 略 */ }
   nameInput.blur(); // 收起鍵盤，否則下一個畫面一開場就被鍵盤蓋掉半個螢幕
@@ -168,155 +218,75 @@ function showToast(text, durationMs = 3200) {
 }
 
 let scanStream = null;
+/** 生成成功但尚未被本人確認的外觀。按下「進場」才會寫入 config */
+let pendingScanConfig = null;
+
+/**
+ * 切換掃描畫面的階段。
+ *
+ * 四個階段共用同一個左右分欄，只換右欄內容 —— 整塊重繪會讓畫面跳動，
+ * 而左邊的取景框在拍照前後必須留在原位（拍完顯示成果圖，位置不變）。
+ */
+function showScanPhase(phase) {
+  for (const el of document.querySelectorAll('#scan .scan-panel')) {
+    el.hidden = el.dataset.phase !== phase;
+  }
+  // 成果階段換白底。生成中顯示的是剛拍下的照片（深色框比較合適），
+  // 只有最後展示角色時才轉白 —— 角色是透明背景，白底才襯得出來。
+  $('.scan-stage')?.classList.toggle('is-result', phase === 'done');
+
+  // 名字貫穿整條流程：使用者在上一頁輸入之後就再也沒看到它，
+  // 但那正是等一下會出現在大螢幕角色頭上的名字。
+  for (const el of [$('#aim-name'), $('#done-name')]) {
+    if (el) el.textContent = displayName || '';
+  }
+  // 輔助線只在取景時有意義，其餘階段會擋住成果圖。
+  //
+  // 這裡用 class 而不是 .hidden：`hidden` 是 HTMLElement 的屬性，
+  // SVGElement 沒有 —— `svg.hidden = true` 會靜默失敗（屬性根本沒設上去，
+  // 也不會拋錯），輔助線就一路留在成果圖上面。
+  $('#scan-guide')?.classList.toggle('is-off', phase !== 'aim');
+  // 引導只在取景階段有意義；生成中與成果階段畫面已經定格。
+  if (phase !== 'aim') stopPreviewLoop();
+}
 
 // ── 站位引導 ──────────────────────────────────────────────
 //
-// 每秒送幾張縮圖到 /api/preview，回來的是「還差哪一項」。這條路只跑 CV，
-// 不呼叫任何付費 API，因此可以一直跑；真正花錢的只有按下快門那一次。
+// 人形輔助線只告訴參與者「該站成什麼樣」，不會告訴他「現在站對了沒有」。
+// 這裡每 250ms 送一張縮圖到 /api/preview，回來的是還差哪一項。
+// 只跑 CV，不呼叫任何付費 API，因此可以一直跑；錢只花在快門那一次。
 //
-// 沒有這段引導的話，參與者只能對著一個沒有回饋的畫面猜自己站得對不對，
-// 而拍歪的照片要等到生成完（約一分鐘、且已經付費）才會知道不合格。
+// 送出的影格必須與實際拍攝走同一套裁切（cropToPortraitJpeg 的 9:16），
+// 否則 CV 分析的取景與最後送去生成的不是同一塊畫面 —— 引導會指著一個
+// 不存在的問題，而真正被裁掉的部分沒有人檢查。
 
-/** 送出頻率。再高只是讓行動網路排隊，CV 本身跟不上 */
 const PREVIEW_INTERVAL_MS = 250;
-/** 預覽影格長邊。CV 端還會再縮到 360，送更大只是浪費上行頻寬 */
+/** 引導用的長邊。CV 端還會再縮到 360，送更大只是浪費上行頻寬 */
 const PREVIEW_MAX_EDGE = 360;
-/** 就緒後的倒數秒數，與 2D 版一致 */
-const COUNTDOWN_SEC = 3;
+/** 連續幾張空影格才提示 —— 剛開鏡頭時空一兩張是正常的 */
+const BLANK_FRAME_WARN = 12;
 
 let previewTimer = null;
 let previewInFlight = false;
 let previewSessionId = null;
-/** 連續幾張空影格之後才提示 —— 剛開鏡頭時空一兩張是正常的 */
-const BLANK_FRAME_WARN = 12;
 let blankFrames = 0;
-let countdownLeft = 0;
-let countdownTimer = null;
-let capturing = false;
-
-function stopScanStream() {
-  stopPreviewLoop();
-  if (!scanStream) return;
-  for (const track of scanStream.getTracks()) track.stop();
-  scanStream = null;
-}
 
 function stopPreviewLoop() {
   clearInterval(previewTimer);
   previewTimer = null;
   previewInFlight = false;
-  previewSessionId = null;
   blankFrames = 0;
-  $('.scan-stage')?.classList.remove('ready');
-  cancelCountdown();
+  document.querySelector('.scan-stage')?.classList.remove('is-ready');
+  const text = $('#aim-guide');
+  if (text) text.textContent = '';
+  $('#aim-lights')?.replaceChildren();
 }
 
-function cancelCountdown() {
-  clearInterval(countdownTimer);
-  countdownTimer = null;
-  countdownLeft = 0;
-  const el = $('#scan-countdown');
-  if (el) el.hidden = true;
-}
-
-/**
- * 等到 video 真的有影格為止。
- *
- * autoplay 在某些瀏覽器上不會自動觸發（尤其是動態指派 srcObject 的情況），
- * 因此明確呼叫 play()；再等 loadedmetadata 拿到實際尺寸。逾時就放行，
- * 讓後續的「拿不到影像」提示接手，而不是永遠卡在這裡。
- */
-function waitForVideo(video, timeoutMs = 4000) {
-  return new Promise((resolve) => {
-    const done = () => { clearTimeout(timer); video.removeEventListener('loadedmetadata', done); resolve(); };
-    const timer = setTimeout(done, timeoutMs);
-    if (video.videoWidth) { done(); return; }
-    video.addEventListener('loadedmetadata', done);
-    video.play().catch(() => { /* 由 loadedmetadata 或逾時收尾 */ });
-  });
-}
-
-/** 與代理層的 MAX_PHOTO_BYTES 一致；超過就會被 413 擋掉，不如先說 */
-const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
-
-function readFileAsDataUrl(file) {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
-    reader.onerror = () => resolve(null);
-    reader.readAsDataURL(file);
-  });
-}
-
-/**
- * 把上傳的照片縮到與拍照相同的尺寸。
- *
- * 解不開時回傳 null 而不是拋錯 —— 最常見的情況是 iPhone 的 HEIC，
- * Chrome 與 Firefox 都無法解碼，但後端有 pillow-heif 解得開。
- * 那時直接把原檔送出去，讓後端處理，而不是擋下一張其實可用的照片。
- */
-function downscaleDataUrl(dataUrl, maxEdge, quality) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.naturalWidth * scale);
-      canvas.height = Math.round(img.naturalHeight * scale);
-      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', quality));
-    };
-    img.onerror = () => resolve(null);
-    img.src = dataUrl;
-  });
-}
-
-/**
- * 讓參考圈貼齊影片實際顯示的矩形。
- *
- * video 用 contain，容器通常比影像大（手機直式、桌機橫式都會留黑邊）。
- * 參考圈若鋪滿容器，腳印會落在黑邊上，指到的位置與 CV 分析的影格對不上 ——
- * 這正是 2D 版把 (ix, iy, vw, vh) 傳給 _drawCaptureGuide 的原因。
- */
-function layoutStencil() {
-  const stage = document.querySelector('.scan-stage');
-  const video = $('#scan-video');
-  const svg = $('#scan-stencil');
-  if (!stage || !video?.videoWidth || !svg) return;
-  const sw = stage.clientWidth;
-  const sh = stage.clientHeight;
-  const scale = Math.min(sw / video.videoWidth, sh / video.videoHeight);
-  const w = video.videoWidth * scale;
-  const h = video.videoHeight * scale;
-  svg.style.left = `${Math.round((sw - w) / 2)}px`;
-  svg.style.top = `${Math.round((sh - h) / 2)}px`;
-  svg.style.width = `${Math.round(w)}px`;
-  svg.style.height = `${Math.round(h)}px`;
-
-  // 頭部參考圈在 2D 版是 ellipse(cx, cy, vh*0.12, vh*0.15) —— 寬與高都取自
-  // 影片「高度」，所以它在畫面上是圓的。viewBox 的 x 單位是寬度百分比，
-  // 直接寫死 rx 會讓它隨畫面比例被拉扁，因此換算後在執行期設定。
-  svg.querySelector('.st-head')?.setAttribute('rx', String((h * 0.06 / w) * 100));
-}
-
-window.addEventListener('resize', layoutStencil);
-
-/** 把 video 目前的畫面縮成小張 JPEG */
-function grabFrame(maxEdge, quality) {
-  const video = $('#scan-video');
-  if (!video?.videoWidth) return null;
-  const scale = Math.min(1, maxEdge / Math.max(video.videoWidth, video.videoHeight));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.round(video.videoWidth * scale);
-  canvas.height = Math.round(video.videoHeight * scale);
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL('image/jpeg', quality);
-}
-
-function renderGuide(features) {
-  $('#scan-guide-text').textContent =
-    captureGuidanceText(features, '✓ 全身已入鏡，準備拍攝');
-  const list = $('#scan-lights');
+function renderAimGuide(features) {
+  const text = $('#aim-guide');
+  if (text) text.textContent = captureGuidanceText(features, '✓ 全身已入鏡，可以按拍照了');
+  const list = $('#aim-lights');
+  if (!list) return;
   list.replaceChildren();
   for (const item of captureIndicators(features)) {
     const li = document.createElement('li');
@@ -326,34 +296,16 @@ function renderGuide(features) {
   }
 }
 
-function startCountdown() {
-  if (countdownTimer) return;
-  countdownLeft = COUNTDOWN_SEC;
-  const box = $('#scan-countdown');
-  box.hidden = false;
-  $('#scan-count').textContent = String(countdownLeft);
-  countdownTimer = setInterval(() => {
-    countdownLeft -= 1;
-    if (countdownLeft <= 0) {
-      cancelCountdown();
-      doCapture();
-      return;
-    }
-    $('#scan-count').textContent = String(countdownLeft);
-  }, 1000);
-}
-
 async function previewTick() {
   // 上一張還沒回來就跳過這一輪：排隊只會讓引導越來越落後於現實，
   // 參與者照著三秒前的畫面調整站位，永遠對不上。
-  if (previewInFlight || capturing || !scanStream) return;
-  const image = grabFrame(PREVIEW_MAX_EDGE, 0.6);
-  if (!image) {
-    // 相機開著卻拿不到影格（虛擬鏡頭、被其他程式佔用）。靜靜什麼都不做的話
-    // 參與者只會看到一個沒有反應的黑畫面，不知道該等還是該重來。
+  // 倒數與生成期間也不送 —— 那時畫面已經定格，引導沒有意義。
+  if (previewInFlight || counting || !scanStream) return;
+  const video = $('#scan-video');
+  if (!video?.videoWidth) {
     blankFrames += 1;
-    if (blankFrames === BLANK_FRAME_WARN) {
-      $('#scan-guide-text').textContent = '讀不到相機畫面，請確認沒有其他程式正在使用鏡頭';
+    if (blankFrames === BLANK_FRAME_WARN && $('#aim-guide')) {
+      $('#aim-guide').textContent = '讀不到相機畫面，請確認沒有其他程式正在使用鏡頭';
     }
     return;
   }
@@ -361,30 +313,31 @@ async function previewTick() {
 
   previewInFlight = true;
   try {
+    const image = cropToPortraitJpeg(video, video.videoWidth, video.videoHeight,
+                                     PREVIEW_MAX_EDGE, 0.6);
     const res = await fetch('/api/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image, sessionId: previewSessionId }),
     });
     const features = await res.json();
-    if (!scanStream) return;   // 期間已經離開拍攝頁
+    if (!scanStream) return;   // 期間已經離開取景階段
 
     if (typeof features?.sessionId === 'string') previewSessionId = features.sessionId;
 
     if (!features?.ok) {
       // 限流、逾時、服務未啟動都只是這一幀沒有結果，不是錯誤 ——
       // 引導維持原狀，下一幀補上；只有確定偵測不到人時才更新文字。
-      if (features?.guidance_reason) renderGuide(features);
-      $('.scan-stage').classList.remove('ready');
-      cancelCountdown();
+      if (features?.guidance_reason) renderAimGuide(features);
+      document.querySelector('.scan-stage')?.classList.remove('is-ready');
       return;
     }
 
-    renderGuide(features);
-    const ready = allCaptureIndicatorsPassed(features);
-    $('.scan-stage').classList.toggle('ready', ready);
-    if (ready) startCountdown();
-    else cancelCountdown();
+    renderAimGuide(features);
+    // 就緒只是「可以按了」的提示，不自動拍 —— 何時按下快門由參與者決定，
+    // 那是這個流程刻意保留的控制權（見拍照鍵的 5 秒倒數）。
+    document.querySelector('.scan-stage')
+      ?.classList.toggle('is-ready', allCaptureIndicatorsPassed(features));
   } catch {
     // 網路瞬斷：下一輪會再試
   } finally {
@@ -394,25 +347,16 @@ async function previewTick() {
 
 function startPreviewLoop() {
   stopPreviewLoop();
-  $('#scan-guide-text').textContent = '請站遠一點，讓全身與雙腳入鏡';
-  $('#scan-lights').replaceChildren();
+  previewSessionId = null;
+  if ($('#aim-guide')) $('#aim-guide').textContent = '請站遠一點，讓全身與雙腳入鏡';
   previewTimer = setInterval(previewTick, PREVIEW_INTERVAL_MS);
 }
 
-/**
- * 相機用不了時，留在拍攝頁的純上傳模式。
- *
- * 原本這兩種情況（非安全情境、權限被拒）都直接跳去捏臉 —— 但上傳按鈕就在
- * 拍攝頁上，等於在最需要它的時候把它藏起來。捏臉沒有被拿掉，「改用捏臉」
- * 仍然在同一排。
- */
-function showScanUploadOnly(reason) {
-  stopScanStream();
-  showScreen('scan');
-  document.querySelector('.scan-stage')?.classList.add('upload-only');
-  $('#btn-capture').disabled = true;
-  $('#scan-guide-text').textContent = `${reason}可以改上傳一張全身照片，或改用捏臉。`;
-  $('#scan-lights').replaceChildren();
+function stopScanStream() {
+  stopPreviewLoop();
+  if (!scanStream) return;
+  for (const track of scanStream.getTracks()) track.stop();
+  scanStream = null;
 }
 
 function fallbackToBuilder(message) {
@@ -428,125 +372,378 @@ function fallbackToBuilder(message) {
 $('#btn-scan').addEventListener('click', async () => {
   if (!commitName()) return;
 
+  showScreen('scan');
+
   // getUserMedia 要求安全情境。場館用 http://192.168.x.x 時瀏覽器會直接
   // 拒絕，且錯誤訊息相當隱晦 —— 這裡先明講，免得現場以為是相機壞了。
+  //
+  // 但沒有相機**不等於**不能生成角色：從相簿上傳這條路徑完全不需要相機。
+  // 因此這裡不再直接踢回捏臉，而是停在失敗畫面上 —— 那個畫面同時放了
+  // 「從相簿選」與「改用捏臉」，由使用者自己選，而不是系統代為決定。
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-    showScanUploadOnly('這個網址無法使用相機（需要 HTTPS）。');
+    showScanFailure(
+      '這個網址無法使用相機（需要 HTTPS）。',
+      '你仍然可以從相簿選一張全身照來生成角色，或改用捏臉。',
+      { title: '相機無法使用', emptyStage: true, noRetry: true },
+    );
     return;
   }
 
-  showScreen('scan');
-  document.querySelector('.scan-stage')?.classList.remove('upload-only');
+  await openCamera();
+});
+
+/** 開啟相機並回到取景階段。重拍會再次呼叫，因此不能寫在事件處理器裡。 */
+async function openCamera() {
+  stopScanStream();
+  pendingScanConfig = null;
+  $('#scan-result').hidden = true;
+  $('#scan-video').hidden = false;
   $('#btn-capture').disabled = false;
-  $('#scan-overlay').hidden = true;
+  $('#btn-capture').textContent = '拍照';
+  // 上一次若是相機失敗，取景框被藏起來了，重試時要收回來
+  $('.scan-stage')?.classList.remove('is-empty', 'shutter', 'is-result');
+  showScanPhase('aim');
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
-      // ideal 而非固定值：桌機通常只有前鏡頭，寫死 environment 在某些裝置上
-      // 會挑到輸出黑畫面的虛擬鏡頭。
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { facingMode: 'environment', width: { ideal: 720 }, height: { ideal: 1280 } },
       audio: false,
     });
-    const video = $('#scan-video');
-    video.srcObject = scanStream;
-    // srcObject 設好不代表已經有影格。少了這一步，預覽迴圈每次都在
-    // videoWidth === 0 提早 return，畫面全黑而且一盞指示燈都不會亮 ——
-    // 看起來像引導壞了，其實是還沒開始播。
-    await waitForVideo(video);
-    layoutStencil();
+    $('#scan-video').srcObject = scanStream;
     startPreviewLoop();
-  } catch {
-    showScanUploadOnly('沒有取得相機權限。');
+    return true;
+  } catch (err) {
+    // 不直接踢回捏臉：使用者可能只是誤按拒絕，或想去設定裡開啟。
+    // 捏臉仍在，但那是「他選的」而不是「系統替他決定的」。
+    const denied = err?.name === 'NotAllowedError';
+    showScanFailure(
+      denied ? '沒有取得相機權限。' : '開不起相機。',
+      denied
+        ? '請在網址列左側的權限圖示允許使用相機，再按重新嘗試。'
+        : '相機可能正被其他程式使用（視訊軟體、另一個分頁）。',
+      { title: '相機無法使用', retryLabel: '重新嘗試', emptyStage: true },
+    );
+    return false;
   }
-});
+}
 
 $('#btn-scan-back').addEventListener('click', () => fallbackToBuilder(null));
 
-/** 快門。倒數結束與手動按鈕走同一條路，避免兩份幾乎相同的流程各自演化。 */
-async function doCapture() {
-  if (capturing) return;
-  // 先把畫面定格成 JPEG。長邊限制在 1280：再大只是讓上傳變慢，
-  // 生圖模型看到的解析度並不會因此提升。
-  const image = grabFrame(1280, 0.85);
-  if (!image) return;
-  // sessionId：預覽期間跨影格量到的身高比快門那一瞬間的單張估計可信，
-  // 後端會優先採用它。上傳的照片沒有預覽階段，因此沒有這個。
-  await submitImage(image, previewSessionId, '正在生成你的角色…');
+/** 倒數中被按下取消時設為 true，讓倒數迴圈中止。
+    宣告必須排在下方上傳處理器之前 —— let 不會提升，放在後面會落入
+    暫時性死區（TDZ）。 */
+let countdownCancelled = false;
+let counting = false;
+
+// ── 從相簿選一張照片 ─────────────────────────────────────────
+//
+// 與拍照並存而非取代：現場有人不想當場被拍、光線不夠、或相機權限被拒，
+// 上傳既有照片仍能走完同一條生成流程。
+//
+// 這條路徑**不需要相機**，因此在 getUserMedia 不可用時（http 非安全情境、
+// 權限被拒、相機被其他程式占用）依然成立 —— 相機失敗畫面上也放了這個入口。
+$('#btn-upload')?.addEventListener('click', () => $('#upload-input').click());
+$('#btn-upload-alt')?.addEventListener('click', () => $('#upload-input').click());
+
+$('#upload-input')?.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  // 先清空 value，否則連續選同一個檔案不會再次觸發 change
+  e.target.value = '';
+  if (!file) return;
+
+  if (!file.type.startsWith('image/')) {
+    showToast('請選擇圖片檔。');
+    return;
+  }
+
+  // 倒數中切走會讓倒數繼續跑並拍下空畫面，先中止它
+  if (counting) countdownCancelled = true;
+
+  let img;
+  try {
+    img = await loadImageFromFile(file);
+  } catch {
+    showScanFailure('讀不到這張照片。', '換一張圖片試試，或改用拍照。', {
+      title: '照片打不開', retryLabel: '重新選擇',
+    });
+    return;
+  }
+
+  // 相機若正開著就關掉：接下來取景框顯示的是選來的照片，
+  // 讓串流繼續跑只是白耗電。
+  stopScanStream();
+  const image = cropToPortraitJpeg(img, img.naturalWidth, img.naturalHeight);
+  await submitScanImage(image);
+});
+
+/** 讀取本機圖片檔成 <img>。用完必須釋放 objectURL，否則整張原檔會留在記憶體裡。 */
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode_failed')); };
+    img.src = url;
+  });
 }
 
-/**
- * 把一張照片送去生成。拍照與上傳共用 —— 兩者的差別只有影像從哪裡來，
- * 之後的等待、失敗降級與進場流程完全相同，沒有理由寫成兩份。
- */
-async function submitImage(image, sessionId, statusText) {
-  if (capturing) return;
-  capturing = true;
+$('#btn-capture').addEventListener('click', async () => {
+  const btn = $('#btn-capture');
+
+  // 倒數期間再按一次＝取消。
+  // 少了這條，發現站錯位置或有人闖進畫面時只能眼睜睜看它拍下去，
+  // 然後再等 25 秒生成完才能重拍。
+  if (counting) {
+    countdownCancelled = true;
+    return;
+  }
+
+  const video = $('#scan-video');
+  if (!video.videoWidth) return;
+  if (btn.disabled) return;
+
+  const display = $('#countdown-display');
+  const stage = $('.scan-stage');
+  counting = true;
+  countdownCancelled = false;
+  display.hidden = false;
+  $('#btn-scan-back').disabled = true;
+
+  for (let i = 5; i > 0; i--) {
+    display.textContent = i;
+    // 每一秒重播一次縮放動畫，讓數字有「跳動」感而不是靜止著換數字
+    display.classList.remove('tick');
+    void display.offsetWidth;
+    display.classList.add('tick');
+    btn.textContent = `取消（${i}）`;
+    await new Promise(r => setTimeout(r, 1000));
+    if (countdownCancelled) break;
+  }
+
+  display.hidden = false;
+  display.classList.remove('tick');
+  counting = false;
+  $('#btn-scan-back').disabled = false;
+  btn.textContent = '拍照';
+
+  if (countdownCancelled) {
+    display.hidden = true;
+    showToast('已取消');
+    return;
+  }
+
+  display.hidden = true;
+  btn.disabled = true;
+  // 快門：白閃一下，給「有拍到」的即時回饋
+  stage.classList.remove('shutter');
+  void stage.offsetWidth;
+  stage.classList.add('shutter');
+
+  const image = cropToPortraitJpeg(video, video.videoWidth, video.videoHeight);
+
   stopScanStream();
-  $('#scan-overlay').hidden = false;
-  $('#scan-status').textContent = statusText;
+  await submitScanImage(image);
+});
+
+/**
+ * 把來源（<video> 或 <img>）裁成 9:16 並編成 JPEG data URL。
+ *
+ * 相機與相簿上傳共用這一份：兩者送進 /api/generate 的格式必須一致，
+ * 否則後端 slicer 的切片比例會對不上其中一邊（見 CLAUDE.md 的跨語言耦合）。
+ */
+function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85) {
+  // 裁切成 9:16 長方細長型：聚焦在人物，捨棄無用的左右背景，減少 API 負擔與上傳成本
+  const TARGET_RATIO = 9 / 16;
+  let sx = 0, sy = 0, sw = sw0, sh = sh0;
+
+  if (sw0 / sh0 > TARGET_RATIO) {
+    sw = sh0 * TARGET_RATIO;
+    sx = (sw0 - sw) / 2;
+  } else {
+    sh = sw0 / TARGET_RATIO;
+    sy = (sh0 - sh) / 2;
+  }
+
+  // 長邊限制在 maxEdge（拍攝 1280），再大只是讓上傳變慢，生圖模型看到的
+  // 解析度並不會因此提升。上傳的相簿原檔可能是好幾千萬畫素，這一步同時
+  // 把它壓回伺服器收得下的大小。站位引導用小很多的尺寸，見 previewTick()。
+  const scale = Math.min(1, maxEdge / Math.max(sw, sh));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+
+  canvas.getContext('2d').drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+/** 送出照片並走完生成流程。相機與上傳共用。 */
+async function submitScanImage(image) {
+  // 凍結送出的那張照片留在取景框裡 —— 等待的 25 秒有東西可看，
+  // 也讓人知道系統正在處理的是哪一張。
+  $('#scan-video').hidden = true;
+  $('#scan-result').src = image;
+  $('#scan-result').hidden = false;
+  $('.scan-stage')?.classList.remove('is-empty');
+  showScanPhase('working');
+
+  const stopProgress = startScanProgress();
 
   let body;
   try {
     const res = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image, sessionId }),
+      // sessionId：取景期間跨影格量到的身高比快門那一瞬間的單張估計可信，
+      // 後端會優先採用它。相簿上傳沒有取景階段，因此是 null。
+      body: JSON.stringify({ image, sessionId: previewSessionId }),
     });
     body = await res.json();
   } catch {
-    capturing = false;
-    fallbackToBuilder('生成服務連不上，先用捏臉進場。');
+    stopProgress();
+    showScanFailure('生成服務連不上。');
     return;
   }
+
+  stopProgress();
 
   if (!body?.ok) {
-    // 生成服務在驗證不過時會附上重拍理由（缺腿、出框、輪廓不清…）。
-    // 沒有它，參與者能做的就只是再拍一張一模一樣的照片。
-    // 理由是伺服器端寫死的固定字串，不含使用者輸入。
-    const why = typeof body?.guidance === 'string' && body.guidance ? body.guidance : null;
-    capturing = false;
-    fallbackToBuilder(why ? `${why}先用捏臉進場，也可以重拍再試。`
-                          : '這張照片沒能生成角色，先用捏臉進場。');
+    const known = SCAN_ERRORS[body?.error];
+    showScanFailure(
+      known ?? '這張照片沒能生成角色。',
+      // 沒有對應錯誤碼時多半是照片本身的問題（人太小、背光、多人入鏡），
+      // 給具體可行動的建議，而不是只說「失敗了」。
+      known ? '' : '照片裡的人要夠大、光線夠亮，並且只有一個人入鏡。',
+    );
     return;
   }
 
-  config = { source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors };
+  // 生成完成不直接進場：讓本人看過再決定。
+  // 「數位轉譯成什麼樣子」正是這件作品的核心體驗，跳過等於白等 25 秒。
+  pendingScanConfig = {
+    source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors,
+  };
+  if (body.fullPng) $('#scan-result').src = body.fullPng;
+  showScanPhase('done');
+}
+
+/**
+ * 失敗畫面：保留重試的機會，而不是逕自把人踢回捏臉。
+ *
+ * 降級到捏臉是刻意保留的保底路徑（整合計畫 §3.5），但「自動降級」與
+ * 「讓使用者選」是兩回事 —— 等了 25 秒換來一句 toast 然後被丟去捏臉，
+ * 挫折感遠大於再按一次重拍。
+ */
+function showScanFailure(message, hint = '', opts = {}) {
+  // 相機開不起來時左邊沒有東西可看，留一個空黑框只是佔位。
+  // 生成失敗則相反 —— 剛拍的那張照片正是使用者要判斷「哪裡不對」的依據。
+  $('.scan-stage')?.classList.toggle('is-empty', !!opts.emptyStage);
+  $('#fail-title').textContent = opts.title ?? '沒能生成角色';
+  $('#scan-error').textContent = hint ? message : `${message}再試一次通常就好了。`;
+  const hintEl = $('#fail-hint');
+  hintEl.textContent = hint;
+  hintEl.hidden = !hint;
+  // 非安全情境下相機永遠開不起來（那個檢查是同步且必然的），
+  // 留一個按了必定再次失敗的「重新嘗試」只是在浪費現場的時間。
+  const retryBtn = $('#btn-retry');
+  retryBtn.textContent = opts.retryLabel ?? '重拍一次';
+  retryBtn.hidden = !!opts.noRetry;
+  showScanPhase('failed');
+}
+
+/** 後端回報的錯誤碼 → 看得懂的說明 */
+const SCAN_ERRORS = {
+  too_busy: '現在同時生成的人太多。',
+  rate_limited: '太快連續拍照了，稍等一下。',
+  photo_too_large: '照片檔案太大。',
+  generation_timeout: '生成等太久逾時了。',
+  vision_service_unavailable: '生成服務連不上。',
+  imagegen_unavailable: '生成服務尚未就緒。',
+  circuit_open: '生成服務暫時過載。',
+  no_person: '照片裡沒有偵測到人。',
+};
+
+/**
+ * 生成進度提示。
+ *
+ * 後端沒有回報真實進度，這裡是依實測耗時（約 25 秒）推進的估計值，
+ * 因此刻意在 92% 前停住 —— 進度條先滿了卻還沒好，比沒有進度條更糟。
+ */
+function startScanProgress() {
+  const STEPS = [
+    [0, '正在分析服裝特徵…'],
+    [22, '正在辨識臉部特徵…'],
+    [45, 'AI 正在挑選樂高積木…'],
+    [68, '積木拼裝與上色中…'],
+    [86, '即將完成，準備登場…'],
+  ];
+  const bar = $('#scan-progress');
+  const statusEl = $('#scan-status');
+  const elapsedEl = $('#scan-elapsed');
+  const t0 = Date.now();
+
+  const tick = setInterval(() => {
+    const sec = (Date.now() - t0) / 1000;
+    const pct = Math.min(92, (sec / 25) * 100);
+    bar.style.width = `${pct}%`;
+    const step = STEPS.filter(([p]) => pct >= p).at(-1);
+    if (step) statusEl.textContent = step[1];
+    elapsedEl.textContent = sec < 30
+      ? `已等待 ${Math.floor(sec)} 秒　約需 25 秒`
+      : `已等待 ${Math.floor(sec)} 秒　比平常久一些，請再等等`;
+  }, 250);
+
+  return () => { clearInterval(tick); bar.style.width = '100%'; };
+}
+
+// 確認、重拍、放棄
+$('#btn-accept').addEventListener('click', () => {
+  if (!pendingScanConfig) return;
+  config = pendingScanConfig;
+  pendingScanConfig = null;
   // 與捏臉路徑一致：存下外觀後由 enterStage 統一處理進場
   // （縮圖、搖桿初始化、舊 socket 清理都在那裡）
   try { localStorage.setItem(LS.avatar, JSON.stringify(config)); } catch { /* 略 */ }
-  capturing = false;
   enterStage();
+});
+$('#btn-retake').addEventListener('click', () => openCamera());
+$('#btn-retry').addEventListener('click', () => openCamera());
+$('#btn-give-up').addEventListener('click', () => fallbackToBuilder(null));
+
+/**
+ * 顯示「你認識了誰」。
+ *
+ * 這場活動真正在累積的是人與人的連結，但手機端進場後原本只有搖桿、
+ * 任務與分數 —— 那份累積完全看不見。這裡把它變成參與者自己的收藏。
+ */
+function renderSocialStrip(msg) {
+  const strip = $('#links-strip');
+  const peers = Array.isArray(msg?.peers) ? msg.peers : [];
+  if (peers.length === 0) { strip.hidden = true; return; }
+
+  $('#ls-count').textContent = String(msg.count ?? peers.length);
+
+  const faces = $('#ls-faces');
+  faces.textContent = '';
+  // 只畫最近幾位：手機橫幅放不下更多，而數字已經說明了總數
+  for (const peer of peers.slice(-6)) {
+    const sprite = peer.avatar ? avatarImage(peer.avatar) : null;
+    const cell = document.createElement('span');
+    cell.className = 'ls-face';
+    cell.title = peer.name || '';
+    if (sprite) {
+      // avatarImage 回傳的是 canvas，直接放進 DOM 即可，不必再編碼一次
+      sprite.className = 'ls-face-img';
+      cell.append(sprite);
+    } else {
+      cell.textContent = (peer.name || '?').slice(0, 1);
+    }
+    faces.append(cell);
+  }
+  strip.hidden = false;
 }
 
-$('#btn-capture').addEventListener('click', doCapture);
-
-// ── 上傳既有照片 ──────────────────────────────────────────
-//
-// 現場不是每個人都適合站到定點拍：抱小孩、坐輪椅、或單純不想被當場拍。
-// 上傳走的是同一條生成管線，只是少了站位引導那一段。
-$('#btn-upload').addEventListener('click', () => $('#file-input').click());
-
-$('#file-input').addEventListener('change', async (e) => {
-  const file = e.target.files?.[0];
-  // 先清空 value：同一個檔案連選兩次時 change 不會再觸發，
-  // 生成失敗想重試同一張照片就會像是按鈕壞了。
-  e.target.value = '';
-  if (!file || capturing) return;
-
-  if (file.size > MAX_UPLOAD_BYTES) {
-    showToast('這張照片太大了，請選一張小一點的。');
-    return;
-  }
-
-  const original = await readFileAsDataUrl(file);
-  if (!original) {
-    showToast('讀不到這個檔案，請換一張照片。');
-    return;
-  }
-
-  // 縮到與拍照相同的長邊。解不開多半是 HEIC —— 瀏覽器不會，但後端會，
-  // 因此原檔照送，不擋下一張其實可用的照片。
-  const scaled = await downscaleDataUrl(original, 1280, 0.85);
-  await submitImage(scaled ?? original, null, '正在辨識這張照片…');
+$('#links-strip').addEventListener('click', () => {
+  // 目前只做提示；完整名單留待有需求時再展開成面板
+  showToast('這些是你在現場實際碰面並互相確認過的人');
 });
 
 // ── 捏臉 ──────────────────────────────────────────────────
@@ -590,6 +787,8 @@ function connect() {
   const sock = ws;
 
   ws.addEventListener('open', () => {
+    const overlay = $('#reconnect-overlay');
+    if (overlay) overlay.hidden = true;
     reconnectDelay = 500;
     setStatus('登入中…');
     // 帶上舊 userId 與重連憑證：若伺服器上的角色還在（斷線 45 秒內），
@@ -615,6 +814,10 @@ function connect() {
       $('#my-name').textContent = msg.name;
       $('#my-id').textContent = msg.userId;
       setStatus('已連線', 'ok');
+    } else if (msg.type === EV.CLIENT_SYNC) {
+      // 個人視角座標（10Hz）。畫布可能還沒建立（剛連上、尚未進場），
+      // 此時直接丟棄即可 —— 下一則 100ms 後就到。
+      renderer?.applySync(msg);
     } else if (msg.type === EV.CLIENT_REJECT) {
       setStatus('資料有誤', 'warn');
       showToast(`登入失敗：${msg.reason}`);
@@ -629,6 +832,10 @@ function connect() {
     if (hasLeft) return;
     // 已被新連線取代的舊 socket 也不重連（見 enterStage）
     if (sock.superseded) return;
+    
+    const overlay = $('#reconnect-overlay');
+    if (overlay) overlay.hidden = false;
+
     setStatus('重新連線中…', 'warn');
     // 指數退避上限 5 秒：現場 Wi-Fi 壅塞時避免所有手機同頻重連加劇擁塞
     setTimeout(connect, reconnectDelay);
@@ -830,6 +1037,10 @@ $('#btn-confirm-exit').addEventListener('click', () => {
   // 讓退出訊息送達後才關閉連線，避免它被 close 交握截斷
   setTimeout(() => ws?.close(), 120);
 
+  // 停掉 POV 畫布的 rAF 迴圈。離場畫面看不到它，繼續跑只是白白耗電。
+  renderer?.stop();
+  renderer = null;
+
   // 清除身分憑證：重新進場時應建立全新角色，而不是接回剛剛離場的那個
   try {
     localStorage.removeItem(LS.userId);
@@ -855,6 +1066,25 @@ let joyIntensity = 0;
 let joyEngaged = false;
 let lastInputAt = 0;
 
+/** @type {AvatarRenderer|null} 個人視角畫布。進場時建立，離場時停止。 */
+let renderer = null;
+
+/**
+ * 建立或更新 POV 畫布。
+ * 掃描生成完成後外觀會變，因此重複呼叫時只換貼圖，不重建畫布 ——
+ * 重建會把累積的網格位移歸零，畫面看起來像瞬移。
+ */
+function initRenderer() {
+  const canvas = $('#pov-canvas');
+  if (!canvas) return;
+  if (renderer) { renderer.setAvatar(config); return; }
+
+  renderer = new AvatarRenderer(canvas, config);
+  // 腳步震動：由步態相位驅動，與畫面上的落腳完全同步（見 avatarRenderer._detectFootstep）
+  renderer.onFootstep(() => vibrate(15));
+  renderer.start();
+}
+
 function initJoystick() {
   if (joystick) return;
   joystick = nipplejs.create({
@@ -873,12 +1103,14 @@ function initJoystick() {
     joyIntensity = Math.min(1, data.force ?? 0);
     joyEngaged = true;
     lastInputAt = Date.now();
+    renderer?.setInput(joyVec, joyIntensity);
   });
 
   joystick.on('end', () => {
     joyEngaged = false;
     joyVec = { x: 0, y: 0 };
     joyIntensity = 0;
+    renderer?.setInput(joyVec, 0);
     // 補送一則歸零封包，讓伺服器立即停止施加手動速度，
     // 而不必等 3 秒閒置逾時才發現使用者已放手
     sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: 0 });
@@ -896,17 +1128,40 @@ $('#emotes').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-action]');
   if (!btn) return;
   sendMsg(EV.INPUT_ACTION, { action: btn.dataset.action });
+  vibrate([30, 40, 30]);
   btn.animate(
     [{ transform: 'scale(1)' }, { transform: 'scale(0.9)' }, { transform: 'scale(1)' }],
     { duration: 220 },
   );
 });
 
+// ── 震動開關 ──────────────────────────────────────────────
+{
+  const btn = $('#btn-haptics');
+  // 不支援的裝置（iOS Safari）直接不顯示，而不是顯示一個按了沒反應的開關
+  if (btn && canVibrate) {
+    btn.hidden = false;
+    const sync = () => btn.setAttribute('aria-pressed', String(hapticsOn));
+    sync();
+    btn.addEventListener('click', () => {
+      hapticsOn = !hapticsOn;
+      try { localStorage.setItem(HAPTICS_KEY, hapticsOn ? 'on' : 'off'); } catch { /* 略 */ }
+      sync();
+      // 開啟的當下震一下，讓使用者立刻確認它真的有作用
+      if (hapticsOn) vibrate(20);
+    });
+  }
+}
+
 /**
  * 操控權提示。
- * 這是純本地的顯示邏輯，鏡射伺服器 M2 的閒置門檻，用意是讓使用者理解
- * 「放手後角色會自己走」是設計而非故障。它不是控制權的真實來源 ——
- * 真正的 α 權重永遠由伺服器計算。
+ * 這是純本地的顯示邏輯，鏡射伺服器 M2 的閒置門檻。它不是控制權的真實來源
+ * —— 真正的 α 權重永遠由伺服器計算。
+ *
+ * 文案刻意不描述「放手之後角色會做什麼」：那由伺服器的 IDLE_MOTION 決定
+ * （預設 'still' 靜止待機，可改為 'wander' 自由漫遊），而手機端讀不到那個值。
+ * 寫死其中一種，另一種模式下就會變成假訊息 —— 使用者看著站著不動的角色，
+ * 卻被告知它正在漫遊。因此只陳述這端能確定的事：現在是不是你在操控。
  */
 setInterval(() => {
   const el = $('#agency');
@@ -915,7 +1170,7 @@ setInterval(() => {
   el.classList.toggle('active', active);
   el.textContent = active
     ? '你正在操控'
-    : '角色正在自由漫遊中 — 推動搖桿即可接手';
+    : '推動搖桿即可操控你的角色';
 }, 200);
 
 // 手機息屏或切換到其他 App 時主動歸零，避免角色維持在最後的推桿方向
@@ -924,6 +1179,8 @@ document.addEventListener('visibilitychange', () => {
     joyEngaged = false;
     sendMsg(EV.INPUT_MOVE, { vector: { x: 0, y: 0 }, intensity: 0 });
   }
+  // 畫布同步歸零，回到前景時角色不會延續息屏前的推桿方向繼續走
+  if (document.hidden) renderer?.setInput({ x: 0, y: 0 }, 0);
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -931,12 +1188,13 @@ document.addEventListener('visibilitychange', () => {
 // ─────────────────────────────────────────────────────────────
 function enterStage() {
   showScreen('controller');
+  requestWakeLock();
   $('#mini-avatar').innerHTML = renderAvatarSVG(config);
   $('#my-name').textContent = displayName;
   $('#my-id').textContent = '—';
   setStatus('連線中…');
-  // nipplejs 建立時需要量測 zone 尺寸，因此必須在區塊顯示之後才初始化
-  requestAnimationFrame(initJoystick);
+  // nipplejs 與畫布都需要量測已顯示區塊的尺寸，因此必須在 showScreen 之後才初始化
+  requestAnimationFrame(() => { initJoystick(); initRenderer(); });
   // 重新進場時可能還留著上一個已關閉的 socket，先確保它不會干擾。
   // 只呼叫 close() 不夠：它的 close 監聽器仍會依退避排程再 connect() 一次，
   // 於是同一支手機開出第二條連線、用同一個 userId 再送一次 CLIENT_JOIN。
@@ -1143,6 +1401,10 @@ function handleQuizMessage(msg) {
       myChoice = null;
       closeQuiz();
       return true;
+
+    case EV.SOCIAL_SELF:
+      renderSocialStrip(msg);
+      break;
 
     case EV.SCORE_SELF:
       setScore(msg.score);

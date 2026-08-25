@@ -19,9 +19,9 @@ const ASSET = 'a'.repeat(32);
 const CV_AVATAR = {
   source: 'CV',
   textures: {
-    head: `/assets/gen/${ASSET}/head.png`,
-    torso: `/assets/gen/${ASSET}/torso.png`,
-    legs: `/assets/gen/${ASSET}/legs.png`,
+    head: `/assets/gen/${ASSET}/head.webp`,
+    torso: `/assets/gen/${ASSET}/torso.webp`,
+    legs: `/assets/gen/${ASSET}/legs.webp`,
   },
   fallbackColors: {
     skin: '#F4C08A', hair: '#4A2C1A', torso: '#8FA05E', legs: '#B7A98A',
@@ -52,7 +52,7 @@ describe('CV avatar：合法輸入', () => {
   test('丟棄客戶端夾帶的額外欄位', () => {
     const cfg = withCV((c) => {
       c.isAdmin = true;
-      c.textures.extra = '/assets/gen/x/evil.png';
+      c.textures.extra = '/assets/gen/x/evil.webp';
     });
     const r = validateAvatarConfig(cfg);
     assert.equal(r.ok, true);
@@ -71,15 +71,15 @@ describe('CV avatar：貼圖路徑', () => {
   // 而它會被螢幕端當成圖片來源載入。
   const BAD_URLS = [
     ['上層目錄穿越', `/assets/gen/${ASSET}/../../../etc/passwd`],
-    ['目錄名不是 32 位十六進位', '/assets/gen/..%2F..%2Fetc/head.png'],
-    ['換成絕對外部網址', 'https://evil.example/head.png'],
-    ['協定相對網址', '//evil.example/head.png'],
+    ['目錄名不是 32 位十六進位', '/assets/gen/..%2F..%2Fetc/head.webp'],
+    ['換成絕對外部網址', 'https://evil.example/head.webp'],
+    ['協定相對網址', '//evil.example/head.webp'],
     ['data URI', 'data:image/png;base64,AAAA'],
-    ['前綴不符', '/assets/other/' + ASSET + '/head.png'],
+    ['前綴不符', '/assets/other/' + ASSET + '/head.webp'],
     ['副檔名不符', `/assets/gen/${ASSET}/head.svg`],
-    ['目錄名含大寫', `/assets/gen/${'A'.repeat(32)}/head.png`],
-    ['目錄名長度不足', '/assets/gen/abc/head.png'],
-    ['尾端夾帶查詢字串', `/assets/gen/${ASSET}/head.png?x=1`],
+    ['目錄名含大寫', `/assets/gen/${'A'.repeat(32)}/head.webp`],
+    ['目錄名長度不足', '/assets/gen/abc/head.webp'],
+    ['尾端夾帶查詢字串', `/assets/gen/${ASSET}/head.webp?x=1`],
   ];
 
   for (const [label, url] of BAD_URLS) {
@@ -89,16 +89,16 @@ describe('CV avatar：貼圖路徑', () => {
     });
   }
 
-  test('拒絕：部位與檔名對不上（torso 指向 head.png）', () => {
+  test('拒絕：部位與檔名對不上（torso 指向 head.webp）', () => {
     const r = validateAvatarConfig(withCV((c) => {
-      c.textures.torso = `/assets/gen/${ASSET}/head.png`;
+      c.textures.torso = `/assets/gen/${ASSET}/head.webp`;
     }));
     assert.equal(r.ok, false);
   });
 
   test('拒絕：三張貼圖混用不同資產目錄', () => {
     const r = validateAvatarConfig(withCV((c) => {
-      c.textures.legs = `/assets/gen/${'b'.repeat(32)}/legs.png`;
+      c.textures.legs = `/assets/gen/${'b'.repeat(32)}/legs.webp`;
     }));
     assert.equal(r.ok, false);
     assert.match(r.reason, /資產目錄/);
@@ -199,7 +199,7 @@ describe('renderAvatarSVG 對 CV 角色的降級', () => {
 describe('CV avatar：未切割的整張圖（選用）', () => {
   // 2D 大螢幕優先用整張圖 —— 切了又照同一組比例疊回去等於沒切，卻換來三個
   // 請求與整體變形。三張切片保留給之後貼到 3D 部件的用途。
-  const withFull = () => withCV((c) => { c.textures.full = `/assets/gen/${ASSET}/full.png`; });
+  const withFull = () => withCV((c) => { c.textures.full = `/assets/gen/${ASSET}/full.webp`; });
 
   test('沒有 full 仍通過（改版前生成的資產不得被踢出場）', () => {
     const r = validateAvatarConfig(CV_AVATAR);
@@ -210,17 +210,17 @@ describe('CV avatar：未切割的整張圖（選用）', () => {
   test('合法的 full 會被保留', () => {
     const r = validateAvatarConfig(withFull());
     assert.equal(r.ok, true);
-    assert.equal(r.value.textures.full, `/assets/gen/${ASSET}/full.png`);
+    assert.equal(r.value.textures.full, `/assets/gen/${ASSET}/full.webp`);
   });
 
   test('拒絕：full 與三張切片混用不同資產目錄', () => {
     // 少了這條就等於允許把別人的整張圖拼進自己的角色
-    const cfg = withCV((c) => { c.textures.full = `/assets/gen/${'b'.repeat(32)}/full.png`; });
+    const cfg = withCV((c) => { c.textures.full = `/assets/gen/${'b'.repeat(32)}/full.webp`; });
     assert.equal(validateAvatarConfig(cfg).ok, false);
   });
 
   test('拒絕：full 指向別的部位檔名', () => {
-    const cfg = withCV((c) => { c.textures.full = `/assets/gen/${ASSET}/head.png`; });
+    const cfg = withCV((c) => { c.textures.full = `/assets/gen/${ASSET}/head.webp`; });
     assert.equal(validateAvatarConfig(cfg).ok, false);
   });
 

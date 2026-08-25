@@ -20,10 +20,11 @@
 import {
   IDLE_THRESHOLD_MS, ALPHA_RAMP_UP_MS, ALPHA_DECAY_MS,
   DISCONNECT_GRACE_MS, MAX_SPEED, WALK_THRESHOLD,
-  ARRIVE, HEADING_TURN_RATE,
+  ARRIVE, HEADING_TURN_RATE, IDLE_MOTION, FACING_FLIP_SPEED, FACING_DWELL_MS,
+  MANUAL_SMOOTH_TAU,
 } from './config.js';
 import { STAGE, AGENT_STATE, AGENT_MODE } from '../shared/protocol.js';
-import { integrateBoids, resolveObstacleOverlap } from './boids.js';
+import { integrateBoids, resolveObstacleOverlap, obstacleAvoidance } from './boids.js';
 
 /**
  * 更新主動控制權重 α。
@@ -121,14 +122,96 @@ export function stepAgent(agent, agents, dt, now, affinity = null) {
   // Boids 影子速度無條件持續整合 —— 這是 α 歸零時能無縫接手的前提
   integrateBoids(agent, agents, dt, affinity);
 
-  // 手動速度：正規化方向 × 推桿強度 × 最高速
-  const manualVx = agent.inputX * agent.inputIntensity * MAX_SPEED;
-  const manualVy = agent.inputY * agent.inputIntensity * MAX_SPEED;
+  // 手動速度：正規化方向 × 推桿強度 × 最高速，再做一階低通。
+  //
+  // 平滑是必要的，因為輸入方向是單位向量：靠近搖桿中心時，手指的一點
+  // 偏移就是一個滿長度的方向，只有 intensity 在縮放。使用者把托盤拖回
+  // 原點的途中方向會反覆換邊而速度仍有數十單位 —— 沒有平滑的話，
+  // 角色會以接近全速的步態左右亂晃（實測回中期間場域速度維持在 26~52，
+  // 遠高於 WALK_THRESHOLD，步態強度因此一路都是滿的）。
+  //
+  // 濾在這裡而不是濾步態：步態只是症狀，真正在跳動的是速度本身，
+  // 位置與朝向也都吃同一份速度。
+  const rawVx = agent.inputX * agent.inputIntensity * MAX_SPEED;
+  const rawVy = agent.inputY * agent.inputIntensity * MAX_SPEED;
+  const smoothK = 1 - Math.exp(-dt / MANUAL_SMOOTH_TAU);
+  agent.manualVx += (rawVx - agent.manualVx) * smoothK;
+  agent.manualVy += (rawVy - agent.manualVy) * smoothK;
+  const manualVx = agent.manualVx;
+  const manualVy = agent.manualVy;
 
   // ── M2 核心合成公式 ──
+  //
+  // IDLE_MOTION === 'still' 時，自主項的係數改為 0：合成式退化成
+  // V = α · V_Manual，α 歸零後角色即完全靜止。
+  //
+  // 刻意乘以係數而非略過 integrateBoids() —— 影子速度仍要持續整合，
+  // 否則現場把參數改回 'wander' 時，第一次交接會從一個過期的速度接手。
   const a = agent.alpha;
-  let vx = (1 - a) * agent.boidsVx + a * manualVx;
-  let vy = (1 - a) * agent.boidsVy + a * manualVy;
+  const still = IDLE_MOTION === 'still';
+
+  // 'still' 模式關掉的是「自主意圖」（漫遊、群聚），不是「碰撞處理」。
+  //
+  // 影子速度裡同時含有這兩者。把整個自主項乘 0，會連帶抹掉道具斥力貢獻的
+  // 側向分量 —— 而正面推向圓形道具時，位置修正只會消去朝內的速度分量，
+  // 側向為零就等於沒有繞行方向，角色會直接卡在道具正面推不過去。
+  // （scene.test.mjs「沿邊緣滑過」正是為此把關。）
+  //
+  // 因此靜止模式下仍保留道具斥力，只是不讓它自己推著角色跑：
+  // 唯有在角色本來就有移動意圖（推桿中或正在煞停）時才生效。
+  const autonomy = still ? 0 : 1 - a;
+  let vx = autonomy * agent.boidsVx + a * manualVx;
+  let vy = autonomy * agent.boidsVy + a * manualVy;
+
+  // ── 靜止模式的煞停 ──
+  //
+  // 'still' 模式下不能只靠 α 衰減來收速度。α 要閒置滿 IDLE_THRESHOLD_MS 才開始
+  // 衰減，而 inputIntensity 在手指離開搖桿的當下就歸零 —— 那一瞬間 α 還是 1，
+  // 但 manualV 已經是 0，兩者相乘直接從全速掉到 0。'wander' 模式看不出這件事，
+  // 因為空缺由 Boids 影子速度補上；自主項一旦歸零，缺口就直接暴露成一階不連續。
+  //
+  // 因此改為對「上一幀的實際速度」做餘弦煞停，曲線與 ALPHA_DECAY_MS 一致：
+  // 使用者放手後角色會滑行一小段再停住，而不是被瞬間拔掉電源。
+  if (still) {
+    const manualMag = Math.hypot(manualVx, manualVy);
+    if (manualMag > 0) {
+      // 仍在推桿：記住當下速度，作為之後煞停的起點
+      agent.brakeFrom = null;
+      agent.brakeStartAt = null;
+    } else if (Math.hypot(agent.vx, agent.vy) > 0 || agent.brakeFrom !== null) {
+      if (agent.brakeFrom === null) {
+        agent.brakeFrom = { vx: agent.vx, vy: agent.vy };
+        agent.brakeStartAt = now;
+      }
+      const t = Math.min(1, (now - agent.brakeStartAt) / ALPHA_DECAY_MS);
+      const k = 0.5 * (1 + Math.cos(Math.PI * t)); // 1 → 0，起訖斜率皆為 0
+      vx = agent.brakeFrom.vx * k;
+      vy = agent.brakeFrom.vy * k;
+      if (t >= 1) agent.brakeFrom = null;
+    }
+  }
+
+  // 道具繞行放在煞停之後：煞停會直接覆寫 vx/vy，寫在前面的繞行結果會被丟掉，
+  // 角色在滑行途中撞上道具就只剩位置修正硬擋，看起來像貼著道具急停。
+  if (still && (vx !== 0 || vy !== 0)) {
+    const [avoidX, avoidY] = obstacleAvoidance(agent, vx, vy);
+    if (avoidX !== 0 || avoidY !== 0) {
+      // 繞行只能改變「方向」，不能改變「速率」。
+      //
+      // 切向分量直接相加會有兩個症狀：全速時合成速度超過 MAX_SPEED（經過道具
+      // 時莫名加速衝一下）；煞停途中則更糟 —— 疊加後的速率與正在餘弦衰減的
+      // 速率脫鉤，畫面上會看到角色減速到一半又彈回去。
+      // 因此把疊加結果正規化回原本的速率，只留下方向的改變。
+      const before = Math.hypot(vx, vy);
+      const sumX = vx + avoidX;
+      const sumY = vy + avoidY;
+      const after = Math.hypot(sumX, sumY);
+      if (before > 0 && after > 0) {
+        vx = (sumX / after) * before;
+        vy = (sumY / after) * before;
+      }
+    }
+  }
 
   // ── 定位鎖定：第三個速度來源 ──
   // 合照等情境需要把角色帶到指定位置。此時使用者操控與群體動力都不生效，
@@ -169,6 +252,45 @@ export function stepAgent(agent, agents, dt, now, affinity = null) {
 
   updateHeading(agent, dt);
 
-  // 2D 版的左右鏡像。3D 改用 heading，此欄保留是為了讓 2D 備援版本仍能運作。
-  if (Math.abs(agent.vx) > WALK_THRESHOLD) agent.facing = agent.vx > 0 ? 1 : -1;
+  updateFacing(agent, dt);
+}
+
+/**
+ * 更新左右鏡像（2D 版；3D 改用 heading，此欄保留是為了讓 2D 備援版本仍能運作）。
+ *
+ * 翻面是整個角色的水平鏡像 —— 畫面上最醒目的變化，比步態擺動大得多，
+ * 因此判定要比「是否在走路」保守得多，這裡疊了兩道防抖：
+ *
+ *   1. 速度門檻 FACING_FLIP_SPEED（高於 WALK_THRESHOLD，形成遲滯區）
+ *   2. 停留時間 FACING_DWELL_MS：新方向要站得住腳才真的翻面
+ *
+ * 兩道缺一不可。使用者把搖桿托盤拖回原點時，手指回中途不可能走直線，
+ * 向量會在零附近反覆換邊，而每次換邊的瞬時速度都可能衝過門檻 ——
+ * 只有速度門檻時實測仍會翻面 6 次，看起來就是角色瘋狂左右擺動。
+ * 加上停留時間後降到 0，而真正的轉身只慢 150ms，操作上感覺不出來。
+ */
+function updateFacing(agent, dt) {
+  if (Math.abs(agent.vx) <= FACING_FLIP_SPEED) return;
+
+  const want = agent.vx > 0 ? 1 : -1;
+  if (want === agent.facing) {
+    // 方向與現況一致：清掉累積中的反向計時
+    agent.facingPendingDir = null;
+    agent.facingPendingMs = 0;
+    return;
+  }
+
+  // 反向：必須連續維持 FACING_DWELL_MS 才真的翻面
+  if (agent.facingPendingDir === want) {
+    agent.facingPendingMs += dt * 1000;
+  } else {
+    agent.facingPendingDir = want;
+    agent.facingPendingMs = dt * 1000;
+  }
+
+  if (agent.facingPendingMs >= FACING_DWELL_MS) {
+    agent.facing = want;
+    agent.facingPendingDir = null;
+    agent.facingPendingMs = 0;
+  }
 }

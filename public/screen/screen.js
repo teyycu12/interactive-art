@@ -3,16 +3,18 @@
  *
  * 渲染分兩層：
  *   靜態場景　由 scene.js 離屏渲染一次，每幀貼圖（見該檔的說明）
- *   角色　　　由 character.js 逐幀以變換矩陣算出步態
+ *   角色　　　由 shared/character.js 逐幀以變換矩陣算出步態（手機端 POV 共用同一份）
  *
  * 除錯視圖（按 D）保留自 M2 開發期，用於檢查 α 權重、避障半徑與速度向量。
  */
 
-import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES } from '/shared/protocol.js';
-import { renderAvatarSVG, CV_CUTS, CV_PARTS, CV_FULL_PART } from '/shared/avatars.js';
-import { OBSTACLES } from '/shared/scene.js';
-import { buildScene } from './scene.js';
-import { drawCharacter, drawNameplate, drawEmote, drawOffline } from './character.js';
+import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protocol.js';
+import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
+import { OBSTACLES, PROPS } from '/shared/scene.js';
+import { RoomScene, populateProps } from './3d/RoomScene.js';
+import { drawCharacter, drawNameplate, drawEmote, drawOffline } from '/shared/character.js';
+
+let roomScene = null;
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
@@ -29,6 +31,10 @@ addEventListener('keydown', (e) => {
     debug = !debug;
     document.getElementById('hud').hidden = !debug;
   }
+  if (e.key === '1') roomScene?.applyLight('day');
+  if (e.key === '2') roomScene?.applyLight('evening');
+  if (e.key === '3') roomScene?.applyLight('night');
+  if (e.key === 'r' || e.key === 'R') roomScene?.resetCamera();
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -38,7 +44,6 @@ let scale = 1;
 let offsetX = 0;
 let offsetY = 0;
 let dpr = 1;
-let sceneLayer = null;
 
 function resize() {
   dpr = devicePixelRatio || 1;
@@ -53,12 +58,13 @@ function resize() {
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingQuality = 'high';
-
-  // 場景以實際輸出像素重建，縮放視窗才不會糊掉
-  sceneLayer = buildScene(scale, dpr);
 }
 addEventListener('resize', resize);
 resize();
+
+// 初始化 3D 背景
+roomScene = new RoomScene(document.getElementById('bg3d'));
+populateProps(roomScene, PROPS);
 
 // ─────────────────────────────────────────────────────────────
 // 連線狀態
@@ -69,6 +75,17 @@ const roster = new Map();
 const view = new Map();
 /** 剛完成配對的角色，用於畫面上的短暫強調 */
 const pulse = new Map();
+/**
+ * 社交圖譜的邊。
+ *
+ * 這是整件作品真正在累積的東西 —— 每一條線都對應現場實際發生過的一次
+ * 交談（配對必須雙方確認）。角色會走動、會加分，但「誰跟誰認識」若不畫
+ * 出來，那張集體共創的關係圖就只存在於伺服器的記憶體裡。
+ */
+let links = [];
+/** 剛完成配對的連線特效，播完即丟 */
+const sparks = [];
+const SPARK_MS = 1400;
 const PULSE_MS = 2600;
 
 let latest = [];
@@ -76,113 +93,43 @@ let syncCount = 0;
 let lastSyncAt = 0;
 let syncHz = 0;
 
-const AVATAR_W = 200;
-const AVATAR_H = 260;
-
 /**
- * 掃描生成的角色：優先畫未切割的整張圖，缺它才把三張貼圖疊回去。
- *
- * 回傳 canvas 而非 Image —— drawCharacter 只要求 sprite 有 complete 與
- * naturalWidth（character.js:82），canvas 兩者都能自行掛上，
- * 這樣就不必為了取得 Image 物件多繞一次 toDataURL 編解碼。
- *
- * 貼圖尚未載入時先用取樣色畫一個替身：現場的參與者在生成完成的瞬間
- * 就會看著大螢幕找自己，不能讓角色有一段時間是空白的。
+ * 大螢幕的角色圖像。組裝邏輯共用 shared/avatarSprite.js，
+ * enhance 打開對比補償 —— 投影機的實際亮度遠低於製作時的螢幕。
  */
-function cvAvatarImage(avatar) {
-  const canvas = document.createElement('canvas');
-  canvas.width = AVATAR_W;
-  canvas.height = AVATAR_H;
-  const ctx = canvas.getContext('2d');
-
-  const paintPlaceholder = () => {
-    const c = avatar.fallbackColors;
-    for (const part of CV_PARTS) {
-      const [top, bottom] = CV_CUTS[part];
-      ctx.fillStyle = part === 'head' ? c.skin : (part === 'torso' ? c.torso : c.legs);
-      ctx.fillRect(AVATAR_W * 0.25, AVATAR_H * top, AVATAR_W * 0.5, AVATAR_H * (bottom - top));
-    }
-    // 頭部上緣的髮色帶，比例與 slicer 取樣 hair 的區域一致
-    const [, headBottom] = CV_CUTS.head;
-    ctx.fillStyle = c.hair;
-    ctx.fillRect(AVATAR_W * 0.25, 0, AVATAR_W * 0.5, AVATAR_H * headBottom * 0.35);
-  };
-
-  paintPlaceholder();
-  // 先讓替身可被繪製；貼圖到齊後原地重畫，roster 不需要重新建立條目
-  canvas.complete = true;
-  canvas.naturalWidth = canvas.width;
-
-  /**
-   * 整張圖：等比縮放後底部對齊。
-   *
-   * 不能直接鋪滿畫布 —— 角色的寬高比平均約 0.642，畫布是 200x260 = 0.769，
-   * 直接填滿會把每個人橫向拉寬約 20%。底部對齊而非置中，是為了讓所有角色
-   * 站在同一條基準線上；置中會讓矮的角色浮在半空。
-   *
-   * 畫之前先清空且不重畫替身：整張圖的背景是透明的，替身的色塊會從
-   * 透明處透出來，變成角色身後多了三條顏色。
-   */
-  const drawFull = (img) => {
-    const scale = Math.min(AVATAR_W / img.naturalWidth, AVATAR_H / img.naturalHeight);
-    const w = img.naturalWidth * scale;
-    const h = img.naturalHeight * scale;
-    ctx.clearRect(0, 0, AVATAR_W, AVATAR_H);
-    ctx.drawImage(img, (AVATAR_W - w) / 2, AVATAR_H - h, w, h);
-  };
-
-  const loaded = {};
-  let pending = CV_PARTS.length;
-  const composite = () => {
-    if (!CV_PARTS.some((p) => loaded[p])) return; // 三張都載入失敗就留著替身
-    // 清空後必須先把替身畫回去，再疊上載入成功的貼圖。
-    // 少了這一步，只要有一張載入失敗（單一資產讀取失敗、網路瞬斷），
-    // 該部位就會變成全透明 —— 角色在大螢幕上缺頭或缺腿，
-    // 比維持取樣色的替身難看得多。
-    ctx.clearRect(0, 0, AVATAR_W, AVATAR_H);
-    paintPlaceholder();
-    for (const part of CV_PARTS) {
-      const img = loaded[part];
-      if (!img) continue;
-      const [top, bottom] = CV_CUTS[part];
-      ctx.drawImage(img, 0, AVATAR_H * top, AVATAR_W, AVATAR_H * (bottom - top));
-    }
-  };
-
-  const loadParts = () => {
-    for (const part of CV_PARTS) {
-      const img = new Image();
-      img.addEventListener('load', () => { loaded[part] = img; if (--pending === 0) composite(); });
-      img.addEventListener('error', () => { if (--pending === 0) composite(); });
-      img.src = avatar.textures[part];
-    }
-  };
-
-  // 整張圖是選用的：改版前生成的資產只有三張切片，那些角色仍在場上。
-  // 載入失敗也退回切片 —— 兩條路都通到同一個替身，參與者不會看到空白。
-  const fullUrl = avatar.textures[CV_FULL_PART];
-  if (fullUrl) {
-    const img = new Image();
-    img.addEventListener('load', () => drawFull(img));
-    img.addEventListener('error', loadParts);
-    img.src = fullUrl;
-  } else {
-    loadParts();
-  }
-
-  return canvas;
-}
-
-function avatarImage(avatar) {
-  // 兩種來源：掃描生成走貼圖，模組捏臉（備援路徑）走原本的 SVG
-  if (avatar?.source === 'CV') return cvAvatarImage(avatar);
-  const svg = renderAvatarSVG(avatar, { width: AVATAR_W, height: AVATAR_H });
-  const img = new Image();
-  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  return img;
-}
+const avatarImage = (avatar) => buildAvatarImage(avatar, { enhance: true });
 
 let screenReconnectDelay = 1000;
+
+const offlineEl = document.getElementById('offline');
+const offlineTextEl = document.getElementById('offline-text');
+/** 重連倒數的計時器，重連成功或下一次斷線時都必須清掉 */
+let offlineTimer = null;
+
+/**
+ * 顯示／隱藏斷線提示。
+ *
+ * 這個提示不是可有可無的裝飾：IDLE_MOTION 預設為靜止待機，因此伺服器掛掉時
+ * 畫面與「健康但沒人操控」完全相同 —— 角色都停在原地，也沒有任何錯誤訊息。
+ * 現場操作者需要一個能一眼分辨兩者的訊號。
+ */
+function setOffline(on, secondsLeft = 0) {
+  if (offlineTimer) { clearInterval(offlineTimer); offlineTimer = null; }
+  if (!offlineEl) return;
+  offlineEl.hidden = !on;
+  if (!on) return;
+
+  let left = secondsLeft;
+  const paint = () => {
+    offlineTextEl.textContent = left > 0
+      ? `與伺服器斷線，${left} 秒後重新連線…`
+      : '與伺服器斷線，正在重新連線…';
+    left -= 1;
+    if (left < 0 && offlineTimer) { clearInterval(offlineTimer); offlineTimer = null; }
+  };
+  paint();
+  offlineTimer = setInterval(paint, 1000);
+}
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -190,6 +137,7 @@ function connect() {
 
   ws.addEventListener('open', () => {
     screenReconnectDelay = 1000;
+    setOffline(false);
     ws.send(JSON.stringify({ type: EV.SCREEN_HELLO }));
   });
 
@@ -228,6 +176,10 @@ function connect() {
         break;
       }
 
+      case EV.STAGE_LINKS:
+        links = Array.isArray(msg.edges) ? msg.edges : [];
+        break;
+
       case EV.MISSION_ANNOUNCE:
         showMission(msg.mission);
         break;
@@ -242,6 +194,9 @@ function connect() {
         toast(`${msg.a.name} 和 ${msg.b.name} 認識了！`);
         pulse.set(msg.a.id, performance.now());
         pulse.set(msg.b.id, performance.now());
+        // 兩個各自擴散的環看不出「是這兩人連上了」——
+        // 補一道從 A 射向 B 的光束，把關係本身畫出來
+        sparks.push({ a: msg.a.id, b: msg.b.id, at: performance.now() });
         break;
 
       case EV.MISSION_CLOSED:
@@ -268,12 +223,27 @@ function connect() {
       case EV.SCORE_BOARD:
         renderRanks(msg.leaderboard ?? []);
         break;
+
+      case EV.SCREEN_CAPTURE_REQ:
+        // 大合照的底圖只能由大螢幕自己提供 —— 3D 場景在 WebGL 畫布上，
+        // 伺服器端沒有等價的渲染路徑（見 server/index.js 的 takeGroupPhoto）。
+        //
+        // 走 HTTP 而非這條 WebSocket：截圖遠大於單則訊息上限（4KB），
+        // 那個上限是擋惡意客戶端用的，不該為了合照對所有連線放寬。
+        fetch('/api/screen-capture', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId: msg.requestId, image: captureStageFrame() }),
+        }).catch(() => { /* 失敗就讓伺服器那邊逾時，退回無底圖版本 */ });
+        break;
     }
   });
 
   ws.addEventListener('close', () => {
     const delay = screenReconnectDelay + Math.floor(Math.random() * 500);
+    // #meta 在除錯面板裡（預設 hidden），所以另外顯示常駐的斷線提示
     metaEl.textContent = `與伺服器斷線，${(delay / 1000).toFixed(1)} 秒後重連…`;
+    setOffline(true, Math.round(delay / 1000));
     setTimeout(connect, delay);
     screenReconnectDelay = Math.min(screenReconnectDelay * 1.5, 6000);
   });
@@ -316,10 +286,112 @@ function toast(text) {
 // ─────────────────────────────────────────────────────────────
 // 繪製
 // ─────────────────────────────────────────────────────────────
-const EMOTE_GLYPH = { CHEERS: '🍻', HEART: '💗', WAVE: '👋' };
 
-/** 邏輯座標 → 螢幕座標 */
-const toScreen = (v) => ({ x: offsetX + v.x * scale, y: offsetY + v.y * scale });
+/** 邏輯座標 → 螢幕座標 (3D 空間投影) */
+const toScreen = (v) => {
+  return roomScene ? roomScene.projectToScreen(v.x, v.y) : { x: 0, y: 0 };
+};
+
+// 角色在 3D 世界裡的身高（房間牆高 9，成人約佔五分之一多一點）
+const CHARACTER_WORLD_HEIGHT = 2.1;
+
+/**
+ * 角色在該座標處應有的螢幕高度。
+ *
+ * 走 3D 投影而非固定值：同一個人走到房間深處就該變小，走近就該變大。
+ * roomScene 還沒建好時退回原本的等比縮放，畫面不會空掉。
+ */
+function characterHeightAt(v) {
+  if (!roomScene || !v) return CHARACTER_HEIGHT * scale;
+  const px = roomScene.scaleAt(v.x, v.y, CHARACTER_WORLD_HEIGHT);
+  return px > 1 ? px : CHARACTER_HEIGHT * scale;
+}
+
+/** 新建立的邊會亮著這麼久，之後淡成常駐細線 */
+const LINK_FRESH_MS = 6000;
+
+/**
+ * 畫出社交圖譜。
+ *
+ * 剛建立的邊亮而粗，隨時間淡成細線 —— 這讓「剛剛有兩個人認識了」在滿場
+ * 連線中仍然看得出來，同時整場累積的關係網也一直留在畫面上。
+ *
+ * 只畫兩端都在場的邊：邊本身是既成事實（人離場也不刪），但畫一條連到
+ * 空無一人處的線只會讓畫面變髒。
+ */
+function drawLinks(now) {
+  if (links.length === 0) return;
+  const wallNow = Date.now();
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (const e of links) {
+    const va = view.get(e.a);
+    const vb = view.get(e.b);
+    if (!va || !vb) continue;
+
+    const pa = toScreen(va);
+    const pb = toScreen(vb);
+    if (!Number.isFinite(pa.x) || !Number.isFinite(pb.x)) continue;
+
+    // 0 = 剛建立，1 = 已成為背景的一部分
+    const age = Math.min(1, Math.max(0, (wallNow - (e.at ?? 0)) / LINK_FRESH_MS));
+    const fresh = 1 - age;
+    // 剛連上時脈動一下，讓現場注意到
+    const pulseAmt = fresh > 0 ? (0.5 + 0.5 * Math.sin(now / 140)) * fresh : 0;
+
+    ctx.strokeStyle = `rgba(42, 140, 128, ${0.16 + fresh * 0.5 + pulseAmt * 0.2})`;
+    ctx.lineWidth = (1.2 + fresh * 2.4 + pulseAmt * 1.2) * scale;
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(pb.x, pb.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/**
+ * 配對瞬間的連線特效：一道沿著兩人之間快速掃過的亮線。
+ *
+ * 與常駐連線分開處理 —— 那條線負責「他們認識」，這道光束負責
+ * 「他們剛剛認識」。全場需要在那一兩秒內知道有事發生。
+ */
+function drawSparks(now) {
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const sp = sparks[i];
+    const t = (now - sp.at) / SPARK_MS;
+    if (t >= 1) { sparks.splice(i, 1); continue; }
+
+    const va = view.get(sp.a);
+    const vb = view.get(sp.b);
+    if (!va || !vb) continue;
+    const pa = toScreen(va);
+    const pb = toScreen(vb);
+    if (!Number.isFinite(pa.x) || !Number.isFinite(pb.x)) continue;
+
+    // 前 45% 是光束射出，其餘時間整條線發亮後淡出
+    const head = Math.min(1, t / 0.45);
+    const ease = 1 - Math.pow(1 - head, 3);
+    const hx = pa.x + (pb.x - pa.x) * ease;
+    const hy = pa.y + (pb.y - pa.y) * ease;
+    const fade = t < 0.45 ? 1 : 1 - (t - 0.45) / 0.55;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = `rgba(42, 140, 128, ${0.9 * fade})`;
+    ctx.lineWidth = 5 * scale;
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(hx, hy);
+    ctx.stroke();
+    // 光點在前端
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * fade})`;
+    ctx.beginPath();
+    ctx.arc(hx, hy, 5 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
 
 function drawDebugOverlay(a, pos) {
   // 剛體避障半徑
@@ -347,17 +419,40 @@ function drawDebugOverlay(a, pos) {
   ctx.stroke();
 }
 
+/**
+ * 把當下的大螢幕畫面截成一張 PNG（大合照的底圖）。
+ *
+ * 畫面實際上是兩張獨立的畫布疊出來的：3D 房間在 WebGL 畫布、角色在 2D
+ * 畫布，CSS 用 z-index 把它們疊在一起。截圖必須依同樣順序合成 ——
+ * 只截其中一張會得到「有房間沒有人」或「有人沒有房間」。
+ *
+ * 先強制 render 一次再讀：WebGL 的緩衝內容只在該幀有效，
+ * 不重畫就可能讀到上一幀甚至空白（配合 preserveDrawingBuffer）。
+ */
+function captureStageFrame() {
+  if (roomScene) roomScene.render();
+
+  const out = document.createElement('canvas');
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const octx = out.getContext('2d');
+
+  // 3D 房間在底層。WebGL 畫布的像素尺寸與 2D 畫布未必相同
+  // （setPixelRatio 上限 1.5，2D 用完整 dpr），因此明確拉伸到同一尺寸。
+  const gl = roomScene?.renderer?.domElement;
+  if (gl) octx.drawImage(gl, 0, 0, out.width, out.height);
+  // 角色與名牌在上層
+  octx.drawImage(canvas, 0, 0);
+
+  return out.toDataURL('image/png');
+}
+
 function render(now) {
   const time = now / 1000;
 
+  // 3D 畫布在底層自行 render，我們只需清空 2D Canvas
   ctx.clearRect(0, 0, innerWidth, innerHeight);
-  // 投影畫面以外的區域填成同色，避免出現黑邊
-  ctx.fillStyle = '#FAF8F5';
-  ctx.fillRect(0, 0, innerWidth, innerHeight);
-
-  if (sceneLayer) {
-    ctx.drawImage(sceneLayer, offsetX, offsetY, STAGE.width * scale, STAGE.height * scale);
-  }
+  if (roomScene) roomScene.render();
 
   if (debug) {
     ctx.strokeStyle = 'rgba(233,196,106,.9)';
@@ -381,12 +476,19 @@ function render(now) {
     v.y += (a.y - v.y) * 0.35;
   }
 
+  // 連線畫在角色底下：關係是背景脈絡，不該蓋住人臉
+  drawLinks(now);
+  drawSparks(now);
+
   // 依 Y 軸排序，讓視覺上較近（偏下）的角色蓋住較遠的（§6 風險 2）
   const sorted = [...latest].sort((p, q) => p.y - q.y);
-  const height = CHARACTER_HEIGHT * scale;
 
   for (const a of sorted) {
-    const pos = toScreen(view.get(a.id));
+    const v = view.get(a.id);
+    const pos = toScreen(v);
+    // 角色高度隨深度變化。房間最深處到最近處的相機距離差 2.45 倍，
+    // 固定高度會讓所有人畫得一樣大 —— 那是「貼紙浮在畫面上」的主因。
+    const height = characterHeightAt(v);
     const entry = roster.get(a.id);
 
     // 剛完成配對：向外擴散的環，讓觀眾把螢幕上的事件與
@@ -410,7 +512,8 @@ function render(now) {
     if (debug) drawDebugOverlay(a, pos);
 
     drawCharacter(ctx, a, pos, entry?.img, { time, maxSpeed: MAX_SPEED, height });
-    drawNameplate(ctx, pos, entry?.name ?? a.id, { fontSize: Math.max(11, 17 * scale) });
+    // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
+    drawNameplate(ctx, pos, entry?.name ?? a.id, { fontSize: Math.max(10, height * 0.12) });
     if (a.emote) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }

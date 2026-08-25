@@ -17,7 +17,7 @@
 
 import {
   BOIDS, MAX_SPEED, MAX_FORCE, BOUNDARY_MARGIN, BOUNDARY_WEIGHT,
-  OBSTACLE_WEIGHT,
+  OBSTACLE_WEIGHT, IDLE_MOTION,
 } from './config.js';
 import { STAGE } from '../shared/protocol.js';
 import { OBSTACLES } from '../shared/scene.js';
@@ -194,6 +194,60 @@ export function resolveObstacleOverlap(agent) {
   }
 }
 
+
+/**
+ * 靜止模式用的道具繞行速度（不經影子速度）。
+ *
+ * obstacleForce() 回傳的是相對於影子速度的轉向力，在 'still' 模式下影子速度
+ * 不參與合成，那個力沒有著力點。
+ *
+ * ⚠ 這裡要的是「繞過去」而不是「被擋下來」。純徑向的斥力在正面直衝時
+ *   恰好與行進方向反向，兩者相消，角色會停在道具前方動彈不得（而且是停在
+ *   緩衝帶外緣，看起來像撞到空氣牆）。因此回傳的是**切向**分量：
+ *   取徑向的垂直方向，並選與當前行進方向同側的那一邊，角色才會順勢滑開。
+ *
+ * @param {object} agent
+ * @param {number} vx 目前的合成速度，用來決定往哪一側繞
+ * @param {number} vy
+ * @returns {[number, number]} 速度增量（邏輯單位/秒）
+ */
+export function obstacleAvoidance(agent, vx, vy) {
+  const speed = Math.hypot(vx, vy);
+  if (speed === 0) return [0, 0];
+
+  let bestPush = 0;
+  let nx = 0, ny = 0;
+
+  for (const o of OBSTACLES) {
+    const dx = agent.x - o.x;
+    const dy = agent.y - o.y;
+    const distSq = dx * dx + dy * dy;
+    const reach = o.r + BOIDS.obstacleMargin;
+    if (distSq > reach * reach) continue;
+
+    const dist = Math.sqrt(distSq) || 1e-6;
+    // 只在朝著道具前進時才需要繞行；已經在遠離就別再加力
+    if ((vx * -dx + vy * -dy) / speed <= 0) continue;
+
+    const push = Math.min((reach - dist) / BOIDS.obstacleMargin, 1);
+    if (push > bestPush) {
+      bestPush = push;
+      nx = dx / dist;
+      ny = dy / dist;
+    }
+  }
+
+  if (bestPush === 0) return [0, 0];
+
+  // 徑向的兩個垂直方向，取與行進方向夾角較小的那個 → 順勢繞行而非折返
+  let tx = -ny, ty = nx;
+  if (tx * vx + ty * vy < 0) { tx = ny; ty = -nx; }
+
+  // 上限壓在 MAX_SPEED 之下：這是偏移量，不該強到蓋過使用者的操控
+  const strength = bestPush * MAX_SPEED * 0.9;
+  return [tx * strength, ty * strength];
+}
+
 /** 邊界回推：進入邊緣帶後施加朝內的力，力度隨深入程度線性上升 */
 function boundaryForce(agent) {
   let fx = 0, fy = 0;
@@ -224,7 +278,11 @@ export function integrateBoids(agent, agents, dt, affinity = null) {
   const [flockX, flockY] = flockingForce(agent, agents, affinity);
   const [boundX, boundY] = boundaryForce(agent);
   const [obsX, obsY] = obstacleForce(agent);
-  const [wanderX, wanderY] = wanderForce(agent, dt);
+  // 漫遊擾動是「無鄰居時仍要動」的來源，因此它正是 IDLE_MOTION 要關掉的東西。
+  // 'flock' 模式關掉它之後，三力在孤身一人時全為零，角色自然停住。
+  const [wanderX, wanderY] = IDLE_MOTION === 'wander'
+    ? wanderForce(agent, dt)
+    : [0, 0];
 
   agent.boidsVx += (flockX + boundX + obsX + wanderX) * dt;
   agent.boidsVy += (flockY + boundY + obsY + wanderY) * dt;

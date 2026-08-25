@@ -114,7 +114,21 @@ def _draw_lego_character(
     draw = ImageDraw.Draw(char_img)
 
 
-    # 1. 優先嘗試載入 AI 生成的 body_png
+    # 1a. 整合版：貼圖已落地成檔案，直接讀本機路徑（見 service.py 的 /compose）
+    body_path = char.get("body_path")
+    if body_path and isinstance(body_path, str):
+        try:
+            with Image.open(body_path) as pil_body:
+                pil_body = pil_body.convert("RGBA")
+                pil_body.thumbnail((width, target_height), Image.Resampling.LANCZOS)
+                paste_x = (width - pil_body.width) // 2
+                paste_y = (target_height - pil_body.height) // 2
+                char_img.paste(pil_body, (paste_x, paste_y), pil_body)
+                return char_img
+        except Exception as e:
+            print(f"[photo_composer] 讀取 {body_path} 失敗，改用程式化繪製：{e}")
+
+    # 1b. 優先嘗試載入 AI 生成的 body_png
     body_b64 = char.get("body_png")
     if body_b64 and isinstance(body_b64, str):
         try:
@@ -358,6 +372,106 @@ def upload_photo(image_bytes: bytes, photo_id: str = "personaflow") -> Optional[
     )
 
 
+def _decode_backdrop(backdrop: Optional[str], width: int, height: int):
+    """把大螢幕交回的截圖解成畫布尺寸的底圖。
+
+    任何解不開的情況（None、格式壞掉、被截斷）都回 None，讓呼叫端安靜地
+    退回自畫舞台 —— 合照失敗對現場的代價，遠高於背景不是 3D 房間。
+    """
+    if not backdrop or not isinstance(backdrop, str) or Image is None:
+        return None
+    try:
+        raw = backdrop.split(",", 1)[1] if backdrop.startswith("data:image") else backdrop
+        img = Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
+        if img.size != (width, height):
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+        return img
+    except Exception as e:
+        print(f"[photo_composer] 底圖解碼失敗，改用自畫舞台：{e}")
+        return None
+
+
+def _draw_stage_backdrop(canvas, draw, width: int, height: int) -> None:
+    """自畫的夜幕舞台。2D 備援版、以及整合版拿不到截圖時的退路。"""
+    stage_y = int(height * 0.75)
+    for y in range(height):
+        ratio = y / height
+        draw.line(
+            [(0, y), (width, y)],
+            fill=(int(18 + ratio * 20), int(22 + ratio * 25), int(45 + ratio * 35), 255),
+        )
+    draw.polygon(
+        [(0, stage_y), (width, stage_y), (width, height), (0, height)],
+        fill=(12, 14, 25, 255),
+    )
+    draw.line([(0, stage_y), (width, stage_y)], fill=(80, 110, 180, 180), width=3)
+
+
+def _has_positions(characters: List[Dict[str, Any]]) -> bool:
+    """名冊是否帶著場上座標。整合版會帶，2D 備援版不會。"""
+    return any(
+        isinstance(c, dict) and isinstance(c.get("x"), (int, float))
+        and isinstance(c.get("y"), (int, float))
+        for c in characters
+    )
+
+
+# 座標排版的角色高度範圍。最遠 170px、最近 300px，差距用來表現景深。
+MIN_CHAR_H = 170
+MAX_CHAR_H = 300
+
+
+def _layout_by_position(
+    canvas: Any,
+    characters: List[Dict[str, Any]],
+    width: int,
+    height: int,
+    stage_y: int,
+    field: Tuple[int, int] = (1920, 1080),
+) -> None:
+    """依角色在場上的實際座標排版（整合版）。
+
+    這件作品要記錄的是「集體共創的當下樣貌」，把人重新排成整齊隊形
+    會把那個訊息抹掉 —— 誰跟誰聚在一起、場上散成什麼形狀，正是重點。
+
+    場域座標（STAGE 1920x1080）等比映射到畫布，並保留邊距免得貼邊的
+    角色被裁掉。y 越大代表越靠近觀眾，因此畫得越大、且越晚畫（蓋在前面），
+    沿用階梯式排版原本的景深邏輯。
+    """
+    fw, fh = field
+    # baseline 是角色的「腳底」而非中心，因此可用高度要從 stage_y 再往上收
+    # 一段 —— 否則場域最下緣（離觀眾最近、畫得最大）的角色會有半截身體
+    # 掉到地平線以下被裁掉。往下留一點餘裕讓最前排略微跨過地平線，
+    # 看起來才像站在舞台上而不是浮在後面。
+    pad_x, pad_top = int(width * 0.06), int(height * 0.10)
+    usable_w = width - pad_x * 2
+    usable_h = int(stage_y * 0.98) - pad_top - MAX_CHAR_H
+
+    # y 小的先畫（後排），y 大的後畫蓋在上面
+    ordered = sorted(
+        (c for c in characters if isinstance(c, dict)),
+        key=lambda c: c.get("y") if isinstance(c.get("y"), (int, float)) else 0,
+    )
+    for c in ordered:
+        fx = c.get("x") if isinstance(c.get("x"), (int, float)) else fw / 2
+        fy = c.get("y") if isinstance(c.get("y"), (int, float)) else fh / 2
+        depth = min(max(fy / fh, 0.0), 1.0)          # 0 最遠、1 最近
+        char_h = int(MIN_CHAR_H + depth * (MAX_CHAR_H - MIN_CHAR_H))
+        char_img = _draw_lego_character(c, target_height=char_h)
+        if char_img is None:
+            continue
+        cx = pad_x + int(min(max(fx / fw, 0.0), 1.0) * usable_w)
+        # 腳底對齊 baseline：角色是站在地上的，不是以身體中心浮在某個高度。
+        # baseline 由 pad_top 起算已含最矮角色的身高，因此最遠的角色頭頂
+        # 仍落在 pad_top 之下，不會頂到標題橫幅。
+        baseline_y = pad_top + MIN_CHAR_H + int(depth * usable_h)
+        canvas.paste(
+            char_img,
+            (cx - char_img.width // 2, baseline_y - char_img.height),
+            char_img,
+        )
+
+
 def compose_group_photo(
     characters: List[Dict[str, Any]],
     *,
@@ -365,6 +479,7 @@ def compose_group_photo(
     height: int = 1080,
     title: str = "PersonaFlow · 集體記憶紀念大合照",
     photo_url_base: str = "http://127.0.0.1:5001/photos",
+    backdrop: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     合成大合照主入口。
@@ -380,29 +495,37 @@ def compose_group_photo(
     photo_id = f"photo_{timestamp}_{len(characters)}p_{uuid.uuid4().hex[:8]}"
     photo_url = f"{photo_url_base}/{photo_id}.png"
 
-    # 1. 建立高畫質背景畫布 (漸層質感夜幕展場風格)
-    canvas = Image.new("RGBA", (width, height), (20, 24, 40, 255))
-    draw = ImageDraw.Draw(canvas)
+    # 1. 背景畫布
+    #
+    # 有 backdrop 時直接用大螢幕交回的那張畫面 —— 3D 房間與角色都已經在上面，
+    # 合照因此與觀眾當下看到的完全一致。這是唯一能保證兩者不漂移的做法：
+    # 在 Python 端重畫一次 3D 場景等於維護第二套渲染器。
+    #
+    # 沒有 backdrop（沒有大螢幕連線、截圖逾時）才退回自己畫的舞台，
+    # 那條路徑同時也是 2D 備援版在用的。
+    stage_canvas = _decode_backdrop(backdrop, width, height)
+    if stage_canvas is not None:
+        canvas = stage_canvas
+        draw = ImageDraw.Draw(canvas)
+        stage_y = int(height * 0.75)
+    else:
+        canvas = Image.new("RGBA", (width, height), (20, 24, 40, 255))
+        draw = ImageDraw.Draw(canvas)
+        _draw_stage_backdrop(canvas, draw, width, height)
+        stage_y = int(height * 0.75)
 
-    # 繪製舞臺地板與光暈
-    stage_y = int(height * 0.75)
-    for y in range(height):
-        # 垂直漸層
-        ratio = y / height
-        r = int(18 + ratio * 20)
-        g = int(22 + ratio * 25)
-        b = int(45 + ratio * 35)
-        draw.line([(0, y), (width, y)], fill=(r, g, b, 255))
-
-    # 地板網格/光照
-    draw.polygon([(0, stage_y), (width, stage_y), (width, height), (0, height)], fill=(12, 14, 25, 255))
-    draw.line([(0, stage_y), (width, stage_y)], fill=(80, 110, 180, 180), width=3)
-
-    # 2. 自動階梯式構圖排版
+    # 2. 構圖排版
+    #
+    # 底圖若來自大螢幕，角色已經畫在上面了 —— 這裡再畫一次會出現兩組人。
+    # 因此只有走自畫舞台時才需要排版。
     total = len(characters)
-    if total == 0:
+    if stage_canvas is not None:
+        pass
+    elif total == 0:
         # 空合照提示
         draw.text((width // 2 - 150, height // 2), "目前尚無在場角色", fill=(200, 200, 200, 255), font=_cjk_font(28))
+    elif _has_positions(characters):
+        _layout_by_position(canvas, characters, width, height, stage_y)
     else:
         # 決定行數 (Rows): 1~7 角色 1 行; 8~18 角色 2 行; 19~36 角色 3 行; 37+ 角色 4 行
         if total <= 7:

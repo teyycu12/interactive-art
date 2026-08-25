@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
+import { CLIENT_SYNC_RADIUS, STAGE, MAX_SPEED } from '../shared/protocol.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 3199;
@@ -132,7 +133,12 @@ let welcome = null;
 phone.on('open', () => phone.send(JSON.stringify({
   type: 'CLIENT_JOIN', name: '冠儀', avatar: AVATAR,
 })));
-phone.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'CLIENT_WELCOME') welcome = m; });
+const phoneSyncs = [];
+phone.on('message', (d) => {
+  const m = JSON.parse(d);
+  if (m.type === 'CLIENT_WELCOME') welcome = m;
+  if (m.type === 'CLIENT_SYNC') phoneSyncs.push(m);
+});
 await sleep(400);
 check('手機登入成功', !!welcome?.userId, welcome?.userId);
 check('CLIENT_WELCOME 帶有重連憑證', welcome?.rejoinToken?.length === 32);
@@ -171,6 +177,91 @@ check('模式切換為湧現漫遊態', idle.mode === 'SWARM');
   await sleep(5000);
   const hz = (syncs.length - n0) / ((syncs.at(-1).t - t0) / 1000);
   check('STAGE_SYNC 達到 30 Hz（±1）', hz > 29 && hz < 31, `${hz.toFixed(1)} Hz`);
+}
+
+// ── 手機端個人視角（CLIENT_SYNC）────────────────────────────
+{
+  const n0 = phoneSyncs.length;
+  await sleep(2000);
+  const hz = (phoneSyncs.length - n0) / 2;
+  // 刻意低於大螢幕的 30Hz：手機是每人一條連線，30Hz×10人 會吃掉現場頻寬
+  check('CLIENT_SYNC 約 10 Hz（±2）', hz >= 8 && hz <= 12, `${hz.toFixed(1)} Hz`);
+
+  const self = phoneSyncs.at(-1)?.self;
+  check('CLIENT_SYNC 帶有自身座標與 α',
+    typeof self?.x === 'number' && typeof self?.vx === 'number'
+      && typeof self?.alpha === 'number' && typeof self?.facing === 'number',
+    JSON.stringify(self));
+  // 與 STAGE_SYNC 同一個頻寬取捨：外觀是靜態資料，不進每秒數十次的封包
+  check('CLIENT_SYNC 不含捏臉外觀', self && !('avatar' in self));
+  check('場上只有自己時 neighbors 為空', phoneSyncs.at(-1)?.neighbors?.length === 0,
+    JSON.stringify(phoneSyncs.at(-1)?.neighbors));
+
+  // 伺服器座標必須與大螢幕看到的同一份 —— 兩邊若不同步，
+  // 使用者低頭與抬頭會看到不同的位置（issue #8 的坑）
+  const onScreen = live().find((a) => a.id === welcome.userId);
+  check('CLIENT_SYNC 與 STAGE_SYNC 是同一份座標',
+    Math.abs(onScreen.x - self.x) < 40 && Math.abs(onScreen.y - self.y) < 40,
+    `螢幕 ${onScreen.x},${onScreen.y} / 手機 ${self.x},${self.y}`);
+}
+
+// ── 鄰居可見性 ────────────────────────────────────────────
+{
+  const mate = new WebSocket(URL);
+  const mateSyncs = [];
+  let mateWelcome = null;
+  mate.on('open', () => mate.send(JSON.stringify({
+    type: 'CLIENT_JOIN', name: '鄰居', avatar: AVATAR,
+  })));
+  mate.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'CLIENT_WELCOME') mateWelcome = m;
+    if (m.type === 'CLIENT_SYNC') mateSyncs.push(m);
+  });
+  await sleep(600);
+
+  // 兩人的初始位置由 spawnPoint() 隨機決定，距離可能一開始就超過可見半徑。
+  // 這裡主動把手機推向對方，讓測項驗證的是「半徑內看得見」而不是
+  // 「隨機生成剛好夠近」。
+  //
+  // 迴圈次數必須夠走完整個場域對角線（約 2200 單位）。IDLE_MOTION 預設為
+  // 'still' 之後，閒置角色不再漂移 —— 過去有一部分距離是靠 Boids 漂移
+  // 湊巧拉近的，現在全得靠這個迴圈自己走完。次數不足時兩人會停在半徑外，
+  // 失敗訊息卻只說「看不到鄰居」，看不出是測試沒走到位。
+  const walkSteps = Math.ceil((STAGE.width + STAGE.height) / (MAX_SPEED * 0.05)) + 20;
+  for (let i = 0; i < walkSteps; i++) {
+    const me = phoneSyncs.at(-1)?.self;
+    const you = mateSyncs.at(-1)?.self;
+    if (!me || !you) break;
+    const dx = you.x - me.x;
+    const dy = you.y - me.y;
+    const d = Math.hypot(dx, dy) || 1;
+    if (d < CLIENT_SYNC_RADIUS * 0.5) break;
+    phone.send(JSON.stringify({
+      type: 'INPUT_MOVE', vector: { x: dx / d, y: dy / d }, intensity: 1,
+    }));
+    await sleep(50);
+  }
+  await sleep(300);
+
+  const mine = phoneSyncs.at(-1);
+  const theirs = mateSyncs.at(-1);
+  const seen = mine?.neighbors?.find((n) => n.id === mateWelcome?.userId);
+  check('看得到鄰近的另一位參與者', !!seen, JSON.stringify(mine?.neighbors));
+  // 相對座標而非絕對：手機把自己畫在畫面中央，要的本來就是相對位移
+  check('鄰居用相對座標 dx/dy', seen && 'dx' in seen && !('x' in seen));
+
+  const back = theirs?.neighbors?.find((n) => n.id === welcome.userId);
+  check('雙方互相看得見', !!back);
+  check('雙方的相對座標互為反向',
+    back && Math.abs(seen.dx + back.dx) < 40 && Math.abs(seen.dy + back.dy) < 40,
+    `${seen?.dx},${seen?.dy} vs ${back?.dx},${back?.dy}`);
+  check('鄰居距離在可見半徑內',
+    seen && Math.hypot(seen.dx, seen.dy) <= CLIENT_SYNC_RADIUS,
+    `${Math.hypot(seen?.dx ?? 0, seen?.dy ?? 0).toFixed(0)} / ${CLIENT_SYNC_RADIUS}`);
+
+  mate.close();
+  await sleep(2700);   // 等 TTL 回收，避免影響後續測項
 }
 
 // ── 斷線與重連 ────────────────────────────────────────────
@@ -535,6 +626,22 @@ function httpStatus(rawPath) {
   });
 }
 
+function httpBody(pathname) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { host: '127.0.0.1', port: PORT, path: pathname, method: 'GET' },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve(body));
+      },
+    );
+    req.on('error', () => resolve(''));
+    req.end();
+  });
+}
+
 // 曾可讀到 .env 與 data/state.json（內含主辦密鑰與所有重連憑證）
 check('路徑穿越讀不到 .env',
   (await httpStatus('/shared/..%2f.env')) === 403);
@@ -542,6 +649,22 @@ check('路徑穿越讀不到活動快照',
   (await httpStatus('/shared/..%2fdata%2fstate.json')) === 403);
 check('正常的 /shared/ 資源仍可載入',
   (await httpStatus('/shared/avatars.js')) === 200);
+
+// three 一度指向 jsdelivr CDN：本機開發正常，但展場網路不通時大螢幕的
+// 整個 3D 背景會消失 —— 而那是本機永遠測不出來的故障。
+check('three 由本機直出，不依賴 CDN',
+  (await httpStatus('/vendor/three.module.js')) === 200);
+check('three addons 由本機直出',
+  (await httpStatus('/vendor/three-addons/controls/OrbitControls.js')) === 200);
+check('大螢幕頁面不含任何 CDN 連結',
+  !(await httpBody('/screen/')).includes('jsdelivr'));
+
+// addons 走目錄映射而非逐檔白名單，穿越防護是該分支自己做的，
+// 不受下方那套只涵蓋 PUBLIC_DIR 與 shared 的通用檢查保護。
+check('addons 路徑穿越讀不到 .env',
+  (await httpStatus('/vendor/three-addons/..%2f..%2f..%2f.env')) === 403);
+check('addons 路徑穿越讀不到活動快照',
+  (await httpStatus('/vendor/three-addons/..%2f..%2f..%2f..%2fdata%2fstate.json')) !== 200);
 
 // 曾可用一個壞掉的網址讓整個 Gateway 行程結束
 check('無效百分比編碼回 400 而非終止行程',
