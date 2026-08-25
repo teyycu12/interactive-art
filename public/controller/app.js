@@ -13,6 +13,9 @@ import {
   EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS,
   QUIZ_CHOICES, QUIZ_ERRORS,
 } from '/shared/protocol.js';
+import {
+  allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
+} from '/shared/capture-guidance.js';
 import { avatarImage } from '/shared/avatarSprite.js';
 import { AvatarRenderer } from './avatarRenderer.js';
 
@@ -243,9 +246,114 @@ function showScanPhase(phase) {
   // SVGElement 沒有 —— `svg.hidden = true` 會靜默失敗（屬性根本沒設上去，
   // 也不會拋錯），輔助線就一路留在成果圖上面。
   $('#scan-guide')?.classList.toggle('is-off', phase !== 'aim');
+  // 引導只在取景階段有意義；生成中與成果階段畫面已經定格。
+  if (phase !== 'aim') stopPreviewLoop();
+}
+
+// ── 站位引導 ──────────────────────────────────────────────
+//
+// 人形輔助線只告訴參與者「該站成什麼樣」，不會告訴他「現在站對了沒有」。
+// 這裡每 250ms 送一張縮圖到 /api/preview，回來的是還差哪一項。
+// 只跑 CV，不呼叫任何付費 API，因此可以一直跑；錢只花在快門那一次。
+//
+// 送出的影格必須與實際拍攝走同一套裁切（cropToPortraitJpeg 的 9:16），
+// 否則 CV 分析的取景與最後送去生成的不是同一塊畫面 —— 引導會指著一個
+// 不存在的問題，而真正被裁掉的部分沒有人檢查。
+
+const PREVIEW_INTERVAL_MS = 250;
+/** 引導用的長邊。CV 端還會再縮到 360，送更大只是浪費上行頻寬 */
+const PREVIEW_MAX_EDGE = 360;
+/** 連續幾張空影格才提示 —— 剛開鏡頭時空一兩張是正常的 */
+const BLANK_FRAME_WARN = 12;
+
+let previewTimer = null;
+let previewInFlight = false;
+let previewSessionId = null;
+let blankFrames = 0;
+
+function stopPreviewLoop() {
+  clearInterval(previewTimer);
+  previewTimer = null;
+  previewInFlight = false;
+  blankFrames = 0;
+  document.querySelector('.scan-stage')?.classList.remove('is-ready');
+  const text = $('#aim-guide');
+  if (text) text.textContent = '';
+  $('#aim-lights')?.replaceChildren();
+}
+
+function renderAimGuide(features) {
+  const text = $('#aim-guide');
+  if (text) text.textContent = captureGuidanceText(features, '✓ 全身已入鏡，可以按拍照了');
+  const list = $('#aim-lights');
+  if (!list) return;
+  list.replaceChildren();
+  for (const item of captureIndicators(features)) {
+    const li = document.createElement('li');
+    li.textContent = item.label;
+    if (item.ok) li.classList.add('ok');
+    list.append(li);
+  }
+}
+
+async function previewTick() {
+  // 上一張還沒回來就跳過這一輪：排隊只會讓引導越來越落後於現實，
+  // 參與者照著三秒前的畫面調整站位，永遠對不上。
+  // 倒數與生成期間也不送 —— 那時畫面已經定格，引導沒有意義。
+  if (previewInFlight || counting || !scanStream) return;
+  const video = $('#scan-video');
+  if (!video?.videoWidth) {
+    blankFrames += 1;
+    if (blankFrames === BLANK_FRAME_WARN && $('#aim-guide')) {
+      $('#aim-guide').textContent = '讀不到相機畫面，請確認沒有其他程式正在使用鏡頭';
+    }
+    return;
+  }
+  blankFrames = 0;
+
+  previewInFlight = true;
+  try {
+    const image = cropToPortraitJpeg(video, video.videoWidth, video.videoHeight,
+                                     PREVIEW_MAX_EDGE, 0.6);
+    const res = await fetch('/api/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image, sessionId: previewSessionId }),
+    });
+    const features = await res.json();
+    if (!scanStream) return;   // 期間已經離開取景階段
+
+    if (typeof features?.sessionId === 'string') previewSessionId = features.sessionId;
+
+    if (!features?.ok) {
+      // 限流、逾時、服務未啟動都只是這一幀沒有結果，不是錯誤 ——
+      // 引導維持原狀，下一幀補上；只有確定偵測不到人時才更新文字。
+      if (features?.guidance_reason) renderAimGuide(features);
+      document.querySelector('.scan-stage')?.classList.remove('is-ready');
+      return;
+    }
+
+    renderAimGuide(features);
+    // 就緒只是「可以按了」的提示，不自動拍 —— 何時按下快門由參與者決定，
+    // 那是這個流程刻意保留的控制權（見拍照鍵的 5 秒倒數）。
+    document.querySelector('.scan-stage')
+      ?.classList.toggle('is-ready', allCaptureIndicatorsPassed(features));
+  } catch {
+    // 網路瞬斷：下一輪會再試
+  } finally {
+    previewInFlight = false;
+  }
+}
+
+function startPreviewLoop() {
+  stopPreviewLoop();
+  previewSessionId = null;
+  if ($('#aim-guide')) $('#aim-guide').textContent = '請站遠一點，讓全身與雙腳入鏡';
+  previewTimer = setInterval(previewTick, PREVIEW_INTERVAL_MS);
 }
 
 function stopScanStream() {
+  stopPreviewLoop();
   if (!scanStream) return;
   for (const track of scanStream.getTracks()) track.stop();
   scanStream = null;
@@ -301,6 +409,7 @@ async function openCamera() {
       audio: false,
     });
     $('#scan-video').srcObject = scanStream;
+    startPreviewLoop();
     return true;
   } catch (err) {
     // 不直接踢回捏臉：使用者可能只是誤按拒絕，或想去設定裡開啟。
@@ -441,7 +550,7 @@ $('#btn-capture').addEventListener('click', async () => {
  * 相機與相簿上傳共用這一份：兩者送進 /api/generate 的格式必須一致，
  * 否則後端 slicer 的切片比例會對不上其中一邊（見 CLAUDE.md 的跨語言耦合）。
  */
-function cropToPortraitJpeg(source, sw0, sh0) {
+function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85) {
   // 裁切成 9:16 長方細長型：聚焦在人物，捨棄無用的左右背景，減少 API 負擔與上傳成本
   const TARGET_RATIO = 9 / 16;
   let sx = 0, sy = 0, sw = sw0, sh = sh0;
@@ -454,15 +563,16 @@ function cropToPortraitJpeg(source, sw0, sh0) {
     sy = (sh0 - sh) / 2;
   }
 
-  // 長邊限制在 1280，再大只是讓上傳變慢，生圖模型看到的解析度並不會因此提升。
-  // 上傳的相簿原檔可能是好幾千萬畫素，這一步同時把它壓回伺服器收得下的大小。
-  const scale = Math.min(1, 1280 / Math.max(sw, sh));
+  // 長邊限制在 maxEdge（拍攝 1280），再大只是讓上傳變慢，生圖模型看到的
+  // 解析度並不會因此提升。上傳的相簿原檔可能是好幾千萬畫素，這一步同時
+  // 把它壓回伺服器收得下的大小。站位引導用小很多的尺寸，見 previewTick()。
+  const scale = Math.min(1, maxEdge / Math.max(sw, sh));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(sw * scale);
   canvas.height = Math.round(sh * scale);
 
   canvas.getContext('2d').drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL('image/jpeg', 0.85);
+  return canvas.toDataURL('image/jpeg', quality);
 }
 
 /** 送出照片並走完生成流程。相機與上傳共用。 */
@@ -482,7 +592,9 @@ async function submitScanImage(image) {
     const res = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image }),
+      // sessionId：取景期間跨影格量到的身高比快門那一瞬間的單張估計可信，
+      // 後端會優先採用它。相簿上傳沒有取景階段，因此是 null。
+      body: JSON.stringify({ image, sessionId: previewSessionId }),
     });
     body = await res.json();
   } catch {

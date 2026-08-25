@@ -4,6 +4,10 @@ from backend.app import app, socketio, _swarm_chars, _swarm_lock
 
 @unittest.skipIf(socketio is None or app is None, "Flask/SocketIO not installed in current environment")
 class TestSocketIOHandlers(unittest.TestCase):
+    # 投影牆的角色比例來自固定站位身高量測，因此 join_swarm 會擋掉沒量到的角色
+    # （見 handle_join_swarm）。以下 payload 都必須帶上這兩個欄位才進得去。
+    HEIGHT_OK = {"height_measurement_valid": True, "height_class": "medium"}
+
     def setUp(self):
         self.client = socketio.test_client(app)
         self.assertTrue(self.client.is_connected())
@@ -25,6 +29,7 @@ class TestSocketIOHandlers(unittest.TestCase):
             "upper": {"hex": "#FF0000"},
             "lower": {"hex": "#0000FF"},
             "room": "main_hall",
+            **self.HEIGHT_OK,
         }
         self.client.emit("join_swarm", payload)
         received = self.client.get_received()
@@ -36,6 +41,22 @@ class TestSocketIOHandlers(unittest.TestCase):
         with _swarm_lock:
             self.assertIn("test_user_01", _swarm_chars)
             self.assertEqual(_swarm_chars["test_user_01"]["upper"]["hex"], "#FF0000")
+
+    def test_join_swarm_rejects_missing_height_measurement(self):
+        """沒有有效身高量測的角色不得進場。
+
+        角色比例由固定站位的身高等級決定；沒量到就放行的話，牆上會出現以
+        預設比例混進去的角色，而現場無從分辨那是量測失敗還是真實體型。
+        """
+        self.client.emit("join_swarm", {"id": "no_height_user", "x": 1, "y": 1})
+        received = self.client.get_received()
+        names = [msg["name"] for msg in received]
+        self.assertIn("swarm_join_failed", names)
+        self.assertNotIn("swarm_joined", names)
+        failed = [m for m in received if m["name"] == "swarm_join_failed"][0]
+        self.assertEqual(failed["args"][0]["error"], "valid_height_measurement_required")
+        with _swarm_lock:
+            self.assertNotIn("no_height_user", _swarm_chars)
 
     def test_get_swarm(self):
         self.client.emit("get_swarm", {"room": "default"})
@@ -96,7 +117,8 @@ class TestSocketIOHandlers(unittest.TestCase):
         c = socketio.test_client(app)
         c.emit("join_swarm", {"x": 100, "y": 100,
                               "upper": {"hex": "#ABCDEF"},
-                              "lower": {"hex": "#123456"}})
+                              "lower": {"hex": "#123456"},
+                              **self.HEIGHT_OK})
         joined = [m for m in c.get_received() if m["name"] == "swarm_joined"]
         self.assertEqual(len(joined), 1)
         char_id = joined[0]["args"][0]["id"]
@@ -113,7 +135,8 @@ class TestSocketIOHandlers(unittest.TestCase):
     def test_rejoin_with_same_id_does_not_duplicate(self):
         """帶著原本的 id 重新連線應認領同一個角色，而不是產生分身。"""
         c1 = socketio.test_client(app)
-        c1.emit("join_swarm", {"x": 1, "y": 1, "upper": {"hex": "#111111"}})
+        c1.emit("join_swarm", {"x": 1, "y": 1, "upper": {"hex": "#111111"},
+                               **self.HEIGHT_OK})
         char_id = [m for m in c1.get_received()
                    if m["name"] == "swarm_joined"][0]["args"][0]["id"]
         c1.disconnect()
@@ -123,7 +146,7 @@ class TestSocketIOHandlers(unittest.TestCase):
 
         c2 = socketio.test_client(app)
         c2.emit("join_swarm", {"id": char_id, "x": 2, "y": 2,
-                               "upper": {"hex": "#222222"}})
+                               "upper": {"hex": "#222222"}, **self.HEIGHT_OK})
         c2.disconnect()
 
         with _swarm_lock:

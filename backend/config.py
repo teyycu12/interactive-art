@@ -83,7 +83,12 @@ class AppConfig:
     CHARACTER_TTL_SEC: int = max(0, _get_int("CHARACTER_TTL_SEC", 7200))
 
     # M2 生成模式與金鑰
-    GENERATION_MODE: str = _get_str("GENERATION_MODE", "body_sprite")
+    # full_character 是唯一還在線上的模式；body_sprite 與 brick_ai_texture 已退役，
+    # app.py 會在付費呼叫前直接拒絕它們。預設值必須跟著改，否則沒設這個環境變數
+    # 的人一啟動就落在被拒絕的模式上。
+    # 用 _get_str 而非 os.environ.get：.env 裡留一行「GENERATION_MODE=」會產生
+    # 空字串，直接讀會讓它覆寫掉這個預設值。
+    GENERATION_MODE: str = _get_str("GENERATION_MODE", "full_character")
     GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
     OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
     OUTFIT_GEN_MODEL: str = _get_str("OUTFIT_GEN_MODEL", "google/gemini-3.1-flash-image-preview")

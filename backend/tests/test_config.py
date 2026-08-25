@@ -84,7 +84,10 @@ class TestEmptyEnvFallsBackToDefault(unittest.TestCase):
             cfg = AppConfig()
             self.assertTrue(cfg.OUTFIT_GEN_MODEL.strip())
             self.assertTrue(cfg.FULL_CHARACTER_MODEL.strip())
-            self.assertEqual(cfg.GENERATION_MODE, "body_sprite")
+            # 預設模式改為 full_character：body_sprite 與 brick_ai_texture 已退役，
+            # app.py 會在付費呼叫前直接拒絕它們。這支測試釘的是「空字串不得覆寫
+            # 程式預設值」，而非某個特定模式名。
+            self.assertEqual(cfg.GENERATION_MODE, "full_character")
 
     def test_refine_model_blank_becomes_none(self):
         """未指定精修模型時應為 None，讓解析鏈往下退回主模型。"""

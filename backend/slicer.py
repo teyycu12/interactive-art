@@ -162,21 +162,34 @@ def slice_character(
         parts[part].save(os.path.join(out_dir, f"{part}.webp"), "WEBP", quality=92)
         textures[part] = f"{url_prefix}/{asset_id}/{part}.webp"
 
-    # 另存一份未切片的全身圖供大合照使用。
+    # 未切割的整張圖，另外落地一份。兩個消費者，同一張檔案：
     #
-    # 大合照在 Python 端以 Pillow 無頭合成，拿不到瀏覽器那套疊圖邏輯；
-    # 若只留三張切片，Python 就得依 CUTS 比例把它們重疊回去 —— 那等於
-    # 把 shared/avatars.js 的疊法在第二個語言再實作一次，正是本專案
-    # 一再警告的跨語言耦合（對不上時角色會脖子錯位，兩邊都不會報錯）。
-    # 多存一張檔案的成本遠低於維護第二套疊圖程式碼。
+    # 大螢幕：切了又照同一組比例疊回去，構圖與原圖完全相同 —— 切片在這條路上
+    #   是純成本，一張圖變三個請求、三次載入失敗風險，而且三張各自被拉伸到
+    #   固定寬度，整體寬高比會被畫布比例壓掉（實測角色平均 0.642，
+    #   畫布 200x260 = 0.769，橫向被拉伸約 20%）。
+    #
+    # 大合照：在 Python 端以 Pillow 無頭合成，拿不到瀏覽器那套疊圖邏輯。
+    #   若只留三張切片，Python 就得依 CUTS 比例把它們重疊回去 —— 那等於把
+    #   shared/avatars.js 的疊法在第二個語言再實作一次，正是本專案一再警告的
+    #   跨語言耦合（對不上時角色會脖子錯位，兩邊都不會報錯）。
+    #
+    # 三張切片保留給之後要貼到 3D 部件、做肢體動作的用途，屆時各部位需要
+    # 獨立變形，那才是切片真正的目的（見本檔開頭）。
+    #
+    # 格式與切片一致用 WEBP：現場是無線網路，30 人的貼圖差距很有感。
     img.save(os.path.join(out_dir, "full.webp"), "WEBP", quality=92)
+    textures["full"] = f"{url_prefix}/{asset_id}/full.webp"
 
     return {
         "ok": True,
         "assetId": asset_id,
         "textures": textures,
         "fallbackColors": colors,
-        "fullPng": f"{url_prefix}/{asset_id}/full.webp",
+        # fullPng 是 textures["full"] 的別名，保留給大合照那條既有呼叫端。
+        # 名稱沿用歷史（實際上是 webp）—— 改名要同時動 service.py 的 /compose、
+        # server 的名冊組裝與兩邊測試，不值得在這次合併一起做。
+        "fullPng": textures["full"],
     }
 
 

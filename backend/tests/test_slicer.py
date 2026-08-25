@@ -149,6 +149,61 @@ class TestSliceCharacter:
             assert out["textures"][part] == f"/assets/gen/{asset_id}/{part}.webp"
         assert set(out["fallbackColors"]) == {"skin", "hair", "torso", "legs"}
 
+    def test_writes_full_image_alongside_the_slices(self, figure, tmp_path):
+        """整張圖是大螢幕與大合照共用的那一張，必須是完整的正規化結果。
+
+        切片在 2D 這條路上是純成本：screen.js 又照同一組比例把三張疊回去，
+        構圖與原圖相同，卻換來三個請求與整體變形；大合照那邊則是不想把
+        shared/avatars.js 的疊法在 Python 再實作一次（跨語言耦合）。
+        三張切片保留給之後貼到 3D 部件、做肢體動作的用途。
+
+        比對方式：alpha 必須逐像素相同 —— 它決定輪廓，而 WEBP 的 alpha 是
+        無損的。RGB 只要求接近，quality=92 是有損壓縮，逐像素比對會失敗於
+        壓縮誤差而不是真正的錯誤。
+        """
+        asset_id = "e" * 32
+        out = slice_character(to_b64(figure), str(tmp_path), asset_id)
+        assert out["textures"]["full"] == f"/assets/gen/{asset_id}/full.webp"
+        assert out["fullPng"] == out["textures"]["full"], "大合照那條呼叫端的別名要一致"
+
+        written = np.asarray(
+            PILImage.open(tmp_path / asset_id / "full.webp").convert("RGBA")
+        ).astype(int)
+        expected = np.asarray(
+            normalize(decode_png(to_b64(figure))).convert("RGBA")
+        ).astype(int)
+        assert written.shape == expected.shape
+        assert np.array_equal(written[:, :, 3], expected[:, :, 3]), "輪廓不得改變"
+        assert np.abs(written[:, :, :3] - expected[:, :, :3]).mean() < 15
+
+    def test_full_image_keeps_the_figure_aspect_ratio(self, figure, tmp_path):
+        """整張圖不得被壓成畫布比例 —— 那正是要避免的橫向拉伸。"""
+        asset_id = "f" * 32
+        slice_character(to_b64(figure), str(tmp_path), asset_id)
+        written = PILImage.open(tmp_path / asset_id / "full.webp")
+        source = normalize(decode_png(to_b64(figure)))
+        assert written.size == source.size
+
+    def test_slices_reassemble_into_the_full_image(self, figure, tmp_path):
+        """三張切片疊回去必須等於整張圖 —— 兩條路徑不得畫出不同的角色。
+
+        大螢幕走整張圖、3D 之後走三張切片，兩者若不一致，同一個人在不同
+        畫面上會長得不一樣，而且沒有任何錯誤訊息。
+        """
+        asset_id = "0" * 32
+        slice_character(to_b64(figure), str(tmp_path), asset_id)
+        full = np.asarray(
+            PILImage.open(tmp_path / asset_id / "full.webp").convert("RGBA")
+        ).astype(int)
+        rebuilt = np.concatenate(
+            [np.asarray(PILImage.open(tmp_path / asset_id / f"{p}.webp").convert("RGBA")).astype(int)
+             for p in PARTS],
+            axis=0,
+        )
+        assert rebuilt.shape == full.shape
+        assert np.array_equal(rebuilt[:, :, 3], full[:, :, 3]), "輪廓必須完全一致"
+        assert np.abs(rebuilt - full).mean() < 2
+
     def test_accepts_data_uri_prefix(self, figure, tmp_path):
         b64 = "data:image/png;base64," + to_b64(figure)
         out = slice_character(b64, str(tmp_path), "b" * 32)

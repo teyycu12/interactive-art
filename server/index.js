@@ -261,6 +261,106 @@ function limiterFor(ip, now) {
   return entry.limiter;
 }
 
+// ── 站位引導的代理 ──────────────────────────────────────────
+//
+// 預覽每秒會被打數次，不能沿用生成那條 3 次 / 30 秒的限流；但也不能沒有限流，
+// 否則場館裡任何一台裝置寫個迴圈就能把 Python 端的執行緒池塞滿，排擠正在
+// 報到的人。預覽只跑 CV、不呼叫任何付費 API，因此額度可以放寬得多。
+const PREVIEW_RATE = { capacity: 12, refillPerSec: 8, violationLimit: Infinity };
+
+/** 預覽影格是縮圖，不該有生成那種數 MB 的尺寸 */
+const MAX_PREVIEW_BYTES = 1024 * 1024;
+
+/** 預覽逾時要短：慢到這個程度的引導已經沒有意義，不如讓下一幀補上 */
+const PREVIEW_TIMEOUT_MS = 4000;
+
+/** 同時進行中的預覽上限。超過就直接丟棄，引導少一幀不影響體驗 */
+const MAX_CONCURRENT_PREVIEWS = 6;
+let inFlightPreviews = 0;
+
+/** @type {Map<string, {limiter: RateLimiter, seenAt: number}>} 預覽獨立計費 */
+const previewLimiters = new Map();
+
+function previewLimiterFor(ip, now) {
+  if (previewLimiters.size > 256) {
+    for (const [key, entry] of previewLimiters) {
+      if (now - entry.seenAt > LIMITER_TTL_MS) previewLimiters.delete(key);
+    }
+  }
+  let entry = previewLimiters.get(ip);
+  if (!entry) {
+    entry = { limiter: new RateLimiter(PREVIEW_RATE, performance.now()), seenAt: now };
+    previewLimiters.set(ip, entry);
+  }
+  entry.seenAt = now;
+  return entry.limiter;
+}
+
+function proxyPreview(req, res) {
+  if (req.method !== 'POST') {
+    sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
+    return;
+  }
+  const ip = req.socket.remoteAddress ?? 'unknown';
+  // 引導丟一幀沒有代價，下一幀就補上了 —— 因此逾量、滿載、逾時一律安靜丟棄，
+  // 不回降級外觀（那是生成才需要的東西）。
+  if (previewLimiterFor(ip, Date.now()).check() !== 'ok') {
+    sendJSON(res, 200, { ok: false, error: 'rate_limited' });
+    return;
+  }
+  if (inFlightPreviews >= MAX_CONCURRENT_PREVIEWS) {
+    sendJSON(res, 200, { ok: false, error: 'too_busy' });
+    return;
+  }
+
+  const chunks = [];
+  let size = 0;
+  let aborted = false;
+  req.on('data', (chunk) => {
+    if (aborted) return;
+    size += chunk.length;
+    if (size > MAX_PREVIEW_BYTES) {
+      aborted = true;
+      sendJSON(res, 413, { ok: false, error: 'frame_too_large' });
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+
+  req.on('end', () => {
+    if (aborted) return;
+    const body = Buffer.concat(chunks);
+    inFlightPreviews += 1;
+    let settled = false;
+    const release = () => { if (settled) return; settled = true; inFlightPreviews -= 1; };
+
+    const upstream = http.request({
+      host: VISION_HOST, port: VISION_PORT, path: '/preview', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
+      timeout: PREVIEW_TIMEOUT_MS,
+    }, (up) => {
+      const out = [];
+      up.on('data', (c) => out.push(c));
+      up.on('end', () => {
+        release();
+        res.writeHead(up.statusCode ?? 200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(Buffer.concat(out));
+      });
+    });
+
+    const degrade = (error) => {
+      release();
+      if (res.headersSent) return;
+      sendJSON(res, 200, { ok: false, error });
+    };
+    upstream.on('timeout', () => { upstream.destroy(); degrade('preview_timeout'); });
+    upstream.on('error', () => degrade('vision_service_unavailable'));
+    res.on('close', release);
+    upstream.end(body);
+  });
+}
+
 function proxyGenerate(req, res) {
   if (req.method !== 'POST') {
     sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
@@ -433,6 +533,11 @@ function handleRequest(req, res) {
     return;
   }
 
+  if (urlPath === '/api/preview') {
+    proxyPreview(req, res);
+    return;
+  }
+
   const filePath = resolveStatic(urlPath);
 
   if (!filePath) {
@@ -507,6 +612,10 @@ function hostState() {
     agents: [...stage.agents.values()].map((a) => ({
       id: a.id,
       name: a.name,
+      // 主辦端要能認出「這一列是誰」—— 名字是自填的，現場常常重複或看不懂，
+      // 頭像才是參與者在大螢幕上實際的樣子。CV 角色只帶 URL，捏臉只帶 token，
+      // 兩者都很小，不會讓這份狀態訊息膨脹。
+      avatar: a.avatar,
       offline: a.offline,
       progress: missions.progressOf(a.id),
       connections: graph.degree(a.id),
@@ -1387,11 +1496,13 @@ const photoRoster = () => {
     const meta = byId.get(s.id) || {};
     const avatar = meta.avatar || {};
     const out = { id: s.id, name: meta.name || '', x: s.x, y: s.y };
-    // CV 角色：由貼圖路徑推導出同目錄的未切片全身圖。
-    // avatar 白名單只保留 textures / fallbackColors（shared/avatars.js），
-    // fullPng 不在其中，因此不能直接取。
-    const head = avatar.textures?.head;
-    if (typeof head === 'string') out.fullPng = head.replace(/\/head\.webp$/, '/full.webp');
+    // CV 角色：直接取未切片的全身圖。
+    // 這裡原本是從 head 的路徑字串推導出 full 的路徑 —— 因為當時 full 不在
+    // shared/avatars.js 的驗證白名單裡，取不到也不敢直接信。現在 full 與其他
+    // 三張走同一條路徑驗證（含「必須同屬一個資產目錄」），可以直接用，
+    // 不必再靠字串替換，也不會因為副檔名改動而悄悄失效。
+    const full = avatar.textures?.full;
+    if (typeof full === 'string') out.fullPng = full;
     // 捏臉角色沒有生成圖，交給 photo_composer 程式化繪製樂高人偶
     if (avatar.fallbackColors) {
       out.outfit = {

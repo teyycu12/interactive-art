@@ -79,4 +79,8 @@
   socket.on("avatar_generated", (payload) => {
     window.dispatchEvent(new CustomEvent("avatar_generated", { detail: payload }));
   });
+
+  socket.on("generation_progress", (payload) => {
+    window.dispatchEvent(new CustomEvent("generation_progress", { detail: payload }));
+  });
 })();

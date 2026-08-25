@@ -107,9 +107,14 @@ def build_outfit_data(vlm_result: Optional[Dict[str, Any]],
 
     覆寫規則：VLM 負責「這是什麼衣服」，CV 負責「實際是什麼顏色」，
     因此 CV 的 hex 會覆寫 VLM 的顏色欄位。
+
+    ``ok`` 明確為 False 時，整包語意欄位一律丟棄，只保留 CV 量到的顏色。
+    這與 build_face_data 的作法一致。少了這道檢查，任何在失敗回傳裡附帶
+    服裝欄位的呼叫端都會讓捏造的款式流進生圖 prompt —— 而那看起來像是
+    模型判斷錯誤，不像是呼叫失敗，現場沒有人會發現。
     """
     vlm_result = vlm_result if isinstance(vlm_result, dict) else {}
-    outfit = dict(vlm_result.get("outfit") or {})
+    outfit = {} if vlm_result.get("ok") is False else dict(vlm_result.get("outfit") or {})
 
     if isinstance(cv_result, dict):
         upper = cv_result.get("upper")

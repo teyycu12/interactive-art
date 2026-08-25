@@ -840,3 +840,30 @@ button:disabled { opacity: .35; border-style: dashed; }
   transform: scale(1.9);
   transform-origin: top center;
 }
+
+
+/* ── 站位引導 ─────────────────────────────────────────────
+   人形輔助線只說「該站成什麼樣」，這兩塊說「現在站對了沒有」。 */
+.aim-guide {
+  margin: 10px 0 6px;
+  font-size: 14px; font-weight: 700; line-height: 1.4;
+  color: var(--ink);
+  min-height: 1.4em;   /* 文字換行時不要讓下方按鈕跳動 */
+}
+.aim-lights {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 0 0 10px; padding: 0; list-style: none;
+}
+.aim-lights li {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  padding: 3px 8px; border-radius: 999px;
+  background: var(--sunk); color: var(--ink-faint);
+  border: 1px solid var(--line);
+}
+.aim-lights li.ok {
+  background: #2f9e5f; color: #fff; border-color: #2f9e5f;
+}
+
+/* 六項全通過時輔助線轉綠：參與者的視線在取景框上，餘光就能判斷，
+   不必把視線移到右邊的文字。 */
+.scan-stage.is-ready #scan-guide g { stroke: rgba(80, 220, 130, .95); }

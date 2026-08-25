@@ -1,11 +1,13 @@
 import base64
+import hashlib
 import os
 import random
+import re
+import socket as network_socket
 import sys
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 
@@ -99,13 +101,13 @@ try:
     from backend.swarm_snapshot import save_snapshot, load_snapshot  # type: ignore
     from backend.photo_composer import compose_group_photo  # type: ignore
     from backend.bot_simulator import inject_bots, remove_bots  # type: ignore
-    from backend.circuit_breaker import gemini_breaker, image_gen_breaker  # type: ignore
+    from backend.circuit_breaker import gemini_breaker  # type: ignore
 except Exception:
     try:
         from swarm_snapshot import save_snapshot, load_snapshot  # type: ignore
         from photo_composer import compose_group_photo  # type: ignore
         from bot_simulator import inject_bots, remove_bots  # type: ignore
-        from circuit_breaker import gemini_breaker, image_gen_breaker  # type: ignore
+        from circuit_breaker import gemini_breaker  # type: ignore
     except Exception as _e:
         # 熔斷器變成 None 後，後續 .call() 會拋出難以理解的
         # 'NoneType' object has no attribute 'call'，所以更需要在這裡講清楚
@@ -116,29 +118,55 @@ except Exception:
         inject_bots = lambda *a, **k: []  # type: ignore
         remove_bots = lambda *a, **k: 0  # type: ignore
         gemini_breaker = None
-        image_gen_breaker = None
 
-# vlm_module 與 face_module 必須分開 import：vlm_module 在缺少 GEMINI_API_KEY
-# 時會於 import 階段 raise，而 face_module 是純 MediaPipe、與 Gemini 無關。
-# 兩者原本共用同一個 try 區塊，導致沒設金鑰時臉部偵測也一起被停用。
+def _raise_on_vlm_failure(fn, *args, **kwargs):
+    """把 {ok: False} 轉成例外，好讓熔斷器判定為失敗。
+
+    circuit_breaker.call 只在 func 拋例外時 record_failure()，正常回傳一律
+    record_success()。而 analyze_outfit / analyze_face 把所有例外都吞掉、改回
+    {"ok": False, "error": ...} —— 於是熔斷器永遠不會累積失敗、永遠不會跳開，
+    整段保護形同虛設：Gemini 全掛時每個參與者仍各自等滿一次逾時，而不是
+    在第三次失敗後快速失敗。
+    """
+    result = fn(*args, **kwargs)
+    if isinstance(result, dict) and result.get("ok") is False:
+        raise RuntimeError(result.get("error") or "vlm_call_failed")
+    return result
+
+
+# vlm_module 與 face_module 必須分開 import：vlm_module 只要載入失敗（缺套件、
+# SDK 版本不符）就整組停用，而 face_module 是純 MediaPipe、與 Gemini 無關。
+# 兩者原本共用同一個 try 區塊，導致 vlm_module 一出事臉部偵測也一起被停用。
 try:
     from backend.vlm_module import analyze_outfit, analyze_face
 except Exception:
     try:
         from vlm_module import analyze_outfit, analyze_face
     except Exception as _e:
-        # 常見原因：GEMINI_API_KEY 未設定（vlm_module 於 import 時即 raise）
         _degraded("vlm_module（VLM 服裝分析）", _e)
         analyze_outfit = lambda *a, **k: {"ok": False}
         analyze_face = lambda *a, **k: {"ok": False}
 
+# 金鑰未設定不會讓 import 失敗 —— vlm_module 在沒有 GEMINI_API_KEY 時只是跳過
+# genai.configure()，要等到實際呼叫才會失敗。上面那個 except 因此不會觸發，
+# 啟動訊息也就完全不會提到 VLM 是關的：每次生成都靜靜地少掉服裝款式與臉部
+# 特徵，只剩 CV 顏色。現場看起來像模型變笨，不像少設一個環境變數。
+if not os.environ.get("GEMINI_API_KEY"):
+    _DEGRADED.append("vlm_module（GEMINI_API_KEY 未設定）")
+    print("[app] ⚠️  GEMINI_API_KEY 未設定 —— 服裝款式與臉部特徵辨識將全數失敗，"
+          "生成的角色只會有 CV 取到的顏色，不會像本人。", file=sys.stderr)
+
+# 這三份色表原本在 app.py 與 avatar_pipeline 各有一份完全相同的副本。
+# 以 avatar_pipeline 為單一來源，避免兩邊日後各自漂移。
 try:
     from backend.avatar_pipeline import (  # type: ignore
-        decode_frame, build_outfit_data, infer_sleeve_kind, build_face_data,
+        decode_frame,
+        HAIR_HEX as _HAIR_HEX, SKIN_HEX as _SKIN_HEX, EYE_HEX as _EYE_HEX,
     )
 except ImportError:
     from avatar_pipeline import (  # type: ignore
-        decode_frame, build_outfit_data, infer_sleeve_kind, build_face_data,
+        decode_frame,
+        HAIR_HEX as _HAIR_HEX, SKIN_HEX as _SKIN_HEX, EYE_HEX as _EYE_HEX,
     )
 
 try:
@@ -151,32 +179,36 @@ except Exception:
         get_face_features = lambda *a, **k: {"ok": False}
 
 try:
-    from backend.garment_gen import (  # type: ignore
-        generate_body_png,
-        generate_full_character_png,
-        generate_refine_character_png,
-        _remove_white_background as _gg_remove_white_background,
-    )
+    from backend.garment_gen import generate_full_character_png  # type: ignore
 except Exception:
     try:
-        from garment_gen import (  # type: ignore
-            generate_body_png,
-            generate_full_character_png,
-            generate_refine_character_png,
-            _remove_white_background as _gg_remove_white_background,
-        )
+        from garment_gen import generate_full_character_png  # type: ignore
     except Exception as _e:
         _degraded("garment_gen（AI 角色圖像生成）", _e)
-        generate_body_png = None
         generate_full_character_png = None
-        generate_refine_character_png = None
-        _gg_remove_white_background = lambda img: img
 
+try:
+    from backend.avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
+    from backend.capture_quality import mean_landmark_displacement  # type: ignore
+    from backend.generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, input_directory, list_runs, mark_render_failure, output_directory, record_attempt, save_input_photo, save_rendered_output, save_review, save_visitor_measurement, start_run, update_run_experiment  # type: ignore
+    from backend.blind_review import blind_payload, create_review_session, delete_review_sources, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
+    from backend.height_profiles import classify_height, get_height_profile  # type: ignore
+    from backend.metrics_logger import log_metric  # type: ignore
+    from backend.style_registry import get_event_style_id, get_style  # type: ignore
+except Exception:
+    from avatar_quality import add_transparent_margin, correction_for_validation, guidance_for_validation, validate_avatar_png  # type: ignore
+    from capture_quality import mean_landmark_displacement  # type: ignore
+    from generation_history import backfill_style_fingerprints, finish_run, get_cast_drift, get_detail_benchmark, get_run, get_summary, input_directory, list_runs, mark_render_failure, output_directory, record_attempt, save_input_photo, save_rendered_output, save_review, save_visitor_measurement, start_run, update_run_experiment  # type: ignore
+    from blind_review import blind_payload, create_review_session, delete_review_sources, import_external_generation, list_review_sessions, resolve_blind_asset, results_csv, review_results, save_group_response, save_item_response, save_review_source, set_session_status  # type: ignore
+    from height_profiles import classify_height, get_height_profile  # type: ignore
+    from metrics_logger import log_metric  # type: ignore
+    from style_registry import get_event_style_id, get_style  # type: ignore
+
+CAPTURE_PROTOCOL_VERSION = "height-recent-3-v1"
 
 if _DEGRADED:
     print(f"[app] ⚠️  共 {len(_DEGRADED)} 個模組以降級模式啟動，"
           f"相關功能將無法運作：{', '.join(_DEGRADED)}", file=sys.stderr)
-
 
 
 if Flask is not None:
@@ -206,28 +238,17 @@ def _route(path, **kwargs):
 
 # 顏色名稱 → hex 的對照表已移至 avatar_pipeline（連同使用它們的 build_face_data）
 
-# --- per-client clothing feature state (避免跨使用者污染) ---
-@dataclass
-class ClientLastSuccess:
-    upper: Optional[Dict[str, Any]] = None
-    lower: Optional[Dict[str, Any]] = None
-    upper_type: str = "short_sleeve"
-    lower_type: str = "shorts"
-    landmarks: Optional[list] = None
-    roi: Optional[Dict[str, Any]] = None
-    cloth_grid: Optional[Dict[str, Any]] = None
-    lower_grid: Optional[Dict[str, Any]] = None
-    arm_color: Optional[Dict[str, Any]] = None
-    last_success_ts: Optional[float] = None
-    updated_at: float = field(default_factory=time.time)
-
-
-_client_last_success: Dict[str, ClientLastSuccess] = {}
-_client_last_success_lock = threading.Lock()
+# --- per-socket M1 preview state ---
+# 這份 per-connection 狀態同時是「上次成功特徵」的來源（見 _merge_fallback_payload），
+# 因此必須以 sid 分隔：否則某位訪客偵測失敗時，會拿另一位訪客的服裝顏色去頂替。
+_preview_sessions: Dict[str, Dict[str, Any]] = {}
+_preview_in_flight: set[str] = set()
+_preview_lock = threading.Lock()
 
 _PHOTOS_DIR = os.path.join(os.path.dirname(__file__), "photos")
 os.makedirs(_PHOTOS_DIR, exist_ok=True)
 
+# --- swarm state ---
 # 啟動時自動還原快照（若有），否則預設 system_bot
 _restored_chars = load_snapshot()
 if _restored_chars:
@@ -243,7 +264,12 @@ else:
         "system_bot": {
             "id": "system_bot", "room": "default", "x": 500, "y": 500, "vx": 1, "vy": 1,
             "upper": {"hex": "#FFFFFF"}, "lower": {"hex": "#444444"},
-            "outfit": {"inner_color": "#FF0000", "lower_color": "#0000FF"}
+            "outfit": {"inner_color": "#FF0000", "lower_color": "#0000FF"},
+            "height_class": "medium", "height_profile": get_height_profile("medium"),
+            "character_mode": "full_character",
+            "height_measurement_valid": True,
+            "style_id": "lego",
+            "last_seen": time.time(),
         }
     }
 
@@ -257,25 +283,115 @@ _swarm_lock = threading.Lock()
 MAX_SWARM_SIZE = config.MAX_SWARM_SIZE
 MAX_BOTS_PER_INJECT = config.MAX_BOTS_PER_INJECT
 
-# Thread pools: 即時預覽專用 vs 生成流程專用（避免池資源競爭卡死）
-_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="preview_cv")
-# *4 的來源：單一生成流程尖峰同時佔用 4 個 worker —— 2 個 VLM 任務提交後
-# 尚未 await（要到取 VLM 結果那行才 await），此時又提交 2 個 CV 任務。
-# 若只給 *2，兩個並行流程的 4 個 VLM 任務會佔滿整池，CV 任務在佇列裡
-# 空等並燒掉自己的 30s timeout —— 失敗原因與 CV 本身無關。
-_gen_executor = ThreadPoolExecutor(max_workers=config.GEN_MAX_CONCURRENT * 4, thread_name_prefix="avatar_gen")
 
-# --- 熔斷器橋接 ---
-class _ExternalCallFailed(Exception):
-    """外部 API 回傳失敗結果（非例外）時用來觸發熔斷器計數。"""
-    pass
+# 三個獨立的執行緒池，而非共用一池：共用時生成流程的 VLM 任務會佔滿整池，
+# 讓即時預覽的 CV 任務在佇列裡空等並燒掉自己的 timeout —— 失敗原因看起來
+# 與 CV 有關，實際上是資源飢餓。分池讓兩者互不影響。
+
+# Keep real-time CV from starving formal AI generation.
+_cv_executor = ThreadPoolExecutor(max_workers=1)
+_vlm_executor = ThreadPoolExecutor(max_workers=4)
+_generation_executor = ThreadPoolExecutor(max_workers=2)
+
+# Live installations need a tolerant gate: three steady preview frames are
+# sufficient during the three-second countdown, and natural body sway should not
+# reset the visitor to zero.
+_CAPTURE_STABLE_FRAMES = max(2, int(os.getenv("CAPTURE_STABLE_FRAMES", "3")))
+_CAPTURE_MOTION_MAX = max(0.01, float(os.getenv("CAPTURE_MOTION_MAX", "0.035")))
+_HEIGHT_STABLE_FRAMES = max(2, int(os.getenv("HEIGHT_STABLE_FRAMES", "3")))
+_HEIGHT_RATIO_SPAN_MAX = max(0.02, float(os.getenv("HEIGHT_RATIO_SPAN_MAX", "0.08")))
+
+_INPUT_GENERATION_ERRORS = {"no_body_poly"}
+_CONNECTION_GENERATION_ERRORS = {
+    "APIConnectionError", "APITimeoutError", "generation_timeout", "refine_timeout",
+}
+_RATE_LIMIT_GENERATION_ERRORS = {"RateLimitError"}
+# Kept apart from the rate-limit and config sets because the remedy differs: the
+# request never reached the model, and waiting or retrying cannot clear it.
+_CREDIT_GENERATION_ERRORS = {"insufficient_credits"}
+_CONFIG_GENERATION_ERRORS = {
+    "AuthenticationError", "PermissionDeniedError", "openai_unavailable",
+}
+
+# Only OpenRouter models that support chat-completions image output work here
+# (see .env.example). The client picks from this same list, so an unlisted
+# value is treated as unset rather than forwarded to the provider unchecked.
+_ALLOWED_FULL_CHARACTER_MODELS = {
+    "google/gemini-3-pro-image-preview",
+    "google/gemini-2.5-flash-image-preview",
+    "google/gemini-3.1-flash-image",
+}
 
 
-def _raise_on_failure(func, *args, **kwargs):
-    result = func(*args, **kwargs)
-    if isinstance(result, dict) and result.get("ok") is False:
-        raise _ExternalCallFailed(result.get("error", "external call returned ok=False"))
-    return result
+def _generation_failure_details(result: Dict[str, Any], validation: Dict[str, Any]) -> Dict[str, str]:
+    """Distinguish input/validator failures from image-service failures."""
+    if result.get("ok"):
+        return {
+            "status": "needs_retake",
+            "kind": "validation",
+            "error": "generation_validation_failed",
+            "guidance": guidance_for_validation(validation),
+        }
+
+    error = str(result.get("error") or "generation_service_failed")
+    if error in _INPUT_GENERATION_ERRORS:
+        return {
+            "status": "needs_retake",
+            "kind": "input",
+            "error": error,
+            "guidance": "無法從照片擷取完整人物範圍，請確認頭頂、雙腿與雙腳都在畫面內後重新拍攝。",
+        }
+    if error in _CREDIT_GENERATION_ERRORS:
+        return {
+            "status": "service_error",
+            "kind": "billing",
+            "error": error,
+            "guidance": "生圖服務餘額不足，請求在送出前就被擋下。這不是照片問題，"
+                        "重試也不會成功；請先為 OpenRouter 帳戶加值後再生成。",
+        }
+    if error in _CONNECTION_GENERATION_ERRORS:
+        guidance = "生圖服務連線失敗；照片已通過拍攝分析，不需要更換照片，請稍後用同一張照片重試。"
+    elif error in _RATE_LIMIT_GENERATION_ERRORS:
+        guidance = "生圖服務目前流量受限；照片沒有問題，請稍後用同一張照片重試。"
+    elif error in _CONFIG_GENERATION_ERRORS:
+        guidance = "生圖服務授權或設定異常；這不是照片問題，請檢查後端 API 設定後再試。"
+    else:
+        guidance = "生圖服務沒有回傳圖片；這不是角色完整性檢查失敗，請稍後用同一張照片重試。"
+    return {
+        "status": "service_error",
+        "kind": "service",
+        "error": error,
+        "guidance": guidance,
+    }
+
+
+def _merge_fallback_payload(sid: str, features: Dict[str, Any]) -> Dict[str, Any]:
+    with _preview_lock:
+        session = _preview_sessions.setdefault(sid, {"stable_count": 0})
+    if features.get("ok") is True:
+        with _preview_lock:
+            session["last_success"] = features
+            session["last_success_ts"] = time.time()
+        return features
+    last = session.get("last_success") or {}
+    return {
+        "ok": False,
+        "error": features.get("error"),
+        "upper": last.get("upper"),
+        "lower": last.get("lower"),
+        "arm_color": last.get("arm_color"),
+        "upper_type": last.get("upper_type", "short_sleeve"),
+        "lower_type": last.get("lower_type", "shorts"),
+        "landmarks": last.get("landmarks"),
+        "roi": last.get("roi"),
+        "mask_stats": features.get("mask_stats", {}),
+        "capture_ready": False,
+        "stability_count": 0,
+        "guidance_reason": "person_not_detected",
+        "fallback": bool(last),
+        "last_success_ts": session.get("last_success_ts"),
+        "ts": time.time(),
+    }
 
 
 # --- generate_avatar 併發控制 ---
@@ -285,50 +401,346 @@ _gen_waiting = 0                      # 目前排隊中（尚未取得 slot）�
 _gen_waiting_lock = threading.Lock()
 
 
-def _merge_fallback_payload(features: Dict[str, Any], sid: Optional[str] = None) -> Dict[str, Any]:
-    client_key = sid or "default"
-    with _client_last_success_lock:
-        if client_key not in _client_last_success:
-            _client_last_success[client_key] = ClientLastSuccess()
-        state = _client_last_success[client_key]
-
-        if features.get("ok") is True:
-            state.upper = features.get("upper")
-            state.lower = features.get("lower")
-            state.upper_type = features.get("upper_type", "short_sleeve")
-            state.lower_type = features.get("lower_type", "shorts")
-            state.landmarks = features.get("landmarks")
-            state.roi = features.get("roi")
-            state.cloth_grid = features.get("cloth_grid")
-            state.lower_grid = features.get("lower_grid")
-            state.arm_color  = features.get("arm_color")
-            state.last_success_ts = time.time()
-            state.updated_at = time.time()
-            return features
-
-        return {
-            "ok": False,
-            "error": features.get("error"),
-            "upper": state.upper,
-            "lower": state.lower,
-            "arm_color": state.arm_color,
-            "upper_type": state.upper_type,
-            "lower_type": state.lower_type,
-            "landmarks": state.landmarks,
-            "roi": state.roi,
-            "cloth_grid": state.cloth_grid,
-            "lower_grid": state.lower_grid,
-            "mask_stats": features.get("mask_stats", {}),
-            "fallback": state.upper is not None,
-            "last_success_ts": state.last_success_ts,
-            "ts": time.time(),
-        }
-
 
 
 @_route("/health", methods=["GET"])
 def health_check():
-    return jsonify({"status": "ok", "service": "PersonaFlow backend"})
+    return jsonify({
+        "status": "ok",
+        "service": "PersonaFlow backend",
+        "capture_protocol": CAPTURE_PROTOCOL_VERSION,
+    })
+
+
+@app.route("/api/branch", methods=["GET"])
+def api_branch():
+    """Return the current git branch so the frontend can display it."""
+    import subprocess
+    try:
+        branch = subprocess.check_output(
+            ["git", "branch", "--show-current"],
+            cwd=os.path.dirname(__file__),
+            text=True,
+            timeout=3,
+        ).strip()
+    except Exception:
+        branch = "unknown"
+    return jsonify({"branch": branch})
+
+
+def _with_output_url(item: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(item)
+    result["output_url"] = (
+        f"/api/dev/outputs/{result['output_path']}" if result.get("output_path") else None
+    )
+    result["input_url"] = (
+        f"/api/dev/inputs/{result['input_path']}" if result.get("input_path") else None
+    )
+    return result
+
+
+@app.after_request
+def _allow_local_dev_dashboard(response):
+    if request.path.startswith("/api/dev/"):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    return response
+
+
+@app.route("/api/dev/generations", methods=["GET"])
+def dev_generation_list():
+    limit = request.args.get("limit", 100, type=int)
+    mode = request.args.get("mode") or None
+    experiment_id = request.args.get("experiment_id") or None
+    variant_id = request.args.get("variant_id") or None
+    return jsonify({"items": [
+        _with_output_url(item) for item in list_runs(
+            limit=limit, mode=mode, experiment_id=experiment_id, variant_id=variant_id,
+        )
+    ]})
+
+
+@app.route("/api/dev/generations/<request_id>", methods=["GET"])
+def dev_generation_detail(request_id):
+    item = get_run(request_id)
+    if item is None:
+        return jsonify({"error": "not_found"}), 404
+    for attempt in item.get("attempts") or []:
+        attempt["output_url"] = (
+            f"/api/dev/outputs/{attempt['output_path']}" if attempt.get("output_path") else None
+        )
+    return jsonify(_with_output_url(item))
+
+
+@app.route("/api/dev/generations/<request_id>/review", methods=["POST"])
+def dev_generation_review(request_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        review = save_review(
+            request_id,
+            verdict=payload.get("verdict", "pending"),
+            completeness_score=payload.get("completeness_score"),
+            clothing_match_score=payload.get("clothing_match_score"),
+            face_match_score=payload.get("face_match_score"),
+            overall_score=payload.get("overall_score"),
+            notes=payload.get("notes", ""),
+        )
+    except KeyError:
+        return jsonify({"error": "not_found"}), 404
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": "invalid_review", "detail": str(exc)}), 400
+    return jsonify({"ok": True, "review": review})
+
+
+@app.route("/api/dev/generations/<request_id>/experiment", methods=["POST"])
+def dev_generation_experiment(request_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        item = update_run_experiment(
+            request_id,
+            experiment_id=payload.get("experiment_id"),
+            comparison_id=payload.get("comparison_id"),
+            variant_id=payload.get("variant_id"),
+        )
+    except KeyError:
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({"ok": True, "item": _with_output_url(item)})
+
+
+@app.route("/api/dev/external-generations", methods=["POST"])
+def dev_external_generation():
+    try:
+        item = import_external_generation(request.get_json(silent=True) or {})
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": "invalid_external_generation", "detail": str(exc)}), 400
+    return jsonify({"ok": True, "item": _with_output_url(item)}), 201
+
+
+@app.route("/api/dev/review-sources", methods=["POST"])
+def dev_review_source():
+    payload = request.get_json(silent=True) or {}
+    try:
+        item = save_review_source(
+            payload.get("experiment_id"), payload.get("comparison_id"), payload.get("image")
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": "invalid_review_source", "detail": str(exc)}), 400
+    return jsonify({"ok": True, "item": item}), 201
+
+
+@app.route("/api/dev/review-sources/<experiment_id>", methods=["DELETE"])
+def dev_delete_review_sources(experiment_id):
+    try:
+        deleted = delete_review_sources(experiment_id)
+    except ValueError as exc:
+        return jsonify({"error": "invalid_experiment", "detail": str(exc)}), 400
+    return jsonify({"ok": True, "deleted": deleted})
+
+
+@app.route("/api/dev/review-sessions", methods=["GET", "POST"])
+def dev_review_sessions():
+    if request.method == "GET":
+        return jsonify({"items": list_review_sessions()})
+    payload = request.get_json(silent=True) or {}
+    try:
+        session = create_review_session(
+            name=payload.get("name") or payload.get("experiment_id"),
+            experiment_id=payload.get("experiment_id"),
+            request_ids=payload.get("request_ids"),
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": "invalid_review_session", "detail": str(exc)}), 400
+    return jsonify({"ok": True, "session": session}), 201
+
+
+@app.route("/api/dev/review-sessions/<session_id>/<action>", methods=["POST"])
+def dev_review_session_status(session_id, action):
+    status = {"lock": "locked", "complete": "completed"}.get(action)
+    if not status:
+        return jsonify({"error": "unknown_action"}), 404
+    try:
+        session = set_session_status(session_id, status)
+    except KeyError:
+        return jsonify({"error": "not_found"}), 404
+    except ValueError as exc:
+        return jsonify({"error": "invalid_transition", "detail": str(exc)}), 409
+    return jsonify({"ok": True, "session": session})
+
+
+@app.route("/api/dev/review-sessions/<session_id>/blind", methods=["GET"])
+def dev_blind_review_payload(session_id):
+    try:
+        return jsonify(blind_payload(session_id, request.args.get("reviewer_code") or ""))
+    except KeyError:
+        return jsonify({"error": "not_found"}), 404
+    except ValueError as exc:
+        return jsonify({"error": "blind_review_unavailable", "detail": str(exc)}), 409
+
+
+@app.route("/api/dev/review-sessions/<session_id>/items/<anonymous_code>", methods=["POST"])
+def dev_blind_item_response(session_id, anonymous_code):
+    payload = request.get_json(silent=True) or {}
+    try:
+        save_item_response(
+            session_id, anonymous_code, payload.get("reviewer_code"), payload,
+        )
+    except KeyError:
+        return jsonify({"error": "not_found"}), 404
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": "invalid_response", "detail": str(exc)}), 400
+    except Exception as exc:
+        if "UNIQUE constraint" in str(exc):
+            return jsonify({"error": "already_submitted"}), 409
+        raise
+    return jsonify({"ok": True}), 201
+
+
+@app.route("/api/dev/review-sessions/<session_id>/groups/<group_code>", methods=["POST"])
+def dev_blind_group_response(session_id, group_code):
+    payload = request.get_json(silent=True) or {}
+    try:
+        save_group_response(
+            session_id, group_code, payload.get("reviewer_code"), payload,
+        )
+    except KeyError:
+        return jsonify({"error": "not_found"}), 404
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": "invalid_response", "detail": str(exc)}), 400
+    except Exception as exc:
+        if "UNIQUE constraint" in str(exc):
+            return jsonify({"error": "already_submitted"}), 409
+        raise
+    return jsonify({"ok": True}), 201
+
+
+@app.route("/api/dev/review-sessions/<session_id>/results", methods=["GET"])
+def dev_blind_results(session_id):
+    try:
+        return jsonify(review_results(session_id))
+    except KeyError:
+        return jsonify({"error": "not_found"}), 404
+    except ValueError as exc:
+        return jsonify({"error": "results_still_blind", "detail": str(exc)}), 409
+
+
+@app.route("/api/dev/review-sessions/<session_id>/export.csv", methods=["GET"])
+def dev_blind_export(session_id):
+    try:
+        csv_text = results_csv(session_id)
+    except KeyError:
+        return jsonify({"error": "not_found"}), 404
+    except ValueError as exc:
+        return jsonify({"error": "results_still_blind", "detail": str(exc)}), 409
+    return app.response_class(csv_text, mimetype="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="{session_id}.csv"'
+    })
+
+
+@app.route("/api/dev/blind-assets/<session_id>/<anonymous_code>/<kind>", methods=["GET"])
+def dev_blind_asset(session_id, anonymous_code, kind):
+    if kind not in {"source", "output"}:
+        return jsonify({"error": "not_found"}), 404
+    try:
+        directory, filename = resolve_blind_asset(session_id, anonymous_code, kind)
+    except KeyError:
+        return jsonify({"error": "not_found"}), 404
+    return send_from_directory(str(directory), filename)
+
+
+@app.route("/api/dev/summary", methods=["GET"])
+def dev_generation_summary():
+    return jsonify(get_summary())
+
+
+@app.route("/api/dev/detail-benchmark", methods=["GET"])
+def dev_detail_benchmark():
+    return jsonify(get_detail_benchmark())
+
+
+@app.route("/api/dev/cast-drift", methods=["GET"])
+def dev_cast_drift():
+    """Cross-character style drift: how far this cast is from one species."""
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        limit = 50
+    return jsonify(get_cast_drift(
+        experiment_id=(request.args.get("experiment_id") or None),
+        mode=(request.args.get("mode") or "full_character"),
+        limit=limit,
+    ))
+
+
+@app.route("/api/dev/cast-drift/backfill", methods=["POST"])
+def dev_cast_drift_backfill():
+    """Measure stored attempts that predate the fingerprint column."""
+    return jsonify({"updated": backfill_style_fingerprints()})
+
+
+@app.route("/api/dev/outputs/<path:filename>", methods=["GET"])
+def dev_generation_output(filename):
+    return send_from_directory(str(output_directory()), filename)
+
+
+@app.route("/api/dev/inputs/<path:filename>", methods=["GET"])
+def dev_generation_input(filename):
+    return send_from_directory(str(input_directory()), filename)
+
+
+@socketio.on("save_rendered_avatar")
+def handle_save_rendered_avatar(payload):
+    """Persist the final browser-rendered character used by the developer history."""
+    request_id = str((payload or {}).get("request_id") or "").strip()
+    png_b64 = str((payload or {}).get("body_png") or "")
+    if png_b64.startswith("data:image/") and "," in png_b64:
+        png_b64 = png_b64.split(",", 1)[1]
+    if not request_id or not png_b64 or len(png_b64) > 12 * 1024 * 1024:
+        emit("rendered_avatar_saved", {"ok": False, "request_id": request_id, "error": "invalid_payload"})
+        return
+    try:
+        raw = base64.b64decode(png_b64, validate=True)
+        if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("not_png")
+        output_path = save_rendered_output(request_id, png_b64)
+        emit("rendered_avatar_saved", {
+            "ok": bool(output_path), "request_id": request_id,
+            "output_url": f"/api/dev/outputs/{output_path}" if output_path else None,
+        })
+    except KeyError:
+        emit("rendered_avatar_saved", {"ok": False, "request_id": request_id, "error": "request_not_found"})
+    except Exception:
+        emit("rendered_avatar_saved", {"ok": False, "request_id": request_id, "error": "invalid_png"})
+
+
+@socketio.on("render_avatar_failed")
+def handle_render_avatar_failed(payload):
+    """Reject a formal result when the browser cannot produce its Three.js render."""
+    request_id = str((payload or {}).get("request_id") or "").strip()
+    raw_error = str((payload or {}).get("error") or "frontend_3d_render_failed").strip().lower()
+    error_code = re.sub(r"[^a-z0-9_\-]", "_", raw_error)[:96] or "frontend_3d_render_failed"
+    if not request_id:
+        emit("render_failure_saved", {"ok": False, "error": "invalid_payload"})
+        return
+    try:
+        mark_render_failure(
+            request_id,
+            error_code=error_code,
+            guidance="Three.js 正式角色渲染失敗；未建立替代角色。",
+        )
+        emit("render_failure_saved", {"ok": True, "request_id": request_id})
+    except KeyError:
+        emit("render_failure_saved", {"ok": False, "request_id": request_id, "error": "request_not_found"})
+
+
+def _history_call(function, *args, **kwargs):
+    if os.environ.get("DEV_HISTORY_ENABLED", "1").strip().lower() in {"0", "false", "no"}:
+        return None
+    try:
+        return function(*args, **kwargs)
+    except Exception as exc:
+        print(f"[generation_history] {function.__name__} failed: {exc}")
+        return None
 
 
 @_route("/photos/<path:filename>", methods=["GET"])
@@ -349,20 +761,19 @@ def handle_connect():
 
 @_on_socket("disconnect")
 def handle_disconnect():
-    # 斷線時只移除「這條連線自己就是角色本人」的情況：char_id == sid。
-    # 互動端拍完照關分頁時，其角色 id 通常就是當時的 sid；投影牆連線斷開
-    # 不該把別人加入的角色一起清掉，故只 pop sid 對應者（見技術架構文件 5.2）。
+    # 角色 id 已與連線 id 脫鉤（char_<uuid>），因此斷線不再移除任何角色 ——
+    # 賓客關掉分頁不代表離開現場，作品不該因此少一個人。舊版角色 id 沿用 sid，
+    # 這裡保留相容處理：改為續命而非刪除，交由 TTL 掃描回收。
     sid = request.sid
-    removed = False
     with _swarm_lock:
-        # 角色已與連線脫鉤（id 是 char_<uuid>，不是 sid），因此斷線不再移除
-        # 任何角色 —— 賓客關掉分頁不代表離開現場，作品不該因此少一個人。
-        # 舊版角色 id 沿用 sid，這裡保留相容處理：改為續命而非刪除。
         if sid in _swarm_chars:
             _swarm_chars[sid]["last_seen"] = time.time()
-    with _client_last_success_lock:
-        _client_last_success.pop(sid, None)
-    log_event("disconnect", pid=sid, removed_char=removed)
+    # 預覽階段的 per-connection 狀態則必須清掉：它是這條連線專屬的拍攝閘門進度，
+    # 留著會讓同一個 sid 被重用時繼承上一位訪客的穩定度計數。
+    with _preview_lock:
+        _preview_sessions.pop(sid, None)
+        _preview_in_flight.discard(sid)
+    log_event("disconnect", pid=sid, removed_char=False)
 
 
 @_on_socket("client_event")
@@ -374,34 +785,132 @@ def handle_client_event(payload):
 def handle_process_frame(payload):
     sid = request.sid
     if cv2 is None:
-        emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "opencv_missing"}, sid=sid))
+        emit("clothing_features", _merge_fallback_payload(sid, {"ok": False, "error": "opencv_missing"}))
         return
 
-    def _process_in_background():
+    with _preview_lock:
+        if sid in _preview_in_flight:
+            # Keep only the newest waiting frame for this connection.
+            _preview_sessions.setdefault(sid, {"stable_count": 0})["pending_payload"] = payload
+            return
+        _preview_in_flight.add(sid)
+        _preview_sessions.setdefault(sid, {"stable_count": 0})
+
+    def _process_in_background(frame_payload):
         try:
-            img_str = payload.get("image")
+            img_str = frame_payload.get("image")
             if not img_str:
                 return
 
-            if img_str.startswith("data:image"):
-                img_str = img_str.split(",")[1]
+            with _preview_lock:
+                previous = _preview_sessions.setdefault(sid, {"stable_count": 0}).get("landmarks")
+            frame_id = frame_payload.get("frame_id")
 
-            img_bytes = base64.b64decode(img_str)
-            np_arr = np.frombuffer(img_bytes, np.uint8)
-            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            frame, _decode_err = decode_frame(img_str)
+            if frame is None:
+                print(f"[preview] 影像解碼失敗: {_decode_err}")
 
             if frame is not None:
-                features = get_clothing_features(frame, max_width=360)
-                result = _merge_fallback_payload(features, sid=sid)
+                features = get_clothing_features(frame, max_width=360, previous_landmarks=previous)
+                if features.get("ok"):
+                    current = features.get("landmarks") or []
+                    displacement = mean_landmark_displacement(current, previous)
+                    raw_ready = bool(features.get("capture_ready_raw"))
+                    with _preview_lock:
+                        live = _preview_sessions.setdefault(sid, {"stable_count": 0})
+                        window = list(live.get("displacements") or [])
+                        if raw_ready:
+                            # Count the first valid frame as zero movement, then
+                            # evaluate a short rolling mean thereafter.
+                            window.append(0.0 if displacement is None else displacement)
+                            window = window[-_CAPTURE_STABLE_FRAMES:]
+                        else:
+                            window = []
+                        average = sum(window) / len(window) if window else None
+                        stable_count = len(window) if average is not None and average <= _CAPTURE_MOTION_MAX else 0
+                        live["displacements"] = window if stable_count else []
+                        live["stable_count"] = stable_count
+                        live["landmarks"] = current
+                        raw_height_ratio = features.get("height_ratio")
+                        height_measurement_ready = False
+                        if features.get("height_measurement_valid") and isinstance(raw_height_ratio, (int, float)):
+                            height_window = list(live.get("height_ratios") or [])
+                            if height_window and abs(float(raw_height_ratio) - float(np.median(height_window))) > 0.12:
+                                height_window = []
+                            height_window.append(float(raw_height_ratio))
+                            # Only recent samples determine readiness. Keeping a
+                            # 15-frame history meant one old mask jump could
+                            # prevent the indicator from ever turning on.
+                            height_window = height_window[-_HEIGHT_STABLE_FRAMES:]
+                            live["height_ratios"] = height_window
+                            smoothed_height_ratio = float(np.median(height_window))
+                            features["height_ratio_raw"] = round(float(raw_height_ratio), 4)
+                            features["height_ratio"] = round(smoothed_height_ratio, 4)
+                            features["height_class"] = classify_height(smoothed_height_ratio)
+                            features["height_sample_count"] = len(height_window)
+                            features["height_confidence"] = round(
+                                min(1.0, len(height_window) / _HEIGHT_STABLE_FRAMES), 3
+                            )
+                            height_span = max(height_window) - min(height_window)
+                            features["height_sample_span"] = round(height_span, 4)
+                            height_measurement_ready = (
+                                len(height_window) >= _HEIGHT_STABLE_FRAMES
+                                and height_span <= _HEIGHT_RATIO_SPAN_MAX
+                            )
+                        else:
+                            live["height_ratios"] = []
+                            features["height_sample_count"] = 0
+                            features["height_confidence"] = 0.0
+                            features["height_sample_span"] = None
+                        features["height_measurement_ready"] = height_measurement_ready
+                        features["height_samples_required"] = _HEIGHT_STABLE_FRAMES
+                        features["height_span_limit"] = _HEIGHT_RATIO_SPAN_MAX
+                        if height_measurement_ready:
+                            live["trusted_height_ratio"] = features["height_ratio"]
+                            live["trusted_height_class"] = features["height_class"]
+                            live["trusted_height_at"] = time.time()
+                        else:
+                            live.pop("trusted_height_ratio", None)
+                            live.pop("trusted_height_class", None)
+                            live.pop("trusted_height_at", None)
+                        quality = features.get("capture_quality")
+                        if isinstance(quality, dict):
+                            checks = quality.setdefault("capture_checks", {})
+                            checks["height_station"] = bool(features.get("height_station_valid"))
+                            checks["height_measurement"] = height_measurement_ready
+                    features["stability_count"] = stable_count
+                    features["stability_required"] = _CAPTURE_STABLE_FRAMES
+                    features["landmark_displacement"] = round(displacement, 5) if displacement is not None else None
+                    features["stability_average"] = round(average, 5) if average is not None else None
+                    features["capture_ready"] = (
+                        raw_ready
+                        and stable_count >= _CAPTURE_STABLE_FRAMES
+                        and height_measurement_ready
+                    )
+                    if features["capture_ready"]:
+                        features["guidance_reason"] = "ready"
+                    elif raw_ready:
+                        features["guidance_reason"] = "hold_still"
+                if frame_id is not None:
+                    features["frame_id"] = frame_id
+                result = _merge_fallback_payload(sid, features)
                 if "ts" not in result:
                     result["ts"] = time.time()
                 socketio.emit("clothing_features", result, to=sid)
             else:
-                socketio.emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "frame_decode_failed"}, sid=sid), to=sid)
+                socketio.emit("clothing_features", _merge_fallback_payload(sid, {"ok": False, "error": "frame_decode_failed"}), to=sid)
         except Exception as e:
-            socketio.emit("clothing_features", _merge_fallback_payload({"ok": False, "error": "cv_exception", "message": str(e)}, sid=sid), to=sid)
+            socketio.emit("clothing_features", _merge_fallback_payload(sid, {"ok": False, "error": "cv_exception", "message": str(e)}), to=sid)
+        finally:
+            with _preview_lock:
+                live = _preview_sessions.get(sid)
+                pending = live.pop("pending_payload", None) if live is not None else None
+                if pending is None:
+                    _preview_in_flight.discard(sid)
+            if pending is not None:
+                _cv_executor.submit(_process_in_background, pending)
 
-    _executor.submit(_process_in_background)
+    _cv_executor.submit(_process_in_background, payload)
 
 
 @_on_socket("generate_avatar")
@@ -416,233 +925,477 @@ def handle_generate_avatar(payload):
         return
 
     sid = request.sid
+    request_id = str(payload.get("request_id") or uuid.uuid4().hex)
+    style_id = get_event_style_id()
+    source_type = str(payload.get("source_type") or "camera").strip().lower()
+    if source_type not in {"upload", "camera"}:
+        source_type = "camera"
+    requested_model = str(payload.get("model") or "").strip()
+    model_override = requested_model if requested_model in _ALLOWED_FULL_CHARACTER_MODELS else None
+    try:
+        fingerprint_b64 = img_str.split(",", 1)[1] if img_str.startswith("data:image") else img_str
+        comparison_id = hashlib.sha256(base64.b64decode(fingerprint_b64)).hexdigest()[:20]
+    except Exception:
+        comparison_id = None
+    experiment_id = str(payload.get("experiment_id") or "").strip()[:96] or None
+    requested_comparison = str(payload.get("comparison_id") or "").strip()[:96] or None
+    if requested_comparison:
+        comparison_id = requested_comparison
+    variant_id = str(payload.get("variant_id") or "").strip()[:96] or (
+        "baseline" if experiment_id else None
+    )
 
-    # Generation mode: "body_sprite" (existing, fast, just upper+lower)
-    #                  "full_character" (new, slow, head→feet single image).
-    # Frontend sends mode in payload; .env GENERATION_MODE is the default.
+    # Camera captures must use the temporally stable height measurement that
+    # lit the live capture indicators. A fresh single-frame CV pass may produce
+    # a slightly different mask and must not silently replace that result.
+    trusted_height = None
+    if source_type == "camera":
+        with _preview_lock:
+            live = _preview_sessions.get(sid) or {}
+            measured_at = live.get("trusted_height_at")
+            if (
+                isinstance(measured_at, (int, float))
+                and time.time() - float(measured_at) <= 8.0
+                and live.get("trusted_height_class") in {"short", "medium", "tall"}
+                and isinstance(live.get("trusted_height_ratio"), (int, float))
+            ):
+                trusted_height = {
+                    "height_ratio": float(live["trusted_height_ratio"]),
+                    "height_class": live["trusted_height_class"],
+                }
+
+    # full_character is the only live path: one AI image covers the whole
+    # figure. body_sprite and brick_ai_texture are retired -- old history stays
+    # readable, but new requests must not spend API budget on them.
     mode = (payload.get("mode") or config.GENERATION_MODE).strip()
-    if mode not in {"body_sprite", "full_character", "full_character_refined"}:
-        mode = "body_sprite"
-
-    # 拍照→送出到後端收到請求的牆鐘時間起點（生成延遲量測起點，見第 6 節）
-    _req_start = time.perf_counter()
+    if mode in {"body_sprite", "brick_ai_texture"}:
+        emit("avatar_generated", {
+            "ok": False,
+            "is_final": True,
+            "request_id": request_id,
+            "character_mode": mode,
+            "error": "mode_retired",
+            "guidance": "此生成模式已退役，請重新整理頁面後使用完整角色生成模式。",
+        })
+        return
+    if mode not in get_style(style_id).supported_modes:
+        mode = "full_character"
+    _history_call(
+        start_run, request_id, mode=mode, style_id=style_id,
+        source_type=source_type, experiment_id=experiment_id,
+        comparison_id=comparison_id, variant_id=variant_id,
+    )
+    _history_call(save_input_photo, request_id, img_str)
 
     def _background():
-        # 各子流程里程碑毫秒數，最後一起寫進 avatar_generated 事件的 log
+        total_start = time.perf_counter()
+        # 各子流程里程碑毫秒數，最後一起寫進 avatar_generated 事件 log。
+        # analyze_log.py / report_html.py 的效能報告就是讀這些欄位。
         _timings: Dict[str, Any] = {}
-
-        def _elapsed_ms() -> float:
-            return round((time.perf_counter() - _req_start) * 1000.0, 1)
-
-        def _progress(stage, pct, detail=""):
-            socketio.emit("avatar_progress", {"stage": stage, "pct": pct, "detail": detail}, to=sid)
-
         global _gen_waiting
         acquired_slot = False
-
-        # --- 併發閘門：多人同時拍照時排隊，避免單點瓶頸卡死（第 8 節風險）---
+        retry_count = 0
+        fallback_used = False
+        final_status = "failed"
+        final_stage = "error"
+        final_validation: Dict[str, Any] = {"passed": False, "errors": [], "warnings": []}
+        final_error = None
+        final_guidance = None
+        final_output = None
         try:
-            acquired = _gen_semaphore.acquire(blocking=False)
-            if not acquired:
-                # 有人正在生成，本請求進入排隊；先告知前端排隊位置
+            def _progress(stage: str, percent: int, message: str):
+                socketio.emit("generation_progress", {
+                    "request_id": request_id,
+                    "mode": mode,
+                    "stage": stage,
+                    "percent": max(0, min(100, int(percent))),
+                    "message": message,
+                }, to=sid)
+
+            def _await_generation(future, *, timeout=50, error="generation_timeout"):
+                try:
+                    return future.result(timeout=timeout)
+                except Exception as exc:
+                    return {"ok": False, "error": error, "detail": type(exc).__name__}
+
+            # --- 併發閘門：多人同時拍照時排隊，避免單點瓶頸卡死 ---
+            if not _gen_semaphore.acquire(blocking=False):
                 with _gen_waiting_lock:
                     _gen_waiting += 1
                     ahead = _gen_waiting
                 try:
-                    _progress("queued", 2, f"生成中人數已滿，排隊中（前面還有 {ahead} 人）...")
+                    _progress("queued", 2, f"生成中人數已滿，排隊中（前面還有 {ahead} 人）")
                     log_event("generate_queued", pid=sid, ahead=ahead, mode=mode)
                 except Exception as pe:
                     print(f"[generate_avatar] queue progress error: {pe}")
                 _queue_wait_start = time.perf_counter()
-                _gen_semaphore.acquire(blocking=True)  # 阻塞等到有 slot
+                _gen_semaphore.acquire(blocking=True)
                 with _gen_waiting_lock:
                     _gen_waiting = max(0, _gen_waiting - 1)
                 _timings["queue_wait_ms"] = round((time.perf_counter() - _queue_wait_start) * 1000.0, 1)
-
             acquired_slot = True
 
-            print(f"[generate_avatar] Received request: mode={mode}, img_len={len(img_str) if img_str else 0}")
-            _progress("analyzing", 5, "正在分析服裝與面部特徵...")
+            _progress("received", 5, "照片已接收，準備分析人物特徵")
+            vlm_start = time.perf_counter()
+            _progress("analyzing", 12, "正在分析人體輪廓、服裝區域與色彩")
+            # The full-character image model already receives the source photo,
+            # so the two extra VLM endpoints duplicate visual analysis. They stay
+            # off unless explicitly re-enabled.
+            use_vlm = os.environ.get("FULL_MODE_VLM_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+            # 經熔斷器呼叫：Gemini 連續失敗時快速失敗並回傳 fallback，避免
+            # executor 執行緒被無效等待佔住。只用在這兩支便宜的分析 API 上 ——
+            # 付費生圖那條刻意不接：CircuitBreaker.call 預設會自動重試一次
+            # （等於多付一次錢），且它的 circuit_open 會蓋掉底下依錯誤類型
+            # 給前端的重拍指引。生圖自有 _await_generation 的逾時與重試。
+            def _vlm(fn, kind):
+                if gemini_breaker is None:
+                    return _vlm_executor.submit(fn, img_str)
+                # 經 _raise_on_vlm_failure 轉手，熔斷器才看得見失敗。
+                return _vlm_executor.submit(
+                    gemini_breaker.call, _raise_on_vlm_failure, fn, img_str, max_retries=0,
+                    fallback={"ok": False, "error": "circuit_open", kind: {}},
+                )
 
-            # Submit VLM analyses to dedicated generation executor (parallel)
-            _vlm_start = time.perf_counter()
-            # 經由熔斷器呼叫：外部 API 連續失敗時快速失敗並回傳 fallback，
-            # 避免 executor 執行緒持續被無效等待卡住。
-            fut_outfit   = _gen_executor.submit(
-                gemini_breaker.call, _raise_on_failure, analyze_outfit, img_str,
-                fallback={"ok": False, "error": "circuit_open"},
-            )
-            fut_face_vlm = _gen_executor.submit(
-                gemini_breaker.call, _raise_on_failure, analyze_face, img_str,
-                fallback={"ok": False, "error": "circuit_open"},
-            )
+            fut_outfit = _vlm(analyze_outfit, "outfit") if use_vlm else None
+            fut_face_vlm = _vlm(analyze_face, "face") if use_vlm else None
 
-            # Ultra-robust base64 image decoding
+            # Decode image（Pillow→OpenCV 兩段式，含 iPhone HEIC 與 base64
+            # padding/'+' 修正；見 avatar_pipeline.decode_frame）
             frame, _decode_err = decode_frame(img_str)
             if frame is None:
-                print(f"[generate_avatar] 影像解碼失敗 "
-                      f"(img_str_len={len(img_str) if img_str else 0}): {_decode_err}")
-            else:
-                print(f"[generate_avatar] Frame decoded successfully: shape={frame.shape}")
+                print(f"[generate_avatar] 影像解碼失敗: {_decode_err}")
 
             cv_result      = {}
             face_cv_result = {}
             rgb_full       = None
             body_poly      = None
-            fut_garment    = None
-
+            cv_start = time.perf_counter()
             if frame is not None:
-                rgb_full = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                cv_result      = get_clothing_features(frame, max_width=480)
+                face_cv_result = get_face_features(frame, max_width=480)
 
-                # Parallelize CV calls — clothing + face run simultaneously
-                _cv_start = time.perf_counter()
-                fut_cv      = _gen_executor.submit(get_clothing_features, frame, max_width=480)
-                fut_face_cv = _gen_executor.submit(get_face_features, frame, max_width=480)
-
-                cv_result      = fut_cv.result(timeout=30)
-                face_cv_result = fut_face_cv.result(timeout=30)
-                # CV 子流程延遲（第 6 節指標：目標 < 1s）
-                _timings["cv_ms"] = round((time.perf_counter() - _cv_start) * 1000.0, 1)
-
-                if cv_result and isinstance(cv_result, dict) and cv_result.get("ok") and "body_poly" in cv_result and len(cv_result["body_poly"]) >= 3:
+                if cv_result.get("ok") and "body_poly" in cv_result:
                     try:
+                        rgb_full  = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         body_poly = np.array(cv_result["body_poly"], dtype=np.float32)
                     except Exception as ge:
                         print(f"[generate_avatar] poly prep failed: {ge}")
+            _progress("cv_ready", 24, "人體與服裝區域分析完成")
 
-                # If MediaPipe skeleton detection missed body_poly (e.g. portrait photos, close-up uploads),
-                # construct a high-quality default central crop area so VLM/Image-Gen still functions perfectly!
-                if body_poly is None or len(body_poly) < 3:
-                    print("[generate_avatar] MediaPipe skeleton detection missed body_poly. Using default central crop.")
-                    body_poly = np.array([
-                        [0.25, 0.10],  # Top-left
-                        [0.75, 0.10],  # Top-right
-                        [0.75, 0.90],  # Bottom-right
-                        [0.25, 0.90]   # Bottom-left
-                    ], dtype=np.float32)
-
-            _progress("analyzing", 20, "特徵分析完成，等待 VLM 結果...")
-
-            # body_sprite mode: spawn generation in PARALLEL with VLM (no VLM context needed).
-            if mode == "body_sprite" and rgb_full is not None and body_poly is not None:
-                fut_garment = _gen_executor.submit(
-                    image_gen_breaker.call,
-                    _raise_on_failure, generate_body_png,
-                    rgb_full, body_poly,
-                    fallback={"ok": False, "error": "circuit_open"},
+            if source_type == "camera" and (
+                not cv_result.get("height_measurement_valid") or trusted_height is None
+            ):
+                cv_ms = int((time.perf_counter() - cv_start) * 1000)
+                guidance = "請站在固定地面腳印上，讓雙腳貼近畫面底部身高基準線後重新拍照。"
+                socketio.emit("avatar_generated", {
+                    "ok": False,
+                    "error": "height_station_not_aligned",
+                    "guidance": guidance,
+                    "request_id": request_id,
+                    "stage": "height_validation",
+                    "is_final": True,
+                    "height_class": None,
+                    "height_ratio": cv_result.get("height_ratio"),
+                    "height_measurement_valid": False,
+                    "style_id": style_id,
+                }, to=sid)
+                _history_call(
+                    finish_run, request_id, status="needs_retake", stage="height_validation",
+                    height_class=None, height_ratio=cv_result.get("height_ratio"),
+                    height_measurement_valid=False,
+                    duration_ms=int((time.perf_counter() - total_start) * 1000),
+                    cv_ms=cv_ms, vlm_ms=None, generation_ms=None, retry_count=0,
+                    validation={"passed": False, "errors": ["height_station_not_aligned"], "warnings": []},
+                    error_code="height_station_not_aligned", guidance=guidance,
                 )
+                return
 
-            # Wait for VLM results
-            vlm_result      = fut_outfit.result(timeout=120)
-            vlm_face_result = fut_face_vlm.result(timeout=120)
-            # VLM 子流程延遲（兩支 Gemini 並行，第 6 節指標：中位數 < 5s）
-            _timings["vlm_ms"] = round((time.perf_counter() - _vlm_start) * 1000.0, 1)
-            # VLM 成敗旗標，供失敗率統計（第 6 節：目標 < 15%）
-            _timings["vlm_outfit_ok"] = bool(vlm_result.get("ok", True)) if isinstance(vlm_result, dict) else False
-            _timings["vlm_face_ok"]   = bool(vlm_face_result.get("ok", True)) if isinstance(vlm_face_result, dict) else False
+            if source_type == "camera" and trusted_height is not None:
+                cv_result["height_ratio"] = trusted_height["height_ratio"]
+                cv_result["height_class"] = trusted_height["height_class"]
+                cv_result["height_measurement_valid"] = True
+                cv_result["height_method"] = "fixed_station_temporal_segmentation"
 
-            _progress("analyzing", 30, "VLM 分析完成")
+            cv_ms = int((time.perf_counter() - cv_start) * 1000)
 
-            # --- clothing data ---（純邏輯見 avatar_pipeline，已有單元測試）
-            outfit_data = build_outfit_data(vlm_result, cv_result)
-            sleeve_kind = infer_sleeve_kind(outfit_data, cv_result)
+            # Wait for VLM results with timeout (45s)
+            vlm_result = {"ok": False, "error": "disabled_for_full_mode", "outfit": {"outer": "none", "inner": "tshirt", "lower": "jeans", "has_pattern": False}}
+            vlm_face_result = {"ok": False, "error": "disabled_for_full_mode", "face": {}}
+            vlm_timeout = 45
+            vlm_deadline = time.monotonic() + vlm_timeout
+            if fut_outfit is not None:
+                try:
+                    vlm_result = fut_outfit.result(timeout=max(0.01, vlm_deadline - time.monotonic()))
+                except Exception as exc:
+                    vlm_result = {"ok": False, "error": type(exc).__name__, "outfit": {"outer": "none", "inner": "tshirt", "lower": "jeans", "has_pattern": False}}
+            if fut_face_vlm is not None:
+                try:
+                    vlm_face_result = fut_face_vlm.result(timeout=max(0.01, vlm_deadline - time.monotonic()))
+                except Exception as exc:
+                    vlm_face_result = {"ok": False, "error": type(exc).__name__, "face": {}}
+            vlm_ms = int((time.perf_counter() - vlm_start) * 1000)
+            _progress("features_ready", 30, "生成所需特徵已整理完成")
 
-            # --- facial data ---（純邏輯見 avatar_pipeline，已有單元測試）
-            face_data: dict = build_face_data(face_cv_result, vlm_face_result)
+            # --- clothing data ---
+            outfit_data = vlm_result.get("outfit", {})
+            if "upper" in cv_result and "hex" in cv_result["upper"]:
+                outfit_data["inner_color"] = cv_result["upper"]["hex"]
+            if "lower" in cv_result and "hex" in cv_result["lower"]:
+                outfit_data["lower_color"] = cv_result["lower"]["hex"]
+            # CV is the authoritative source for clothing colours. When an
+            # outer layer exists, the shoulder/arm sample is the best local
+            # colour candidate; VLM remains responsible only for semantics.
+            if (outfit_data.get("outer") or "none") != "none" and cv_result.get("arm_color"):
+                outfit_data["outer_color"] = cv_result["arm_color"].get("hex")
 
-            # --- Garment / character generation ---
-            if mode == "full_character":
-                _progress("generating", 35, "正在生成 LEGO 全人物...")
-                if rgb_full is not None and body_poly is not None:
-                    fut_gen = _gen_executor.submit(
-                        image_gen_breaker.call,
-                        _raise_on_failure, generate_full_character_png,
-                        rgb_full, body_poly, face_data, outfit_data,
-                        fallback={"ok": False, "error": "circuit_open"},
-                    )
-                    garment_result = fut_gen.result(timeout=120)
-                else:
-                    garment_result = {"ok": False, "error": "no_body_poly"}
-                _progress("generating", 85, "圖片生成完成")
-            elif mode == "full_character_refined":
-                _progress("generating", 35, "正在生成 LEGO 全人物（第一階段）...")
-                if rgb_full is not None and body_poly is not None:
-                    fut_base = _gen_executor.submit(
-                        image_gen_breaker.call,
-                        _raise_on_failure, generate_full_character_png,
-                        rgb_full, body_poly, face_data, outfit_data, False,
-                        fallback={"ok": False, "error": "circuit_open"},
-                    )
-                    base_result = fut_base.result(timeout=120)
-                    if base_result.get("ok") and base_result.get("body_png"):
-                        _progress("refining", 60, "正在精修細節（第二階段）...")
-                        fut_ref = _gen_executor.submit(
-                            image_gen_breaker.call,
-                            _raise_on_failure, generate_refine_character_png,
-                            base_result["body_png"], rgb_full, body_poly,
-                            face_data, outfit_data,
-                            fallback={"ok": False, "error": "circuit_open"},
-                        )
-                        refined = fut_ref.result(timeout=120)
-                        if refined.get("ok"):
-                            refined.setdefault("body_bbox", base_result.get("body_bbox"))
-                            garment_result = refined
-                        else:
-                            print("[generate_avatar] refine failed, falling back to base")
-                            base_cleaned = _gg_remove_white_background(base_result["body_png"])
-                            garment_result = {
-                                "ok": True,
-                                "body_png": base_cleaned,
-                                "body_bbox": base_result.get("body_bbox"),
-                            }
-                    else:
-                        garment_result = base_result
-                else:
-                    garment_result = {"ok": False, "error": "no_body_poly"}
-                _progress("generating", 85, "圖片生成完成")
+            # Derive sleeve length from VLM outfit semantics — more reliable
+            _LONG_SLEEVE_OUTERS = {"blazer", "cardigan", "denim_jacket"}
+            _LONG_SLEEVE_INNERS = {"button_up"}
+            vlm_outer = (outfit_data.get("outer") or "none").lower()
+            vlm_inner = (outfit_data.get("inner") or "tshirt").lower()
+            if vlm_outer in _LONG_SLEEVE_OUTERS or vlm_inner in _LONG_SLEEVE_INNERS:
+                sleeve_kind = "long_sleeve"
             else:
-                _progress("generating", 35, "正在生成上下身...")
-                garment_result = fut_garment.result(timeout=120) if fut_garment is not None else {"ok": False}
-                _progress("generating", 85, "圖片生成完成")
+                sleeve_kind = cv_result.get("upper_type", "short_sleeve")
 
-            _progress("finalizing", 95, "正在完成...")
+            # --- facial data ---
+            face_data: dict = {}
 
-            is_full_mode = mode in ("full_character", "full_character_refined")
-            ai_gen_ok = bool(garment_result.get("ok", False))
-            can_render = ai_gen_ok if is_full_mode else True
-            err_msg = garment_result.get("error") if not ai_gen_ok else None
+            # VLM classifies (hair style, beard); CV measures (colour). Garment
+            # colour already works this way, and routing skin and hair through
+            # the VLM's 6- and 8-entry palettes quantised away exactly the
+            # individual difference the character is supposed to preserve.
+            if vlm_face_result.get("ok") and "face" in vlm_face_result:
+                vf = vlm_face_result["face"]
+                face_data.update({
+                    "hair_style":  vf.get("hair_style", "short_straight"),
+                    "hair_color":  _HAIR_HEX.get(vf.get("hair_color",  "dark_brown"), "#3B2314"),
+                    "skin_tone":   _SKIN_HEX.get(vf.get("skin_tone",   "light"),      "#FFD0A8"),
+                    "eye_color":   _EYE_HEX.get( vf.get("eye_color",   "brown"),      "#7A4A28"),
+                    "has_beard":   vf.get("has_beard", False),
+                    "beard_style": vf.get("beard_style", "none"),
+                })
 
-            # 生成延遲與真實成敗落地（第 6 節指標：誠實統計 AI 生成成敗）
-            log_event("avatar_generated", pid=sid, latency_ms=_elapsed_ms(),
-                      mode=mode, ok=ai_gen_ok, error=err_msg,
-                      garment_source=("openai" if ai_gen_ok else "grid"),
-                      **_timings)
+            if face_cv_result.get("ok"):
+                face_data.update({
+                    "face_shape":    face_cv_result["face_shape"],
+                    "eye_shape":     face_cv_result["eye_shape"],
+                    "eyebrow_style": face_cv_result["eyebrow_style"],
+                    "smile_score":   face_cv_result["smile_score"],
+                    "lip_color":     face_cv_result.get("lip_color"),
+                })
+                for key in ("skin_tone", "hair_color", "eye_color"):
+                    measured = face_cv_result.get(key)
+                    if measured:
+                        face_data[key] = measured
+                        face_data.setdefault("color_source", {})[key] = "cv_measured"
 
-            socketio.emit("avatar_generated", {
-                "ok":    can_render,
-                "error": err_msg,
+            # What CV actually read off this visitor, kept so a generated
+            # sprite can be compared against the person later. Without it
+            # reference_bleed has only one hypothesis and cannot run at all.
+            #
+            # face_measured is the more important half. A failed face read is
+            # currently silent: skin tone, hair colour and expression simply
+            # stop appearing in the prompt and the model picks its own, which
+            # is indistinguishable from a model ignoring instructions it was
+            # given. Recording the flag turns that into a countable rate.
+            face_measured = bool(face_cv_result.get("ok"))
+            visitor_measurement = {
+                "upper": (cv_result.get("upper") or {}).get("hex"),
+                "lower": (cv_result.get("lower") or {}).get("hex"),
+                "skin_tone": face_data.get("skin_tone"),
+                "hair_color": face_data.get("hair_color"),
+                "face_measured": face_measured,
+                "face_error": None if face_measured else (face_cv_result.get("error") or "unknown"),
+                "color_source": face_data.get("color_source") or {},
+            }
+            _history_call(save_visitor_measurement, request_id, visitor_measurement)
+            if not face_measured:
+                print(f"[app] face not measured ({visitor_measurement['face_error']}); "
+                      f"skin tone, hair colour and expression are unmeasured for {request_id}")
+
+            height_class = cv_result.get("height_class")
+            height_profile = get_height_profile(height_class) if height_class else None
+            upper_rgb = (cv_result.get("upper") or {}).get("rgb")
+            lower_rgb = (cv_result.get("lower") or {}).get("rgb")
+            regions = cv_result.get("regions") or {}
+
+            def _payload_for(
+                garment_result, *, stage: str, is_final: bool,
+                selected_mode: str, validation: Dict[str, Any], retries: int,
+                fallback: bool = False, ok: bool = True,
+                error: Optional[str] = None, guidance: Optional[str] = None,
+                error_kind: Optional[str] = None,
+            ):
+                return {
+                "ok": ok,
+                "error": error,
+                "guidance": guidance,
+                "error_kind": error_kind,
+                "request_id": request_id,
+                "stage": stage,
+                "is_final": is_final,
                 "outfit": outfit_data,
                 "stencil": cv_result.get("stencil"),
-                "cloth_grid": cv_result.get("cloth_grid"),
-                "lower_grid": cv_result.get("lower_grid"),
+                "arm_color": cv_result.get("arm_color"),
                 "face":  face_data or None,
+                # Surfaced so a wrong skin tone can be told from an unmeasured
+                # one. Without it both arrive looking like a rendering fault.
+                "face_measured": face_measured,
+                "face_measure_error": visitor_measurement["face_error"],
                 "upper_type": sleeve_kind,
                 "lower_type": cv_result.get("lower_type", "shorts"),
                 "body_png":  garment_result.get("body_png"),
                 "body_bbox": garment_result.get("body_bbox"),
-                "garment_source": "openai" if garment_result.get("ok") else "grid",
-                "character_mode": mode,
-            }, to=sid)
+                "garment_source": "openai" if garment_result.get("ok") else "unavailable",
+                "character_mode": selected_mode,
+                "validation": validation,
+                "retry_count": retries,
+                "fallback_used": fallback,
+                "height_ratio": cv_result.get("height_ratio"),
+                "height_class": height_class,
+                "height_profile": height_profile,
+                "height_measurement_valid": cv_result.get("height_measurement_valid", False),
+                "height_method": cv_result.get("height_method"),
+                "style_id": style_id,
+                "capture_quality": cv_result.get("capture_quality"),
+                }
+
+            def _validate(result: Dict[str, Any]) -> Dict[str, Any]:
+                if not result.get("ok"):
+                    return {"passed": False, "errors": [result.get("error", "generation_failed")], "warnings": []}
+                return validate_avatar_png(result.get("body_png"), upper_rgb=upper_rgb, lower_rgb=lower_rgb)
+
+            def _prepare_generated(result: Dict[str, Any]) -> Dict[str, Any]:
+                prepared = dict(result)
+                if prepared.get("body_png"):
+                    prepared["body_png"] = add_transparent_margin(prepared["body_png"])
+                return prepared
+
+            def _record_generation_attempt(phase: str, attempt: int, result: Dict[str, Any], validation: Dict[str, Any]):
+                _history_call(
+                    record_attempt, request_id, phase=phase,
+                    attempt_index=attempt, result=result, validation=validation,
+                )
+
+            try:
+                max_retries = max(0, min(1, int(os.environ.get("GENERATION_MAX_RETRIES", "0"))))
+            except ValueError:
+                max_retries = 0
+
+            generation_start = time.perf_counter()
+            base_generation_ms = None
+            if mode == "full_character":
+                _progress("generating", 40, "正在生成完整角色，這通常是最久的階段")
+                if rgb_full is not None and body_poly is not None:
+                    garment_result = _await_generation(_generation_executor.submit(
+                        generate_full_character_png, rgb_full, body_poly, face_data, outfit_data,
+                        True, regions, style_id, model_override=model_override,
+                    ))
+                else:
+                    garment_result = {"ok": False, "error": "no_body_poly"}
+                garment_result = _prepare_generated(garment_result)
+                if garment_result.get("ok"):
+                    _progress("validating", 84, "角色已生成，正在檢查雙腿、雙腳與透明背景")
+                validation = _validate(garment_result)
+                _record_generation_attempt("full_character", 0, garment_result, validation)
+                if max_retries and garment_result.get("ok") and not validation.get("passed") and rgb_full is not None and body_poly is not None:
+                    retry_count = 1
+                    garment_result = _await_generation(_generation_executor.submit(
+                        generate_full_character_png, rgb_full, body_poly, face_data, outfit_data,
+                        True, regions, style_id, correction_for_validation(validation),
+                        model_override=model_override,
+                    ))
+                    garment_result = _prepare_generated(garment_result)
+                    validation = _validate(garment_result)
+                    _record_generation_attempt("full_character", 1, garment_result, validation)
+                base_generation_ms = int((time.perf_counter() - generation_start) * 1000)
+                final_validation = validation
+                final_stage = "base"
+                final_output = garment_result.get("body_png")
+                if not validation.get("passed"):
+                    failure = _generation_failure_details(garment_result, validation)
+                    final_status = failure["status"]
+                    final_error = failure["error"]
+                    final_guidance = failure["guidance"]
+                    socketio.emit("avatar_generated", _payload_for(
+                        garment_result, stage="base", is_final=True, selected_mode="full_character",
+                        validation=validation, retries=retry_count, ok=False,
+                        error=final_error, guidance=final_guidance, error_kind=failure["kind"],
+                    ), to=sid)
+                    _progress(
+                        "service_failed" if failure["kind"] == "service" else "failed",
+                        100, final_guidance,
+                    )
+                else:
+                    _progress("complete", 100, "完整角色生成完成")
+                    final_status = "success"
+                    socketio.emit("avatar_generated", _payload_for(
+                        garment_result, stage="base", is_final=True, selected_mode="full_character",
+                        validation=validation, retries=retry_count,
+                    ), to=sid)
+
+            generation_ms = int((time.perf_counter() - generation_start) * 1000)
+            _timings.update(cv_ms=cv_ms, vlm_ms=vlm_ms, generation_ms=generation_ms)
+            # 生成延遲與真實成敗落地，供 analyze_log 統計誠實的失敗率
+            log_event("avatar_generated", pid=sid,
+                      latency_ms=round((time.perf_counter() - total_start) * 1000.0, 1),
+                      mode=mode, ok=(final_status == "success"), error=final_error,
+                      retry_count=retry_count, **_timings)
+            log_metric({
+                "ts": time.time(), "request_id": request_id, "mode": mode,
+                "style_id": style_id, "height_class": height_class, "stage": "final",
+                "duration_ms": int((time.perf_counter() - total_start) * 1000),
+                "cv_ms": cv_ms, "vlm_ms": vlm_ms, "generation_ms": generation_ms,
+                "base_generation_ms": base_generation_ms,
+                "quality_score": (cv_result.get("capture_quality") or {}).get("score"),
+                "ai_detail_score": final_validation.get("detail_score"),
+                "validation_errors": final_validation.get("errors", []),
+                "validation_warnings": final_validation.get("warnings", []),
+                "retry_count": retry_count, "fallback_used": fallback_used, "status": final_status,
+            })
+            _history_call(
+                finish_run, request_id, status=final_status, stage=final_stage,
+                height_class=height_class,
+                duration_ms=int((time.perf_counter() - total_start) * 1000),
+                cv_ms=cv_ms, vlm_ms=vlm_ms, generation_ms=generation_ms,
+                retry_count=retry_count, validation=final_validation,
+                error_code=final_error, guidance=final_guidance,
+                output_png=final_output,
+                height_ratio=cv_result.get("height_ratio"),
+                height_measurement_valid=cv_result.get("height_measurement_valid"),
+            )
         except Exception as e:
             print(f"[generate_avatar] error: {e}")
-            # 失敗也要落地，才能算出誠實的失敗率（第 6 節指標）
-            log_event("avatar_generated", pid=sid, latency_ms=_elapsed_ms(),
+            try:
+                _progress("failed", 100, "生成流程發生錯誤")
+            except Exception:
+                pass
+            socketio.emit("avatar_generated", {
+                "ok": False, "error": str(e), "request_id": request_id,
+                "stage": "error", "is_final": True, "style_id": style_id,
+            }, to=sid)
+            log_metric({
+                "ts": time.time(), "request_id": request_id, "mode": mode,
+                "style_id": style_id, "stage": "error",
+                "duration_ms": int((time.perf_counter() - total_start) * 1000),
+                "retry_count": retry_count, "fallback_used": fallback_used, "status": type(e).__name__,
+            })
+            _history_call(
+                finish_run, request_id, status="error", stage="error",
+                height_class=None,
+                duration_ms=int((time.perf_counter() - total_start) * 1000),
+                cv_ms=None, vlm_ms=None, generation_ms=None,
+                retry_count=retry_count, validation=final_validation,
+                error_code=type(e).__name__, guidance=str(e), output_png=final_output,
+            )
+            # 失敗也要落地，否則報告算出來的失敗率會是假的
+            log_event("avatar_generated", pid=sid,
+                      latency_ms=round((time.perf_counter() - total_start) * 1000.0, 1),
                       mode=mode, ok=False, error=str(e), **_timings)
-            socketio.emit("avatar_generated", {"ok": False, "error": str(e)}, to=sid)
         finally:
             if acquired_slot:
                 _gen_semaphore.release()
-
 
     threading.Thread(target=_background, daemon=True).start()
 
@@ -654,6 +1407,18 @@ def handle_join_swarm(payload):
     # 重新連線時帶回來認領同一個角色，避免產生分身。
     char_id = payload.get("id") or f"char_{uuid.uuid4().hex[:12]}"
     room = payload.get("room", "default")
+    # 投影牆的角色比例由固定站位量測的身高等級決定，量不到就不讓它進場 ——
+    # 否則角色會以預設比例混進去，而現場無從得知那是量測失敗還是真實體型。
+    height_class = payload.get("height_class")
+    if not payload.get("height_measurement_valid") or height_class not in {"short", "medium", "tall"}:
+        if emit is not None:
+            emit("swarm_join_failed", {
+                "id": char_id,
+                "error": "valid_height_measurement_required",
+                "guidance": "請先完成固定站位身高量測，再匯入投影牆。",
+            })
+        return
+    height_profile = get_height_profile(height_class)
     with _swarm_lock:
         existing = _swarm_chars.get(char_id, {})
         _swarm_chars[char_id] = {
@@ -670,14 +1435,20 @@ def handle_join_swarm(payload):
             "lower_type": payload.get("lower_type", existing.get("lower_type", "shorts")),
             "accessories": payload.get("accessories", existing.get("accessories", [])),
             "accessory": payload.get("accessory", existing.get("accessory", "none")),
-            "arm_color": payload.get("arm_color", existing.get("arm_color")),
+            "arm_color": payload.get("arm_color", payload.get("arm", existing.get("arm_color"))),
             "face": payload.get("face", existing.get("face")),
             "outfit": payload.get("outfit", existing.get("outfit")),
             "body_png": payload.get("body_png", existing.get("body_png")),
             "body_bbox": payload.get("body_bbox", existing.get("body_bbox")),
-            "character_mode": payload.get("character_mode", existing.get("character_mode", "body_sprite")),
+            "character_mode": payload.get("character_mode", existing.get("character_mode", "full_character")),
+            "height_class": height_class,
+            "height_profile": height_profile,
+            "height_measurement_valid": True,
+            "style_id": payload.get("style_id", existing.get("style_id", "lego")),
             "last_seen": time.time(),
         }
+        snapshot = [c for c in _swarm_chars.values()
+                    if c.get("room", "default") == room]
         total = len(_swarm_chars)
     if join_room is not None:
         join_room(room)
@@ -685,8 +1456,12 @@ def handle_join_swarm(payload):
         emit("swarm_joined", {"id": char_id, "room": room})
     log_event("join_swarm", pid=char_id, room=room,
               x=float(payload.get("x", 960)), y=float(payload.get("y", 540)),
-              character_mode=payload.get("character_mode", "body_sprite"),
+              character_mode=payload.get("character_mode", "full_character"),
               swarm_size=total)
+    # Send large immutable assets once when a character joins. Regular Boids
+    # ticks omit body_png to avoid rebroadcasting megabytes ten times per second.
+    if socketio is not None:
+        socketio.emit("update_positions", {"characters": snapshot}, room=room)
 
 
 @_on_socket("leave_swarm")
@@ -706,7 +1481,10 @@ def handle_update_character(payload):
     changed = []
     with _swarm_lock:
         if char_id in _swarm_chars:
-            for k in ("upper", "lower", "upper_type", "lower_type", "accessories", "accessory", "arm_color", "face", "outfit", "body_png", "body_bbox", "character_mode", "room"):
+            for k in ("upper", "lower", "upper_type", "lower_type", "accessories",
+                      "accessory", "arm_color", "face", "outfit", "body_png",
+                      "body_bbox", "character_mode", "height_class", "height_profile",
+                      "height_measurement_valid", "style_id", "room"):
                 if k in payload:
                     _swarm_chars[char_id][k] = payload[k]
                     changed.append(k)
@@ -863,8 +1641,15 @@ def _swarm_background():
         for room_name, room_chars in by_room.items():
             room_updated = update_swarm_state(room_chars)
             if socketio is not None:
+                # Large immutable assets are sent once, when a character joins.
+                # Regular Boids ticks omit body_png so the wall does not
+                # re-receive megabytes ten times per second.
+                lightweight = [
+                    {k: v for k, v in character.items() if k != "body_png"}
+                    for character in room_updated
+                ]
                 socketio.emit("update_positions",
-                              {"characters": room_updated}, room=room_name)
+                              {"characters": lightweight}, room=room_name)
             updated.extend(room_updated)
 
         _BOIDS_KEYS = ("x", "y", "vx", "vy", "state", "greeting_ticks")
@@ -915,7 +1700,22 @@ if socketio is not None:
 
 
 if __name__ == "__main__":
-    if socketio is not None and app is not None:
-        socketio.run(app, host=config.HOST, port=config.PORT, debug=config.DEBUG, use_reloader=False, allow_unsafe_werkzeug=True)
-    else:
+    if socketio is None or app is None:
         print("[PersonaFlow] Flask or Flask-SocketIO is missing. Please run: pip install -r requirements.txt")
+        raise SystemExit(1)
+    # Werkzeug on Windows can leave several development processes sharing the
+    # same port. Refuse a second launch so browsers cannot randomly reconnect to
+    # an older copy of the capture logic.
+    probe = network_socket.socket(network_socket.AF_INET, network_socket.SOCK_STREAM)
+    probe.settimeout(0.4)
+    try:
+        port_is_busy = probe.connect_ex(("127.0.0.1", config.PORT)) == 0
+    finally:
+        probe.close()
+    if port_is_busy:
+        raise SystemExit(
+            f"Port {config.PORT} already has a PersonaFlow backend. "
+            "Stop it before starting another instance."
+        )
+    socketio.run(app, host=config.HOST, port=config.PORT, debug=config.DEBUG,
+                 use_reloader=False, allow_unsafe_werkzeug=True)

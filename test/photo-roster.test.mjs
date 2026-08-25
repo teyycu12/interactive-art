@@ -23,6 +23,7 @@ const CV_AVATAR = {
     head: '/assets/gen/aid1/head.webp',
     torso: '/assets/gen/aid1/torso.webp',
     legs: '/assets/gen/aid1/legs.webp',
+    full: '/assets/gen/aid1/full.webp',
   },
   fallbackColors: {
     hair: '#4A2C1A', skin: '#F4C08A', torso: '#8FA05E', legs: '#B7A98A',
@@ -36,8 +37,8 @@ function photoRoster(stage) {
     const meta = byId.get(s.id) || {};
     const avatar = meta.avatar || {};
     const out = { id: s.id, name: meta.name || '', x: s.x, y: s.y };
-    const head = avatar.textures?.head;
-    if (typeof head === 'string') out.fullPng = head.replace(/\/head\.webp$/, '/full.webp');
+    const full = avatar.textures?.full;
+    if (typeof full === 'string') out.fullPng = full;
     if (avatar.fallbackColors) {
       out.outfit = {
         inner_color: avatar.fallbackColors.torso,
@@ -60,14 +61,16 @@ describe('大合照名冊', () => {
     assert.equal(row.fullPng, '/assets/gen/aid1/full.webp');
   });
 
-  test('只替換結尾的 head.webp，不動路徑中的其他片段', () => {
+  test('沒有 full 貼圖時不編造一個路徑', () => {
+    // 這裡原本是從 head 的路徑字串推導出 full（並測「目錄名叫 head 時不可被
+    // 誤改」）。full 納入 shared/avatars.js 的驗證白名單之後改為直接取用，
+    // 字串替換連同那個邊界一起消失；剩下要守的是「取不到就不要有」——
+    // 編一個路徑出來會讓 Pillow 在合成大合照時才發現檔案不存在。
     const stage = new Stage();
-    stage.addAgent({
-      name: 'x',
-      avatar: { ...CV_AVATAR, textures: { ...CV_AVATAR.textures, head: '/assets/gen/head/head.webp' } },
-    });
+    const { full, ...noFull } = CV_AVATAR.textures;
+    stage.addAgent({ name: 'x', avatar: { ...CV_AVATAR, textures: noFull } });
     const [row] = photoRoster(stage);
-    assert.equal(row.fullPng, '/assets/gen/head/full.webp', '目錄名叫 head 時不可被誤改');
+    assert.equal(row.fullPng, undefined);
   });
 
   test('捏臉角色沒有生成圖，但帶著色碼供程式化繪製', () => {

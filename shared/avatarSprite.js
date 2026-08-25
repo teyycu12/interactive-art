@@ -10,13 +10,13 @@
  * 只會出現「手機上的我」和「大螢幕上的我」長得不一樣。
  */
 
-import { renderAvatarSVG, CV_CUTS, CV_PARTS } from './avatars.js';
+import { renderAvatarSVG, CV_CUTS, CV_PARTS, CV_FULL_PART } from './avatars.js';
 
 export const AVATAR_W = 200;
 export const AVATAR_H = 260;
 
 /**
- * 掃描生成的角色：把三張貼圖依 CV_CUTS 的比例疊回一張畫布。
+ * 掃描生成的角色：優先畫未切割的整張圖，缺它才把三張貼圖疊回去。
  *
  * 回傳 canvas 而非 Image —— drawCharacter 只要求 sprite 有 complete 與
  * naturalWidth（shared/character.js），canvas 兩者都能自行掛上，
@@ -54,6 +54,26 @@ export function cvAvatarImage(avatar, { enhance = false } = {}) {
   canvas.complete = true;
   canvas.naturalWidth = canvas.width;
 
+  /**
+   * 整張圖：等比縮放後底部對齊。
+   *
+   * 不能直接鋪滿畫布 —— 角色的寬高比實測平均約 0.642，畫布是 200x260 =
+   * 0.769，直接填滿會把每個人橫向拉寬約 20%。底部對齊而非置中，是為了讓
+   * 所有角色站在同一條基準線上；置中會讓矮的角色浮在半空。
+   *
+   * 畫之前清空且不重畫替身：整張圖已經是完整的角色，替身的實心矩形只會
+   * 從透明處透出來（與下方 composite() 不畫替身是同一個理由）。
+   */
+  const drawFull = (img) => {
+    const scale = Math.min(AVATAR_W / img.naturalWidth, AVATAR_H / img.naturalHeight);
+    const w = img.naturalWidth * scale;
+    const h = img.naturalHeight * scale;
+    ctx.clearRect(0, 0, AVATAR_W, AVATAR_H);
+    if (enhance) ctx.filter = 'contrast(1.15) saturate(1.15) brightness(1.05)';
+    ctx.drawImage(img, (AVATAR_W - w) / 2, AVATAR_H - h, w, h);
+    ctx.filter = 'none';
+  };
+
   const loaded = {};
   let pending = CV_PARTS.length;
   const composite = () => {
@@ -82,11 +102,26 @@ export function cvAvatarImage(avatar, { enhance = false } = {}) {
     ctx.filter = 'none';
   };
 
-  for (const part of CV_PARTS) {
+  const loadParts = () => {
+    for (const part of CV_PARTS) {
+      const img = new Image();
+      img.addEventListener('load', () => { loaded[part] = img; if (--pending === 0) composite(); });
+      img.addEventListener('error', () => { if (--pending === 0) composite(); });
+      img.src = avatar.textures[part];
+    }
+  };
+
+  // 整張圖是選用的：改版前生成的資產目錄只有三張切片，那些角色仍在場上，
+  // 把它列為必要會讓一次改版就把先前生成的人全部踢出場。
+  // 載入失敗也退回切片 —— 兩條路都通到同一個替身，參與者不會看到空白。
+  const fullUrl = avatar.textures?.[CV_FULL_PART];
+  if (fullUrl) {
     const img = new Image();
-    img.addEventListener('load', () => { loaded[part] = img; if (--pending === 0) composite(); });
-    img.addEventListener('error', () => { if (--pending === 0) composite(); });
-    img.src = avatar.textures[part];
+    img.addEventListener('load', () => drawFull(img));
+    img.addEventListener('error', loadParts);
+    img.src = fullUrl;
+  } else {
+    loadParts();
   }
 
   return canvas;

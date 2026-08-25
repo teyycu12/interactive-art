@@ -37,68 +37,108 @@
 ```
 /PersonaFlow
 ├── /backend
-│   ├── app.py              # Flask 主程式、Socket 事件、生成併發閘門
-│   ├── config.py           # 集中式環境設定（型別轉換與驗證，單一 config 物件）
-│   ├── cv_module.py        # MediaPipe PoseLandmarker 特徵提取（網格色彩、body_poly）
-│   ├── face_module.py      # MediaPipe FaceLandmarker 臉部特徵
-│   ├── vlm_module.py       # Gemini VLM 服裝/臉部語意分類
-│   ├── garment_gen.py      # AI 生圖入口（body_sprite / full_character / refined）
-│   ├── avatar_pipeline.py  # generate_avatar 的純資料處理（影像解碼、服裝/臉部合併）
-│   ├── swarm_logic.py      # Boids 群聚演算法（含邊界柔性轉向、打招呼持續）
-│   ├── swarm_snapshot.py   # swarm 狀態持久化，重啟自動還原
-│   ├── photo_composer.py   # M6 大合照合成（LEGO 排版、QR Code、中文字型後備鏈）
-│   ├── bot_simulator.py    # 壓測用虛擬角色注入 / 移除
-│   ├── circuit_breaker.py  # 外部 API 熔斷器與退避重試
-│   ├── event_logger.py     # 結構化事件 log 落地（JSON lines，隱私遮除影像）
-│   ├── stress_test.py      # 承載量壓測工具
-│   ├── e2e_smoke.py        # 端到端煙霧測試（對真的跑起來的後端走完整流程）
-│   ├── analyze_log.py      # 效能指標分析（延遲 / 失敗率）
-│   ├── bench_generate.py   # 生成延遲基準線量測
-│   ├── report_html.py      # HTML 效能報告產生器
-│   ├── pytest.ini          # 測試設定（testpaths / pythonpath）
-│   ├── service.py          # ★ 角色資產生成 HTTP 服務（整合版用，只綁 127.0.0.1）
-│   ├── slicer.py           # ★ 生成圖正規化 + 切成 head/torso/legs 三張貼圖
-│   ├── validate_cuts.py    # ★ 切片比例穩定度驗證工具（計畫書 §3.3 驗收項）
-│   └── tests/              # 單元測試（236 個，pytest；conftest.py 提供 fixture）
-├── /frontend
-│   ├── index.html          # 互動端主頁
-│   ├── projection.html     # 投影牆渲染（PixiJS）
-│   ├── sketch.js           # p5.js 主渲染迴圈（僅渲染，不放業務邏輯）
-│   ├── character.js        # class Character（角色模型）+ 組件繪製、動態換色
-│   ├── socket.js           # Socket.io 前後端通訊（自動偵測 LAN）
-│   └── themes/lego.js      # LEGO 樂高風格渲染
-├── /server                 # ★ PF2 互動層（Node.js）
-│   ├── index.js            # Gateway：靜態服務、WebSocket、/api/generate 代理、TLS
-│   ├── arbiter.js          # α 權重仲裁與速度合成
-│   ├── boids.js state.js   # 群聚引擎與狀態矩陣
-│   ├── missions.js pairing.js quiz.js scores.js socialgraph.js
-│   └── persistence.js scheduler.js ratelimit.js config.js
-├── /shared                 # ★ 前後端共用的單一事實來源
-│   ├── protocol.js         # 事件名、節流頻率、場域尺寸、EMOTE_GLYPH
-│   ├── avatars.js          # 捏臉素材 + CV 角色驗證 + CV_CUTS 切片比例
-│   ├── character.js        # ★ 程式化步態（大螢幕與手機 POV 共用）
-│   ├── avatarSprite.js     # ★ 角色圖像組裝（兩端共用）
-│   └── scene.js            # 場景障礙物佈局
-├── /public                 # ★ 整合版前端
-│   ├── controller/         # 手機端：拍照生成 / 捏臉（備援）、搖桿、任務
-│   │   └── avatarRenderer.js # ★ 個人視角畫布（CLIENT_SYNC、鄰居、腳步震動）
-│   ├── screen/             # 大螢幕（3D 房間背景 + 2D 角色疊加）
-│   │   └── 3d/RoomScene.js # ★ Three.js 場景、燈光、透視投影 projectToScreen()
-│   ├── host/               # 主辦端控制台
-│   └── assets/gen/         # 生成貼圖落地處（gitignore，每場重新產生）
-├── /test                   # ★ Node 單元測試（228 個，node --test）
-│   ├── idle-still.test.mjs # ★ 靜止待機（預設 IDLE_MOTION）
-│   └── wander-mode.test.mjs # ★ 漫遊模式，需 npm run test:wander
+/PersonaFlow
+├── /backend
+│   ├── app.py                    # 2D 備援版 Flask／Socket.io、生成併發閘門與開發 API
+│   ├── service.py                # ★ 整合版角色資產生成 HTTP 服務（只綁 127.0.0.1:5055）
+│   ├── slicer.py                 # ★ 生成圖正規化 + 切成 head/torso/legs 三張貼圖
+│   ├── validate_cuts.py          # ★ 切片比例穩定度驗證工具
+│   ├── config.py                 # 集中式環境設定（型別轉換與驗證，單一 config 物件）
+│   ├── cv_module.py              # MediaPipe 人體、服裝色彩、區域與姿勢特徵
+│   ├── face_module.py            # 本機臉部特徵
+│   ├── vlm_module.py             # 雲端服裝、髮型與臉部語意辨識
+│   ├── avatar_pipeline.py        # generate_avatar 的純資料處理（影像解碼、色表、特徵合併）
+│   ├── garment_gen.py            # 完整角色生成流程與 prompt 模板
+│   ├── style_registry.py         # 可擴充角色風格註冊表
+│   ├── style_base.py             # 從參考圖量出的風格標準（數值化）
+│   ├── style_fingerprint.py      # 風格指紋與跨角色物種漂移量測
+│   ├── style_normalizer.py       # 方向性明暗量測與正規化
+│   ├── style_probe.py            # 把指紋接到實際生成圖上的漂移量測
+│   ├── reference_bleed.py        # 參考圖滲漏偵測
+│   ├── identity_fidelity.py      # 個體特徵保真度量測
+│   ├── avatar_quality.py         # 生成角色圖結構完整性驗證
+│   ├── capture_quality.py        # 拍攝品質、站位與穩定度判定
+│   ├── capture_session.py        # ★ 跨影格的可拍攝判定（站位引導的時序邏輯）
+│   ├── detail_quality.py         # 最終畫面細節指標
+│   ├── height_profiles.py        # short／medium／tall 身高校正
+│   ├── swarm_logic.py            # Boids 群聚演算法（2D 備援版用；整合版走 server/boids.js）
+│   ├── swarm_snapshot.py         # swarm 狀態持久化，重啟自動還原
+│   ├── photo_composer.py         # 大合照合成（LEGO 排版、QR Code、中文字型後備鏈）
+│   ├── bot_simulator.py          # 壓測用虛擬角色注入／移除
+│   ├── circuit_breaker.py        # 外部 API 熔斷器與退避重試
+│   ├── generation_history.py     # SQLite 生成紀錄、Token、成本與快速審查
+│   ├── blind_review.py           # 外部結果匯入、原照縮圖與多人匿名盲評
+│   ├── metrics_logger.py         # 匿名流程指標與輪替紀錄
+│   ├── event_logger.py           # 結構化事件 log 落地（JSON lines，隱私遮除影像）
+│   ├── analyze_log.py            # 效能指標分析（延遲／失敗率）
+│   ├── report_html.py            # HTML 效能報告產生器
+│   ├── stress_test.py            # 承載量壓測工具
+│   ├── bench_generate.py         # 生成延遲基準線量測
+│   ├── e2e_smoke.py              # 端到端煙霧測試（對真的跑起來的後端走完整流程）
+│   ├── pytest.ini                # 測試設定（testpaths／pythonpath）
+│   ├── /models                   # MediaPipe／分割模型資產
+│   ├── /tests                    # pytest：CV、生成、規格、歷史、盲評與 Socket handler
+│   └── /logs                     # 執行期資料；gitignored，不提交版本庫
+│       ├── generation_history.sqlite3
+│       ├── /generated            # AI attempt 與最終角色快照
+│       └── /review_sources       # 經同意、去 EXIF 的評測縮圖，可批次刪除
+├── /server                       # ★ 整合版互動層（Node.js）
+│   ├── index.js                  # Gateway：靜態服務、WebSocket、/api/generate 代理、TLS
+│   ├── arbiter.js                # α 權重仲裁與速度合成
+│   ├── boids.js  state.js        # 群聚引擎與狀態矩陣
+│   ├── missions.js  pairing.js  quiz.js  scores.js  socialgraph.js
+│   └── persistence.js  scheduler.js  ratelimit.js  config.js
+├── /shared                       # ★ 前後端共用的單一事實來源
+│   ├── protocol.js               # 事件名、節流頻率、場域尺寸
+│   ├── avatars.js                # 捏臉素材 + CV 角色驗證 + CV_CUTS 切片比例
+│   ├── avatarSprite.js           # 角色圖組裝（整張圖優先，缺它才疊三張切片）
+│   ├── character.js              # 角色與名牌繪製（大螢幕與控制器共用）
+│   ├── capture-guidance.js       # 站位引導文案與指示燈判定
+│   └── scene.js                  # 場景障礙物佈局
+├── /public                       # ★ 整合版前端
+│   ├── controller/               # 手機端：拍照生成／捏臉（備援）、搖桿、任務
+│   ├── screen/                   # 大螢幕
+│   │   └── 3d/RoomScene.js       # three.js 房間場景
+│   ├── host/                     # 主辦端控制台
+│   └── assets/gen/               # 生成貼圖落地處（gitignored，每場重新產生）
+├── /frontend                     # 2D 備援版前端
+│   ├── index.html                # 拍攝與生成主操作頁
+│   ├── sketch.js                 # p5.js 畫面、狀態與拍攝流程（只放渲染）
+│   ├── character.js              # class Character（角色資料模型）與組件繪製
+│   ├── socket.js                 # Socket.io 前後端事件橋接（自動偵測 LAN）
+│   ├── projection.html           # 2D sprite 群聚投影牆（PixiJS，自有格柵實作）
+│   ├── dev.html                  # 生成歷史、成本、外部匯入與盲評操作台
+│   ├── package.json              # 只做一件事：把此目錄標回 CommonJS（見下方注意事項）
+│   ├── /themes
+│   │   ├── lego.js               # LEGO 主題渲染
+│   │   └── registry.js           # 前端主題註冊表
+│   ├── /tests                    # Node 內建測試執行器（harness.js 提供 p5 樁）
+│   └── wedding_bg.png            # 投影背景素材
+├── /test                         # ★ 整合版 Node 單元測試（node --test）
 ├── /scripts
-│   ├── e2e.mjs             # ★ 端對端測試（103 項，會自行啟動伺服器）
-│   ├── make-cert.sh        # ★ 現場用 TLS 憑證產生
-│   └── scene-preview.mjs   # 場景離線預覽
-├── /docs                   # 所有規格與設計文件（PRD、TechStack、INTERFACES、SPEC…）
-├── start.sh                # ★ 整合版一鍵啟動（主線）
-├── start-2d.sh             # 2D 備援版一鍵啟動
-├── package.json            # ★ Node 相依與指令
-├── requirements.txt        # 執行相依（mediapipe 已釘 <1.0，原因見下）
-└── requirements-dev.txt    # 測試相依（pytest）
+│   ├── e2e.mjs                   # ★ 端對端測試（會自行啟動伺服器）
+│   ├── make-cert.sh              # ★ 現場用 TLS 憑證產生
+│   ├── scene-preview.mjs         # ★ 場景離線預覽
+│   └── ...                       # 參考圖集與髮色取樣的離線檢查工具
+├── /docs
+│   ├── INTERFACES.md             # Socket.io 事件與 payload 介面規格
+│   ├── STYLE_BASE.md             # 基底風格標準與量測方法
+│   ├── STYLE_PROBE_FOLLOWUPS.md  # 已知但刻意延後的量測與管線細節
+│   ├── TECHNICAL_ARCHITECTURE.md # 技術架構文件
+│   ├── TECH-PersonaFlow2.md      # ★ 整合版互動層技術說明
+│   ├── README-PersonaFlow2.md    # ★ 整合版說明
+│   ├── PRD.md                    # 產品需求與驗收定義（驗收條件仍寫在已退役模式上，待重寫）
+│   ├── TechStack.md              # 技術選型
+│   ├── /m3                       # M3 交接說明與效能報告
+│   └── /style_reference          # 風格參考圖集（含圖檔，見 PROVENANCE.md）
+├── /.github/workflows/ci.yml     # CI：前端 Node 測試＋整合版 npm test＋後端 pytest
+├── package.json                  # ★ 整合版 Node 相依與指令
+├── start.sh                      # 2D 備援版一鍵啟動腳本（macOS／Linux）
+├── CLAUDE.md                     # 本檔：專案結構、規範與啟動方式
+├── README.md                     # 安裝、設定、流程與使用說明
+├── .env.example                  # 環境變數範本
+├── requirements.txt              # Python 執行相依（mediapipe 已釘 <1.0）
+└── requirements-dev.txt          # 測試相依（pytest）
 ```
 
 > ★ 為整合後新增。文件已全數移入 `docs/`，根目錄只留 README 與本檔。
@@ -215,6 +255,16 @@ python backend/service.py          # 角色生成服務（127.0.0.1:5055）
 # 現場要用手機相機就必須有 HTTPS（getUserMedia 的硬性要求）
 bash scripts/make-cert.sh
 TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start
+
+# 後端啟動
+python backend/app.py
+
+# 前端啟動（在專案根目錄執行）
+python -m http.server 8000 --directory frontend
+
+# 後端測試
+pip install -r requirements-dev.txt
+python -m pytest backend/tests
 
 # 測試
 npm test                           # Node 單元測試（228 + wander 模式 5）
@@ -377,3 +427,55 @@ PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 
 相機權限被拒、非安全情境、生成失敗、生成服務未啟動 —— 全部退回捏臉流程。
 捏臉是刻意保留的備援路徑，**不要移除**。
+
+# 端到端煙霧測試（需後端已啟動）
+python backend/e2e_smoke.py
+```
+
+## 本機預覽：開啟與關閉（2D 備援版）
+
+以下是 2D 備援版（`backend/app.py` + `frontend/`）的本機操作。整合版請改用上方
+「常用指令 → 整合版（主線）」，兩者的埠不同（備援 5001／8000，整合版 3000／5055），
+可並存。
+
+請在專案根目錄 `PersonaFlow` 開啟兩個終端機視窗，各自執行一個服務：
+
+```powershell
+# 終端機 A：後端（Socket.io / API）
+python backend/app.py
+
+# 終端機 B：前端靜態網站
+python -m http.server 8000 --directory frontend
+```
+
+服務啟動後，可在終端機直接開啟頁面：
+
+```powershell
+# 主操作頁
+Start-Process 'http://127.0.0.1:8000/index.html'
+
+# 投影頁
+Start-Process 'http://127.0.0.1:8000/projection.html'
+
+# 開發端生成歷史／Token／成本
+Start-Process 'http://127.0.0.1:8000/dev.html'
+
+# 後端健康檢查
+Start-Process 'http://127.0.0.1:5001/health'
+```
+
+要關閉服務時，回到各自正在執行服務的終端機並按 `Ctrl+C`。若終端機已關閉或服務卡住，可在新的 PowerShell 視窗查詢並停止對應連接埠：
+
+```powershell
+# 查詢目前監聽 5001（後端）與 8000（前端）的程序
+Get-NetTCPConnection -LocalPort 5001,8000 -State Listen |
+  Select-Object LocalPort, OwningProcess
+
+# 停止指定程序；將 <PID> 換成上方的 OwningProcess 數字
+Stop-Process -Id <PID>
+```
+
+主操作頁：`http://127.0.0.1:8000/index.html`
+投影頁：`http://127.0.0.1:8000/projection.html`
+生成歷史與成本：`http://127.0.0.1:8000/dev.html`
+後端健康檢查：`http://127.0.0.1:5001/health`

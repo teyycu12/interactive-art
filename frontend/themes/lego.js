@@ -1,35 +1,23 @@
-// PersonaFlow – LEGO character theme
-//
-// Color pipeline per frame:
-//   1. _filterHairCells()   – remove grid cells that match person.hairColor
-//   2. _clusterGrid()       – BFS region growing (threshold 22) → average each cluster
-//                             Lower threshold than before: preserves real pattern edges
-//                             while still smoothing lighting noise.
-//   3. _enhanceGrid()       – per-grid contrast stretch (luma range → [L_MIN, L_MAX])
-//                             + saturation boost (HSL).  Makes subtle differences pop.
-//   4. _makeSymmetric()     – mirror-average left↔right halves of the torso grid so
-//                             the pattern reads as clean bilateral symmetry on the body.
-//   5. Camera correction    – baked into _enhanceGrid (×CAMERA_CORRECTION before HSL).
+// PersonaFlow – legacy solid-colour／full-character p5.js theme.
+// Formal brick_ai_texture results are rendered exclusively by Three.js.
 
 // ─── Tuning knobs ────────────────────────────────────────────────────────────
 const CAMERA_CORRECTION  = 1.18; // compensates for camera underexposure
-const CLUSTER_THRESHOLD  = 22;   // max per-edge RGB distance to merge cells
 const SAT_BOOST          = 1.6;  // saturation multiplier (HSL)
 const CONTRAST_L_MIN     = 0.20; // after stretch: darkest active cell → this luma
 const CONTRAST_L_MAX     = 0.82; // after stretch: brightest active cell → this luma
-const HAIR_CELL_DIST     = 40;   // cell filtered if within this RGB dist of hairColor
-const HAIR_SHIRT_MIN     = 35;   // skip hair filter when shirt≈hair (dark shirt + dark hair)
-const SHIRT_CELL_DIST    = 45;   // lower-body cell filtered if within this dist of shirt color
-const SHIRT_PANTS_MIN    = 30;   // skip shirt filter when pants≈shirt (can't distinguish)
 
 // ─── Public entry point ──────────────────────────────────────────────────────
 
 function drawLegoCharacter(person) {
   const s = 1.5;
+  const usesProgrammaticRig = person.renderMode === 'body_sprite';
+  const torsoScaleY = usesProgrammaticRig ? (Number(person.heightProfile?.torso_scale_y) || 1) : 1;
+  const legScaleY = usesProgrammaticRig ? (Number(person.heightProfile?.leg_scale_y) || 1) : 1;
 
   // ── Geometry ────────────────────────────────────────────────────
-  const tTop   = 38 * s, tBottom = 50 * s, torsoH = 50 * s;
-  const legW   = 21 * s, legH    = 38 * s, footH  = 10 * s, legGap = 2 * s;
+  const tTop   = 38 * s, tBottom = 50 * s, torsoH = 50 * s * torsoScaleY;
+  const legW   = 21 * s, legH    = 38 * s * legScaleY, footH  = 10 * s, legGap = 2 * s;
   const aW     = 13 * s, aL      = 40 * s;
   const shldY  = -torsoH / 2 + 3 * s;
   const headS  = 35 * s;
@@ -73,63 +61,7 @@ function drawLegoCharacter(person) {
   const lLegDeg = -legDeg;  // left leg backward when swing > 0
   const rLegDeg =  legDeg;  // right leg forward when swing > 0
 
-  // ── Memoized Grid pipeline (每角色/特徵變更時才重算，非每幀重算) ────
-  // 這是前端唯一的效能熱點：單次 pipeline 約 2.2ms（32x40 = 1280 格，含
-  // flood-fill BFS + 膨脹 + HSL 轉換）。若每幀重算，30 個角色的每幀成本
-  // 約 65ms —— 上限僅約 15fps，遠低於 60fps 目標。
-  //
-  // ⚠️ 快取以「物件參照」判斷，不是內容雜湊。目前安全，因為 update_positions
-  //    每次都從 socket payload 指派全新陣列；但若日後改成就地修改 cells，
-  //    牆上會顯示舊顏色且毫無徵兆。相關性質已由
-  //    frontend/tests/lego_grid.test.js 固定下來。
-  let clothGrid = null;
-  if (person.clothGrid) {
-    const hairKey = person.hairColor ? `${person.hairColor.r},${person.hairColor.g},${person.hairColor.b}` : "";
-    const innerKey = person.innerColor ? `${person.innerColor.r},${person.innerColor.g},${person.innerColor.b}` : "";
-    if (
-      !person._cachedClothGrid ||
-      person._cachedClothGridRef !== person.clothGrid ||
-      person._cachedHairKey !== hairKey ||
-      person._cachedInnerKey !== innerKey
-    ) {
-      person._cachedClothGrid = _makeSymmetric(
-        _enhanceGrid(
-          _clusterGrid(
-            _filterHairCells(person.clothGrid, person.hairColor, person.innerColor)
-          )
-        )
-      );
-      person._cachedClothGridRef = person.clothGrid;
-      person._cachedHairKey = hairKey;
-      person._cachedInnerKey = innerKey;
-    }
-    clothGrid = person._cachedClothGrid;
-  }
-
-  // Leg grid only works with static (non-rotated) geometry; skip while walking
-  let lowerGrid = null;
-  if (!isWalking && person.lowerGrid) {
-    const innerKey = person.innerColor ? `${person.innerColor.r},${person.innerColor.g},${person.innerColor.b}` : "";
-    const lowerKey = person.lowerColor ? `${person.lowerColor.r},${person.lowerColor.g},${person.lowerColor.b}` : "";
-    if (
-      !person._cachedLowerGrid ||
-      person._cachedLowerGridRef !== person.lowerGrid ||
-      person._cachedLowerInnerKey !== innerKey ||
-      person._cachedLowerKey !== lowerKey
-    ) {
-      person._cachedLowerGrid = _enhanceGrid(
-        _clusterGrid(
-          _filterShirtFromLower(person.lowerGrid, person.innerColor, person.lowerColor)
-        )
-      );
-      person._cachedLowerGridRef = person.lowerGrid;
-      person._cachedLowerInnerKey = innerKey;
-      person._cachedLowerKey = lowerKey;
-    }
-    lowerGrid = person._cachedLowerGrid;
-  }
-
-  // ── Solid colors for areas without grid data (arms, fallback) ───
+  // ── Solid colors for the legacy renderer ────────────────────────
   const [br, bg2, bb] = _enhanceSolid(person.innerColor);
   const [lr, lg,  lb] = _enhanceSolid(person.lowerColor);
   const bodyColor = color(br, bg2, bb);
@@ -294,7 +226,6 @@ function drawLegoCharacter(person) {
     beginShape();
     for (const [px, py] of torsoPoly) vertex(px, py);
     endShape(CLOSE);
-    if (clothGrid) _drawClothGrid(drawingContext, torsoPoly, clothGrid);
     noFill(); stroke(bodyOutline);
     beginShape();
     for (const [px, py] of torsoPoly) vertex(px, py);
@@ -323,11 +254,6 @@ function drawLegoCharacter(person) {
     beginShape();
     for (const [px, py] of torsoPoly) vertex(px, py);
     endShape(CLOSE);
-    if (clothGrid) _drawClothGrid(drawingContext, torsoPoly, clothGrid);
-    if (lowerGrid) {
-      _drawClothGrid(drawingContext, lLegPoly, lowerGrid, true);
-      _drawClothGrid(drawingContext, rLegPoly, lowerGrid, false);
-    }
     noFill(); stroke(bodyOutline);
     beginShape();
     for (const [px, py] of torsoPoly) vertex(px, py);
@@ -363,234 +289,11 @@ function drawLegoCharacter(person) {
   rectMode(CENTER);
 }
 
-// ─── Grid pipeline steps ─────────────────────────────────────────────────────
-
-// 1a. Shirt-color filter for lower-body grid
-//     The lower-body ROI often overlaps the shirt hem, contaminating the pants
-//     colour with shirt pixels.  Remove any cell whose colour is close to the
-//     detected shirt colour; the remaining dominant colour = actual pants.
-//     Guard: when pants ≈ shirt (same-colour outfit) the filter is skipped so
-//     we don't accidentally erase all lower-body data.
-function _filterShirtFromLower(grid, shirtColor, pantsColor) {
-  if (!grid || !shirtColor || !pantsColor) return grid;
-  if (Math.hypot(
-    pantsColor.r - shirtColor.r,
-    pantsColor.g - shirtColor.g,
-    pantsColor.b - shirtColor.b,
-  ) < SHIRT_PANTS_MIN) return grid; // pants ≈ shirt — skip
-
-  const cells = grid.cells.map(c => {
-    if (!c.active) return c;
-    const d = Math.hypot(c.r - shirtColor.r, c.g - shirtColor.g, c.b - shirtColor.b);
-    return d <= SHIRT_CELL_DIST ? { ...c, active: false } : c;
-  });
-  return { ...grid, cells };
-}
-
-// 1b. Hair filter
-function _filterHairCells(grid, hairColor, shirtColor) {
-  if (!grid || !hairColor || !shirtColor) return grid;
-  if (Math.hypot(
-    shirtColor.r - hairColor.r,
-    shirtColor.g - hairColor.g,
-    shirtColor.b - hairColor.b,
-  ) < HAIR_SHIRT_MIN) return grid; // shirt ≈ hair; can't distinguish — skip
-
-  const cells = grid.cells.map(c => {
-    if (!c.active) return c;
-    const d = Math.hypot(c.r - hairColor.r, c.g - hairColor.g, c.b - hairColor.b);
-    return d <= HAIR_CELL_DIST ? { ...c, active: false } : c;
-  });
-  return { ...grid, cells };
-}
-
-// 2. BFS cluster + average (reduced threshold = preserves real pattern edges)
-function _clusterGrid(grid) {
-  if (!grid || !grid.cells || grid.cells.length === 0) return null;
-  const { cols, rows } = grid;
-  const n = cols * rows;
-  const cells    = grid.cells.map(c => ({ r: c.r, g: c.g, b: c.b, active: c.active }));
-  const visited  = new Uint8Array(n);
-
-  for (let seed = 0; seed < n; seed++) {
-    if (!cells[seed].active || visited[seed]) continue;
-    const indices = [], queue = [seed];
-    visited[seed] = 1;
-
-    let qHead = 0;
-    while (qHead < queue.length) {
-      const curr = queue[qHead++];
-      indices.push(curr);
-      const cr = (curr / cols) | 0, cc = curr % cols;
-      for (const [dr, dc] of [[-1,0],[1,0],[0,-1],[0,1]]) {
-        const nr = cr + dr, nc = cc + dc;
-        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-        const ni = nr * cols + nc;
-        if (!cells[ni].active || visited[ni]) continue;
-        if (Math.hypot(
-          cells[curr].r - cells[ni].r,
-          cells[curr].g - cells[ni].g,
-          cells[curr].b - cells[ni].b,
-        ) < CLUSTER_THRESHOLD) { visited[ni] = 1; queue.push(ni); }
-      }
-    }
-
-    let sr = 0, sg = 0, sb = 0;
-    for (const i of indices) { sr += cells[i].r; sg += cells[i].g; sb += cells[i].b; }
-    const mr = Math.round(sr / indices.length);
-    const mg = Math.round(sg / indices.length);
-    const mb = Math.round(sb / indices.length);
-    for (const i of indices) { cells[i].r = mr; cells[i].g = mg; cells[i].b = mb; }
-  }
-
-  // Edge dilation (3 passes) — fill gaps at silhouette borders
-  for (let pass = 0; pass < 3; pass++) {
-    const upd = [];
-    for (let i = 0; i < n; i++) {
-      if (cells[i].active) continue;
-      const cr = (i / cols) | 0, cc = i % cols;
-      let sr = 0, sg = 0, sb = 0, cnt = 0;
-      for (const [dr, dc] of [[-1,0],[1,0],[0,-1],[0,1]]) {
-        const nr = cr + dr, nc = cc + dc;
-        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-        const ni = nr * cols + nc;
-        if (!cells[ni].active) continue;
-        sr += cells[ni].r; sg += cells[ni].g; sb += cells[ni].b; cnt++;
-      }
-      if (cnt > 0) upd.push({ i, r: Math.round(sr/cnt), g: Math.round(sg/cnt), b: Math.round(sb/cnt) });
-    }
-    for (const u of upd) { cells[u.i].r = u.r; cells[u.i].g = u.g; cells[u.i].b = u.b; cells[u.i].active = true; }
-  }
-
-  return { cols, rows, cells };
-}
-
-// 3. Contrast stretch + saturation boost (HSL)
-//    Adaptive output range: wide-range grids (black+white mixed) keep both extremes;
-//    dark-dominant grids stay dark; light-dominant grids stay bright.
-//    Per-cell saturation: near-black cells kill camera blue-bias; near-white cells
-//    skip boost to avoid HSL near-white artefact (tiny colour diff → false vivid hue).
-function _enhanceGrid(grid) {
-  if (!grid) return null;
-  const active = grid.cells.filter(c => c.active);
-  if (active.length === 0) return grid;
-
-  // Compute luma stats on corrected values
-  const corrLumas = active.map(c => _luma(
-    Math.min(255, c.r * CAMERA_CORRECTION),
-    Math.min(255, c.g * CAMERA_CORRECTION),
-    Math.min(255, c.b * CAMERA_CORRECTION),
-  ));
-  corrLumas.sort((a, b) => a - b);
-  const minL      = corrLumas[0];
-  const maxL      = corrLumas[corrLumas.length - 1];
-  const medianL   = corrLumas[Math.floor(corrLumas.length / 2)];
-  const lumaRange = maxL - minL;
-  const hasRange  = lumaRange > 0.03;
-
-  // Adaptive output range — preserves "black stays black, white stays white"
-  let outMin, outMax;
-  if (lumaRange > 0.40) {
-    // Wide range = dark + light coexist (e.g. black shirt under white cardigan):
-    // let both ends be close to their true values
-    outMin = 0.05; outMax = 0.90;
-  } else if (medianL < 0.30) {
-    // Predominantly dark (black jeans, dark shirt): stay in dark band
-    outMin = 0.06; outMax = 0.42;
-  } else if (medianL > 0.62) {
-    // Predominantly light (white/cream top): stay in bright band
-    outMin = 0.58; outMax = 0.92;
-  } else {
-    outMin = CONTRAST_L_MIN; outMax = CONTRAST_L_MAX;
-  }
-
-  const cells = grid.cells.map(c => {
-    if (!c.active) return c;
-
-    // Pre-correction luma used to classify cell tone (camera doesn't change identity)
-    const origLuma = _luma(c.r, c.g, c.b);
-
-    const cr = Math.min(255, c.r * CAMERA_CORRECTION);
-    const cg = Math.min(255, c.g * CAMERA_CORRECTION);
-    const cb = Math.min(255, c.b * CAMERA_CORRECTION);
-    const { h, s, l } = _rgbToHsl(cr, cg, cb);
-
-    const newL = hasRange
-      ? outMin + ((l - minL) / lumaRange) * (outMax - outMin)
-      : (outMin + outMax) / 2;
-
-    let newS;
-    if (origLuma < 0.15) {
-      // Near-black: camera blue-bias is noise — kill saturation so black stays black
-      newS = Math.min(s, 0.07);
-    } else if (origLuma > 0.60) {
-      // Near-white/cream: HSL near-white makes even tiny hue diff show as high S —
-      // skip boost entirely so wrinkle tints don't become vivid green patches
-      newS = s;
-    } else {
-      // Mid-tone colour: apply saturation boost for vibrancy
-      const satScale = Math.min(1.0, s / 0.22);
-      newS = Math.min(1.0, s * (1 + (SAT_BOOST - 1) * satScale));
-    }
-
-    const [r, g, b] = _hslToRgb(h, newS, newL);
-    return { ...c, r, g, b };
-  });
-
-  return { cols: grid.cols, rows: grid.rows, cells };
-}
-
-// 4. Conditional bilateral symmetry
-//    First measure average RGB distance between mirror-pair cells.
-//    Only apply mirror-average when that distance is below SYMMETRY_THRESHOLD —
-//    meaning the garment is already roughly symmetric (plain shirt, simple pattern)
-//    and any asymmetry is likely lighting noise, not intentional design.
-//    If the distance is above the threshold (single pocket, asymmetric print,
-//    side stripe, etc.) the grid is returned unchanged.
-const SYMMETRY_THRESHOLD = 28; // avg mirror-pair RGB distance that triggers correction
-
-function _makeSymmetric(grid) {
-  if (!grid) return null;
-  const { cols, rows } = grid;
-  const half = Math.floor(cols / 2);
-
-  // Measure how symmetric the garment already is
-  let totalDist = 0, pairs = 0;
-  for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < half; col++) {
-      const lc = grid.cells[row * cols + col];
-      const rc = grid.cells[row * cols + (cols - 1 - col)];
-      if (!lc.active || !rc.active) continue;
-      totalDist += Math.hypot(lc.r - rc.r, lc.g - rc.g, lc.b - rc.b);
-      pairs++;
-    }
-  }
-
-  // Not enough overlapping pairs or design is clearly asymmetric → keep original
-  if (pairs === 0 || totalDist / pairs > SYMMETRY_THRESHOLD) return grid;
-
-  // Left ↔ right are similar enough: mirror-average to clean up lighting asymmetry
-  const cells = grid.cells.map(c => ({ ...c }));
-  for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < half; col++) {
-      const li = row * cols + col;
-      const ri = row * cols + (cols - 1 - col);
-      const lc = cells[li], rc = cells[ri];
-      if (lc.active && rc.active) {
-        const r = (lc.r + rc.r) >> 1;
-        const g = (lc.g + rc.g) >> 1;
-        const b = (lc.b + rc.b) >> 1;
-        cells[li] = { ...lc, r, g, b };
-        cells[ri] = { ...rc, r, g, b };
-      } else if (lc.active) {
-        cells[ri] = { active: true, r: lc.r, g: lc.g, b: lc.b };
-      } else if (rc.active) {
-        cells[li] = { active: true, r: rc.r, g: rc.g, b: rc.b };
-      }
-    }
-  }
-  return { cols, rows, cells };
-}
+// ─── Grid pipeline (removed) ────────────────────────────────────────────────
+// _filterShirtFromLower / _filterHairCells / _clusterGrid / _enhanceGrid /
+// _makeSymmetric 連同繪製它們的 _drawClothGrid 一併移除。這個主題自 2026-08
+// 起只畫 AI 生成的完整角色 sprite（見上方 FULL-CHARACTER MODE），格柵已無消費者。
+// 投影牆的格柵是 projection.html 內另一套 PIXI 實作，與此處無關。
 
 // ─── Solid-color enhancement (for arms / no-grid fallback) ───────────────────
 
@@ -669,4 +372,19 @@ function _legoHand(s, col, outlineColor) {
   for (let a = 180; a <= 360; a += 10) vertex(rOut * cos(radians(a)), rOut * sin(radians(a)));
   for (let a = 360; a >= 180; a -= 10) vertex(rIn  * cos(radians(a)), rIn  * sin(radians(a)));
   endShape(CLOSE);
+}
+
+if (window.PersonaFlowThemes) {
+  window.PersonaFlowThemes.register('lego', {
+    draw: drawLegoCharacter,
+    baseFootAnchor: 109.5,
+    footAnchor(person) {
+      const modeOne = person.renderMode === 'body_sprite';
+      const torso = modeOne ? (Number(person.heightProfile?.torso_scale_y) || 1) : 1;
+      const legs = modeOne ? (Number(person.heightProfile?.leg_scale_y) || 1) : 1;
+      return (25 * 1.5 * torso) + (38 * 1.5 * legs) + (10 * 1.5);
+    },
+    accessoryOptions: { hatY: -96, handYBoost: 22 },
+    supportedModes: ['body_sprite', 'full_character'],
+  });
 }

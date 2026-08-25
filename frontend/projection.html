@@ -555,13 +555,66 @@ class LegoCharacter extends PIXI.Container {
   }
 }
 
+// Complete generated characters use the saved transparent PNG as one sprite.
+// Previously body_png was broadcast by the backend but ignored here, so every
+// imported result silently fell back to the programmatic LEGO geometry.
+class GeneratedSpriteCharacter extends PIXI.Container {
+  constructor(bodyPng) {
+    super();
+    this._isGeneratedSprite = true;
+    this.glasses = new PIXI.Container();
+    const source = String(bodyPng || '').startsWith('data:image')
+      ? String(bodyPng)
+      : `data:image/png;base64,${bodyPng}`;
+    const texture = PIXI.Texture.from(source);
+    this.sprite = new PIXI.Sprite(texture);
+    this.sprite.anchor.set(0.5, 1);
+    // Match the programmatic character's unscaled foot anchor. Boid then keeps
+    // that anchor fixed while multiplying perspective and height profile scale.
+    this.sprite.y = 182.5;
+    this.addChild(this.sprite, this.glasses);
+
+    const fitTexture = () => {
+      const texW = Number(texture.orig?.width || texture.width || 1);
+      const texH = Number(texture.orig?.height || texture.height || 1);
+      const scale = Math.min(300 / texW, 407 / texH);
+      this.sprite.scale.set(scale);
+    };
+    if (texture.baseTexture?.valid) fitTexture();
+    else texture.baseTexture?.once('loaded', fitTexture);
+  }
+
+  updateColors() {}
+  updateAccessories() {}
+  updateClothGrid() {}
+  updateLowerGrid() {}
+  applyGridTextures() {}
+  updateAnimation() {}
+}
+
+// Projection renderer registry. Additional event-wide styles can register a
+// PIXI renderer here without changing Socket event names or swarm logic.
+const projectionRenderers = new Map();
+projectionRenderers.set('lego', {
+  create(topColor, botColor, armColor) {
+    return new LegoCharacter(topColor, botColor, armColor);
+  },
+  supportedModes: ['body_sprite', 'full_character'],
+});
+
+function _projectionRenderer(styleId) {
+  return projectionRenderers.get(styleId) || projectionRenderers.get('lego');
+}
+
 // ─── 6. Boid 類別 ────────────────────────────────────────────────────────────
 class Boid {
-  constructor(x, y, characterDisplay, charId = null) {
+  constructor(x, y, characterDisplay, charId = null, heightProfile = null, styleId = 'lego') {
     this.pos = new Vec2(x, y);
     this.vel = new Vec2((Math.random() * 2 - 1), (Math.random() * 2 - 1)).normalize().mult(1.0);
     this.acc = new Vec2(0, 0);
     this.charId = charId;
+    this.styleId = projectionRenderers.has(styleId) ? styleId : 'lego';
+    this.heightProfile = heightProfile || { id: 'medium', display_scale: 1 };
     this.photoTarget = null;
     this.serverTarget = null;
     this.serverState = 'ROAMING';
@@ -583,11 +636,38 @@ class Boid {
       this.shadow.endFill();
     }
     this.characterDisplay = characterDisplay;
-    this.characterDisplay.scale.set(0.4);
     this.characterDisplay.x = 0; this.characterDisplay.y = 0;
+    this._applyHeightProfile();
     this.container.addChild(this.shadow, this.characterDisplay);
     this.container.x = x; this.container.y = y;
     pixiApp.stage.addChild(this.container);
+  }
+
+  _applyHeightProfile() {
+    const heightScale = Number(this.heightProfile?.display_scale) || 1;
+    // This local factor is later multiplied by the existing perspective
+    // container scale, leaving Boids positions and collision logic unchanged.
+    this.characterDisplay.scale.set(0.4 * heightScale);
+    // The unscaled PIXI LEGO foot anchor is 73 inner units after the
+    // character's internal 2.5 scale. Offset the sprite so all profiles keep
+    // the historical medium-profile foot position at y=73.
+    this.characterDisplay.y = 73 - (73 * heightScale);
+  }
+
+  updateHeightProfile(profile) {
+    this.heightProfile = profile || { id: 'medium', display_scale: 1 };
+    this._applyHeightProfile();
+  }
+
+  replaceCharacterDisplay(nextDisplay) {
+    if (!nextDisplay || nextDisplay === this.characterDisplay) return;
+    this.container.removeChild(this.characterDisplay);
+    this.characterDisplay.destroy({ children: true });
+    this.characterDisplay = nextDisplay;
+    this.characterDisplay.x = 0;
+    this.characterDisplay.y = 0;
+    this.container.addChild(this.characterDisplay);
+    this._applyHeightProfile();
   }
 
   startGreeting(target) {
@@ -796,7 +876,10 @@ function _extractColors(char) {
   // Legs
   const rawBot = outfit.lower_color || (char.lower && char.lower.hex) || null;
   // Arms: outfit.outer_color > char.arm.hex > fall back to body color
-  const rawArm = outfit.outer_color || (char.arm && char.arm.hex) || rawTop;
+  const rawArm = outfit.outer_color
+    || (typeof char.arm_color === 'string' ? char.arm_color : char.arm_color?.hex)
+    || (char.arm && char.arm.hex)
+    || rawTop;
 
   let top = _safeHex(rawTop) ?? Math.floor(Math.random() * 0xFFFFFF);
   let bot = _safeHex(rawBot) ?? Math.floor(Math.random() * 0xFFFFFF);
@@ -810,8 +893,12 @@ function _extractColors(char) {
   return [top, bot, arm];
 }
 
-function _spawnBoid(charId, topColor, botColor, armColor, accList, clothGrid, lowerGrid) {
-  const lego = new LegoCharacter(topColor, botColor, armColor);
+function _spawnBoid(charId, topColor, botColor, armColor, accList, clothGrid, lowerGrid, styleId = 'lego', heightProfile = null, bodyPng = null, characterMode = 'body_sprite') {
+  const resolvedStyleId = projectionRenderers.has(styleId) ? styleId : 'lego';
+  const useCompleteSprite = Boolean(bodyPng) && ['full_character', 'full_character_refined', 'history_sprite'].includes(characterMode);
+  const lego = useCompleteSprite
+    ? new GeneratedSpriteCharacter(bodyPng)
+    : _projectionRenderer(resolvedStyleId).create(topColor, botColor, armColor);
   lego.updateAccessories(accList || []);
   // Apply real-pattern textures if grid data available; fall back to solid tint
   const clothTex = _gridToTexture(clothGrid);
@@ -831,7 +918,7 @@ function _spawnBoid(charId, topColor, botColor, armColor, accList, clothGrid, lo
     rx = origX * bg.scale + bg.x;
     ry = origY * bg.scale + bg.y;
   }
-  const boid = new Boid(rx, ry, lego, charId);
+  const boid = new Boid(rx, ry, lego, charId, heightProfile, resolvedStyleId);
   flock.push(boid);
   boidMap[charId] = boid;
   return boid;
@@ -907,8 +994,20 @@ function initSocket() {
         // Merge has_glasses from outfit (VLM-detected)
         if (char.outfit?.has_glasses && !accList.includes('glasses')) accList.push('glasses');
         if (!boidMap[char.id]) {
-          _spawnBoid(char.id, top, bot, arm, accList, char.cloth_grid, char.lower_grid);
+          _spawnBoid(
+            char.id, top, bot, arm, accList, char.cloth_grid, char.lower_grid,
+            char.style_id || 'lego', char.height_profile || null,
+            char.body_png || null, char.character_mode || 'body_sprite'
+          );
         } else {
+          boidMap[char.id].updateHeightProfile(char.height_profile || null);
+          if (
+            char.body_png &&
+            ['full_character', 'full_character_refined', 'history_sprite'].includes(char.character_mode) &&
+            !boidMap[char.id].characterDisplay._isGeneratedSprite
+          ) {
+            boidMap[char.id].replaceCharacterDisplay(new GeneratedSpriteCharacter(char.body_png));
+          }
           boidMap[char.id].characterDisplay.updateColors(top, bot, arm);
           boidMap[char.id].characterDisplay.updateAccessories(accList);
           // Apply grid textures if not yet applied and data is available
@@ -1106,5 +1205,6 @@ window.spawnTest = (n = 3) => {
   }
 };
 </script>
+<script src="./branch-badge.js"></script>
 </body>
 </html>

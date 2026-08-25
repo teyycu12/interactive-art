@@ -1,16 +1,12 @@
 import base64
 import json
 import os
-from typing import Any, Dict
-
-from google import genai
-from google.genai import types
+import google.generativeai as genai
+from typing import Dict, Any
 
 _API_KEY = os.environ.get("GEMINI_API_KEY")
-if not _API_KEY:
-    raise RuntimeError("GEMINI_API_KEY not set — add it to your .env file")
-_client = genai.Client(api_key=_API_KEY)
-
+if _API_KEY:
+    genai.configure(api_key=_API_KEY)
 
 def strip_json_fence(text: str) -> str:
     """把模型回應中的 markdown code fence 去掉，取出純 JSON。
@@ -42,26 +38,37 @@ def strip_json_fence(text: str) -> str:
 
 def analyze_outfit(base64_image: str) -> Dict[str, Any]:
     """
-    Sends the base64 image to Gemini 2.0 Flash to analyze the outfit components.
+    Sends the base64 image to Gemini 1.5 Flash to analyze the outfit components.
     Returns a parsed JSON dictionary.
     """
     try:
+        # Use gemini-1.5-flash for fast multimodal processing
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        
         # Decode base64 to bytes
         if base64_image.startswith("data:image"):
             base64_image = base64_image.split(",")[1]
-
+        
         image_bytes = base64.b64decode(base64_image)
-        image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
-
+        
+        # Prepare the payload for Gemini
+        image_part = {
+            "mime_type": "image/jpeg",
+            "data": image_bytes
+        }
+        
         prompt = """
-        You are a fashion analyst for a 2D avatar system.
+        You are a fashion analyst for a fixed-species 3D brick avatar system.
         Analyze the clothing the person is wearing in the image and output a JSON object describing the outfit components.
         
         The JSON MUST have the following structure and use exactly these keys and specific values:
         {
-            "outer": "blazer" | "denim_jacket" | "cardigan" | "none",
-            "inner": "tshirt" | "vneck" | "button_up",
-            "lower": "jeans" | "pleated_skirt" | "suit_pants" | "shorts",
+            "outer": "none" | "vest" | "blazer" | "denim_jacket" | "cardigan" | "hoodie" | "long_coat",
+            "inner": "tank_top" | "tshirt" | "vneck" | "button_up" | "sweater" | "dress",
+            "lower": "jeans" | "pleated_skirt" | "straight_skirt" | "suit_pants" | "shorts" | "dress",
+            "sleeve_length": "sleeveless" | "short" | "long",
+            "fit": "slim" | "regular" | "relaxed",
+            "legwear": "covered" | "bare" | "tights" | "leggings",
             "inner_color": "#HEXCODE",
             "outer_color": "#HEXCODE" (or null if none),
             "lower_color": "#HEXCODE",
@@ -73,32 +80,22 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
         If there is no outer layer, set "outer" to "none" and "outer_color" to null.
         Respond ONLY with the JSON object, no markdown formatting like ```json or other text.
         """
-
-        response = _client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=[prompt, image_part],
-        )
-
-        data = json.loads(strip_json_fence(response.text or ""))
+        
+        response = model.generate_content([prompt, image_part], request_options={"timeout": 40})
+        
+        data = json.loads(strip_json_fence(response.text))
         return {
             "ok": True,
-            "outfit": data,
+            "outfit": data
         }
     except Exception as e:
         print(f"[VLM Error] {e}")
-        return {
-            "ok": False,
-            "error": str(e),
-            "outfit": {
-                "outer": "none",
-                "inner": "tshirt",
-                "lower": "jeans",
-                "inner_color": "#FFFFFF",
-                "outer_color": None,
-                "lower_color": "#336699",
-                "has_pattern": False,
-            },
-        }
+        # 失敗時「不」附帶服裝欄位。早期版本會回一組寫死的預設值
+        # （tshirt / jeans / short / regular），而 build_outfit_data 只讀
+        # outfit 鍵、不看 ok —— 結果是 VLM 一失敗，穿西裝、洋裝、外套的人
+        # 全都被生成為短袖 T 恤配牛仔褲，只有 CV 取到的顏色是對的，
+        # 且沒有任何一處會報錯。看起來像模型變笨，不像呼叫失敗。
+        return {"ok": False, "error": str(e)}
 
 
 def analyze_face(base64_image: str) -> Dict[str, Any]:
@@ -107,18 +104,19 @@ def analyze_face(base64_image: str) -> Dict[str, Any]:
     and facial hair — all via visual analysis (no color sampling).
     """
     _DEFAULTS = {
-        "hair_style": "short_straight",
-        "hair_color": "dark_brown",
-        "skin_tone": "light",
-        "eye_color": "brown",
-        "has_beard": False,
+        "hair_style":  "short_straight",
+        "hair_color":  "dark_brown",
+        "skin_tone":   "light",
+        "eye_color":   "brown",
+        "has_beard":   False,
         "beard_style": "none",
     }
     try:
+        model = genai.GenerativeModel("gemini-2.0-flash")
         if base64_image.startswith("data:image"):
             base64_image = base64_image.split(",")[1]
         image_bytes = base64.b64decode(base64_image)
-        image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+        image_part = {"mime_type": "image/jpeg", "data": image_bytes}
 
         prompt = """Carefully analyze this person's appearance.
 Return ONLY a JSON object with exactly these keys and values:
@@ -151,13 +149,11 @@ skin_tone guide (judge by face, not lighting):
 
 Respond ONLY with the JSON object, no markdown fences."""
 
-        response = _client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=[prompt, image_part],
-        )
-        data = json.loads(strip_json_fence(response.text or ""))
+        response = model.generate_content([prompt, image_part], request_options={"timeout": 40})
+        data = json.loads(strip_json_fence(response.text))
         return {"ok": True, "face": {**_DEFAULTS, **data}}
     except Exception as e:
         print(f"[VLM face Error] {e}")
-        return {"ok": False, "face": _DEFAULTS}
-
+        # 同 analyze_outfit：失敗時不附帶臉部欄位，避免捏造的髮型與膚色
+        # 被當成真的辨識結果送進生圖 prompt。
+        return {"ok": False, "error": str(e)}

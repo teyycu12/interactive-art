@@ -155,7 +155,7 @@
 }
 ```
 > **相遇偵測內嵌在 `state` 欄位裡**，不是獨立事件。若 M7 v2 需要獨立相遇事件，
-> 後端已在事件 log 落地 `character_encounter`（見 §5），要廣播給前端只需在 tick 內加一行 emit。
+> 目前沒有現成的 `character_encounter` 記錄可用，需另外設計。
 
 ### `trigger_photo`（前端 → 後端）— 觸發集體記憶大合照 (M6)
 ```json
@@ -249,7 +249,7 @@
 | `group_photo_composed` | `photo_id`, `count`, `room` | M6 大合照生成記錄 |
 | `inject_bots` / `remove_bots` | `count`, `total`, `room` | Bot 模擬注入觀測 |
 | `generate_queued` | `pid`, `ahead`, `mode` | 多人同拍時進入排隊（超過 `GEN_MAX_CONCURRENT`） |
-| `avatar_generated` | `latency_ms`, `cv_ms`, `vlm_ms`, `queue_wait_ms`, `ok`, `vlm_outfit_ok`, `vlm_face_ok` | **生成延遲分佈 + 失敗率 + 排隊等待**（第 6 節） |
+| `avatar_generated` | `latency_ms`, `cv_ms`, `vlm_ms`, `generation_ms`, `queue_wait_ms`, `retry_count`, `ok`, `error` | **生成延遲分佈 + 失敗率 + 排隊等待**（第 6 節） |
 | `character_encounter` | `pid`, `swarm_size` | 相遇（只記新進入 GREETING，已去重） |
 | `swarm_summary` | `swarm_size`, `greeting_count` | 每 5s 一筆的承載量快照 |
 

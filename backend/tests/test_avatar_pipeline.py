@@ -86,6 +86,26 @@ class TestBuildOutfitData(unittest.TestCase):
         build_outfit_data(vlm, {"upper": {"hex": "#FF0000"}})
         self.assertEqual(vlm["outfit"]["inner_color"], "#000000")
 
+    def test_failed_vlm_payload_is_discarded(self):
+        """ok 為 False 時，語意欄位一律丟棄，只留 CV 顏色。
+
+        這是第二道防線。vlm_module 的失敗路徑已經不再捏造欄位，但只要有任何
+        呼叫端在失敗回傳裡帶上 outfit，捏造的款式就會流進生圖 prompt，而且
+        看起來像模型判斷錯誤，不像呼叫失敗 —— 現場沒有人會發現。
+        """
+        failed = {"ok": False, "error": "No API_KEY",
+                  "outfit": {"inner": "tshirt", "lower": "jeans",
+                             "sleeve_length": "short", "fit": "regular"}}
+        cv = {"upper": {"hex": "#8FA05E"}, "lower": {"hex": "#B7A98A"}}
+        out = build_outfit_data(failed, cv)
+        self.assertEqual(out, {"inner_color": "#8FA05E", "lower_color": "#B7A98A"},
+                         "失敗的 VLM 結果只該留下 CV 量到的顏色")
+
+    def test_ok_absent_is_still_accepted(self):
+        """沒有 ok 鍵時視為可用 —— 只拒絕明確標記失敗的結果。"""
+        out = build_outfit_data({"outfit": {"inner": "hoodie"}}, None)
+        self.assertEqual(out["inner"], "hoodie")
+
     def test_survives_none_and_malformed(self):
         self.assertEqual(build_outfit_data(None, None), {})
         self.assertEqual(build_outfit_data({"outfit": None}, {"upper": None}), {})

@@ -18,6 +18,11 @@ import cv2
 import numpy as np
 
 try:
+    from backend.capture_quality import assess_capture_quality, height_metadata  # type: ignore
+except Exception:
+    from capture_quality import assess_capture_quality, height_metadata  # type: ignore
+
+try:
     from mediapipe import Image, ImageFormat
     from mediapipe.tasks.python.core.base_options import BaseOptions
     from mediapipe.tasks.python.vision.pose_landmarker import (
@@ -33,7 +38,6 @@ except ModuleNotFoundError:
 _landmarker: Optional[Any] = None
 _landmarker_lock = threading.Lock()
 
-_prev_landmarks: Optional[List[Any]] = None
 _EMA_ALPHA = 0.35
 
 _MODEL_FILENAME = "pose_landmarker_lite.task"
@@ -290,6 +294,7 @@ def get_clothing_features(
     max_width: int = 480,
     allow_download: bool = True,
     patch_size: int = 40,
+    previous_landmarks: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """
     從影像擷取人體骨架，計算使用者上半身與下半身衣著區域的顏色格柵。
@@ -313,28 +318,49 @@ def get_clothing_features(
     raw_lm = result.pose_landmarks[0]
     
     # ── 時序平滑 (Temporal EMA) ──
-    global _prev_landmarks
-    if _prev_landmarks is None or len(_prev_landmarks) != len(raw_lm):
+    if previous_landmarks is None or len(previous_landmarks) != len(raw_lm):
         lm = raw_lm
     else:
         from types import SimpleNamespace
         lm = []
-        for curr, prev in zip(raw_lm, _prev_landmarks):
+        for curr, prev in zip(raw_lm, previous_landmarks):
             vis = getattr(curr, "visibility", 1.0)
+            px = prev.get("x", curr.x) if isinstance(prev, dict) else getattr(prev, "x", curr.x)
+            py = prev.get("y", curr.y) if isinstance(prev, dict) else getattr(prev, "y", curr.y)
+            pz = prev.get("z", getattr(curr, "z", 0)) if isinstance(prev, dict) else getattr(prev, "z", getattr(curr, "z", 0))
             if vis > 0.5:
-                sx = _EMA_ALPHA * curr.x + (1 - _EMA_ALPHA) * prev.x
-                sy = _EMA_ALPHA * curr.y + (1 - _EMA_ALPHA) * prev.y
-                sz = _EMA_ALPHA * getattr(curr, "z", 0) + (1 - _EMA_ALPHA) * getattr(prev, "z", 0)
+                sx = _EMA_ALPHA * curr.x + (1 - _EMA_ALPHA) * px
+                sy = _EMA_ALPHA * curr.y + (1 - _EMA_ALPHA) * py
+                sz = _EMA_ALPHA * getattr(curr, "z", 0) + (1 - _EMA_ALPHA) * pz
                 lm.append(SimpleNamespace(x=sx, y=sy, z=sz, visibility=vis))
             else:
-                lm.append(prev)
-    _prev_landmarks = lm
+                lm.append(SimpleNamespace(x=px, y=py, z=pz, visibility=vis))
 
     # 取得 Segmentation Mask (轉為 0/255 uint8)
     seg_mask_uint8 = None
     if result.segmentation_masks and len(result.segmentation_masks) > 0:
         mask_np = result.segmentation_masks[0].numpy_view()
         seg_mask_uint8 = (mask_np > 0.5).astype(np.uint8) * 255
+
+    person_bbox = None
+    if seg_mask_uint8 is not None and np.any(seg_mask_uint8):
+        # Keep only the largest connected foreground component. MediaPipe masks
+        # occasionally contain isolated edge pixels; using the raw min/max made
+        # those speckles look like a cropped person and permanently blocked the
+        # capture button even when the full skeleton was correct.
+        component_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(
+            (seg_mask_uint8 > 0).astype(np.uint8), connectivity=8
+        )
+        if component_count > 1:
+            largest_label = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+            seg_mask_uint8 = (labels == largest_label).astype(np.uint8) * 255
+        ys, xs = np.where(seg_mask_uint8 > 0)
+        person_bbox = {
+            "x1": float(xs.min() / rgb.shape[1]),
+            "y1": float(ys.min() / rgb.shape[0]),
+            "x2": float((xs.max() + 1) / rgb.shape[1]),
+            "y2": float((ys.max() + 1) / rgb.shape[0]),
+        }
 
     # ── 關節點座標（正規化 0-1）──
     # 11=左肩 12=右肩 23=左髖 24=右髖 25=左膝 26=右膝
@@ -346,6 +372,10 @@ def get_clothing_features(
     rkne = np.array([lm[26].x, lm[26].y])
     lank = np.array([lm[27].x, lm[27].y])
     rank = np.array([lm[28].x, lm[28].y])
+    lheel = np.array([lm[29].x, lm[29].y])
+    rheel = np.array([lm[30].x, lm[30].y])
+    lfoot = np.array([lm[31].x, lm[31].y])
+    rfoot = np.array([lm[32].x, lm[32].y])
 
     shoulder_dist = abs(lm[11].x - lm[12].x)
     # 動態 patch size（用於 fallback 單色採樣）
@@ -468,17 +498,47 @@ def get_clothing_features(
     # Top = above shoulders so collar/hood is included; bottom = below ankles;
     # left/right = widest of shoulders / wrists / ankles so arms aren't clipped.
     top_y    = float(min(lsho[1], rsho[1])) - 0.05
-    bottom_y = float(max(lank[1], rank[1])) + 0.05
+    foot_points = (lank, rank, lheel, rheel, lfoot, rfoot)
+    bottom_y = float(max(p[1] for p in foot_points)) + 0.04
     lwri_x = lm[15].x if lm[15].visibility > 0.3 else lsho[0]
     rwri_x = lm[16].x if lm[16].visibility > 0.3 else rsho[0]
-    left_x  = float(min(lsho[0], rsho[0], lwri_x, rwri_x, lank[0], rank[0])) - 0.03
-    right_x = float(max(lsho[0], rsho[0], lwri_x, rwri_x, lank[0], rank[0])) + 0.03
+    left_x  = float(min(lsho[0], rsho[0], lwri_x, rwri_x, *(p[0] for p in foot_points))) - 0.03
+    right_x = float(max(lsho[0], rsho[0], lwri_x, rwri_x, *(p[0] for p in foot_points))) + 0.03
+    top_y = max(0.0, top_y)
+    bottom_y = min(1.0, bottom_y)
+    left_x = max(0.0, left_x)
+    right_x = min(1.0, right_x)
     body_poly = np.array([
         [left_x,  top_y],
         [right_x, top_y],
         [right_x, bottom_y],
         [left_x,  bottom_y],
     ], dtype=np.float32)
+
+    face_cx, face_cy = float(lm[0].x), float(lm[0].y)
+    face_half_w = max(0.06, shoulder_dist * 0.28)
+    face_half_h = face_half_w * 1.15
+
+    def _box(x1: float, y1: float, x2: float, y2: float) -> Dict[str, float]:
+        return {
+            "x1": max(0.0, min(1.0, float(x1))),
+            "y1": max(0.0, min(1.0, float(y1))),
+            "x2": max(0.0, min(1.0, float(x2))),
+            "y2": max(0.0, min(1.0, float(y2))),
+        }
+
+    regions = {
+        "full_body": _box(left_x, top_y, right_x, bottom_y),
+        "face": _box(face_cx - face_half_w, face_cy - face_half_h, face_cx + face_half_w, face_cy + face_half_h),
+        "upper_body": _box(float(upper_poly[:, 0].min()), float(upper_poly[:, 1].min()), float(upper_poly[:, 0].max()), float(upper_poly[:, 1].max())),
+        "lower_body": _box(float(lower_poly[:, 0].min()), float(lower_poly[:, 1].min()), float(lower_poly[:, 0].max()), bottom_y),
+        "feet": _box(float(min(p[0] for p in foot_points)) - 0.04, float(min(p[1] for p in foot_points)) - 0.06, float(max(p[0] for p in foot_points)) + 0.04, bottom_y),
+    }
+
+    capture_quality = assess_capture_quality(lm, person_bbox=person_bbox)
+    left_foot_y = max(float(lank[1]), float(lheel[1]), float(lfoot[1]))
+    right_foot_y = max(float(rank[1]), float(rheel[1]), float(rfoot[1]))
+    height_info = height_metadata(person_bbox, foot_y=(left_foot_y + right_foot_y) / 2.0)
 
     return {
         "ok": True,
@@ -500,6 +560,12 @@ def get_clothing_features(
         "upper_poly": upper_poly.tolist(),
         "lower_poly": lower_poly.tolist(),
         "body_poly":  body_poly.tolist(),
+        "regions": regions,
+        "person_bbox": person_bbox,
+        "capture_quality": capture_quality,
+        "capture_ready_raw": capture_quality.get("raw_ready", False),
+        "guidance_reason": capture_quality.get("guidance_reason"),
+        **height_info,
     }
 
 

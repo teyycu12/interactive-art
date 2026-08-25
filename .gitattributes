@@ -1,3 +1,20 @@
-# 統一以 LF 存進版本庫，Windows 工作區仍可用 CRLF。
-# 沒有這一行，Mac 與 Windows 的組員互推時會整份檔案被判成有改動。
+# 換行符號正規化。
+#
+# 這個專案同時在 Windows 與 macOS 上開發、在 Ubuntu 上跑 CI。沒有這份設定時，
+# 儲存庫裡存的是哪種換行取決於當初提交者的 core.autocrlf，組員互推時會整份檔案
+# 被判成有改動，也會讓 shell script 因為結尾的 CR 而無法執行。
+# 這裡強制版本庫內一律存 LF，工作區則交由各自平台的 autocrlf 決定。
 * text=auto eol=lf
+
+# 這兩種必須是 LF，否則在 Linux／macOS 上會壞掉
+*.sh text eol=lf
+*.yml text eol=lf
+
+# 二進位：不得做任何換行轉換，否則檔案會損毀
+*.png binary
+*.webp binary
+*.jpg binary
+*.jpeg binary
+*.task binary
+*.tflite binary
+*.sqlite3 binary
