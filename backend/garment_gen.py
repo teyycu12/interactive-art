@@ -258,6 +258,27 @@ def _style_reference_sheet() -> Optional[PILImage.Image]:
     return _style_sheet_cache[set_id]
 
 
+def style_reference_status() -> Dict[str, Any]:
+    """目前的風格參考狀態，供 /health 回報。
+
+    缺參考圖不會讓生成失敗 —— 它只是靜靜地少掉「所有角色是同一個物種」的
+    依據，生出來的角色會各自漂移。那在現場看起來像模型不穩，不像少了檔案，
+    而參考圖因授權不可散布並未進版控，clone 下來的環境預設就是這個狀態。
+    因此必須讓它出現在健康檢查裡，而不是只有一行埋在啟動 log 中。
+    """
+    mode = os.environ.get("STYLE_REFERENCE_MODE", "sheet").strip().lower()
+    set_id = os.environ.get("STYLE_REFERENCE_SET", "").strip() or "2026q3_owner_curated"
+    if mode != "sheet":
+        return {"mode": mode, "set_id": set_id, "available": False, "reason": "disabled"}
+    sheet = _style_reference_sheet()
+    return {
+        "mode": mode,
+        "set_id": set_id,
+        "available": sheet is not None,
+        "reason": None if sheet is not None else "set_not_found",
+    }
+
+
 def _get_shield_mask(
     poly_norm: Optional[np.ndarray],
     crop_box: Tuple[int, int, int, int],

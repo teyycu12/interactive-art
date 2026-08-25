@@ -66,10 +66,11 @@ except Exception as _e:  # 最常見：GEMINI_API_KEY 未設定
     analyze_face = lambda *a, **k: {"ok": False, "error": "vlm_unavailable"}
 
 try:
-    from garment_gen import generate_full_character_png
+    from garment_gen import generate_full_character_png, style_reference_status
 except Exception as _e:  # 最常見：OPENAI_API_KEY 未設定
     _degraded("garment_gen（AI 角色圖像生成）", _e)
     generate_full_character_png = None
+    style_reference_status = lambda: {"available": False, "reason": "garment_gen_unavailable"}
 
 # 品質關卡。validate_avatar_png 是唯一會觸發重生的檢查，而且它不只判定通過與否：
 # correction_for_validation 把失敗原因變成下一次生成的修正指令，
@@ -184,13 +185,25 @@ def _sampled_colors(cv_result: Dict[str, Any], face_cv: Dict[str, Any]) -> Dict[
 
 @app.route("/health", methods=["GET"])
 def health():
+    # 風格參考圖集因授權不可散布而未進版控 —— clone 下來的環境預設就是缺的。
+    # 缺它不會讓生成失敗，只是靜靜地少掉「所有角色是同一個物種」的依據，
+    # 現場看起來像模型不穩、不像少了檔案。因此列進 degraded，
+    # 讓佈署的人在開場前就看得到，而不是靠一行埋在啟動 log 裡的字。
+    style_ref = style_reference_status()
+    degraded = list(_DEGRADED)
+    if not style_ref.get("available"):
+        degraded.append(
+            f"style_reference（風格參考圖集 '{style_ref.get('set_id')}'："
+            f"{style_ref.get('reason')}，角色間的物種一致性會下降）"
+        )
     return jsonify({
         "ok": True,
         "opencv": cv2 is not None,
         "gemini_key": bool(config.GEMINI_API_KEY),
         "imagegen_key": bool(config.OPENAI_API_KEY),
         "asset_dir": ASSET_DIR,
-        "degraded": _DEGRADED,
+        "style_reference": style_ref,
+        "degraded": degraded,
     })
 
 

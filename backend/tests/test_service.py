@@ -50,6 +50,34 @@ class TestHealth:
         assert isinstance(body["degraded"], list)
 
 
+class TestHealthReportsMissingStyleReference:
+    """風格參考圖集缺席必須出現在健康檢查裡。
+
+    圖集因授權不可散布而未進版控 —— clone 下來的環境預設就是缺的。缺它不會
+    讓生成失敗，只是靜靜地少掉「所有角色是同一個物種」的依據；現場看起來
+    像模型不穩，沒有人會聯想到少了檔案。
+    """
+
+    def test_missing_set_appears_in_degraded(self, client, monkeypatch):
+        monkeypatch.setattr(
+            service, "style_reference_status",
+            lambda: {"mode": "sheet", "set_id": "2026q3_owner_curated",
+                     "available": False, "reason": "set_not_found"},
+        )
+        body = client.get("/health").get_json()
+        assert body["ok"] is True, "缺參考圖不是故障，服務仍然可用"
+        assert any("style_reference" in d for d in body["degraded"])
+        assert body["style_reference"]["available"] is False
+
+    def test_present_set_is_not_flagged(self, client, monkeypatch):
+        monkeypatch.setattr(
+            service, "style_reference_status",
+            lambda: {"mode": "sheet", "set_id": "s", "available": True, "reason": None},
+        )
+        body = client.get("/health").get_json()
+        assert not any("style_reference" in d for d in body["degraded"])
+
+
 class TestGenerateGuards:
     def test_missing_image_degrades_not_errors(self, client):
         """缺圖是使用者情境，不是伺服器故障 —— 必須回 200 + 降級色。"""
