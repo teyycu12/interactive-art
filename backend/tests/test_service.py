@@ -352,6 +352,34 @@ class TestPreview:
         assert body["sessionId"] != "../../etc/passwd"
         assert re.fullmatch(r"[0-9a-f]{32}", body["sessionId"])
 
+    def test_internal_error_still_returns_a_session_id(self, client, monkeypatch):
+        """感知層整條掛掉時也要帶回 id。
+
+        少了它，客戶端每一幀都開新 session，穩定度計數永遠累積不起來；
+        而且症狀會表現成 KeyError: 'sessionId'，把「MediaPipe 起不來」
+        偽裝成「session 邏輯壞了」—— CI 上缺 libGLESv2 那次就是這樣。
+        """
+        def _boom(*a, **k):
+            raise OSError("libGLESv2.so.2: cannot open shared object file")
+
+        monkeypatch.setattr(service, "get_clothing_features", _boom)
+        r = client.post("/preview", json={"image": _photo_b64()})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["error"] == "internal_error"
+        assert re.fullmatch(r"[0-9a-f]{32}", body["sessionId"])
+
+    def test_internal_error_keeps_the_existing_session(self, client, monkeypatch):
+        """已經配發過的 id 不因一次失敗就換掉，否則取景中途抖一下就重頭數。"""
+        def _boom(*a, **k):
+            raise RuntimeError("感知層暫時性失敗")
+
+        first = client.post("/preview", json={"image": _photo_b64()}).get_json()["sessionId"]
+        monkeypatch.setattr(service, "get_clothing_features", _boom)
+        body = client.post("/preview", json={"image": _photo_b64(),
+                                             "sessionId": first}).get_json()
+        assert body["sessionId"] == first
+
     def test_missing_image_is_not_an_error(self, client):
         r = client.post("/preview", json={})
         assert r.status_code == 200
