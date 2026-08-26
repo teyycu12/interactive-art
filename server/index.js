@@ -1286,7 +1286,14 @@ function handleHostMessage(ws, msg) {
       const r = treasure.stop();
       if (!r) return;
       console.log('[treasure] 本輪中止');
-      blastAll(EV.TREASURE_ENDED, { id: r.id, spot: { x: r.x, y: r.y } });
+      // ⚠ 中止不公布座標。沒有人找到，那個點就還是秘密 ——
+      //   主辦端可能馬上重開一輪（甚至同一個點），先講出來等於直接送答案。
+      //   只有 TREASURE_FOUND 才公布，因為那時本輪已經真的結束了。
+      //   大螢幕與主辦端另外收到座標：它們是公開畫面，不在參與者手上。
+      blast(controllers.values(), EV.TREASURE_ENDED, { id: r.id });
+      blast([...screens, ...hosts], EV.TREASURE_ENDED, {
+        id: r.id, spot: { x: r.x, y: r.y },
+      });
       pushHostState();
       break;
     }
@@ -1556,7 +1563,22 @@ const loop = startTicker({
   intervalMs: TICK_MS,
   onTick(dt) {
     // 傳入社交圖譜：配對過的角色之間凝聚力較強，關係會表現為畫面上的群聚
-    stage.tick(dt, graph);
+    const zoneMoves = stage.tick(dt, graph);
+
+    // 分區進出。只在換區時送，不是每幀 ——
+    // 每幀回報所在分區的話，30Hz × 10 人是每秒 300 則重複訊息。
+    //
+    // ⚠ 與 CLIENT_SYNC 同樣放在 `screens.size === 0` 早退之前，
+    //   否則投影機還沒接上時手機完全收不到分區提示。
+    if (zoneMoves.length) {
+      for (const mv of zoneMoves) {
+        sendToAgent(mv.id, EV.ZONE_SELF, { from: mv.from, to: mv.to });
+      }
+      // 大螢幕與主辦端要的是「哪一區現在有幾人」，不是逐筆進出
+      blast([...screens, ...hosts], EV.ZONE_STATE, {
+        zones: stage.zoneOccupancy(),
+      });
+    }
 
     // 配對碼輪換。舊碼在寬限期內仍有效，因此輪換不會打斷正在進行的交換。
     if (pairing.rotate()) {
@@ -1658,10 +1680,12 @@ const loop = startTicker({
       if (!viable.ok) {
         const r = treasure.stop();
         console.log(`[treasure] 本輪中止：${viable.reason}`);
-        blastAll(EV.TREASURE_ENDED, {
-          id: r.id,
-          reason: viable.reason,
-          spot: { x: r.x, y: r.y },
+        // 同上：中止不對手機公布座標
+        blast(controllers.values(), EV.TREASURE_ENDED, {
+          id: r.id, reason: viable.reason,
+        });
+        blast([...screens, ...hosts], EV.TREASURE_ENDED, {
+          id: r.id, reason: viable.reason, spot: { x: r.x, y: r.y },
         });
         pushHostState();
       }

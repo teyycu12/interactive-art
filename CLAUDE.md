@@ -272,10 +272,14 @@ python -m http.server 8000 --directory frontend
 pip install -r requirements-dev.txt
 python -m pytest backend/tests
 
+# 一個人也能把場域填滿，實際玩一輪（開發／調校用，現場請勿使用）
+npm run bots -- --count 9          # 湊滿 10 人，自己佔 1 個
+npm run bots -- --colors           # 每種色族各保證一隻（測顏色任務）
+
 # 測試
-npm test                           # Node 單元測試（294 + wander 模式 5）
+npm test                           # Node 單元測試（330 + wander 模式 5）
 npm run test:wander                # 只跑漫遊模式那一組（PERSONAFLOW_IDLE_MOTION=wander）
-npm run test:e2e                   # 端對端，會自行啟動伺服器（116）
+npm run test:e2e                   # 端對端，會自行啟動伺服器（125）
 pytest backend/                    # Python（236）
 
 # 切片比例驗證（計畫書 §3.3 的 R1 驗收項）
@@ -703,6 +707,42 @@ PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 `toScreen()` 是 3D 透視投影，但尺寸不能用 2D 的 `scale` ——
 那會讓房間深處的寶箱畫得跟最前方一樣大，就是「貼紙浮在畫面上」。
 要走 `roomScene.scaleAt()`，與角色的 `characterHeightAt()` 同一條路徑。
+
+#### 中止尋寶不公布座標，找到才公布
+
+`TREASURE_FOUND` 帶座標是對的（本輪真的結束了）；但 `TREASURE_ENDED`
+**不能**用 `blastAll` 把座標送給手機 —— 沒有人找到，那個點就還是秘密，
+主辦端可能馬上重開一輪（甚至同一個點），先講出來等於直接送答案。
+
+這個洩漏是端對端測試抓到的（它檢查手機收到的原始封包字串裡有沒有座標），
+而且**只在「本輪被中止」時才會發生**，正常玩完全看不出來。
+
+#### 分區感知（`shared/scene.js` 的 `zoneAt`）
+
+分區原本只是地板上的色塊 —— 伺服器完全不知道它們存在，走進暢飲區與
+走到空地毫無差別。`zoneAt()` 讓「站到某個地方就會發生事」成立，而那是
+展場裡最容易被觀眾自己發現的互動語言：不需要說明牌。
+
+**只在換區時回報**，不是每幀：每幀回報的話 30Hz × 10 人是每秒 300 則
+重複訊息，而現場的症狀只會是「網路很慢」，完全看不出跟分區有關。
+推播同樣放在 `screens.size === 0` 早退**之前**（與 CLIENT_SYNC 同理）。
+
+手機端的分區以 `CLIENT_SYNC` 的 `self.zone`（狀態）為準，而非只靠
+`ZONE_SELF`（事件）—— 重連的人已經錯過了那則事件，只有狀態拿得到。
+這與尋寶的 `sendTreasureCatchUp()` 是同一類補送問題。
+
+#### 2D 備援版的主題查不到要退回 lego
+
+`character.js` 的 `drawSelf` 原本直接用 `this.styleId` 查主題，查不到時
+`theme` 是 undefined，於是往下掉進 anime 分支 —— 那不是「沒有主題」該有
+的樣子，而且不會有任何錯誤訊息。
+
+後端的 `CHARACTER_STYLE` 現在可以是 `pixar`，但 2D 備援版只註冊了
+`lego`（`themes/lego.js`），因此這條路徑真的走得到。
+`projection.html` 的 `_projectionRenderer` 早就有同樣的退回，那邊是對的。
+
+（這也讓 issue #7「anime 是不可達的死碼」不再成立：改成主題註冊表之後，
+它其實是「查不到主題時的後備渲染」。要不要留是另一個決定。）
 
 #### CSS 類名撞名：主辦端的 .swatch 已經有人在用
 

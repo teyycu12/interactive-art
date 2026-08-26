@@ -18,6 +18,7 @@ import {
 } from '/shared/capture-guidance.js';
 import { COLOR_FAMILY_MAP } from '/shared/colorFamily.js';
 import { HEAT_MAP } from '/shared/heat.js';
+import { ZONE_MAP } from '/shared/scene.js';
 import { avatarImage } from '/shared/avatarSprite.js';
 import { AvatarRenderer } from './avatarRenderer.js';
 
@@ -904,6 +905,9 @@ function connect() {
       // 個人視角座標（10Hz）。畫布可能還沒建立（剛連上、尚未進場），
       // 此時直接丟棄即可 —— 下一則 100ms 後就到。
       renderer?.applySync(msg);
+      // 分區以 CLIENT_SYNC 的狀態為準，而非只靠 ZONE_SELF 事件 ——
+      // 重連的人已經錯過了進場那一則事件，只有狀態拿得到
+      if (msg.self) renderZone(msg.self.zone);
       // α 是伺服器仲裁的真實結果，比本地計時器準確（見下方 #agency）
       serverAlpha = msg.self?.alpha ?? null;
       serverMode = msg.self?.mode ?? null;
@@ -1001,6 +1005,29 @@ function renderMission() {
   $('#pair-progress').textContent = done
     ? `你已經完成任務了（${frac}），還可以繼續認識新的人`
     : `你的進度　${frac}`;
+}
+
+// ── 分區 ──────────────────────────────────────────────────
+/** 目前顯示中的分區，避免每幀重寫 DOM */
+let shownZone;
+
+/**
+ * 顯示所在分區。
+ *
+ * 分區原本只是地板色塊，走進去沒有任何回饋 —— 參與者不會知道
+ * 「這裡跟別處不一樣」。這一行字是最低限度的提示。
+ */
+function renderZone(zoneId) {
+  if (zoneId === shownZone) return;
+  shownZone = zoneId;
+  const el = $('#zone-chip');
+  if (!el) return;
+  const z = zoneId ? ZONE_MAP[zoneId] : null;
+  el.hidden = !z;
+  if (z) {
+    el.textContent = `📍 ${z.label}`;
+    el.style.setProperty('--zone', z.fill);
+  }
 }
 
 // ── 尋寶（先知模式）──────────────────────────────────────

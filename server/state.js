@@ -9,7 +9,7 @@
 
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { STAGE, AGENT_STATE, AGENT_MODE } from '../shared/protocol.js';
-import { OBSTACLES } from '../shared/scene.js';
+import { OBSTACLES, zoneAt } from '../shared/scene.js';
 import {
   EMOTE_DURATION_MS, EMOTE_COOLDOWN_MS, AGENT_TTL_MS, INPUT_DEADZONE,
   MAX_AGENTS,
@@ -109,6 +109,8 @@ export class Stage {
       offline: false,
       // 渲染提示
       state: AGENT_STATE.IDLE,
+      // 目前所在分區（shared/scene.js 的 ZONES）。null 代表在分區外。
+      zone: null,
       mode: AGENT_MODE.SWARM,
       facing: 1,
       // 翻面防抖：累積中的反向與其持續時間（見 arbiter.js 的 updateFacing）
@@ -292,12 +294,22 @@ export class Stage {
   tick(dt, graph = null) {
     const now = Date.now();
     const agents = [...this.agents.values()];
+    /** @type {{id: string, from: string|null, to: string|null}[]} 本幀的分區進出 */
+    const transitions = [];
 
     for (const agent of agents) {
       stepAgent(agent, agents, dt, now, graph ? graph.neighbors(agent.id) : null);
 
       // 累計主動操控時長，作為 WP-C 行為 Log 與 M4 構圖加權的依據
       if (agent.alpha > 0.5) agent.activeMs += dt * 1000;
+
+      // 分區進出。只在「換區」時記一筆，呼叫端據此推播 ——
+      // 每幀回報所在分區的話，30Hz × 10 人就是每秒 300 則重複訊息。
+      const zone = zoneAt(agent.x, agent.y);
+      if (zone !== agent.zone) {
+        transitions.push({ id: agent.id, from: agent.zone, to: zone });
+        agent.zone = zone;
+      }
 
       if (agent.emote && now > agent.emote.until) agent.emote = null;
 
@@ -306,6 +318,18 @@ export class Stage {
         this.removeAgent(agent.id);
       }
     }
+
+    return transitions;
+  }
+
+  /** 目前各分區裡有誰。供大螢幕高亮與「合力開門」這類需要人數的玩法 */
+  zoneOccupancy() {
+    const out = {};
+    for (const a of this.agents.values()) {
+      if (!a.zone) continue;
+      (out[a.zone] ??= []).push(a.id);
+    }
+    return out;
   }
 
   /**
@@ -396,6 +420,9 @@ export class Stage {
         // α 是手機端唯一需要的仲裁資訊：它決定「你正在操控」的提示
         alpha: Math.round(me.alpha * 100) / 100,
         facing: me.facing,
+        // 所在分區。手機端據此顯示「你在暢飲區」，與 ZONE_SELF 的
+        // 進出事件互補：這個是狀態，那個是事件（重連時只有狀態拿得到）
+        zone: me.zone,
       },
       neighbors,
     };

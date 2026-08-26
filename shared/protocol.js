@@ -70,6 +70,10 @@ export const EV = {
   // ── 社交圖譜 ──────────────────────────────────────────
   SOCIAL_SELF: 'SOCIAL_SELF',                 // Server → Phone：我認識了誰
 
+  // ── 分區（shared/scene.js 的 ZONES）───────────────────
+  ZONE_SELF: 'ZONE_SELF',                     // Server → Phone：我進出了某個分區
+  ZONE_STATE: 'ZONE_STATE',                   // Server → Screen/Host：各分區目前有幾人
+
   // ── 尋寶任務（先知模式，見 server/treasure.js）────────
   HOST_START_TREASURE: 'HOST_START_TREASURE', // Host → Server：開始一輪尋寶
   HOST_STOP_TREASURE: 'HOST_STOP_TREASURE',   // Host → Server：中止本輪

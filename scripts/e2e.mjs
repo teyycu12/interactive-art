@@ -604,18 +604,42 @@ await sleep(300);
   check('藏寶座標不會外洩給手機', !phoneSawCoords);
 
   // 把阿賓推到寶藏上：先知（小美）應收到冷熱，阿賓不該收到
+  // ⚠ payload 形狀必須是 {vector:{x,y}}：伺服器讀的是
+  //   `msg.vector ?? {x: msg.vx, y: msg.vy}`，寫成裸的 {x,y} 會兩邊都拿到
+  //   undefined，角色完全不動 —— 而這條測試仍然會過（它斷言的是先知收到
+  //   冷熱，那與角色有沒有移動無關），所以錯了也看不出來。
   const nudge = (box, x, y) => box.ws.send(JSON.stringify({
-    type: 'INPUT_MOVE', x, y, intensity: 1,
+    type: 'INPUT_MOVE', vector: { x, y }, intensity: 1,
   }));
-  // 直接靠伺服器的搖桿輸入把人推過去太慢，改以多次輸入逼近
-  for (let i = 0; i < 40; i++) {
-    nudge(ben, spot.x > 960 ? 1 : -1, spot.y > 540 ? 1 : -1);
+  // 一路把阿賓推向寶藏，直到踩中為止
+  for (let i = 0; i < 120 && !ben.treasureFound; i++) {
+    const me = live().find((a) => a.id === ben.welcome.userId);
+    if (!me) break;
+    const dx = spot.x - me.x;
+    const dy = spot.y - me.y;
+    const d = Math.hypot(dx, dy) || 1;
+    nudge(ben, dx / d, dy / d);
     await sleep(40);
   }
 
   check('只有先知收得到冷熱提示',
     amy.heats.length > 0 && ben.heats.length === 0,
     `先知 ${amy.heats.length} 則 / 非先知 ${ben.heats.length} 則`);
+
+  // 走完整條「踩中 → 廣播 → 記分」。單元測試只驗規則，這裡驗真的接起來了。
+  check('非先知踩到寶藏即完成本輪', !!ben.treasureFound,
+    ben.treasureFound ? `由 ${ben.treasureFound.byName} 找到` : '未踩中');
+  check('找到者就是走過去的那個人，不是先知',
+    ben.treasureFound?.by === ben.welcome.userId
+    && ben.treasureFound?.prophetId === amy.welcome.userId);
+  check('找到之後才公布座標',
+    Number.isFinite(ben.treasureFound?.spot?.x),
+    JSON.stringify(ben.treasureFound?.spot));
+  check('找到者拿到分數',
+    ben.scores.some((s) => s.source === 'TREASURE'),
+    ben.scores.map((s) => s.source).join(', '));
+  check('先知拿 0 分（不能得分是這個玩法的前提）',
+    !amy.scores.some((s) => s.source === 'TREASURE'));
 
   host.send(JSON.stringify({ type: 'HOST_STOP_TREASURE' }));
   await sleep(300);

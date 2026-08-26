@@ -955,3 +955,16 @@ button:disabled { opacity: .35; border-style: dashed; }
   line-height: 1.5;
   opacity: .85;
 }
+
+/* 所在分區。刻意做得比尋寶那塊低調 —— 它是常駐的環境資訊，
+   不是需要立刻反應的事件 */
+.zone-chip {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--zone, #888) 20%, transparent);
+  border: 1.5px solid var(--zone, #888);
+  font-size: 13px;
+  font-weight: 700;
+}

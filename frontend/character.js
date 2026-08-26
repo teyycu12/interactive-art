@@ -556,7 +556,13 @@ class Character {
   }
 
   drawSelf(scaleFactor = 1.2) {
-    const theme = window.PersonaFlowThemes?.get(this.styleId || DEFAULT_STYLE_ID);
+    // 退回預設風格而不是直接用 this.styleId：後端的 CHARACTER_STYLE 現在
+    // 可以是 pixar，但 2D 備援版只註冊了 lego（themes/lego.js）。
+    // 查不到主題時 theme 會是 undefined，於是往下掉進 anime 分支 ——
+    // 那不是「沒有主題」該有的樣子，而且不會有任何錯誤訊息。
+    // projection.html 的 _projectionRenderer 早就有同樣的退回，這裡補上。
+    const theme = window.PersonaFlowThemes?.get(this.styleId)
+      ?? window.PersonaFlowThemes?.get(DEFAULT_STYLE_ID);
     const heightScale = Number(this.heightProfile?.display_scale) || 1;
     const footAnchor = typeof theme?.footAnchor === 'function' ? theme.footAnchor(this) : 0;
     const baseFootAnchor = Number(theme?.baseFootAnchor) || footAnchor;
