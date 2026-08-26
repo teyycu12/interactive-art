@@ -224,6 +224,7 @@ def preview():
     """
     if not _PREVIEW:
         return jsonify({"ok": False, "error": "preview_unavailable"})
+    session_id = None
     try:
         payload = request.get_json(silent=True) or {}
         img_str = payload.get("image")
@@ -263,7 +264,13 @@ def preview():
         return jsonify(features)
     except Exception as e:
         print(f"[vision] /preview 未預期失敗：{e!r}", file=sys.stderr)
-        return jsonify({"ok": False, "error": "internal_error"})
+        # 錯誤路徑同樣要帶回 id。其餘每個 return 都帶了，唯獨這裡漏掉 ——
+        # 於是感知層整條掛掉時（CI 上缺 libGLESv2 讓 MediaPipe 建圖失敗就是一例），
+        # 客戶端每一幀都拿不到 id，每幀開一個新 session，穩定度計數永遠累積不起來；
+        # 而表面症狀是 KeyError: 'sessionId'，看起來像 session 邏輯壞了，
+        # 完全指不到真正的原因。
+        return jsonify({"ok": False, "error": "internal_error",
+                        "sessionId": session_id or _sessions.new_id()})
 
 @app.route("/compose", methods=["POST"])
 def compose():
