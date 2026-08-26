@@ -134,10 +134,12 @@ phone.on('open', () => phone.send(JSON.stringify({
   type: 'CLIENT_JOIN', name: '冠儀', avatar: AVATAR,
 })));
 const phoneSyncs = [];
+const phoneRosters = [];
 phone.on('message', (d) => {
   const m = JSON.parse(d);
   if (m.type === 'CLIENT_WELCOME') welcome = m;
   if (m.type === 'CLIENT_SYNC') phoneSyncs.push(m);
+  if (m.type === 'CLIENT_ROSTER') phoneRosters.push(m);
 });
 await sleep(400);
 check('手機登入成功', !!welcome?.userId, welcome?.userId);
@@ -184,8 +186,9 @@ check('模式切換為湧現漫遊態', idle.mode === 'SWARM');
   const n0 = phoneSyncs.length;
   await sleep(2000);
   const hz = (phoneSyncs.length - n0) / 2;
-  // 刻意低於大螢幕的 30Hz：手機是每人一條連線，30Hz×10人 會吃掉現場頻寬
-  check('CLIENT_SYNC 約 10 Hz（±2）', hz >= 8 && hz <= 12, `${hz.toFixed(1)} Hz`);
+  // 刻意低於大螢幕的 30Hz：手機是每人一條連線，30Hz×10人 會吃掉現場頻寬。
+  // 取 15 是因為它整除 30Hz 主迴圈 —— 10Hz 會落在 33.3ms 格線之間而少送一格。
+  check('CLIENT_SYNC 約 15 Hz（±2）', hz >= 13 && hz <= 17, `${hz.toFixed(1)} Hz`);
 
   const self = phoneSyncs.at(-1)?.self;
   check('CLIENT_SYNC 帶有自身座標與 α',
@@ -203,6 +206,26 @@ check('模式切換為湧現漫遊態', idle.mode === 'SWARM');
   check('CLIENT_SYNC 與 STAGE_SYNC 是同一份座標',
     Math.abs(onScreen.x - self.x) < 40 && Math.abs(onScreen.y - self.y) < 40,
     `螢幕 ${onScreen.x},${onScreen.y} / 手機 ${self.x},${self.y}`);
+}
+
+// ── 手機端名冊（CLIENT_ROSTER）──────────────────────────────
+{
+  check('手機收到 CLIENT_ROSTER', phoneRosters.length > 0, `${phoneRosters.length} 則`);
+  const agents = phoneRosters.at(-1)?.agents ?? [];
+  check('名冊含自己的 id 與名字',
+    agents.some((a) => a.id === welcome.userId && a.name === '冠儀'),
+    JSON.stringify(agents));
+  // 手機的 POV 鄰居只有幾十像素高，不載入貼圖 —— 外觀是白送的頻寬
+  check('名冊不含捏臉外觀', agents.every((a) => !('avatar' in a)));
+
+  // 名冊只在成員變動時送。
+  // 註：本檔全程接著大螢幕，因此測不到「沒有大螢幕時每幀重送」那個情境
+  //（stage.rosterDirty 會被大螢幕那段清掉）。該情境由
+  // test/client-roster.test.mjs 直接對節流條件把關。
+  const n0 = phoneRosters.length;
+  await sleep(1500);
+  check('成員沒變動時不重送名冊', phoneRosters.length === n0,
+    `靜止 1.5 秒送了 ${phoneRosters.length - n0} 次`);
 }
 
 // ── 鄰居可見性 ────────────────────────────────────────────
@@ -260,6 +283,11 @@ check('模式切換為湧現漫遊態', idle.mode === 'SWARM');
     seen && Math.hypot(seen.dx, seen.dy) <= CLIENT_SYNC_RADIUS,
     `${Math.hypot(seen?.dx ?? 0, seen?.dy ?? 0).toFixed(0)} / ${CLIENT_SYNC_RADIUS}`);
 
+  const roster = phoneRosters.at(-1)?.agents ?? [];
+  check('有人加入時名冊會更新',
+    roster.some((a) => a.id === mateWelcome?.userId),
+    JSON.stringify(roster.map((a) => a.name)));
+
   mate.close();
   await sleep(2700);   // 等 TTL 回收，避免影響後續測項
 }
@@ -287,9 +315,23 @@ let welcome2 = null;
 phone2.on('open', () => phone2.send(JSON.stringify({
   type: 'CLIENT_JOIN', userId: uid, rejoinToken: welcome.rejoinToken, name: '冠儀', avatar: AVATAR,
 })));
-phone2.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'CLIENT_WELCOME') welcome2 = m; });
+const phone2Rosters = [];
+phone2.on('message', (d) => {
+  const m = JSON.parse(d);
+  if (m.type === 'CLIENT_WELCOME') welcome2 = m;
+  if (m.type === 'CLIENT_ROSTER') phone2Rosters.push(m);
+});
 await sleep(400);
 check('憑證正確時接回同一角色', welcome2?.userId === uid);
+// 主迴圈那份名冊是「內容變了才廣播」，而重連時場上成員多半沒變 ——
+// 少了進場當下這一次，該手機的鄰居會永遠沒有名字（重整分頁也一樣）。
+//
+// 註：此處只確認「有收到」。無法在這裡驗證「若不補送就收不到」——
+// 上面的 hijack 角色要等 AGENT_TTL_MS（45 秒）才回收，在那之前名冊
+// 一直在變動，主迴圈的廣播會蓋過差異。該條件由
+// test/client-roster.test.mjs 以確定性的方式把關。
+check('重連時補送 CLIENT_ROSTER', phone2Rosters.length > 0,
+  `${phone2Rosters.length} 則`);
 
 // ── 重複登入不得產生幽靈 ──────────────────────────────────
 const countBefore = live().length;
@@ -369,6 +411,7 @@ function joinPhone(name) {
   const box = {
     ws, name, welcome: null, code: null, mission: null, results: [], confirmReq: null,
     quiz: null, acks: [], quizResult: null, scores: [],
+    treasureStart: null, heats: [], treasureFound: null, raw: [],
   };
   ws.on('open', () => ws.send(JSON.stringify({ type: 'CLIENT_JOIN', name, avatar: AVATAR })));
   ws.on('message', (d) => {
@@ -382,6 +425,11 @@ function joinPhone(name) {
     if (m.type === 'QUIZ_ACK') box.acks.push(m);
     if (m.type === 'QUIZ_RESULT') box.quizResult = m;
     if (m.type === 'SCORE_SELF') box.scores.push(m);
+    if (m.type === 'TREASURE_START') box.treasureStart = m;
+    if (m.type === 'TREASURE_HEAT') box.heats.push(m);
+    if (m.type === 'TREASURE_FOUND') box.treasureFound = m;
+    // 保留原始字串，供「座標絕不外洩到手機」的檢查
+    if (m.type?.startsWith('TREASURE')) box.raw.push(d.toString());
   });
   return box;
 }
@@ -517,6 +565,84 @@ check('時間到自動公布正解', amy.quizResult?.correctIndex === 0 && amy.q
   `answered=${amy.quizResult?.answered}`);
 host.send(JSON.stringify({ type: 'HOST_END_QUIZ' }));
 await sleep(300);
+
+// ── 尋寶（先知模式）────────────────────────────────────────
+//
+// 這個玩法完全建立在資訊不對稱上，而「座標有沒有外洩到手機」
+// 是單元測試看不到的 —— 它取決於伺服器實際送出的封包內容。
+{
+  // 先收掉進行中的任務，避免與尋寶的公告互相干擾
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
+  await sleep(300);
+
+  const treasureHostMsgs = [];
+  const onHost = (d) => {
+    const m = JSON.parse(d);
+    if (m.type?.startsWith('TREASURE')) treasureHostMsgs.push(m);
+  };
+  host.on('message', onHost);
+
+  // 指定小美當先知
+  host.send(JSON.stringify({
+    type: 'HOST_START_TREASURE', prophetId: amy.welcome.userId,
+  }));
+  await sleep(500);
+
+  check('尋寶開始後兩支手機都收到通知',
+    !!amy.treasureStart && !!ben.treasureStart);
+  check('手機知道誰是先知',
+    amy.treasureStart?.round?.prophetId === amy.welcome.userId);
+
+  // 最關鍵的一條：座標絕不能出現在手機收到的任何一則訊息裡。
+  // 手機端只要拿得到座標，開發者工具就能直接看到答案。
+  const spot = treasureHostMsgs.find((m) => m.type === 'TREASURE_START')?.spot;
+  check('主辦端拿得到藏寶座標', Number.isFinite(spot?.x) && Number.isFinite(spot?.y));
+  const phoneSawCoords = [...amy.raw, ...ben.raw].some((raw) => {
+    const m = JSON.parse(raw);
+    return m.round?.x !== undefined || m.spot !== undefined;
+  });
+  check('藏寶座標不會外洩給手機', !phoneSawCoords);
+
+  // 把阿賓推到寶藏上：先知（小美）應收到冷熱，阿賓不該收到
+  const nudge = (box, x, y) => box.ws.send(JSON.stringify({
+    type: 'INPUT_MOVE', x, y, intensity: 1,
+  }));
+  // 直接靠伺服器的搖桿輸入把人推過去太慢，改以多次輸入逼近
+  for (let i = 0; i < 40; i++) {
+    nudge(ben, spot.x > 960 ? 1 : -1, spot.y > 540 ? 1 : -1);
+    await sleep(40);
+  }
+
+  check('只有先知收得到冷熱提示',
+    amy.heats.length > 0 && ben.heats.length === 0,
+    `先知 ${amy.heats.length} 則 / 非先知 ${ben.heats.length} 則`);
+
+  host.send(JSON.stringify({ type: 'HOST_STOP_TREASURE' }));
+  await sleep(300);
+  host.off('message', onHost);
+}
+
+// ── COLOR_HUNT 任務 ───────────────────────────────────────
+{
+  hostRejects = [];
+  host.send(JSON.stringify({
+    type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1,
+  }));
+  await sleep(300);
+  check('COLOR_HUNT 缺少顏色時被拒絕', hostRejects.length > 0);
+
+  host.send(JSON.stringify({
+    type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1,
+    colorFamily: 'RED',
+  }));
+  await sleep(400);
+  check('手機收到帶顏色的任務公告',
+    amy.mission?.mission?.colorFamily === 'RED',
+    amy.mission?.mission?.colorFamily);
+
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
+  await sleep(200);
+}
 
 // ── 主辦端踢人 ────────────────────────────────────────────
 const benId = ben.welcome.userId;

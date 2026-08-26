@@ -232,6 +232,20 @@ button:disabled { opacity: .35; border-style: dashed; }
   border-style: solid; border-color: var(--ok); color: var(--ok);
 }
 
+/* 首次進場的一次性提示。用邊框顏色搏動而非位移 ——
+   位移會讓旁邊的搖桿區跟著重排，推桿時反而干擾。 */
+.btn-haptics.nudge {
+  animation: haptics-nudge 1.4s ease-in-out 4;
+}
+@keyframes haptics-nudge {
+  0%, 100% { border-color: var(--line); color: var(--ink-soft); }
+  50%      { border-color: var(--accent); color: var(--accent); }
+}
+/* 系統層級關閉動態效果時不播 —— 前庭功能敏感者會因閃動不適 */
+@media (prefers-reduced-motion: reduce) {
+  .btn-haptics.nudge { animation: none; border-color: var(--accent); color: var(--accent); }
+}
+
 /* ── 個人視角畫布 ─────────────────────────────────────────
    絕對定位鋪滿 #controller，壓在所有控制元件底下。
    pointer-events: none 是必要的：少了它，畫布會吃掉搖桿的觸控事件。
@@ -892,3 +906,52 @@ button:disabled { opacity: .35; border-style: dashed; }
 /* 六項全通過時輔助線轉綠：參與者的視線在取景框上，餘光就能判斷，
    不必把視線移到右邊的文字。 */
 .scan-stage.is-ready #scan-guide g { stroke: rgba(80, 220, 130, .95); }
+/* COLOR_HUNT：要找的顏色。放在任務說明下方，是面板上最顯眼的一行 */
+.color-chip {
+  display: block;
+  margin: 0 0 14px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  border-left: 6px solid var(--chip, #888);
+  background: color-mix(in srgb, var(--chip, #888) 14%, transparent);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: .01em;
+}
+
+/* ── 尋寶（先知模式）───────────────────────────────────── */
+.treasure {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--sunk, rgba(0, 0, 0, .05));
+  border: 2px solid transparent;
+}
+/* 先知的框刻意醒目：他要一眼知道「我這局有特殊身分」 */
+.treasure.is-prophet {
+  border-color: #E9C46A;
+  background: rgba(233, 196, 106, .12);
+}
+.tr-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.tr-role { font-size: 15px; font-weight: 800; }
+.tr-heat {
+  font-size: 20px;
+  font-weight: 800;
+  padding: 4px 12px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--heat, #888);
+  /* 冷熱是先知唯一的資訊來源，變動時要看得出來 */
+  transition: background .25s ease;
+}
+.tr-hint {
+  margin: 7px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: .85;
+}

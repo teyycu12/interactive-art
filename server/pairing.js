@@ -100,6 +100,47 @@ export class PairingSession {
     return null;
   }
 
+  /**
+   * 目前是否處於提交冷卻中。
+   *
+   * 供 COLOR_HUNT 的顏色預檢使用 —— 它必須自己先擋一次，
+   * 理由見 peekTarget。
+   */
+  inCooldown(fromId, now = Date.now()) {
+    return now - (this.lastClaimAt.get(fromId) ?? 0) < PAIRING.claimCooldownMs;
+  }
+
+  /** 記一次提交時間，讓後續的 claim 受同一份冷卻約束 */
+  noteClaim(fromId, now = Date.now()) {
+    this.lastClaimAt.set(fromId, now);
+  }
+
+  /**
+   * 依碼查出對方是誰，但不做任何狀態變更。
+   *
+   * 供 COLOR_HUNT 在正式 claim 之前先檢查顏色條件。
+   *
+   * ⚠ 本方法不含冷卻，呼叫端**必須**自己把關。
+   *
+   *   claim() 的冷卻是防枚舉用的：4 位碼只有 10000 組，沒有冷卻
+   *   就能在幾毫秒內試完（實測 15ms），把場上每個人的碼都撈出來。
+   *   若「顏色不符」這條路徑直接 return 而不記冷卻，攻擊者只要
+   *   在 COLOR_HUNT 期間狂送 PAIR_CLAIM，就能從
+   *   COLOR_MISMATCH ↔ NOT_FOUND 的差異反推出哪些碼是有效的 ——
+   *   等於繞過了 claim() 的整套防護。
+   *
+   *   因此呼叫端的規則是：**只有真的顏色不符才免計冷卻**
+   *   （那是正當使用者會遇到的情況，不該罰他），
+   *   其餘一律照記。
+   *
+   * @returns {string|null} 對方的 agentId
+   */
+  peekTarget(rawCode, now = Date.now()) {
+    const code = String(rawCode ?? '').trim();
+    if (!/^\d+$/.test(code) || code.length !== PAIRING.codeLength) return null;
+    return this.#findByCode(code, now);
+  }
+
   /** 清除逾時未回應的待確認 */
   sweep(now = Date.now()) {
     const expired = [];

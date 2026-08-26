@@ -11,6 +11,7 @@
 import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protocol.js';
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
+import { TREASURE_RADIUS } from '/shared/heat.js';
 import { RoomScene, populateProps } from './3d/RoomScene.js';
 import { drawCharacter, drawNameplate, drawEmote, drawOffline } from '/shared/character.js';
 
@@ -75,6 +76,17 @@ const roster = new Map();
 const view = new Map();
 /** 剛完成配對的角色，用於畫面上的短暫強調 */
 const pulse = new Map();
+
+/**
+ * 剛進場的角色 → 標記時間。用於在頭頂畫一段時間的指示箭頭。
+ *
+ * 存在的理由：參與者在手機上完成捏臉／生成後會抬頭找自己，
+ * 而十個角色散在 1920×1080 上並不好認。沒有指示的話，
+ * 「這是我」這個連結就建立不起來 —— 而那正是整件作品的前提。
+ */
+const arrivals = new Map();
+const ARRIVAL_MS = 6000;
+let rosterSeenOnce = false;
 /**
  * 社交圖譜的邊。
  *
@@ -83,6 +95,15 @@ const pulse = new Map();
  * 出來，那張集體共創的關係圖就只存在於伺服器的記憶體裡。
  */
 let links = [];
+/**
+ * 尋寶本輪狀態（含座標）。
+ *
+ * 大螢幕拿得到座標而手機拿不到 —— 大螢幕是公開畫面，寶箱畫上去
+ * 所有人都看得到大概方位，但「還差多遠」仍只有先知知道。
+ */
+let treasureRound = null;
+let treasureHeat = null;
+
 /** 剛完成配對的連線特效，播完即丟 */
 const sparks = [];
 const SPARK_MS = 1400;
@@ -148,6 +169,9 @@ function connect() {
     switch (msg.type) {
       case EV.STAGE_ROSTER: {
         const seen = new Set();
+        // 首次收到名冊時不算「新加入」—— 大螢幕中途重開時場上可能已有十個人，
+        // 全部一起閃會變成一片光暈，反而看不出誰是誰。
+        const firstRoster = !rosterSeenOnce;
         for (const a of msg.agents) {
           seen.add(a.id);
           const prev = roster.get(a.id);
@@ -157,9 +181,18 @@ function connect() {
           } else {
             prev.name = a.name;
           }
+          // 新加入者標記為「剛進場」：參與者剛抬頭看大螢幕時，
+          // 十個角色裡找自己並不容易，給一段時間的指示才接得上。
+          if (!prev && !firstRoster) arrivals.set(a.id, performance.now());
         }
-        for (const id of roster.keys()) {
-          if (!seen.has(id)) { roster.delete(id); view.delete(id); pulse.delete(id); }
+        rosterSeenOnce = true;
+        for (const id of [...roster.keys()]) {
+          if (seen.has(id)) continue;
+          // 離場要有交代。默默消失會讓畫面出現無法解釋的變化 ——
+          // 觀眾會以為是系統出錯，而不是有人離開了。
+          // 首次名冊同樣不報（那只是本機還沒有名冊，不是有人離場）。
+          if (!firstRoster) toast(`${roster.get(id).name} 離開了`);
+          roster.delete(id); view.delete(id); pulse.delete(id); arrivals.delete(id);
         }
         break;
       }
@@ -197,6 +230,30 @@ function connect() {
         // 兩個各自擴散的環看不出「是這兩人連上了」——
         // 補一道從 A 射向 B 的光束，把關係本身畫出來
         sparks.push({ a: msg.a.id, b: msg.b.id, at: performance.now() });
+        break;
+
+      case EV.TREASURE_START:
+        // 大螢幕看得到座標而手機看不到，是刻意的：
+        // 大螢幕是「公開的畫面」，寶箱畫在上面所有人都看得到大概方位，
+        // 但仍然需要先知喊出冷熱才知道差多遠 —— 這正是設計要的張力。
+        treasureRound = { ...msg.round, ...(msg.spot ?? {}) };
+        toast(`尋寶開始！先知　${roster.get(msg.round.prophetId)?.name ?? ''}`);
+        break;
+
+      case EV.TREASURE_HEAT:
+        treasureHeat = msg.heat;
+        break;
+
+      case EV.TREASURE_FOUND:
+        toast(`${msg.byName} 找到寶藏了！`);
+        if (msg.by) pulse.set(msg.by, performance.now());
+        treasureRound = null;
+        treasureHeat = null;
+        break;
+
+      case EV.TREASURE_ENDED:
+        treasureRound = null;
+        treasureHeat = null;
         break;
 
       case EV.MISSION_CLOSED:
@@ -447,6 +504,45 @@ function captureStageFrame() {
   return out.toDataURL('image/png');
 }
 
+/**
+ * 寶箱。畫在角色下方（先繪製），避免蓋住站上去的人。
+ *
+ * 刻意畫得明顯：這是全場要一起找的目標，看不清楚就失去意義。
+ * 但只畫「在哪」，不畫「離最近的人多遠」—— 後者是先知的獨佔資訊。
+ */
+/** 寶箱在 3D 世界裡的高度（角色為 2.1，寶箱約及膝） */
+const TREASURE_WORLD_HEIGHT = 0.8;
+
+function drawTreasure(now) {
+  if (!treasureRound || !Number.isFinite(treasureRound.x)) return;
+  const p = toScreen(treasureRound);
+  // 半徑必須跟著透視縮放，與角色走同一條路徑（characterHeightAt）——
+  // 直接用 2D 的 scale 會讓寶箱在房間深處畫得跟最前方一樣大，
+  // 那就是「貼紙浮在畫面上」而不是放在地板上。
+  const r = roomScene
+    ? (roomScene.scaleAt(treasureRound.x, treasureRound.y, TREASURE_WORLD_HEIGHT) || TREASURE_RADIUS * scale)
+    : TREASURE_RADIUS * scale;
+  // 呼吸脈動：靜止的圖示在滿是走動角色的畫面上會被忽略
+  const beat = 1 + Math.sin(now / 380) * 0.08;
+
+  ctx.save();
+  ctx.translate(p.x, p.y);
+
+  ctx.beginPath();
+  ctx.arc(0, 0, r * beat, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(233,196,106,.18)';
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(233,196,106,.85)';
+  ctx.stroke();
+
+  ctx.font = `${Math.round(r * 1.1)}px system-ui, "Apple Color Emoji", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('💎', 0, 0);
+  ctx.restore();
+}
+
 function render(now) {
   const time = now / 1000;
 
@@ -467,6 +563,8 @@ function render(now) {
     ctx.strokeRect(offsetX + m, offsetY + m,
       STAGE.width * scale - m * 2, STAGE.height * scale - m * 2);
   }
+
+  drawTreasure(now);
 
   // 位置內插
   for (const a of latest) {
@@ -506,6 +604,39 @@ function render(now) {
         ctx.lineWidth = 4 * scale;
         ctx.stroke();
         ctx.globalAlpha = 1;
+      }
+    }
+
+    // 剛進場：頭頂的下指箭頭，幫參與者在十個角色裡認出自己。
+    // 畫在 drawCharacter 之前，讓角色本體蓋在箭頭之上而非被箭頭壓住。
+    const arrivedAt = arrivals.get(a.id);
+    if (arrivedAt !== undefined) {
+      const t = (now - arrivedAt) / ARRIVAL_MS;
+      if (t >= 1) {
+        arrivals.delete(a.id);
+      } else {
+        // 尾段淡出，不要在時間到的瞬間硬切
+        const alpha = t > 0.75 ? (1 - t) / 0.25 : 1;
+        // 上下浮動，靜止的箭頭在滿是走動角色的畫面裡不夠顯眼
+        const float = Math.sin(now / 220) * height * 0.045;
+        const tipY = pos.y - height * 1.16 + float;
+        const w = height * 0.11;
+        const h = height * 0.13;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.moveTo(pos.x, tipY + h);          // 箭尖朝下，指著角色
+        ctx.lineTo(pos.x - w, tipY);
+        ctx.lineTo(pos.x + w, tipY);
+        ctx.closePath();
+        ctx.fillStyle = COLOR_ACTIVE;
+        ctx.fill();
+        // 米白描邊：深色分區底下純色箭頭會糊掉
+        ctx.strokeStyle = 'rgba(250, 248, 245, .9)';
+        ctx.lineWidth = 2 * scale;
+        ctx.stroke();
+        ctx.restore();
       }
     }
 
