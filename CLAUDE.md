@@ -704,6 +704,19 @@ PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 那會讓房間深處的寶箱畫得跟最前方一樣大，就是「貼紙浮在畫面上」。
 要走 `roomScene.scaleAt()`，與角色的 `characterHeightAt()` 同一條路徑。
 
+#### CSS 類名撞名：主辦端的 .swatch 已經有人在用
+
+`.swatch` 同時被三個地方使用：名冊縮圖（`avatarThumb`）、生成歷史縮圖
+（`historyThumb`）、以及 COLOR_HUNT 的顏色選單。前兩者是既有的，
+因此顏色選單改用 `.color-swatch`。
+
+共用會讓名冊與歷史的縮圖被套上 flex 版面與 `::before` 色塊而變形 ——
+**與控制器 `.bar` 撞名（頂端狀態列 vs 生成進度條）是同一類問題**，
+那次的症狀是頭像／名字／積分／離開鍵被壓扁裁切。
+
+這類 bug 不會有任何錯誤訊息，只會在某個頁面上默默壞掉。在共用的
+樣式檔裡加通用類名之前，先 grep 一次那個名字。
+
 #### 兩者的共用常數都在 shared/
 
 `shared/colorFamily.js`（色族）與 `shared/heat.js`（冷熱等級 + 判定半徑）
