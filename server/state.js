@@ -401,6 +401,18 @@ export class Stage {
     };
   }
 
+  /**
+   * 手機端用的精簡名冊：只有 id 與名字。
+   *
+   * 與 roster() 分開是因為手機不需要捏臉外觀 —— POV 畫布上的鄰居
+   * 只有幾十像素高，不載入貼圖（見 avatarRenderer 的 _drawNeighbors）。
+   * 名字放這裡而非塞進 CLIENT_SYNC 的每個鄰居：名字是靜態資料，
+   * 隨 15Hz 的座標重送等於每秒多送十幾 KB 的重複字串。
+   */
+  nameRoster() {
+    return [...this.agents.values()].map((a) => ({ id: a.id, name: a.name }));
+  }
+
   /** 參與者名冊：id、顯示名稱與捏臉設定，僅在成員變動時廣播 */
   roster() {
     return [...this.agents.values()].map((a) => ({
