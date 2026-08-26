@@ -7,6 +7,13 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
+# 必須在任何 print 之前 —— 見該模組的說明。
+try:
+    from backend import console_encoding  # noqa: F401
+except ImportError:
+    import console_encoding  # noqa: F401
+
+
 try:
     from dotenv import load_dotenv  # type: ignore
     load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))

@@ -24,6 +24,13 @@
 
 from __future__ import annotations
 
+# 必須在任何 print 之前 —— 見該模組的說明。
+try:
+    from backend import console_encoding  # noqa: F401
+except ImportError:
+    import console_encoding  # noqa: F401
+
+
 import argparse
 import base64
 import glob

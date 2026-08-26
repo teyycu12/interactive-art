@@ -12,6 +12,12 @@
     .venv/bin/python backend/analyze_log.py --glob             # 合併分析 logs/ 下所有檔
 """
 
+# 必須在任何 print 之前 —— 見該模組的說明。
+try:
+    from backend import console_encoding  # noqa: F401
+except ImportError:
+    import console_encoding  # noqa: F401
+
 import argparse
 import glob
 import json
