@@ -702,6 +702,31 @@ button:disabled { opacity: .35; border-style: dashed; }
 .scan-panel h1 { margin: 0; font-size: 26px; }
 .scan-panel .foot { margin-top: auto; padding-top: 8px; }
 
+/* 生成風格選單。整個區塊由 app.js 的 loadStyles 決定顯示與否 —— 只有一種
+   風格可選時不顯示，生成服務沒起來時也不顯示。 */
+.style-pick { display: flex; flex-direction: column; gap: 8px; }
+.style-pick-label {
+  margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  color: var(--ink-soft);
+}
+.style-pick-options { display: flex; gap: 8px; flex-wrap: wrap; }
+.style-opt {
+  flex: 1 1 0; min-width: 96px;
+  padding: 10px 14px;
+  font: inherit; font-size: 14px; font-weight: 700;
+  color: var(--ink-soft);
+  background: var(--paper);
+  border: 2px dashed var(--line);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.style-opt.is-on {
+  color: var(--ink);
+  border-style: solid;
+  border-color: var(--ink);
+}
+
 .tips {
   margin: 0;
   padding-left: 20px;
@@ -727,13 +752,13 @@ button:disabled { opacity: .35; border-style: dashed; }
 }
 .note b { color: var(--ink); }
 
-.bar {
+.progress-bar {
   height: 8px;
   border-radius: 99px;
   background: rgba(47, 42, 38, .12);
   overflow: hidden;
 }
-.bar > i {
+.progress-bar > i {
   display: block;
   height: 100%;
   width: 0;

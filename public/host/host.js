@@ -14,6 +14,8 @@ const SS_KEY = 'personaflow.hostKey';
 
 let ws = null;
 let authed = false;
+/** 通行密鑰的明文，生成歷史走 REST（不是 WS），得自己帶著它做存取控制 */
+let hostKeyValue = null;
 let missionTypes = Object.values(MISSION_TYPES);
 /** 計分規則由伺服器於認證後下發（值只存在於伺服器的調校檔） */
 let scoring = null;
@@ -22,6 +24,7 @@ let scoring = null;
 // 連線與認證
 // ─────────────────────────────────────────────────────────────
 function connect(key) {
+  hostKeyValue = key;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}`);
 
@@ -53,6 +56,8 @@ function handle(msg, key) {
       $('#auth').hidden = true;
       $('#console').hidden = false;
       setConn('已連線', false);
+      loadHistory();
+      startHistoryPolling();
       break;
 
     case EV.HOST_REJECT:
@@ -374,6 +379,141 @@ function renderState(state) {
   renderQuiz();
   renderRanks(state.leaderboard ?? []);
 }
+
+// ─────────────────────────────────────────────────────────────
+// 生成歷史（原始照片、生成結果、token、花費、使用模型）
+//
+// 走 REST 而非 WS：這批資料量比其他控制台狀態大得多（縮圖），塞進
+// HOST_STATE 會讓每次狀態廣播都變重，而歷史紀錄本來就不需要即時推播，
+// 用輪詢就夠。存取控制比照 HOST_AUTH 的理由帶通行密鑰，見 server/index.js
+// 的 handleHostHistory。
+// ─────────────────────────────────────────────────────────────
+const HISTORY_LIMIT = 30;
+const HISTORY_POLL_MS = 20000;
+let historyPollTimer = null;
+
+const STATUS_LABEL = {
+  success: '成功', ok: '成功', base_only: '成功（未過驗證）',
+  failed: '失敗', running: '處理中',
+};
+
+function startHistoryPolling() {
+  if (historyPollTimer) return;
+  historyPollTimer = setInterval(loadHistory, HISTORY_POLL_MS);
+}
+
+async function loadHistory() {
+  if (!hostKeyValue) return;
+  try {
+    const key = encodeURIComponent(hostKeyValue);
+    const [listRes, summaryRes] = await Promise.all([
+      fetch(`/api/host/history?key=${key}&limit=${HISTORY_LIMIT}`),
+      fetch(`/api/host/history/summary?key=${key}`),
+    ]);
+    const list = await listRes.json();
+    const summary = await summaryRes.json();
+    renderHistory(Array.isArray(list.items) ? list.items : []);
+    renderHistorySummary(summary);
+  } catch {
+    // 歷史紀錄是次要資訊，安靜失敗即可，不擋主控台其餘功能
+  }
+}
+
+function renderHistorySummary(summary) {
+  const el = $('#history-summary');
+  if (!summary || typeof summary.run_count !== 'number') {
+    el.textContent = '暫時讀不到生成服務的統計。';
+    return;
+  }
+  const cost = Number(summary.cost_usd || 0).toFixed(4);
+  const successRate = Math.round((summary.success_rate || 0) * 100);
+  el.textContent =
+    `共 ${summary.run_count} 次生成・成功率 ${successRate}%・累計花費 $${cost}・累計 ${summary.total_tokens || 0} tokens`;
+}
+
+function historyThumb(url, alt) {
+  if (!url) {
+    const span = document.createElement('span');
+    span.className = 'swatch';
+    span.style.background = 'var(--sunk)';
+    return span;
+  }
+  const img = document.createElement('img');
+  img.className = 'thumb';
+  img.alt = alt;
+  img.loading = 'lazy';
+  img.style.cursor = 'zoom-in';
+  img.src = `${url}${url.includes('?') ? '&' : '?'}key=${encodeURIComponent(hostKeyValue)}`;
+  img.addEventListener('click', () => window.open(img.src, '_blank'));
+  return img;
+}
+
+function renderHistory(items) {
+  $('#history-count').textContent = items.length;
+  $('#history-empty').hidden = items.length > 0;
+
+  const body = $('#history-body');
+  body.replaceChildren();
+
+  for (const item of items) {
+    const tr = document.createElement('tr');
+
+    const before = document.createElement('td');
+    before.className = 'face';
+    before.append(historyThumb(
+      item.input_path ? `/api/host/history/inputs/${encodeURIComponent(item.input_path)}` : null,
+      '原始照片',
+    ));
+
+    const after = document.createElement('td');
+    after.className = 'face';
+    after.append(historyThumb(
+      item.output_path ? `/api/host/history/outputs/${encodeURIComponent(item.output_path)}` : null,
+      '生成結果',
+    ));
+
+    const time = document.createElement('td');
+    time.className = 'num';
+    time.textContent = item.created_at
+      ? new Date(item.created_at * 1000).toLocaleTimeString('zh-TW', { hour12: false })
+      : '—';
+
+    const status = document.createElement('td');
+    status.textContent = STATUS_LABEL[item.status] ?? item.status ?? '—';
+    if (item.status === 'failed') status.style.color = 'var(--danger)';
+    else if (item.status === 'success' || item.status === 'ok' || item.status === 'base_only') {
+      status.style.color = 'var(--teal)';
+    }
+
+    const model = document.createElement('td');
+    model.textContent = item.model ?? '—';
+
+    const tokens = document.createElement('td');
+    tokens.className = 'num';
+    tokens.textContent = item.token_reported ? (item.total_tokens ?? 0) : '—';
+
+    const cost = document.createElement('td');
+    cost.className = 'num';
+    cost.textContent = item.cost_usd ? `$${Number(item.cost_usd).toFixed(4)}` : '—';
+
+    const duration = document.createElement('td');
+    duration.className = 'num';
+    duration.textContent = item.duration_ms != null ? `${(item.duration_ms / 1000).toFixed(1)}s` : '—';
+
+    tr.append(before, after, time, status, model, tokens, cost, duration);
+    body.append(tr);
+  }
+}
+
+$('#btn-history-refresh').addEventListener('click', loadHistory);
+
+const historyToggle = $('#btn-history-toggle');
+const historyWrap = $('#history-wrap');
+historyToggle.addEventListener('click', () => {
+  const nowCollapsed = historyWrap.classList.toggle('is-collapsed');
+  historyToggle.textContent = nowCollapsed ? '展開列表' : '收合列表';
+  historyToggle.setAttribute('aria-expanded', String(!nowCollapsed));
+});
 
 // ─────────────────────────────────────────────────────────────
 // 現場動態

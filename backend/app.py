@@ -1041,7 +1041,8 @@ def handle_generate_avatar(payload):
             # The full-character image model already receives the source photo,
             # so the two extra VLM endpoints duplicate visual analysis. They stay
             # off unless explicitly re-enabled.
-            use_vlm = os.environ.get("FULL_MODE_VLM_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+            # 解析規則統一走 config，與整合版共用一份真值判斷。
+            use_vlm = config.FULL_MODE_VLM_ENABLED
             # 經熔斷器呼叫：Gemini 連續失敗時快速失敗並回傳 fallback，避免
             # executor 執行緒被無效等待佔住。只用在這兩支便宜的分析 API 上 ——
             # 付費生圖那條刻意不接：CircuitBreaker.call 預設會自動重試一次

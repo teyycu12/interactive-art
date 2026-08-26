@@ -369,10 +369,75 @@ function fallbackToBuilder(message) {
 }
 
 
+/**
+ * 生成風格選單。
+ *
+ * 清單向伺服器要，不寫死：某個風格的參考圖集沒放進去時，後端的 /health 會
+ * 據實回報，選項就不該出現在畫面上 —— 寫死的話選項照樣在，選了卻靜默退回
+ * 預設，參與者只會覺得這個按鈕沒作用。
+ *
+ * 生成服務沒起來就整個藏起來，走活動層級的預設風格。這是「掃描失敗一律
+ * 降級，不擋人進場」的同一條原則：選不了風格不該讓人拍不了照。
+ */
+let selectedStyleId = null;
+let stylesLoaded = false;
+
+async function loadStyles() {
+  if (stylesLoaded) return;
+
+  let body;
+  try {
+    const res = await fetch('/api/styles');
+    body = await res.json();
+  } catch {
+    return;   // 沒有 stylesLoaded = true，下次進拍照頁會再試一次
+  }
+
+  const styles = Array.isArray(body?.styles) ? body.styles : [];
+  // 只有一種風格時選單沒有意義，藏起來比給一個只能選同一項的控制項好。
+  if (styles.length < 2) return;
+
+  stylesLoaded = true;
+  selectedStyleId = styles.some((s) => s.id === body.defaultStyle)
+    ? body.defaultStyle
+    : styles[0].id;
+
+  const container = $('#style-pick-options');
+  container.textContent = '';
+  for (const style of styles) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'style-opt';
+    btn.dataset.styleId = style.id;
+    btn.textContent = style.displayName || style.id;
+    btn.setAttribute('role', 'radio');
+    btn.addEventListener('click', () => selectStyle(style.id));
+    container.appendChild(btn);
+  }
+  $('#style-pick').hidden = false;
+  selectStyle(selectedStyleId);
+}
+
+function selectStyle(styleId) {
+  selectedStyleId = styleId;
+  let label = '';
+  for (const btn of $('#style-pick-options').children) {
+    const on = btn.dataset.styleId === styleId;
+    btn.classList.toggle('is-on', on);
+    btn.setAttribute('aria-checked', String(on));
+    if (on) label = btn.textContent;
+  }
+  $('#aim-lede').textContent = label
+    ? `照片會被轉譯成你的${label}角色。`
+    : '照片會被轉譯成你的角色。';
+}
+
 $('#btn-scan').addEventListener('click', async () => {
   if (!commitName()) return;
 
   showScreen('scan');
+  // 不 await：選單晚幾百毫秒出現無妨，但相機不該為了它慢一步開起來。
+  loadStyles();
 
   // getUserMedia 要求安全情境。場館用 http://192.168.x.x 時瀏覽器會直接
   // 拒絕，且錯誤訊息相當隱晦 —— 這裡先明講，免得現場以為是相機壞了。
@@ -594,7 +659,8 @@ async function submitScanImage(image) {
       headers: { 'Content-Type': 'application/json' },
       // sessionId：取景期間跨影格量到的身高比快門那一瞬間的單張估計可信，
       // 後端會優先採用它。相簿上傳沒有取景階段，因此是 null。
-      body: JSON.stringify({ image, sessionId: previewSessionId }),
+      // styleId：選單沒載入時是 null，後端會退回活動層級的預設風格。
+      body: JSON.stringify({ image, sessionId: previewSessionId, styleId: selectedStyleId }),
     });
     body = await res.json();
   } catch {

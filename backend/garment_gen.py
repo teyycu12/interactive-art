@@ -26,9 +26,13 @@ import numpy as np
 from PIL import Image as PILImage, ImageDraw
 
 try:
-    from backend.style_registry import GenerationStyle, get_style, register_style  # type: ignore
+    from backend.style_registry import (  # type: ignore
+        GenerationStyle, get_style, list_styles, register_style,
+    )
 except Exception:
-    from style_registry import GenerationStyle, get_style, register_style  # type: ignore
+    from style_registry import (  # type: ignore
+        GenerationStyle, get_style, list_styles, register_style,
+    )
 
 try:
     from openai import OpenAI  # type: ignore
@@ -188,6 +192,46 @@ def _canonical_lego_pose(size: int = 1024) -> PILImage.Image:
     return img
 
 
+def _canonical_humanoid_pose(size: int = 1024) -> PILImage.Image:
+    """Neutral reference geometry for the non-toy styles.
+
+    Deliberately drawn WITHOUT outlines, unlike ``_canonical_lego_pose``.  The
+    pose reference is only supposed to carry stance and body-part count, but a
+    figure drawn with a uniform black contour also carries "this species has
+    outlines" -- harmless next to a LEGO prompt that never mentions them, actively
+    wrong next to a prompt whose art direction is "no outlines of any kind".
+
+    Proportions are ~4.5 heads with the collar near 30% of the figure's height, so
+    the geometry agrees with ``slicer.CUTS`` rather than fighting it.
+    """
+    img = PILImage.new("RGB", (size, size), "white")
+    d = ImageDraw.Draw(img)
+    body = (188, 190, 196)
+    skin = (226, 194, 162)
+    shoe = (78, 78, 84)
+
+    d.ellipse((424, 60, 600, 268), fill=skin)                       # head
+    d.rectangle((486, 240, 538, 306), fill=skin)                    # neck
+    # Torso: shoulders wider than waist, hips squared off for the legs to meet.
+    d.polygon([(418, 300), (606, 300), (584, 540), (590, 612), (434, 612), (440, 540)], fill=body)
+    # Arms hang ~15 degrees out, hands as separate blobs at the wrists.
+    d.polygon([(420, 312), (356, 336), (300, 580), (352, 596), (438, 372)], fill=body)
+    d.polygon([(604, 312), (668, 336), (724, 580), (672, 596), (586, 372)], fill=body)
+    d.ellipse((288, 570, 364, 646), fill=skin)
+    d.ellipse((660, 570, 736, 646), fill=skin)
+    # Legs with a clear vertical gap between them -- the single geometric fact the
+    # curated sets kept getting wrong, so the pose reference must state it plainly.
+    # The gap is drawn deliberately wide: a hairline gap reads as "legs touching"
+    # once the sheet is downscaled into the send.
+    d.rectangle((440, 604, 494, 918), fill=body)
+    d.rectangle((530, 604, 584, 918), fill=body)
+    # Shoes sit slightly WIDER than the leg above them, so the silhouette says
+    # "these are separate shoes" rather than "the leg is a different colour here".
+    d.rounded_rectangle((426, 900, 502, 958), radius=16, fill=shoe)
+    d.rounded_rectangle((522, 900, 598, 958), radius=16, fill=shoe)
+    return img
+
+
 _STYLE_SHEET_WIDTH = 1024
 _STYLE_SHEET_COLUMNS = 3
 _STYLE_SHEET_CELL_ASPECT = 1.5  # the curated sets are framed 2:3 portrait
@@ -240,7 +284,21 @@ def _build_style_reference_sheet(set_id: str) -> Optional[PILImage.Image]:
     return sheet
 
 
-def _style_reference_sheet() -> Optional[PILImage.Image]:
+def _resolve_set_id(style_reference_set: str = "") -> str:
+    """Which curated set a generation should send.
+
+    The style's own set wins.  ``STYLE_REFERENCE_SET`` stays as a global override
+    so a set can still be swapped at the venue without a code change, but it is no
+    longer the primary source -- it used to be the only one, which paired every
+    registered style with whatever set the environment named.
+    """
+    override = os.environ.get("STYLE_REFERENCE_SET", "").strip()
+    if override:
+        return override
+    return style_reference_set or "2026q3_owner_curated"
+
+
+def _style_reference_sheet(style_reference_set: str = "") -> Optional[PILImage.Image]:
     """The active style sheet, or None when the switch is off or the set is absent.
 
     ``STYLE_REFERENCE_MODE=off`` rolls the send back to the three-image shape for
@@ -249,7 +307,7 @@ def _style_reference_sheet() -> Optional[PILImage.Image]:
     """
     if os.environ.get("STYLE_REFERENCE_MODE", "sheet").strip().lower() != "sheet":
         return None
-    set_id = os.environ.get("STYLE_REFERENCE_SET", "").strip() or "2026q3_owner_curated"
+    set_id = _resolve_set_id(style_reference_set)
     if set_id not in _style_sheet_cache:
         sheet = _build_style_reference_sheet(set_id)
         _style_sheet_cache[set_id] = sheet
@@ -258,24 +316,40 @@ def _style_reference_sheet() -> Optional[PILImage.Image]:
     return _style_sheet_cache[set_id]
 
 
-def style_reference_status() -> Dict[str, Any]:
+def style_reference_status(style_reference_set: str = "") -> Dict[str, Any]:
     """目前的風格參考狀態，供 /health 回報。
 
     缺參考圖不會讓生成失敗 —— 它只是靜靜地少掉「所有角色是同一個物種」的
     依據，生出來的角色會各自漂移。那在現場看起來像模型不穩，不像少了檔案，
     而參考圖因授權不可散布並未進版控，clone 下來的環境預設就是這個狀態。
     因此必須讓它出現在健康檢查裡，而不是只有一行埋在啟動 log 中。
+
+    多風格之後這裡要逐風格回報：只回報「目前活動預設風格」的那一組，會讓
+    另一個風格的參考圖整組缺席而健康檢查全綠。
     """
     mode = os.environ.get("STYLE_REFERENCE_MODE", "sheet").strip().lower()
-    set_id = os.environ.get("STYLE_REFERENCE_SET", "").strip() or "2026q3_owner_curated"
+    set_id = _resolve_set_id(style_reference_set)
+    # 全域覆寫會把所有風格壓到同一組參考圖上 —— 那正是這次重構要消滅的錯誤配對，
+    # 而它不會失敗、只會讓 prompt 與自己的參考圖互相矛盾。必須看得見。
+    overridden = bool(os.environ.get("STYLE_REFERENCE_SET", "").strip()) and set_id != style_reference_set
     if mode != "sheet":
-        return {"mode": mode, "set_id": set_id, "available": False, "reason": "disabled"}
-    sheet = _style_reference_sheet()
+        return {"mode": mode, "set_id": set_id, "available": False,
+                "reason": "disabled", "overridden": overridden}
+    sheet = _style_reference_sheet(style_reference_set)
     return {
         "mode": mode,
         "set_id": set_id,
         "available": sheet is not None,
         "reason": None if sheet is not None else "set_not_found",
+        "overridden": overridden,
+    }
+
+
+def style_reference_report() -> Dict[str, Any]:
+    """每個已註冊風格各自的參考圖集狀態。"""
+    return {
+        style["id"]: style_reference_status(style["referenceSet"])
+        for style in list_styles()
     }
 
 
@@ -684,6 +758,98 @@ _FULL_CHARACTER_PROMPT_TEMPLATE = (
 )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  PIXAR-LIKE STYLE — 3D animated-feature character, not a moulded toy
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PIXAR_NEGATIVE = (
+    "Strictly NO text, NO labels, NO numbers, NO measurement marks, "
+    "NO size tags, NO fabric callouts, NO arrows, NO design-sketch annotations, "
+    "NO watermarks, NO signatures. "
+    "NO outlines of any kind - no black contour, no ink line, no cel-shaded "
+    "cartoon styling, no flat vector look, no 2D illustration, no anime. "
+    "Equally NOT photoreal and NOT a live-action person: no skin pores, no "
+    "realistic wrinkles, no individual rendered hair strands. "
+    "NOT a moulded plastic toy, NOT a LEGO minifigure, NOT a vinyl figure - "
+    "cloth must read as cloth with real thickness, never as smooth plastic. "
+    "NO side view, NO three-quarter angle, NO sitting pose, NO action pose, "
+    "NO twisted torso. Stand strictly straight, facing the viewer. "
+    "ABSOLUTELY NO background: NO walls, NO floor, NO scenery, NO patterns, "
+    "and NO shadow, contact shadow or reflection cast onto the background - "
+    "every pixel outside the figure must be pure solid white #FFFFFF, completely "
+    "uniform. Shading ON the figure itself is required; see the art style rules. "
+    "NO plaid/tartan/checkered squares unless the photo clearly shows them, "
+    "NO patchwork, NO sewn-on badges, NO pocket stickers, NO logos. "
+    "NEVER omit shoes — both feet must always wear visible shoes. "
+    "The legs must NEVER merge into one solid column: keep a clear vertical gap "
+    "of white background between them, unless a one-piece garment covers them. "
+    "STRICT BODY-PART COUNT: EXACTLY one head, exactly two arms, "
+    "EXACTLY TWO hands total (one at the end of each arm, at the wrist), "
+    "exactly two legs, exactly two feet/shoes. "
+    "NO extra hands, NO duplicate hands, NO floating hands, "
+    "NO hands attached to the torso, hip, or legs, "
+    "NO extra arms, NO duplicate limbs anywhere."
+)
+
+_PIXAR_PROMPT_TEMPLATE = (
+    "Create a single stylized 3D animated-feature character based on the person in "
+    "this photograph, rendered as a full-body character turnaround.\n\n"
+
+    "### DETECTED CHARACTER ATTRIBUTES:\n"
+    "{attrs}\n\n"
+
+    "### MANDATORY DESIGN RULES:\n"
+    "1. **Proportions & Pose**: Strict front-facing view, perfectly centered and "
+    "symmetric. Neutral stance: arms relaxed about 15 degrees out from the sides, "
+    "hands open and fully visible at the wrists, legs straight and parallel. "
+    "About 4.5 heads tall - appealing and stylized, NOT realistic adult "
+    "proportions and NOT a chibi. The collar sits near 30% of total height, the "
+    "waist near 61%, the top of the shoes near 92%. When the lower body is "
+    "trousered or bare, keep a CLEAR VISIBLE VERTICAL GAP between the legs from "
+    "hip to ankle; a one-piece garment reaching below the hip closes that gap "
+    "instead.\n"
+    "2. **Head & Face**: Rounded, softly simplified head in the specified skin "
+    "tone. Large expressive eyes with a visible iris and a soft highlight, clean "
+    "eyebrows, a warm simple mouth. No pores, no rendered wrinkles. Hair is "
+    "sculpted as grouped masses with a soft wide sheen band, never individual "
+    "strands, in the specified style and colour.\n"
+    "3. **Torso & Outerwear**: The figure wears the person's actual outfit as real "
+    "cloth: visible thickness at every hem, collar and cuff, soft rounded folds. "
+    "The torso may carry SEVERAL pieces at once - an open jacket over a shirt, a "
+    "collar, a scarf - and each piece keeps its own colour and overlaps the one "
+    "beneath with real thickness.\n"
+    "4. **Lower Body**: Follow what the person actually wears. Trousers or shorts "
+    "become two separate legs with a clear gap between them. A dress, skirt, robe "
+    "or long coat instead becomes ONE continuous piece falling unbroken from the "
+    "waist to its hem with no vertical split, and the bare legs continue below "
+    "that hem in the person's own skin tone.\n"
+    "5. **Shoes & Footwear**: Mandatory distinct shoes on both feet, fully visible "
+    "and fully inside the frame, with a clean separation from the leg or trouser "
+    "above them.\n\n"
+
+    "### ART STYLE GUIDELINES - 3D CG FEATURE ANIMATION:\n"
+    "- Render the figure as a character from a 3D animated feature film: soft "
+    "rounded forms, clean surfaces, appealing stylization. This is a character "
+    "render, not a photograph and not a flat illustration.\n"
+    "- **Lighting**: one large soft key light above and IN FRONT of the figure, "
+    "with gentle falloff from top to bottom and soft even ambient fill on both "
+    "sides. No rim light, no side light, no coloured light.\n"
+    "- **Material ranking** (shiniest first, keep this order exactly): shoe "
+    "leather; then the soft wide sheen band on hair; then skin, matte with a "
+    "gentle warm subsurface glow and one broad soft highlight; then cotton; then "
+    "denim, the most matte of all. Skin is never glossy, waxy or plastic. Two "
+    "materials must never read as equally shiny.\n"
+    "- **Print versus shading**: seams, hems, stitching, trim, wear, text and "
+    "logos are printed flat onto the fabric and carry no light direction of their "
+    "own. Every highlight and shadow comes from the key light on the form.\n"
+    "- Let form and clean colour separation define edges. Do NOT draw an outline "
+    "around any part.\n"
+    "- Center the figure on a pure solid white background (#FFFFFF). The figure is "
+    "shaded; the background is not. No text, no border lines.\n\n"
+    + _PIXAR_NEGATIVE
+)
+
+
 _ROLE_PERSON = (
     "the source person. This is WHO the figure is: their face, their skin tone, "
     "their hair, their actual garments and their actual colours."
@@ -710,6 +876,22 @@ _ROLE_STYLE = (
     "count and which garments the figure wears are not the sheet's to decide."
 )
 
+_ROLE_STYLE_PIXAR = (
+    "a style reference sheet of DIFFERENT characters rendered in the target style. "
+    "This sheet is the PRIMARY authority on how anything is built and finished: the "
+    "degree of stylization and the head-to-body proportion, how soft the key light "
+    "falls across a form, how matte skin is and how its subsurface warmth reads, "
+    "how hair is sculpted into grouped masses with one soft sheen band, how cloth "
+    "carries real thickness at every hem and cuff and folds in soft rounded "
+    "shapes, how one layer overlaps another, how edges come from form and clean "
+    "colour separation with no outline drawn anywhere, and how this species "
+    "constructs a garment - a one-piece garment falling as a single unbroken drape "
+    "with bare legs below its hem. Where a design rule above and this sheet "
+    "disagree about surface, material, finish or garment construction, FOLLOW THE "
+    "SHEET. Pose, body-part count and which garments the figure wears are not the "
+    "sheet's to decide."
+)
+
 _STYLE_SHEET_FIREWALL = (
     "CRITICAL - the style sheet decides HOW things are made, never WHO the figure is "
     "or WHAT it wears. Not one colour, pattern, print, hairstyle, hair colour, skin "
@@ -726,6 +908,8 @@ def _compose_inputs(
     person_url: str,
     detail_sheet: Optional[PILImage.Image],
     style_sheet: Optional[PILImage.Image],
+    pose_image: Optional[PILImage.Image] = None,
+    role_style_text: str = "",
 ) -> Tuple[List[str], str]:
     """Pair every attachment with its role, numbered from what is actually sent.
 
@@ -738,9 +922,9 @@ def _compose_inputs(
     parts: List[Tuple[str, str]] = [(person_url, _ROLE_PERSON)]
     if detail_sheet is not None:
         parts.append((_pil_to_data_url(detail_sheet), _ROLE_DETAIL))
-    parts.append((_pil_to_data_url(_canonical_lego_pose()), _ROLE_POSE))
+    parts.append((_pil_to_data_url(pose_image or _canonical_lego_pose()), _ROLE_POSE))
     if style_sheet is not None:
-        parts.append((_pil_to_data_url(style_sheet), _ROLE_STYLE))
+        parts.append((_pil_to_data_url(style_sheet), role_style_text or _ROLE_STYLE))
 
     text = "\n\n### HOW TO USE THE INPUT IMAGES\n" + "\n".join(
         f"Image {index}: {role}" for index, (_, role) in enumerate(parts, 1)
@@ -855,7 +1039,9 @@ def generate_full_character_png(
         input_urls, role_text = _compose_inputs(
             data_url,
             _build_detail_sheet(rgb, regions),
-            _style_reference_sheet(),
+            _style_reference_sheet(style.reference_set),
+            pose_image=style.pose_builder() if style.pose_builder else None,
+            role_style_text=style.role_style_text,
         )
         prompt += role_text
         api_result = _call_image_chat_multi(
@@ -892,6 +1078,20 @@ def generate_full_character_png(
 
 register_style(GenerationStyle(
     style_id="lego",
+    display_name="樂高",
     full_prompt_template=_FULL_CHARACTER_PROMPT_TEMPLATE,
     supported_modes=frozenset({"full_character"}),
+    reference_set="2026q3_owner_curated",
+    role_style_text=_ROLE_STYLE,
+    pose_builder=_canonical_lego_pose,
+))
+
+register_style(GenerationStyle(
+    style_id="pixar",
+    display_name="皮克斯",
+    full_prompt_template=_PIXAR_PROMPT_TEMPLATE,
+    supported_modes=frozenset({"full_character"}),
+    reference_set="2026q3_pixar_figma",
+    role_style_text=_ROLE_STYLE_PIXAR,
+    pose_builder=_canonical_humanoid_pose,
 ))

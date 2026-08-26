@@ -2,6 +2,7 @@ import base64
 import io
 import time
 import unittest
+import dataclasses
 from unittest.mock import patch
 
 from PIL import Image, ImageDraw
@@ -138,7 +139,12 @@ class M2FlowTests(unittest.TestCase):
         self.assertEqual(face_data["color_source"]["skin_tone"], "cv_measured")
 
     def test_vlm_palette_is_the_fallback_when_the_face_is_not_measurable(self):
-        with patch.dict(app_module.os.environ, {"FULL_MODE_VLM_ENABLED": "1"}), patch.object(
+        # 這個開關現在由 config 提供（整合版與 2D 備援共用同一份真值判斷），
+        # 而 config 是在 import 當下建立的 frozen dataclass —— 改 os.environ
+        # 已經不再有效果。換掉整個實例，用 replace 保留其餘欄位。
+        with patch.object(app_module, "config",
+                          dataclasses.replace(app_module.config,
+                                              FULL_MODE_VLM_ENABLED=True)), patch.object(
             app_module, "get_face_features", return_value={"ok": False}
         ), patch.object(
             app_module, "analyze_face",

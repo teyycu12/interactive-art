@@ -125,7 +125,9 @@ def correction_for_validation(validation: Dict[str, Any]) -> str:
     if "touches_border" in errors or "foreground_ratio" in errors:
         instructions.append("Center the entire character with generous pure-white margin on every side.")
     if "fragmented_foreground" in errors:
-        instructions.append("Keep every limb physically attached to one coherent LEGO figure; no floating pieces.")
+        # 措辭刻意不提任何風格：這段會被接到當次生成的 prompt 後面，
+        # 而那份 prompt 可能是樂高，也可能是皮克斯。
+        instructions.append("Keep every limb physically attached to one coherent figure; no floating pieces.")
     return " ".join(instructions)
 
 

@@ -297,6 +297,79 @@ node --test frontend/tests/        # 前端測試
 一邊照比例切、一邊照比例疊回去。對不上時角色會脖子錯位或腿被壓扁，
 **而且兩邊都不會報錯**。`backend/tests/test_slicer.py` 有測試直接比對兩邊數值。
 
+### 風格的四樣東西必須成套
+
+一個生成風格由四件事構成，全部掛在 `style_registry.GenerationStyle` 上：
+prompt 模板、negative、姿勢參考圖（`pose_builder`）、策展參考圖集（`reference_set`）。
+
+**任兩個風格共用其中任何一項，都不會報錯。** 參考圖集在 prompt 裡被明文宣告為
+「工藝的最高權威」（`_ROLE_STYLE`），所以拿樂高的 sheet 配皮克斯的 prompt，
+模型只會自己選一邊 —— 現場看起來像模型不穩，不像配錯檔案。姿勢參考同理：
+樂高那張畫的是梯形軀幹加爪手，餵給皮克斯會把玩具比例一起帶進去。
+
+`STYLE_REFERENCE_SET` 現在是**全域覆寫**而非主要來源。設了它就會把所有風格
+壓到同一組圖，也就是上面那個錯誤配對。平常留空；被覆寫的風格會出現在
+生成服務 `/health` 的 `degraded` 裡。`backend/tests/test_style_registry.py`
+擋住共用，並檢查每個風格指名的圖集在磁碟上真的存在。
+
+### VLM 預設關閉，而且模型名不可寫死
+
+服裝／臉部的 Gemini 呼叫由 `FULL_MODE_VLM_ENABLED` 控制，**預設關閉**，
+`service.py`（整合版）與 `app.py`（2D 備援）都讀同一個 `config` 欄位。
+
+關閉是因為生圖模型本來就收到原始照片，這兩次呼叫是重複的視覺分析；
+而 Gemini 免費方案是**每個模型每天 20 次請求**，一位參與者吃掉 2 次 ——
+開著的話一天只夠 10 個人，第 11 個人開始靜默退回純 CV 顏色。
+
+兩個踩過的坑：
+
+1. **模型名不可寫死。** `gemini-2.0-flash` 曾寫死在 `vlm_module.py` 兩處，
+   Google 讓它退役後兩支都回 404，VLM 全數失敗 —— 但**生成照樣成功**，
+   只是 prompt 裡的髮色／髮型／眼睛／鬍子／服裝款式欄位默默全空。
+   錢照付、東西拿不到，畫面上完全看不出來。現在走 `config.VLM_MODEL`，
+   且模型物件在**呼叫當下**才建立（存成模組常數等於凍結在 import 當下）。
+
+2. **測試必須把 VLM 也 stub 掉，不只生圖。** `test_service.py` 的 fixture
+   原本只替換 `generate_full_character_png`，於是每個 `/generate` 測試都對
+   Gemini 發兩次真實請求。長期沒被發現是因為那個模型已退役、秒回 404，
+   看起來只像「有點慢」；模型修好之後整個套件從 20 秒變成 86 秒，
+   而且每跑一次測試就付一次錢，還會吃掉當天的配額。
+
+`/health` 會回報 `vlm_enabled` 與 `vlm_model` —— 「關著」與「開著卻一直失敗」
+在現場長得一模一樣（兩者都是 prompt 少掉語意欄位），不報出來分不出來。
+
+### style_registry 只能有一份（雙重匯入路徑的陷阱）
+
+`backend/` 底下同時存在兩種匯入寫法：`from backend.style_registry import ...`
+（garment_gen 用）與 `from style_registry import ...`（service.py 用，因為它以
+`python backend/service.py` 啟動，`sys.path[0]` 就是 `backend/`）。
+
+兩條路徑**都成立**的時候（pytest、或任何把專案根目錄放進 `sys.path` 的環境），
+Python 會建立**兩個獨立的模組物件**，各自帶一份空的 `_STYLES` ——
+garment_gen 把風格註冊進其中一份，service.py 從另一份查詢，查到的永遠是空的。
+
+後果全程無聲：沒有例外、沒有 log、`/health` 的 `degraded` 也是空的，
+只是每一個請求都靜默退回預設風格。症狀是「選了皮克斯卻生出樂高」，
+看起來像模型的問題。
+
+`style_registry.py` 檔尾用 `sys.modules.setdefault()` 把兩個名字釘成同一個
+模組物件來根除它。**不要刪掉那幾行**，也不要因為「看起來像多餘的魔法」而
+改寫成一般的 import。`backend/tests/test_style_registry.py` 的
+`SingleRegistryInstanceTests` 有回歸防護（拿掉那幾行會有兩個測試立刻失敗）。
+
+任何**持有可變全域狀態**的模組都有同樣的問題；純函式模組則無所謂。
+
+### 參與者選的風格是 per-request，不是活動層級
+
+`CHARACTER_STYLE` 從「一場活動一種風格」降級成「參與者沒選時的預設」。
+手機端的選單由 `/api/styles` 餵資料（Gateway 轉問生成服務的 `/health`），
+**不要在前端寫死風格清單** —— 某個風格的參考圖集沒放進去時，後端會據實回報，
+寫死的話選項照樣出現，選了卻靜默退回預設，參與者只會覺得按鈕沒作用。
+
+`resolve_style_id()` 對認不得的字串一律退回預設而不是報錯（現場原則：掃描
+失敗一律降級，不擋人進場），因此 `/generate` 的回應帶 `styleId` 說明實際採用
+的是哪一個 —— 沒有這個欄位就看不出退回發生過。
+
 ### 貼圖走 URL，不走 base64
 
 30 人的貼圖若內嵌進 `STAGE_ROSTER`，名冊訊息會膨脹到現場無線網路難以負荷。
@@ -428,15 +501,44 @@ PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 相機權限被拒、非安全情境、生成失敗、生成服務未啟動 —— 全部退回捏臉流程。
 捏臉是刻意保留的備援路徑，**不要移除**。
 
-# 端到端煙霧測試（需後端已啟動）
-python backend/e2e_smoke.py
+## 本機預覽：開啟與關閉
+
+### 整合版（主線）
+
+先照上方「常用指令 → 整合版（主線）」啟動兩個服務（`npm start` +
+`python backend/service.py`，或 `bash start.sh` 一次帶起），服務就緒後開啟
+三個角色各自的頁面：
+
+```powershell
+# 大螢幕
+Start-Process 'http://localhost:3000/screen/'
+
+# 手機控制（現場請改用終端機印出的區網 IP，例如 http://192.168.x.x:3000/controller/）
+Start-Process 'http://localhost:3000/controller/'
+
+# 主辦端控制台（需要終端機印出的通行密鑰）
+Start-Process 'http://localhost:3000/host/'
+
+# 生成服務健康檢查
+Start-Process 'http://127.0.0.1:5055/health'
 ```
 
-## 本機預覽：開啟與關閉（2D 備援版）
+要關閉服務，回到執行 `npm start` 與 `python backend/service.py` 的終端機按
+`Ctrl+C`。若終端機已關閉或行程卡住，可在新的 PowerShell 視窗查詢並停止：
 
-以下是 2D 備援版（`backend/app.py` + `frontend/`）的本機操作。整合版請改用上方
-「常用指令 → 整合版（主線）」，兩者的埠不同（備援 5001／8000，整合版 3000／5055），
-可並存。
+```powershell
+# 查詢目前監聽 3000（互動層）與 5055（生成服務）的程序
+Get-NetTCPConnection -LocalPort 3000,5055 -State Listen |
+  Select-Object LocalPort, OwningProcess
+
+# 停止指定程序；將 <PID> 換成上方的 OwningProcess 數字
+Stop-Process -Id <PID>
+```
+
+### 2D 備援版
+
+以下是 2D 備援版（`backend/app.py` + `frontend/`）的本機操作，埠與整合版不同
+（備援 5001／8000，整合版 3000／5055），可並存。
 
 請在專案根目錄 `PersonaFlow` 開啟兩個終端機視窗，各自執行一個服務：
 
@@ -474,8 +576,3 @@ Get-NetTCPConnection -LocalPort 5001,8000 -State Listen |
 # 停止指定程序；將 <PID> 換成上方的 OwningProcess 數字
 Stop-Process -Id <PID>
 ```
-
-主操作頁：`http://127.0.0.1:8000/index.html`
-投影頁：`http://127.0.0.1:8000/projection.html`
-生成歷史與成本：`http://127.0.0.1:8000/dev.html`
-後端健康檢查：`http://127.0.0.1:5001/health`

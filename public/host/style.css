@@ -122,21 +122,35 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 
 .cols {
   display: grid;
-  grid-template-columns: minmax(0, 320px) minmax(0, 1.4fr) minmax(0, 300px);
+  grid-template-columns: minmax(0, 260px) minmax(0, 1.5fr) minmax(0, 320px);
   gap: 18px;
   align-items: start;
 }
 @media (max-width: 1080px) { .cols { grid-template-columns: 1fr; } }
 
-/* 每欄可堆疊多張面板：任務＋問答、參與者、排行＋動態 */
-.col { display: grid; gap: 18px; align-content: start; }
+/* 每欄可堆疊多張面板：任務＋問答、參與者、排行＋動態
+   min-width: 0 是防爆版設定：grid item 預設 min-width 是內容的 max-content，
+   欄位裡的表格／長字串（例如 model 名稱）會把欄位撐寬到超出 grid 軌道，
+   在中欄與右欄之間造成視覺重疊。軌道本身雖然用了 minmax(0, …) 限制，
+   但 item 自己不設 min-width:0 的話一樣會頂出去。 */
+.col { display: grid; gap: 18px; align-content: start; min-width: 0; }
 
 .panel {
   background: var(--surface);
   border: 2px solid var(--line);
   border-radius: 16px;
   padding: 20px;
+  min-width: 0;
 }
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.panel-head h2 { margin: 0; }
 .panel h2 .count {
   font-family: ui-monospace, Consolas, monospace;
   font-size: 13px;
@@ -180,6 +194,8 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 
 /* 參與者表 */
 .table-wrap { overflow-x: auto; }
+/* 收合狀態：只留約 4 列高度並可垂直捲動，長長的生成歷史才不會把整欄往下拉爆 */
+.table-wrap.is-collapsed { max-height: 260px; overflow-y: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th {
   text-align: left;
@@ -191,7 +207,9 @@ th {
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
 }
-td { padding: 9px 10px; border-bottom: 1px solid var(--sunk); vertical-align: middle; }
+/* word-break：model 欄位的字串（如 google/gemini-3.1-flash-image）沒有空白，
+   撐開表格寬度就會逼出 min-width:0 也擋不住的水平溢出。 */
+td { padding: 9px 10px; border-bottom: 1px solid var(--sunk); vertical-align: middle; word-break: break-word; }
 tr:last-child td { border-bottom: none; }
 td.name { font-weight: 700; }
 /* 頭像欄：主辦端要認出「這一列是誰」，名字是自填的，常常重複或看不懂 */

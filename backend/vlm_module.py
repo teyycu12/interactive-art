@@ -4,9 +4,26 @@ import os
 import google.generativeai as genai
 from typing import Dict, Any
 
-_API_KEY = os.environ.get("GEMINI_API_KEY")
+# 模型名不再寫死。config 同時負責載入 .env —— 先前這個模組自己讀 os.environ，
+# 是靠「別人先 import 過 config」才拿得到金鑰。
+try:
+    from backend.config import config as _config  # type: ignore
+except Exception:  # pragma: no cover - 直接以 backend/ 為工作目錄時
+    from config import config as _config  # type: ignore
+
+_API_KEY = _config.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY")
 if _API_KEY:
     genai.configure(api_key=_API_KEY)
+
+
+def _model():
+    """建立 VLM 模型物件。
+
+    每次呼叫都重新建立而非快取成模組層級的常數：模型名來自環境變數，
+    測試要能改它，而寫死成 import 當下的值就改不動了。
+    """
+    return genai.GenerativeModel(_config.VLM_MODEL)
+
 
 def strip_json_fence(text: str) -> str:
     """把模型回應中的 markdown code fence 去掉，取出純 JSON。
@@ -38,12 +55,12 @@ def strip_json_fence(text: str) -> str:
 
 def analyze_outfit(base64_image: str) -> Dict[str, Any]:
     """
-    Sends the base64 image to Gemini 1.5 Flash to analyze the outfit components.
+    Sends the base64 image to the configured Gemini model (config.VLM_MODEL)
+    to analyze the outfit components.
     Returns a parsed JSON dictionary.
     """
     try:
-        # Use gemini-1.5-flash for fast multimodal processing
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = _model()
         
         # Decode base64 to bytes
         if base64_image.startswith("data:image"):
@@ -112,7 +129,7 @@ def analyze_face(base64_image: str) -> Dict[str, Any]:
         "beard_style": "none",
     }
     try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
+        model = _model()
         if base64_image.startswith("data:image"):
             base64_image = base64_image.split(",")[1]
         image_bytes = base64.b64decode(base64_image)
