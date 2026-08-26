@@ -361,6 +361,137 @@ function proxyPreview(req, res) {
   });
 }
 
+// 風格清單。手機端的選單不寫死，否則某個風格的參考圖集沒放進去時，
+// 選項照樣出現在畫面上，選了就靜默退回預設 —— 參與者只會覺得沒作用。
+let stylesCache = null;
+let stylesCacheAt = 0;
+const STYLES_TTL_MS = 60_000;
+
+function proxyStyles(req, res) {
+  if (req.method !== 'GET') {
+    sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
+    return;
+  }
+  if (stylesCache && Date.now() - stylesCacheAt < STYLES_TTL_MS) {
+    sendJSON(res, 200, stylesCache);
+    return;
+  }
+
+  const upstream = http.request({
+    host: VISION_HOST,
+    port: VISION_PORT,
+    path: '/health',
+    method: 'GET',
+    timeout: 3000,
+  }, (up) => {
+    const out = [];
+    up.on('data', (c) => out.push(c));
+    up.on('end', () => {
+      let body = null;
+      try { body = JSON.parse(Buffer.concat(out).toString('utf8')); } catch { /* 見下 */ }
+      const payload = {
+        ok: true,
+        styles: Array.isArray(body?.styles) ? body.styles : [],
+        defaultStyle: typeof body?.default_style === 'string' ? body.default_style : null,
+      };
+      stylesCache = payload;
+      stylesCacheAt = Date.now();
+      sendJSON(res, 200, payload);
+    });
+  });
+
+  // 生成服務還沒起來時**不要快取空清單** —— 佈場時先開手機、後開生成服務
+  // 是常態，快取下去就要等 TTL 過了選單才會出現。
+  const degrade = () => {
+    if (!res.headersSent) sendJSON(res, 200, { ok: false, styles: [], defaultStyle: null });
+  };
+  upstream.on('timeout', () => { upstream.destroy(); degrade(); });
+  upstream.on('error', degrade);
+  upstream.end();
+}
+
+// ── 主辦端生成歷史代理 ──────────────────────────────────────
+//
+// 原始照片、生成結果、token、花費、使用模型都已經由生成服務記在
+// backend/logs/generation_history.sqlite3，這裡只是開一條讀取路徑給主辦端
+// 控制台。資料含參與者照片與花費，比一般靜態頁面敏感，因此比照 HOST_AUTH
+// 的理由（同一區網、路徑可被掃出，不能只靠「網址沒人知道」）比對通行密鑰，
+// 而不是直接開放讀取。
+const HISTORY_TIMEOUT_MS = 8000;
+
+function proxyHostHistory(req, res, upstreamPath, isBinary) {
+  const upstream = http.request({
+    host: VISION_HOST, port: VISION_PORT, path: upstreamPath, method: 'GET',
+    timeout: HISTORY_TIMEOUT_MS,
+  }, (up) => {
+    if (isBinary) {
+      res.writeHead(up.statusCode ?? 200, {
+        'Content-Type': up.headers['content-type'] ?? 'application/octet-stream',
+      });
+      up.pipe(res);
+      return;
+    }
+    const out = [];
+    up.on('data', (c) => out.push(c));
+    up.on('end', () => {
+      res.writeHead(up.statusCode ?? 200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(Buffer.concat(out));
+    });
+  });
+
+  const degrade = () => {
+    if (res.headersSent) return;
+    if (isBinary) { res.writeHead(502).end(); return; }
+    sendJSON(res, 200, { ok: false, error: 'vision_service_unavailable' });
+  };
+  upstream.on('timeout', () => { upstream.destroy(); degrade(); });
+  upstream.on('error', degrade);
+  upstream.end();
+}
+
+/** 落地檔名一律是 generation_history 自己 sanitize 過的 [A-Za-z0-9_.-]，見這裡防禦性再擋一次 */
+const SAFE_FILENAME = /^[A-Za-z0-9_.-]+$/;
+/** request_id 是 uuid4().hex，只會有小寫十六進位 */
+const SAFE_REQUEST_ID = /^[A-Za-z0-9_-]+$/;
+
+function handleHostHistory(req, res, urlPath, searchParams) {
+  if (req.method !== 'GET') {
+    sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
+    return;
+  }
+  if (!keyMatches(searchParams.get('key'))) {
+    sendJSON(res, 403, { ok: false, error: 'invalid_key' });
+    return;
+  }
+
+  const suffix = urlPath.slice('/api/host/history'.length);
+  if (suffix === '' || suffix === '/') {
+    const limit = searchParams.get('limit');
+    const qs = limit ? `?limit=${encodeURIComponent(limit)}` : '';
+    proxyHostHistory(req, res, `/api/dev/generations${qs}`, false);
+    return;
+  }
+  if (suffix === '/summary') {
+    proxyHostHistory(req, res, '/api/dev/summary', false);
+    return;
+  }
+  if (suffix.startsWith('/outputs/')) {
+    const filename = suffix.slice('/outputs/'.length);
+    if (!SAFE_FILENAME.test(filename)) { res.writeHead(400).end('Bad Request'); return; }
+    proxyHostHistory(req, res, `/api/dev/outputs/${filename}`, true);
+    return;
+  }
+  if (suffix.startsWith('/inputs/')) {
+    const filename = suffix.slice('/inputs/'.length);
+    if (!SAFE_FILENAME.test(filename)) { res.writeHead(400).end('Bad Request'); return; }
+    proxyHostHistory(req, res, `/api/dev/inputs/${filename}`, true);
+    return;
+  }
+  const requestId = suffix.slice(1);
+  if (!SAFE_REQUEST_ID.test(requestId)) { res.writeHead(400).end('Bad Request'); return; }
+  proxyHostHistory(req, res, `/api/dev/generations/${requestId}`, false);
+}
+
 function proxyGenerate(req, res) {
   if (req.method !== 'POST') {
     sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
@@ -535,6 +666,16 @@ function handleRequest(req, res) {
 
   if (urlPath === '/api/preview') {
     proxyPreview(req, res);
+    return;
+  }
+
+  if (urlPath === '/api/styles') {
+    proxyStyles(req, res);
+    return;
+  }
+
+  if (urlPath === '/api/host/history' || urlPath.startsWith('/api/host/history/')) {
+    handleHostHistory(req, res, urlPath, new URL(req.url, 'http://localhost').searchParams);
     return;
   }
 

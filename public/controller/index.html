@@ -63,7 +63,15 @@
         <!-- 階段 1：拍攝前的指引 -->
         <div class="scan-panel" data-phase="aim">
           <h1><span class="who-name" id="aim-name"></span>拍一張照片</h1>
-          <p class="lede">照片會被轉譯成你的樂高角色。</p>
+          <!-- 風格名稱由 /api/styles 填入。寫死其中一種，另一種模式下就成了假訊息，
+               與操控提示不寫死 IDLE_MOTION 是同一個理由。 -->
+          <p class="lede" id="aim-lede">照片會被轉譯成你的角色。</p>
+          <!-- 只有兩種以上風格可選時才顯示（見 app.js 的 loadStyles） -->
+          <div class="style-pick" id="style-pick" hidden>
+            <p class="style-pick-label">生成風格</p>
+            <div class="style-pick-options" id="style-pick-options"
+                 role="radiogroup" aria-label="生成風格"></div>
+          </div>
           <ol class="tips">
             <li><b>站遠 2–3 公尺</b>　對齊畫面裡的人形輪廓</li>
             <li><b>光線充足</b>　背光或太暗會認不出服裝</li>
@@ -90,7 +98,7 @@
         <div class="scan-panel" data-phase="working" hidden>
           <h1>生成中</h1>
           <p class="lede" id="scan-status">正在分析服裝特徵…</p>
-          <div class="bar"><i id="scan-progress"></i></div>
+          <div class="progress-bar"><i id="scan-progress"></i></div>
           <p class="hint" id="scan-elapsed">約需 25 秒</p>
         </div>
 

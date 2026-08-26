@@ -102,3 +102,48 @@ class TestFailureCarriesNoFabricatedFields(unittest.TestCase):
         self.assertNotIn("face", result,
                          "失敗回傳不得附帶臉部欄位，否則捏造的髮型膚色會進 prompt")
         self.assertIn("error", result)
+
+
+class TestModelNameIsConfigurable(unittest.TestCase):
+    """VLM 模型名不得寫死在程式碼裡。
+
+    Google 會讓舊的 model id 退役。實際發生過的後果：`gemini-2.0-flash` 被停用，
+    analyze_outfit 與 analyze_face 兩支都回 404，VLM 全數失敗 —— 但生成仍然成功，
+    只是 prompt 裡的髮色／髮型／眼睛／鬍子／服裝款式欄位默默全空。
+    錢照付、東西拿不到，而且畫面上完全看不出來。
+
+    寫死的模型名只能改程式碼才能救；可設定的話現場改一行 .env 就好。
+    """
+
+    def test_no_hardcoded_model_id_in_source(self):
+        import pathlib
+        import re
+        source = pathlib.Path(vlm_module.__file__).read_text(encoding="utf-8")
+        calls = re.findall(r"GenerativeModel\(([^)]*)\)", source)
+        self.assertTrue(calls, "找不到 GenerativeModel 呼叫，這個測試要跟著改")
+        for call in calls:
+            self.assertNotIn('"', call,
+                             f"模型名被寫死成字面值：GenerativeModel({call})")
+            self.assertIn("VLM_MODEL", call)
+
+    def test_model_comes_from_config(self):
+        from backend.config import config
+        self.assertTrue(config.VLM_MODEL, "VLM_MODEL 不得為空")
+        # 退役的那一個絕不能再回來當預設值
+        self.assertNotEqual(config.VLM_MODEL, "gemini-2.0-flash")
+
+    def test_setting_is_read_at_call_time(self):
+        """模型物件必須在呼叫當下建立。
+
+        寫死成模組層級的常數，就會凍結在 import 當下的值 —— 那正是原本的問題
+        換一種形式重演。config 是 frozen dataclass，所以這裡換掉整個 _config。
+        """
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        seen = []
+        with patch.object(vlm_module.genai, "GenerativeModel",
+                          side_effect=lambda name: seen.append(name)), \
+             patch.object(vlm_module, "_config",
+                          SimpleNamespace(VLM_MODEL="gemini-test-override")):
+            vlm_module._model()
+        self.assertEqual(seen, ["gemini-test-override"])

@@ -25,7 +25,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -66,11 +66,11 @@ except Exception as _e:  # 最常見：GEMINI_API_KEY 未設定
     analyze_face = lambda *a, **k: {"ok": False, "error": "vlm_unavailable"}
 
 try:
-    from garment_gen import generate_full_character_png, style_reference_status
+    from garment_gen import generate_full_character_png, style_reference_report
 except Exception as _e:  # 最常見：OPENAI_API_KEY 未設定
     _degraded("garment_gen（AI 角色圖像生成）", _e)
     generate_full_character_png = None
-    style_reference_status = lambda: {"available": False, "reason": "garment_gen_unavailable"}
+    style_reference_report = lambda: {}
 
 # 品質關卡。validate_avatar_png 是唯一會觸發重生的檢查，而且它不只判定通過與否：
 # correction_for_validation 把失敗原因變成下一次生成的修正指令，
@@ -101,16 +101,23 @@ except Exception as _e:
     _PREVIEW = False
 
 try:
-    from style_registry import get_event_style_id
+    from style_registry import get_event_style_id, list_styles, resolve_style_id
 except Exception as _e:
     _degraded("style_registry（生成風格註冊表）", _e)
     get_event_style_id = lambda: "lego"
+    list_styles = lambda: []
+    resolve_style_id = lambda requested: "lego"
 
 # 生成帳本。現場燒掉多少 token、花多少錢、失敗率多少，全靠這個；
 # 缺它不影響參與者，因此所有呼叫都經 _history_call 包起來、失敗只印一行。
 try:
     from generation_history import (
         finish_run,
+        get_run,
+        get_summary,
+        input_directory,
+        list_runs,
+        output_directory,
         record_attempt,
         save_input_photo,
         start_run,
@@ -119,6 +126,12 @@ try:
 except Exception as _e:
     _degraded("generation_history（生成紀錄與成本）", _e)
     _HISTORY = False
+    get_run = lambda *a, **k: None
+    get_summary = lambda *a, **k: {}
+    list_runs = lambda *a, **k: []
+    input_directory = output_directory = lambda: os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "logs"
+    )
 
 
 def _history_call(function, *args, **kwargs):
@@ -169,6 +182,23 @@ def _raise_on_failure(fn, *args, **kwargs):
     return result
 
 
+def _vlm_result(future, label: str) -> Dict[str, Any]:
+    """取一支 VLM 呼叫的結果；關閉或失敗都回同一種形狀。
+
+    `future is None` 代表 FULL_MODE_VLM_ENABLED 是關的，不是出錯 —— 兩者都
+    回傳沒有語意欄位的 dict，因為 build_outfit_data / build_face_data 對
+    「沒有資料」本來就有正確的退路（改用 CV 量到的顏色）。刻意不回傳寫死的
+    預設值：那會讓穿西裝的人被當成 T 恤配牛仔褲，且不會有任何一處報錯。
+    """
+    if future is None:
+        return {"ok": False, "error": "vlm_disabled"}
+    try:
+        return future.result(timeout=120)
+    except Exception as e:
+        print(f"[vision] VLM {label}分析失敗：{e!r}", file=sys.stderr)
+        return {"ok": False}
+
+
 def _sampled_colors(cv_result: Dict[str, Any], face_cv: Dict[str, Any]) -> Dict[str, str]:
     """生成失敗時，仍用 CV 量到的真實顏色當替身，比固定預設值貼近本人。"""
     colors = dict(DEFAULT_COLORS)
@@ -189,20 +219,36 @@ def health():
     # 缺它不會讓生成失敗，只是靜靜地少掉「所有角色是同一個物種」的依據，
     # 現場看起來像模型不穩、不像少了檔案。因此列進 degraded，
     # 讓佈署的人在開場前就看得到，而不是靠一行埋在啟動 log 裡的字。
-    style_ref = style_reference_status()
+    # 逐風格回報。只報活動預設風格的那一組，會讓另一個風格的參考圖整組
+    # 缺席而健康檢查全綠 —— 而那個風格在選單上仍然選得到。
+    style_refs = style_reference_report()
     degraded = list(_DEGRADED)
-    if not style_ref.get("available"):
-        degraded.append(
-            f"style_reference（風格參考圖集 '{style_ref.get('set_id')}'："
-            f"{style_ref.get('reason')}，角色間的物種一致性會下降）"
-        )
+    for style_id, style_ref in style_refs.items():
+        if not style_ref.get("available"):
+            degraded.append(
+                f"style_reference（'{style_id}' 的風格參考圖集 "
+                f"'{style_ref.get('set_id')}'：{style_ref.get('reason')}，"
+                f"該風格角色間的物種一致性會下降）"
+            )
+        elif style_ref.get("overridden"):
+            # 有圖可用，所以上面那條不會觸發 —— 但用的是別的風格的圖。
+            degraded.append(
+                f"style_reference（'{style_id}' 被 STYLE_REFERENCE_SET 覆寫成 "
+                f"'{style_ref.get('set_id')}'，該風格的 prompt 會與自己的參考圖矛盾）"
+            )
     return jsonify({
         "ok": True,
         "opencv": cv2 is not None,
         "gemini_key": bool(config.GEMINI_API_KEY),
         "imagegen_key": bool(config.OPENAI_API_KEY),
         "asset_dir": ASSET_DIR,
-        "style_reference": style_ref,
+        "styles": list_styles(),
+        "default_style": get_event_style_id(),
+        # 關閉是預設值也是刻意的取捨，但「關著」與「開著卻一直失敗」在現場
+        # 完全長得一樣（兩者都是 prompt 少掉語意欄位），所以要報出來。
+        "vlm_enabled": config.FULL_MODE_VLM_ENABLED,
+        "vlm_model": config.VLM_MODEL,
+        "style_reference": style_refs,
         "degraded": degraded,
     })
 
@@ -367,15 +413,22 @@ def _generate():
         return jsonify({"ok": False, "error": f"decode_failed: {decode_err}",
                         "fallbackColors": DEFAULT_COLORS})
 
-    # VLM 不需要等 CV，兩邊同時發車
-    fut_outfit = _executor.submit(
-        _gemini_breaker.call, _raise_on_failure, analyze_outfit, img_str,
-        fallback={"ok": False, "error": "circuit_open"},
-    )
-    fut_face_vlm = _executor.submit(
-        _gemini_breaker.call, _raise_on_failure, analyze_face, img_str,
-        fallback={"ok": False, "error": "circuit_open"},
-    )
+    # VLM 預設關閉（FULL_MODE_VLM_ENABLED）。生圖模型本來就收到原始照片，
+    # 這兩次呼叫是重複的視覺分析 —— 而 Gemini 免費方案是「每個模型每天 20 次
+    # 請求」，一位參與者就吃掉 2 次，等於一天只夠 10 個人，之後全數降級。
+    #
+    # 開著的時候 VLM 不需要等 CV，兩邊同時發車。
+    if config.FULL_MODE_VLM_ENABLED:
+        fut_outfit = _executor.submit(
+            _gemini_breaker.call, _raise_on_failure, analyze_outfit, img_str,
+            fallback={"ok": False, "error": "circuit_open"},
+        )
+        fut_face_vlm = _executor.submit(
+            _gemini_breaker.call, _raise_on_failure, analyze_face, img_str,
+            fallback={"ok": False, "error": "circuit_open"},
+        )
+    else:
+        fut_outfit = fut_face_vlm = None
 
     rgb_full = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     fut_cv = _executor.submit(get_clothing_features, frame, max_width=480)
@@ -413,7 +466,10 @@ def _generate():
             height_valid = True
         _sessions.drop(session_id)   # 拍完就結束，不留著佔記憶體
 
-    style_id = get_event_style_id()
+    # 參與者在拍照頁選的風格優先；沒選、或送來一個沒註冊的字串，就退回活動
+    # 層級的 CHARACTER_STYLE。這裡刻意不因為風格字串有問題而讓請求失敗 ——
+    # 現場的原則是掃描失敗一律降級，不擋人進場。
+    style_id = resolve_style_id(payload.get("styleId"))
     _history_call(start_run, request_id, mode="full_character", style_id=style_id,
                   source_type="camera")
     _history_call(save_input_photo, request_id, img_str)
@@ -431,16 +487,8 @@ def _generate():
             [[0.25, 0.10], [0.75, 0.10], [0.75, 0.90], [0.25, 0.90]], dtype=np.float32
         )
 
-    try:
-        vlm_outfit = fut_outfit.result(timeout=120)
-    except Exception as e:
-        print(f"[vision] VLM 服裝分析失敗：{e!r}", file=sys.stderr)
-        vlm_outfit = {"ok": False}
-    try:
-        vlm_face = fut_face_vlm.result(timeout=120)
-    except Exception as e:
-        print(f"[vision] VLM 臉部分析失敗：{e!r}", file=sys.stderr)
-        vlm_face = {"ok": False}
+    vlm_outfit = _vlm_result(fut_outfit, "服裝")
+    vlm_face = _vlm_result(fut_face_vlm, "臉部")
     outfit_data = build_outfit_data(vlm_outfit, cv_result)
     face_data = build_face_data(face_cv_result, vlm_face)
     fallback_colors = _sampled_colors(cv_result, face_cv_result)
@@ -531,6 +579,9 @@ def _generate():
                      validation=validation, retries=retries, generation_ms=generation_ms)
 
     result["elapsedMs"] = round((time.perf_counter() - started) * 1000.0, 1)
+    # 回報實際採用的風格，而不是讓手機端假設它送出去的那個一定成立 ——
+    # resolve_style_id 會靜默退回預設，沒有這個欄位就看不出退回發生過。
+    result["styleId"] = style_id
     _history_call(
         finish_run, request_id, status="ok", stage="base",
         height_class=height_class, duration_ms=int((time.perf_counter() - started) * 1000.0),
@@ -539,6 +590,59 @@ def _generate():
         height_ratio=height_ratio, height_measurement_valid=height_valid,
     )
     return jsonify(result)
+
+
+# ── 主辦端歷史紀錄（原始照片、生成結果、token、花費、使用模型） ──────────
+#
+# 資料本身早就在寫（generation_history 由上面的 _history_call 每次生成都
+# 記一筆），這裡只是把既有的帳本開放讀取。端點形狀刻意與 app.py（2D 備援版）
+# 的 /api/dev/* 一致，讓兩套系統共用同一份 generation_history 邏輯與前端寫法，
+# 不必為整合版另外發明一套查詢介面。
+#
+# 這個服務只綁 127.0.0.1，本檔其餘端點也都沒有存取控制 —— 對外的存取控制
+# 由 server/index.js 的代理層負責（比對主辦端通行密鑰），不是這裡的責任。
+def _with_output_url(item: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(item)
+    result["output_url"] = (
+        f"/api/dev/outputs/{result['output_path']}" if result.get("output_path") else None
+    )
+    result["input_url"] = (
+        f"/api/dev/inputs/{result['input_path']}" if result.get("input_path") else None
+    )
+    return result
+
+
+@app.route("/api/dev/generations", methods=["GET"])
+def dev_generation_list():
+    limit = request.args.get("limit", 100, type=int)
+    return jsonify({"items": [_with_output_url(item) for item in list_runs(limit=limit)]})
+
+
+@app.route("/api/dev/generations/<request_id>", methods=["GET"])
+def dev_generation_detail(request_id):
+    item = get_run(request_id)
+    if item is None:
+        return jsonify({"error": "not_found"}), 404
+    for attempt in item.get("attempts") or []:
+        attempt["output_url"] = (
+            f"/api/dev/outputs/{attempt['output_path']}" if attempt.get("output_path") else None
+        )
+    return jsonify(_with_output_url(item))
+
+
+@app.route("/api/dev/summary", methods=["GET"])
+def dev_generation_summary():
+    return jsonify(get_summary())
+
+
+@app.route("/api/dev/outputs/<path:filename>", methods=["GET"])
+def dev_generation_output(filename):
+    return send_from_directory(str(output_directory()), filename)
+
+
+@app.route("/api/dev/inputs/<path:filename>", methods=["GET"])
+def dev_generation_input(filename):
+    return send_from_directory(str(input_directory()), filename)
 
 
 if __name__ == "__main__":

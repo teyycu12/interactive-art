@@ -38,6 +38,17 @@ def _photo_b64():
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "ASSET_DIR", str(tmp_path))
+    # VLM 也要擋掉，不只生圖。
+    #
+    # 這裡原本只替換 generate_full_character_png，於是每一個 /generate 測試都會
+    # 對 Gemini 發出兩次真實請求（服裝一次、臉部一次）。長期沒被發現，是因為
+    # 當時設定的模型已經退役、兩支都秒回 404 —— 看起來就只是「有點慢」。
+    # 模型名修好之後那些呼叫開始真的成功，單一測試從數秒變成 27 秒，
+    # 而且每跑一次測試就付一次錢。單元測試不該碰網路。
+    monkeypatch.setattr(service, "analyze_outfit",
+                        lambda *a, **k: {"ok": False, "error": "stubbed_in_tests"})
+    monkeypatch.setattr(service, "analyze_face",
+                        lambda *a, **k: {"ok": False, "error": "stubbed_in_tests"})
     service.app.config["TESTING"] = True
     return service.app.test_client()
 
@@ -60,22 +71,39 @@ class TestHealthReportsMissingStyleReference:
 
     def test_missing_set_appears_in_degraded(self, client, monkeypatch):
         monkeypatch.setattr(
-            service, "style_reference_status",
-            lambda: {"mode": "sheet", "set_id": "2026q3_owner_curated",
-                     "available": False, "reason": "set_not_found"},
+            service, "style_reference_report",
+            lambda: {"lego": {"mode": "sheet", "set_id": "2026q3_owner_curated",
+                              "available": False, "reason": "set_not_found"}},
         )
         body = client.get("/health").get_json()
         assert body["ok"] is True, "缺參考圖不是故障，服務仍然可用"
         assert any("style_reference" in d for d in body["degraded"])
-        assert body["style_reference"]["available"] is False
+        assert body["style_reference"]["lego"]["available"] is False
 
     def test_present_set_is_not_flagged(self, client, monkeypatch):
         monkeypatch.setattr(
-            service, "style_reference_status",
-            lambda: {"mode": "sheet", "set_id": "s", "available": True, "reason": None},
+            service, "style_reference_report",
+            lambda: {"lego": {"mode": "sheet", "set_id": "s",
+                              "available": True, "reason": None}},
         )
         body = client.get("/health").get_json()
         assert not any("style_reference" in d for d in body["degraded"])
+
+    def test_one_missing_set_is_flagged_even_when_another_is_present(self, client, monkeypatch):
+        """逐風格回報存在的理由：只看預設風格會讓另一個風格整組缺席而全綠，
+        而那個風格在手機端的選單上仍然選得到。"""
+        monkeypatch.setattr(
+            service, "style_reference_report",
+            lambda: {
+                "lego": {"mode": "sheet", "set_id": "a", "available": True, "reason": None},
+                "pixar": {"mode": "sheet", "set_id": "b",
+                          "available": False, "reason": "set_not_found"},
+            },
+        )
+        body = client.get("/health").get_json()
+        flagged = [d for d in body["degraded"] if "style_reference" in d]
+        assert len(flagged) == 1
+        assert "pixar" in flagged[0] and "lego" not in flagged[0]
 
 
 class TestGenerateGuards:
@@ -424,3 +452,59 @@ class TestUploadedPhoto:
         body = client.post("/generate", json={"image": _photo_b64(),
                                               "sessionId": "../../etc/passwd"}).get_json()
         assert body["ok"] is True
+
+
+class TestVlmGate:
+    """FULL_MODE_VLM_ENABLED 必須真的擋住呼叫。
+
+    README 與 .env.example 一直寫著「預設關閉」，而 app.py（2D 備援）確實有讀，
+    service.py（整合版主線）卻完全忽略它、無條件呼叫 —— 文件宣稱關閉的東西
+    主線一直開著。代價很具體：Gemini 免費方案是每個模型每天 20 次請求，
+    一位參與者用掉 2 次，一天只夠 10 個人。
+    """
+
+    def _set_gate(self, monkeypatch, enabled):
+        """config 是 frozen dataclass，不能就地改 —— 換掉整個實例，
+        用 replace 保留其餘欄位不動。"""
+        import dataclasses
+        monkeypatch.setattr(service, "config",
+                            dataclasses.replace(service.config,
+                                                FULL_MODE_VLM_ENABLED=enabled))
+
+    def _spy(self, monkeypatch):
+        # 回成功而非失敗：熔斷器對失敗會自動重試一次，那會讓計數變成各兩次，
+        # 把「有沒有被呼叫」這件事混進「重試幾次」裡。
+        calls = []
+        def _outfit(*a, **k):
+            calls.append("outfit")
+            return {"ok": True, "outfit": {"inner": "tshirt", "lower": "jeans"}}
+        def _face(*a, **k):
+            calls.append("face")
+            return {"ok": True, "face": {"hair_color": "brown"}}
+        monkeypatch.setattr(service, "analyze_outfit", _outfit)
+        monkeypatch.setattr(service, "analyze_face", _face)
+        return calls
+
+    def test_disabled_by_default_makes_no_vlm_call(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(service, "ASSET_DIR", str(tmp_path))
+        self._set_gate(monkeypatch, False)
+        calls = self._spy(monkeypatch)
+        monkeypatch.setattr(service, "generate_full_character_png",
+                            lambda *a, **k: {"ok": True, "body_png": _png_b64()})
+        r = service.app.test_client().post("/generate", json={"image": _photo_b64()})
+        assert r.get_json()["ok"] is True, "關掉 VLM 不該讓生成失敗"
+        assert calls == [], "VLM 關閉時不得發出任何呼叫"
+
+    def test_enabled_calls_both_endpoints(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(service, "ASSET_DIR", str(tmp_path))
+        self._set_gate(monkeypatch, True)
+        calls = self._spy(monkeypatch)
+        monkeypatch.setattr(service, "generate_full_character_png",
+                            lambda *a, **k: {"ok": True, "body_png": _png_b64()})
+        service.app.test_client().post("/generate", json={"image": _photo_b64()})
+        assert sorted(calls) == ["face", "outfit"]
+
+    def test_health_reports_the_gate(self, client):
+        body = client.get("/health").get_json()
+        assert "vlm_enabled" in body, "關著與一直失敗在現場長得一樣，必須報出來"
+        assert body["vlm_model"]

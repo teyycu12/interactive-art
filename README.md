@@ -29,6 +29,13 @@ python backend/service.py     # 角色生成服務（127.0.0.1:5055）
 > 執行 `bash scripts/make-cert.sh` 產生憑證後，以
 > `TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start` 啟動。
 
+本機頁面：
+
+- 大螢幕：<http://localhost:3000/screen/>
+- 手機控制：<http://localhost:3000/controller/>（現場請改用終端機印出的區網 IP）
+- 主辦端控制台：<http://localhost:3000/host/>（需要終端機印出的通行密鑰）
+- 生成服務健康檢查：<http://127.0.0.1:5055/health>
+
 完整說明見 [CLAUDE.md](CLAUDE.md) 與 [docs/](docs/)。
 
 ---
@@ -111,9 +118,23 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 - 結果經 `avatar_quality.py` 檢查透明背景、構圖、碎裂、左右腿與鞋；失敗回傳明確原因。
 - 以 2D sprite 進入 Boids 投影牆。
 
-**風格參考圖**：除了上述三張，模型還會收到一張由策展參考圖集拼成的風格參考表
-（`STYLE_REFERENCE_MODE=sheet`，預設集 `STYLE_REFERENCE_SET=2026q3_owner_curated`）。
-設為 `off` 可退回三張圖的送法做對照實驗。
+**生成風格**：目前安裝兩種風格，參與者在拍照頁自行選擇（選單由 `/api/styles`
+餵資料，沒選就用 `CHARACTER_STYLE` 的活動預設）：
+
+| `style_id` | 顯示名 | 參考圖集 |
+|---|---|---|
+| `lego` | 樂高 | `2026q3_owner_curated` |
+| `pixar` | 皮克斯 | `2026q3_pixar_figma` |
+
+**風格參考圖**：除了上述三張，模型還會收到一張由該風格的參考圖集拼成的風格參考表
+（`STYLE_REFERENCE_MODE=sheet`）。設為 `off` 可退回三張圖的送法做對照實驗。
+
+> [!WARNING]
+> 參考圖集**綁在風格上**（`style_registry.GenerationStyle.reference_set`），
+> 不是綁在環境變數上。`STYLE_REFERENCE_SET` 現在是**全域覆寫**，設了它會把
+> 所有風格壓到同一組圖 —— 而風格 sheet 在 prompt 裡被宣告為工藝的最高權威，
+> 這種錯誤配對**不會失敗**，只會讓 prompt 與自己的參考圖互相矛盾，由模型自行
+> 選一邊。`/health` 的 `degraded` 會列出被覆寫的風格。平常請留空。
 
 > [!IMPORTANT]
 > **參考圖集自 2026-08-25 起隨 repo 一起發布**（先前因授權判定不進版控）。
@@ -128,9 +149,15 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 > 以及生成服務 `/health` 的 `degraded` 會列出 `style_reference（…）`。
 >
 > 要換自己的圖集：在 `docs/style_reference/<你的 set_id>/` 放入 `full_body_*.png`
-> （或 `.webp`），照 `PROVENANCE.md` 的格式記錄來源與授權，再把
-> `STYLE_REFERENCE_SET` 指向它。放進去前可用
+> （或 `.webp`），照 `PROVENANCE.md` 的格式逐檔記錄來源與授權，再把
+> `backend/garment_gen.py` 底部該風格的 `register_style(...)` 的 `reference_set`
+> 指向它（**不要**改用 `STYLE_REFERENCE_SET`，那是全域覆寫，見上方警告）。
+> 放進去前可用
 > `python scripts/check_reference_set.py docs/style_reference/<set_id>` 檢查。
+>
+> 要新增一種風格：在 `garment_gen.py` 加一份 prompt 模板、negative、
+> `_ROLE_STYLE_*` 文字與姿勢參考，然後 `register_style()`。四樣東西必須成套 ——
+> `backend/tests/test_style_registry.py` 有測試擋住任兩個風格共用其中任何一項。
 
 ### 已退役
 
@@ -389,6 +416,12 @@ python backend/app.py
 python -m http.server 8000 --directory frontend
 ```
 
+開啟主操作頁：
+
+```powershell
+Start-Process 'http://127.0.0.1:8000/index.html'
+```
+
 ### 一鍵啟動（macOS／Linux）
 
 ```bash
@@ -398,23 +431,9 @@ bash start.sh                 # 同時啟動後端與前端，並顯示 LAN IP
 
 啟動後終端會顯示 LAN IP，現場手機／平板可直接用該 IP 連入互動端。
 
----
-
-### 3. 啟動前端
-
-另開一個終端機：
-
-```powershell
-python -m http.server 8000 --directory frontend
-```
-
-開啟主操作頁：
-
-```powershell
-Start-Process 'http://127.0.0.1:8000/index.html'
-```
-
 要停止服務，回到各自終端機按 `Ctrl+C`。完整的啟動、開啟與依 PID 關閉方式請參考 `CLAUDE.md`。
+
+---
 
 ## 環境變數
 
@@ -425,9 +444,11 @@ Start-Process 'http://127.0.0.1:8000/index.html'
 | `FULL_CHARACTER_MODEL` | `google/gemini-3-pro-image-preview` | 完整角色生成模型 |
 | `GENERATION_MODE` | `full_character` | 後端預設模式；目前唯一支援值 |
 | `GENERATION_MAX_RETRIES` | `0` | 自動付費重試次數，開發預設關閉 |
-| `FULL_MODE_VLM_ENABLED` | `0` | 是否額外呼叫服裝／臉部 VLM（模型已看過原始照片，預設關閉）|
+| `STYLE_REFERENCE_SET` | 空 | **全域覆寫**參考圖集；留空才會各風格用自己的那組 |
+| `FULL_MODE_VLM_ENABLED` | `0` | 是否額外呼叫服裝／臉部 VLM（模型已看過原始照片，預設關閉）。整合版與 2D 備援版都會讀。開啟後每位參與者消耗 2 次 Gemini 請求，免費方案每模型每天上限 20 次 |
 | `GEMINI_API_KEY` | 空 | 可選語意分析 |
-| `CHARACTER_STYLE` | `lego` | 活動層級統一角色風格 |
+| `VLM_MODEL` | `gemini-3.6-flash` | 服裝／臉部語意辨識模型；Google 讓舊 id 退役時要改這裡 |
+| `CHARACTER_STYLE` | `lego` | 活動層級預設風格（`lego`／`pixar`）；參與者可在拍照頁改選 |
 | `HEIGHT_SHORT_MAX_RATIO` | `0.72` | short／medium 分界 |
 | `HEIGHT_TALL_MIN_RATIO` | `0.84` | medium／tall 分界 |
 | `DEV_HISTORY_ENABLED` | `1` | 啟用 SQLite 生成歷史 |

@@ -101,6 +101,22 @@ class AppConfig:
     OUTFIT_GEN_MODEL: str = _get_str("OUTFIT_GEN_MODEL", "google/gemini-3.1-flash-image-preview")
     FULL_CHARACTER_MODEL: str = _get_str("FULL_CHARACTER_MODEL", "google/gemini-3-pro-image-preview")
     REFINE_CHARACTER_MODEL: Optional[str] = _get_str("REFINE_CHARACTER_MODEL", "") or None
+    # 服裝／臉部語意辨識用的 Gemini 模型（vlm_module）。這裡走的是 Google 官方
+    # SDK，不經 OpenRouter，因此模型名沒有 "google/" 前綴 —— 與上面三個不同。
+    #
+    # 必須可設定：這個名字原本寫死在 vlm_module.py 兩處，而 Google 會讓舊模型
+    # 退役。實際發生過的後果是兩個呼叫都回 404，VLM 全數失敗、生成照樣成功，
+    # 於是 prompt 裡的髮色／髮型／眼睛／鬍子／服裝款式欄位默默全空 ——
+    # 錢照付，東西拿不到，而且畫面上看不出來。
+    VLM_MODEL: str = _get_str("VLM_MODEL", "gemini-3.6-flash")
+    # 是否額外呼叫服裝／臉部 VLM。預設關閉：生圖模型本來就收到原始照片，
+    # 這兩次呼叫是重複的視覺分析，不是必需品。
+    #
+    # 集中到這裡是因為原本 app.py 自己解析、service.py 根本沒讀 —— 於是
+    # README 與 .env.example 都寫著「預設關閉」，主線卻無條件呼叫。
+    # 兩邊各自解析同一個變數名還會產生第二種真值規則（app.py 的寫法下
+    # "on" 是假、這裡是真），同一份 .env 在兩個行程裡行為不同。
+    FULL_MODE_VLM_ENABLED: bool = _get_bool("FULL_MODE_VLM_ENABLED", False)
 
 
 # 全域單例

@@ -144,6 +144,25 @@
       </div>
       <p class="hint" id="people-empty">還沒有人進場。</p>
     </div>
+
+    <!-- 生成歷史 -->
+    <div class="panel">
+      <div class="panel-head">
+        <h2>生成歷史 <span class="count" id="history-count">0</span></h2>
+        <button class="btn-link" id="btn-history-toggle" aria-expanded="false">展開列表</button>
+      </div>
+      <p class="hint tiny" id="history-summary">讀取中…</p>
+      <div class="table-wrap is-collapsed" id="history-wrap">
+        <table id="history-table">
+          <thead>
+            <tr><th></th><th></th><th>時間</th><th>狀態</th><th>模型</th><th>Tokens</th><th>花費</th><th>耗時</th></tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+      <p class="hint" id="history-empty" hidden>還沒有生成紀錄。</p>
+      <button class="btn-ghost" id="btn-history-refresh">重新整理</button>
+    </div>
    </div>
 
    <div class="col">
