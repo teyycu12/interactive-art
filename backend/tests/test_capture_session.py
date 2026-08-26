@@ -6,6 +6,7 @@
 
 import re
 import time
+from pathlib import Path
 
 import pytest
 
@@ -30,7 +31,11 @@ class TestThresholdsMatchAppPy:
     """
 
     def test_defaults_are_identical(self):
-        src = open("backend/app.py", encoding="utf-8").read()
+        # 路徑相對於本檔而非工作目錄：CI 是 `cd backend && pytest tests/`，
+        # 本機習慣從根目錄跑 `pytest backend/` —— 寫死 "backend/app.py"
+        # 只在後者成立，前者會以 FileNotFoundError 失敗。
+        app_py = Path(__file__).resolve().parents[1] / "app.py"
+        src = app_py.read_text(encoding="utf-8")
         for name, ours in (
             ("CAPTURE_STABLE_FRAMES", capture_session.STABLE_FRAMES),
             ("CAPTURE_MOTION_MAX", capture_session.MOTION_MAX),

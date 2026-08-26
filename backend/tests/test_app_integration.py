@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from backend.app import app, _swarm_chars, _swarm_lock
 from backend.swarm_snapshot import save_snapshot, load_snapshot, clear_snapshot
 from backend.bot_simulator import inject_bots, remove_bots
@@ -30,7 +31,10 @@ class TestAppIntegration(unittest.TestCase):
             self.assertEqual(len(_swarm_chars), initial_count)
 
     def test_snapshot_persistence_integration(self):
-        test_path = "backend/data/test_integration_snapshot.json"
+        # 同樣不吃工作目錄：從 backend/ 跑時這個相對路徑會生出
+        # backend/backend/data/，被 .gitignore 蓋掉所以沒人會發現。
+        test_path = str(
+            Path(__file__).resolve().parents[1] / "data" / "test_integration_snapshot.json")
         with _swarm_lock:
             save_snapshot(_swarm_chars, test_path)
             restored = load_snapshot(test_path)
