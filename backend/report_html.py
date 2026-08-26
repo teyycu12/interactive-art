@@ -13,6 +13,12 @@ JS 繪製，產出單一 .html 檔可直接開或投影。
     .venv/bin/python backend/report_html.py backend/logs/events-20260714.jsonl
 """
 
+# 必須在任何 print 之前 —— 見該模組的說明。
+try:
+    from backend import console_encoding  # noqa: F401
+except ImportError:
+    import console_encoding  # noqa: F401
+
 import argparse
 import glob
 import json

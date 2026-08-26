@@ -23,6 +23,12 @@ N 次，量測「拍照完成 → avatar_generated 回傳」的端到端延遲�
 注意：每次都會真的呼叫 Gemini，會消耗 API 額度。runs 別設太大。
 """
 
+# 必須在任何 print 之前 —— 見該模組的說明。
+try:
+    from backend import console_encoding  # noqa: F401
+except ImportError:
+    import console_encoding  # noqa: F401
+
 import argparse
 import base64
 import mimetypes

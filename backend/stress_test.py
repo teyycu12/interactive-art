@@ -21,6 +21,12 @@ M3 承載量壓測：模擬 N（預設 30）個角色同時在場，量測後端
 （那條鏈依賴 Gemini，屬 M2 量測，另用真實拍照或獨立腳本測）。
 """
 
+# 必須在任何 print 之前 —— 見該模組的說明。
+try:
+    from backend import console_encoding  # noqa: F401
+except ImportError:
+    import console_encoding  # noqa: F401
+
 import argparse
 import random
 import statistics
