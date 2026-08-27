@@ -74,20 +74,43 @@ class TestEmptyEnvFallsBackToDefault(unittest.TestCase):
             self.assertEqual(_get_str("TEST_STR", "fallback"), "fallback")
 
     def test_model_names_survive_blank_env(self):
-        """三個模型名稱都不可為空 —— 空字串會讓 API 回 404。"""
-        blanks = {
-            "OUTFIT_GEN_MODEL": "",
-            "FULL_CHARACTER_MODEL": "",
-            "GENERATION_MODE": "",
-        }
-        with mock.patch.dict(os.environ, blanks):
-            cfg = AppConfig()
-            self.assertTrue(cfg.OUTFIT_GEN_MODEL.strip())
-            self.assertTrue(cfg.FULL_CHARACTER_MODEL.strip())
-            # 預設模式改為 full_character：body_sprite 與 brick_ai_texture 已退役，
-            # app.py 會在付費呼叫前直接拒絕它們。這支測試釘的是「空字串不得覆寫
-            # 程式預設值」，而非某個特定模式名。
-            self.assertEqual(cfg.GENERATION_MODE, "full_character")
+        """三個設定值都不可為空 —— 空字串會讓 API 回 404。
+
+        直接測 `_get_str` 而不是建一個 AppConfig：`AppConfig` 的欄位是
+        **dataclass 的 field default**，在 class 定義（也就是 import config）
+        的當下就求值完畢並凍結。`mock.patch.dict` 之後再 `AppConfig()`
+        拿到的仍是 import 當時的值，連 `clear=True` 都改不了它 ——
+        於是這支測試實際釘的是「跑測試那台機器的 .env」而不是程式預設值。
+
+        它曾因此在本機 .env 留著已退役的 `GENERATION_MODE=body_sprite` 時失敗，
+        而 CI 上沒有 .env、剛好落在預設值，所以一直是綠的。
+        """
+        for key, default in (
+            ("OUTFIT_GEN_MODEL", "google/gemini-3.1-flash-image-preview"),
+            ("FULL_CHARACTER_MODEL", "google/gemini-3-pro-image-preview"),
+            # full_character 是唯一還在線上的模式：body_sprite 與 brick_ai_texture
+            # 已退役，app.py 會在付費呼叫前直接拒絕。預設值落在被拒絕的模式上，
+            # 等於沒設這個環境變數的人一啟動就全部生成失敗。
+            ("GENERATION_MODE", "full_character"),
+        ):
+            for blank in ("", "   "):
+                with self.subTest(key=key, blank=repr(blank)):
+                    with mock.patch.dict(os.environ, {key: blank}):
+                        self.assertEqual(_get_str(key, default), default)
+
+    def test_generation_mode_default_is_a_live_mode(self):
+        """程式預設的生成模式不可以是已退役的那兩個。
+
+        與上一支測試互補：那支釘「空字串不得覆寫預設值」，這支釘「預設值本身
+        是活的」。分開是因為 AppConfig 的欄位凍結在 import 當下，這裡只能讀
+        原始碼裡寫死的那個字面值。
+        """
+        import inspect
+
+        from backend import config as config_module
+
+        src = inspect.getsource(config_module)
+        self.assertIn('_get_str("GENERATION_MODE", "full_character")', src)
 
     def test_refine_model_blank_becomes_none(self):
         """未指定精修模型時應為 None，讓解析鏈往下退回主模型。"""

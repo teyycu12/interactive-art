@@ -575,6 +575,28 @@ await sleep(300);
   host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
   await sleep(300);
 
+  // 場上只留小美與阿賓。
+  //
+  // 前面的安全性測試（偽造憑證、角色轉換）留下了幾個角色，而**關掉 socket
+  // 不等於角色離場** —— 那是刻意的設計（賓客關分頁角色仍留 AGENT_TTL_MS＝45 秒，
+  // 見 CLAUDE.md），遠長於整套 e2e。
+  //
+  // 而 `treasure.check()` 掃的是場上**所有**非先知角色，不管有沒有連線。
+  // 於是藏寶點若隨機落在那個殘留角色附近，它會在阿賓走到之前就「找到」寶藏，
+  // 一次讓四條測試同時失敗（找到者不是阿賓、阿賓沒拿到分數、
+  // 冷熱因本輪已結束而一則都沒送出）。實測抓到的兇手正是叫「攻擊者」的那一個。
+  //
+  // 這是測試的前置條件沒清乾淨，不是伺服器的錯 —— 因此在這裡明確清場，
+  // 而不是把 TTL 調短或讓尋寶忽略離線角色（後者會改掉現場真正想要的行為）。
+  const keep = new Set([amy.welcome.userId, ben.welcome.userId]);
+  for (const a of hostStates.at(-1)?.agents ?? []) {
+    if (!keep.has(a.id)) host.send(JSON.stringify({ type: 'HOST_KICK', agentId: a.id }));
+  }
+  await sleep(300);
+  check('尋寶開始前場上只剩兩位參與者',
+    (hostStates.at(-1)?.agents ?? []).length === 2,
+    (hostStates.at(-1)?.agents ?? []).map((a) => a.name).join(', '));
+
   const treasureHostMsgs = [];
   const onHost = (d) => {
     const m = JSON.parse(d);
@@ -597,8 +619,12 @@ await sleep(300);
   // 手機端只要拿得到座標，開發者工具就能直接看到答案。
   const spot = treasureHostMsgs.find((m) => m.type === 'TREASURE_START')?.spot;
   check('主辦端拿得到藏寶座標', Number.isFinite(spot?.x) && Number.isFinite(spot?.y));
+  // TREASURE_FOUND 例外：本輪已經結束，那時公布座標是刻意的
+  // （見 CLAUDE.md「中止尋寶不公布座標，找到才公布」）。少了這個排除，
+  // 這條檢查會在阿賓踩中得夠快時誤判「正確行為」為外洩。
   const phoneSawCoords = [...amy.raw, ...ben.raw].some((raw) => {
     const m = JSON.parse(raw);
+    if (m.type === 'TREASURE_FOUND') return false;
     return m.round?.x !== undefined || m.spot !== undefined;
   });
   check('藏寶座標不會外洩給手機', !phoneSawCoords);
@@ -611,15 +637,40 @@ await sleep(300);
   const nudge = (box, x, y) => box.ws.send(JSON.stringify({
     type: 'INPUT_MOVE', vector: { x, y }, intensity: 1,
   }));
-  // 一路把阿賓推向寶藏，直到踩中為止
-  for (let i = 0; i < 120 && !ben.treasureFound; i++) {
-    const me = live().find((a) => a.id === ben.welcome.userId);
-    if (!me) break;
-    const dx = spot.x - me.x;
-    const dy = spot.y - me.y;
-    const d = Math.hypot(dx, dy) || 1;
-    nudge(ben, dx / d, dy / d);
-    await sleep(40);
+  // 一路把阿賓推向寶藏，直到踩中為止。
+  //
+  // 圈數必須由「實際還要走多遠」算出，不能寫死。原本寫死 120 圈 × 40ms＝4.8 秒，
+  // 而 MAX_SPEED 是 190 px/s，等於最遠只走得了約 912px —— 但藏寶點是在
+  // 1920×1080（對角線約 2200px）裡隨機挑的，且要繞開道具。
+  // 於是這條測試實際上是在擲骰子：藏寶點剛好落在附近才過得了，
+  // 落在對角就必然「未踩中」，一次帶垮四條斷言。
+  //
+  // 這裡改成依起始距離估算所需時間再乘 3 倍餘裕（繞道具、α 爬升、
+  // 對齊誤差都會讓實際路徑長於直線），並保留上限避免真的壞掉時無限空轉。
+  {
+    const start = live().find((a) => a.id === ben.welcome.userId);
+    const startDist = Math.hypot(spot.x - start.x, spot.y - start.y);
+    const needMs = (startDist / MAX_SPEED) * 1000 * 3 + 2000;
+    const maxTicks = Math.min(600, Math.ceil(needMs / 40));
+
+    let ticks = 0;
+    for (; ticks < maxTicks && !ben.treasureFound; ticks++) {
+      const me = live().find((a) => a.id === ben.welcome.userId);
+      if (!me) break;
+      const dx = spot.x - me.x;
+      const dy = spot.y - me.y;
+      const d = Math.hypot(dx, dy) || 1;
+      nudge(ben, dx / d, dy / d);
+      await sleep(40);
+    }
+    // 沒踩到時要說得出「差多遠」，否則下面四條失敗看起來像功能壞掉，
+    // 實際上只是走的時間不夠。
+    if (!ben.treasureFound) {
+      const me = live().find((a) => a.id === ben.welcome.userId);
+      console.log(`   [尋寶] 走了 ${ticks}/${maxTicks} 圈仍未踩中；`
+        + `起始距離 ${startDist.toFixed(0)}px，`
+        + `目前距離 ${me ? Math.hypot(spot.x - me.x, spot.y - me.y).toFixed(0) : '?'}px`);
+    }
   }
 
   check('只有先知收得到冷熱提示',
@@ -886,8 +937,36 @@ await sleep(200);
 
 // 生成端點是唯一會花錢的路徑（每次兩支 Gemini 加一次生圖），
 // 原本沒有任何速率限制 —— 場館 Wi-Fi 上一台裝置寫個迴圈就能把額度燒光。
+/**
+ * 對 Gateway 發一個 POST，回傳回應 body 裡的 error 欄位。
+ *
+ * ⚠ 送出過大的 body 時會與伺服器的 `req.destroy()` 賽跑，見下方 sendPost 的說明。
+ */
 function postApi(path, body = Buffer.from('{}')) {
+  return sendPost(path, body).then((json) => (json === null ? null : json.error));
+}
+
+/**
+ * POST 的共用實作。回傳解析後的 JSON，解析不出來回 null。
+ *
+ * **為什麼要自己接 socket 的 error**：伺服器對超過上限的 body 會在讀到一半時
+ * 直接 `req.destroy()` 把連線切掉（這是對的，不能為了讓客戶端寫完而先收下
+ * 一個 2MB 的 body）。但此時客戶端往往還沒把 body 寫完，於是那個 write 會
+ * 收到 EPIPE —— 而且它是在 **socket** 上觸發，不是在 request 物件上，
+ * `req.on('error')` 接不到。未處理的 'error' 事件會讓整個 e2e 行程直接崩潰。
+ *
+ * 這是這支測試長期間歇性失敗的真正原因：伺服器的行為一直是對的
+ * （單獨用 curl 連打 20 次，20 次都正確回 frame_too_large），
+ * 壞的是測試客戶端 —— 它在賽跑輸掉時不是回報失敗，而是整個行程被 EPIPE 帶走。
+ *
+ * 因此：socket 的錯誤一律吞掉，並且**以伺服器真的回了什麼為準** ——
+ * 回應先到就用回應，連線先斷才回 null。
+ */
+function sendPost(path, body) {
   return new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+
     const req = http.request({
       host: '127.0.0.1', port: PORT, path, method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
@@ -895,11 +974,14 @@ function postApi(path, body = Buffer.from('{}')) {
       const out = [];
       res.on('data', (c) => out.push(c));
       res.on('end', () => {
-        try { resolve(JSON.parse(Buffer.concat(out).toString()).error); }
-        catch { resolve(null); }
+        try { done(JSON.parse(Buffer.concat(out).toString())); }
+        catch { done(null); }
       });
     });
-    req.on('error', () => resolve(null));
+
+    // 伺服器切線導致的寫入失敗不是測試失敗，交由上面的回應處理決定結果。
+    req.on('socket', (s) => s.on('error', () => {}));
+    req.on('error', () => done(null));
     req.end(body);
   });
 }
@@ -908,21 +990,7 @@ const postGenerate = () => postApi('/api/generate');
 
 /** 同 postApi，但回傳整包 body 而非只取 error 欄位 */
 function postApiBody(path, body = Buffer.from('{}')) {
-  return new Promise((resolve) => {
-    const req = http.request({
-      host: '127.0.0.1', port: PORT, path, method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
-    }, (res) => {
-      const out = [];
-      res.on('data', (c) => out.push(c));
-      res.on('end', () => {
-        try { resolve(JSON.parse(Buffer.concat(out).toString())); }
-        catch { resolve(null); }
-      });
-    });
-    req.on('error', () => resolve(null));
-    req.end(body);
-  });
+  return sendPost(path, body);
 }
 
 // 容量 3：前三次會被放行（生成服務沒開，因此回 vision_service_unavailable），
