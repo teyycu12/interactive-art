@@ -2,7 +2,8 @@
 
 > **更新：2026-08-22** — `app.py` M3 埋點已全數合入 main（含 M1/M2 影像解碼改動），
 > swarm_logic 已增強（邊界轉向、打招呼持續、有機漫遊），測試與啟動工具已補齊。
-> 原始 diff 檔 `app.py.M3-pending.diff` 已歸檔（僅留作變更歷史參考）。
+> 原始 diff 檔 `app.py.M3-applied.diff` 已歸檔（僅留作變更歷史參考）。
+> **已合入 `backend/app.py`，且因後續改動已無法再套用** —— 不要嘗試 `git apply`。
 
 ---
 
@@ -48,7 +49,7 @@
 ## 2. ✅ `backend/app.py` 改動已合入（原§2 已解決）
 
 原本因 M1/M2 影像解碼改動交錯無法單獨提交的問題，已透過直接 apply diff 完整合入。
-原始 diff 存於 `docs/m3/app.py.M3-pending.diff`（僅作歷史參考）。
+原始 diff 存於 `docs/m3/app.py.M3-applied.diff`（僅作歷史參考）。
 
 ---
 
