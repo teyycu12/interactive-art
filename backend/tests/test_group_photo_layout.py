@@ -198,12 +198,27 @@ class TestBackdropFromScreen:
         assert res["character_count"] == 1
 
     def test_fallback_still_draws_characters(self):
-        """退回自畫舞台時，角色就必須畫出來（否則合照裡沒人）。"""
-        empty = compose_group_photo([], photo_url_base="http://x/p", backdrop=None)
-        peopled = compose_group_photo(
+        """退回自畫舞台時，角色就必須畫出來（否則合照裡沒人）。
+
+        比較的是「一人」與「兩人」，而**不是**「零人」與「一人」——
+        零人那張會多畫一行佔位文字「目前尚無在場角色」，於是兩張的差異
+        同時來自「角色」與「那行字」，測到的並不只是角色。
+
+        而那行字在沒有中文字型的機器上會變成豆腐框甚至完全不顯示
+        （CI 只裝了 libgl 等，沒有 fonts-noto-cjk），差異隨之縮水：
+        實測有字型 0.93、無字型 0.56，而門檻是 0.5 —— 貼著邊緣，
+        Pillow 版本或字型度量稍有不同就會翻面。CI 上實際量到 0.4857 而失敗，
+        本機卻永遠是綠的。
+
+        改成兩張都有角色、都不畫佔位文字之後，有無字型分別是 1.10 / 1.11，
+        與字型無關。
+        """
+        one = compose_group_photo(
             [char(300, 200)], photo_url_base="http://x/p", backdrop=None)
+        two = compose_group_photo(
+            [char(300, 200), char(1500, 900)], photo_url_base="http://x/p", backdrop=None)
         a = np.asarray(I.open(io.BytesIO(base64.b64decode(
-            empty["photo_b64"].split(",")[1]))).convert("RGB")).astype(int)
+            one["photo_b64"].split(",")[1]))).convert("RGB")).astype(int)
         b = np.asarray(I.open(io.BytesIO(base64.b64decode(
-            peopled["photo_b64"].split(",")[1]))).convert("RGB")).astype(int)
+            two["photo_b64"].split(",")[1]))).convert("RGB")).astype(int)
         assert np.abs(a - b).mean() > 0.5, "自畫舞台必須畫出角色"
