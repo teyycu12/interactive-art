@@ -17,7 +17,8 @@ export const EV = {
   // Server → Phone
   CLIENT_WELCOME: 'CLIENT_WELCOME', // 登入確認，回傳伺服器指派的 userId
   CLIENT_REJECT: 'CLIENT_REJECT',   // 資料驗證失敗
-  CLIENT_SYNC: 'CLIENT_SYNC',       // 自己與鄰近角色的座標（10Hz，僅送該連線）
+  CLIENT_SYNC: 'CLIENT_SYNC',       // 自己與鄰近角色的座標（15Hz，僅送該連線）
+  CLIENT_ROSTER: 'CLIENT_ROSTER',   // 場上所有人的 id → 名字（僅在成員變動時送）
   // Server → Screen
   STAGE_META: 'STAGE_META',         // 場域尺寸等靜態資訊（連線時送一次）
   STAGE_ROSTER: 'STAGE_ROSTER',     // 參與者名冊（僅在有人加入/離開時送）
@@ -68,6 +69,18 @@ export const EV = {
 
   // ── 社交圖譜 ──────────────────────────────────────────
   SOCIAL_SELF: 'SOCIAL_SELF',                 // Server → Phone：我認識了誰
+
+  // ── 分區（shared/scene.js 的 ZONES）───────────────────
+  ZONE_SELF: 'ZONE_SELF',                     // Server → Phone：我進出了某個分區
+  ZONE_STATE: 'ZONE_STATE',                   // Server → Screen/Host：各分區目前有幾人
+
+  // ── 尋寶任務（先知模式，見 server/treasure.js）────────
+  HOST_START_TREASURE: 'HOST_START_TREASURE', // Host → Server：開始一輪尋寶
+  HOST_STOP_TREASURE: 'HOST_STOP_TREASURE',   // Host → Server：中止本輪
+  TREASURE_START: 'TREASURE_START',           // Server → All：本輪開始（不含座標）
+  TREASURE_HEAT: 'TREASURE_HEAT',             // Server → Prophet：冷熱提示（僅送先知）
+  TREASURE_FOUND: 'TREASURE_FOUND',           // Server → All：找到了，公布座標
+  TREASURE_ENDED: 'TREASURE_ENDED',           // Server → All：本輪中止
 };
 
 /**
@@ -82,6 +95,18 @@ export const MISSION_TYPES = {
     brief: '走向另一位參與者，互相交換配對碼',
     defaultTarget: 2,   // 每人要完成幾次
     maxTarget: 10,
+  },
+  COLOR_HUNT: {
+    id: 'COLOR_HUNT',
+    label: '找特定顏色的人配對',
+    brief: '找一位身上帶指定顏色的參與者，交換配對碼',
+    defaultTarget: 2,
+    maxTarget: 10,
+    /**
+     * 需要額外參數（顏色族）。主辦端據此多渲染一個顏色選單，
+     * 伺服器據此要求 msg.colorFamily 必填。
+     */
+    param: 'colorFamily',
   },
 };
 
@@ -131,6 +156,7 @@ export const SCORE_SOURCES = {
   PAIR: 'PAIR',               // 完成一次配對
   MISSION_DONE: 'MISSION_DONE', // 達成該任務的目標次數
   QUIZ: 'QUIZ',               // 答對問答
+  TREASURE: 'TREASURE',       // 找到寶藏
 };
 
 /** 積分來源的顯示文案，集中定義避免三端各寫一套 */
@@ -138,6 +164,7 @@ export const SCORE_LABELS = {
   PAIR: '完成配對',
   MISSION_DONE: '任務達標',
   QUIZ: '答對問答',
+  TREASURE: '找到寶藏',
 };
 
 /** 配對失敗原因，集中定義以便手機端顯示對應文案 */
@@ -150,6 +177,7 @@ export const PAIR_ERRORS = {
   COOLDOWN: 'COOLDOWN',
   DECLINED: 'DECLINED',
   EXPIRED: 'EXPIRED',
+  COLOR_MISMATCH: 'COLOR_MISMATCH',  // COLOR_HUNT：對方身上沒有指定的顏色
 };
 
 /** 社交動作白名單（技術文件 M1 §操控輸入發送規格） */
@@ -179,9 +207,15 @@ export const SYNC_FPS = 30;
  * 大螢幕只有一條連線，手機則是每人一條。30Hz × 10 人 = 300 則/秒，
  * 而現場無線網路的餘裕已經被貼圖與 STAGE_SYNC 吃掉大半
  * （見 CLAUDE.md「貼圖走 URL，不走 base64」的同一組取捨）。
- * 10Hz 配合手機端內插，肉眼看不出與 30Hz 的差別。
+ *
+ * 取 15 而非 10 有兩個理由：
+ *   1. 15 整除 30Hz 主迴圈（每 2 個 tick 送一次），節流不會被
+ *      「100ms 落在 33.3ms 格線之間」的問題卡到少送一格。
+ *   2. 同步週期是操控延遲的最大單一來源（10Hz 平均要等 50ms，
+ *      15Hz 降到 33ms）。實測最差情況（10 人全在半徑內）
+ *      15Hz 是 116 KB/s，現場無線網路負擔得起。
  */
-export const CLIENT_SYNC_HZ = 10;
+export const CLIENT_SYNC_HZ = 15;
 export const CLIENT_SYNC_MS = 1000 / CLIENT_SYNC_HZ;
 
 /**

@@ -16,6 +16,9 @@ import {
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
 } from '/shared/capture-guidance.js';
+import { COLOR_FAMILY_MAP } from '/shared/colorFamily.js';
+import { HEAT_MAP } from '/shared/heat.js';
+import { ZONE_MAP } from '/shared/scene.js';
 import { avatarImage } from '/shared/avatarSprite.js';
 import { AvatarRenderer } from './avatarRenderer.js';
 
@@ -33,6 +36,8 @@ const $ = (sel) => document.querySelector(sel);
  * 對電池與體感疲勞都有實際代價，該由使用者決定要不要開。
  */
 const HAPTICS_KEY = 'personaflow.haptics';
+/** 只提示一次就好，每次進場都閃會變成噪音 */
+const HAPTICS_HINT_KEY = 'personaflow.hapticsHint';
 const canVibrate = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
 let hapticsOn = false;
 try { hapticsOn = localStorage.getItem(HAPTICS_KEY) === 'on'; } catch { /* 隱私模式 */ }
@@ -70,6 +75,10 @@ const LS = {
 let step = 1;
 let config = randomAvatarConfig();
 let displayName = '';
+/** 伺服器指派的角色 id。尋寶要用它判斷「先知是不是我」 */
+let myId = null;
+/** 本輪尋寶我是不是先知。只有先知收得到冷熱 */
+let isProphet = false;
 
 // 還原上次的設定，讓現場使用者重整頁面後不必重捏
 try {
@@ -840,6 +849,17 @@ function setStatus(text, cls = '') {
   el.className = `pill ${cls}`;
 }
 
+/**
+ * 伺服器回報的真實仲裁狀態（CLIENT_SYNC）。null 代表尚未收到。
+ *
+ * 宣告放在 connect() 之前：ws 的 message callback 會寫入這幾個變數，
+ * 雖然 callback 實際執行時模組早已載入完畢，但把 let 留在檔案更下方
+ * 等於依賴那個時序 —— 萬一有訊息在載入途中抵達就會踩進暫時死區。
+ */
+let serverAlpha = null;
+let serverMode = null;
+let lastSyncSeenAt = 0;
+
 function sendMsg(type, payload = {}) {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type, ...payload }));
 }
@@ -877,6 +897,7 @@ function connect() {
         localStorage.setItem(LS.userId, msg.userId);
         if (msg.rejoinToken) localStorage.setItem(LS.rejoinToken, msg.rejoinToken);
       } catch { /* 略 */ }
+      myId = msg.userId;
       $('#my-name').textContent = msg.name;
       $('#my-id').textContent = msg.userId;
       setStatus('已連線', 'ok');
@@ -884,6 +905,16 @@ function connect() {
       // 個人視角座標（10Hz）。畫布可能還沒建立（剛連上、尚未進場），
       // 此時直接丟棄即可 —— 下一則 100ms 後就到。
       renderer?.applySync(msg);
+      // 分區以 CLIENT_SYNC 的狀態為準，而非只靠 ZONE_SELF 事件 ——
+      // 重連的人已經錯過了進場那一則事件，只有狀態拿得到
+      if (msg.self) renderZone(msg.self.zone);
+      // α 是伺服器仲裁的真實結果，比本地計時器準確（見下方 #agency）
+      serverAlpha = msg.self?.alpha ?? null;
+      serverMode = msg.self?.mode ?? null;
+      lastSyncSeenAt = Date.now();
+    } else if (msg.type === EV.CLIENT_ROSTER) {
+      // id → 名字。只在成員變動時送，供 POV 畫布標示鄰居是誰。
+      renderer?.setNames(msg.agents ?? []);
     } else if (msg.type === EV.CLIENT_REJECT) {
       setStatus('資料有誤', 'warn');
       showToast(`登入失敗：${msg.reason}`);
@@ -936,6 +967,7 @@ const PAIR_MESSAGES = {
   [PAIR_ERRORS.COOLDOWN]: '太快了，休息一下再試。',
   [PAIR_ERRORS.DECLINED]: '對方沒有確認這次配對。',
   [PAIR_ERRORS.EXPIRED]: '配對逾時，請重新輸入。',
+  [PAIR_ERRORS.COLOR_MISMATCH]: '這位的身上沒有指定的顏色，再找找看。',
 };
 
 function showPairMsg(text, ok = false) {
@@ -953,6 +985,19 @@ function renderMission() {
   $('#pair-title').textContent = mission.title;
   $('#pair-brief').textContent = mission.brief ?? '';
 
+  // COLOR_HUNT：把要找的顏色放在最顯眼的位置。
+  // 只寫在 brief 裡不夠 —— 那行字在小螢幕上會被當成說明略過，
+  // 而顏色是這個任務唯一需要記住的東西。
+  const fam = mission.colorFamily ? COLOR_FAMILY_MAP[mission.colorFamily] : null;
+  const chip = $('#mission-color-chip');
+  if (chip) {
+    chip.hidden = !fam;
+    if (fam) {
+      chip.textContent = `${fam.glyph} 找身上有${fam.label}的人`;
+      chip.style.setProperty('--chip', fam.swatch);
+    }
+  }
+
   const done = myProgress >= mission.target;
   const frac = `${myProgress} / ${mission.target}`;
   $('#mb-prog').textContent = done ? `${frac} ✓` : frac;
@@ -960,6 +1005,67 @@ function renderMission() {
   $('#pair-progress').textContent = done
     ? `你已經完成任務了（${frac}），還可以繼續認識新的人`
     : `你的進度　${frac}`;
+}
+
+// ── 分區 ──────────────────────────────────────────────────
+/** 目前顯示中的分區，避免每幀重寫 DOM */
+let shownZone;
+
+/**
+ * 顯示所在分區。
+ *
+ * 分區原本只是地板色塊，走進去沒有任何回饋 —— 參與者不會知道
+ * 「這裡跟別處不一樣」。這一行字是最低限度的提示。
+ */
+function renderZone(zoneId) {
+  if (zoneId === shownZone) return;
+  shownZone = zoneId;
+  const el = $('#zone-chip');
+  if (!el) return;
+  const z = zoneId ? ZONE_MAP[zoneId] : null;
+  el.hidden = !z;
+  if (z) {
+    el.textContent = `📍 ${z.label}`;
+    el.style.setProperty('--zone', z.fill);
+  }
+}
+
+// ── 尋寶（先知模式）──────────────────────────────────────
+/**
+ * 尋寶面板。
+ *
+ * 兩種身分的畫面刻意差很多：
+ *   先知　看得到冷熱，但畫面明說「你不能自己去撿」
+ *   其他人　完全沒有提示，只寫「聽先知的指令」
+ * 若兩邊長得像，先知會以為自己也在找，整個玩法就散掉。
+ */
+function renderTreasure(round) {
+  const box = $('#treasure-box');
+  if (!box) return;
+  box.hidden = !round;
+  if (!round) return;
+
+  box.classList.toggle('is-prophet', isProphet);
+  $('#treasure-role').textContent = isProphet ? '🔮 你是先知' : '🔍 尋寶中';
+  $('#treasure-hint').textContent = isProphet
+    ? '只有你看得到冷熱。大聲喊出來，帶大家過去 —— 你自己撿不算分。'
+    : '你看不到提示。聽先知喊的方向走。';
+  $('#treasure-heat').textContent = isProphet ? '等待中…' : '—';
+  $('#treasure-heat').hidden = !isProphet;
+}
+
+function renderHeat(id) {
+  const h = HEAT_MAP[id];
+  if (!h) return;
+  const el = $('#treasure-heat');
+  el.textContent = `${h.glyph} ${h.label}`;
+  el.style.setProperty('--heat', h.color);
+  // 震動只是加分項：iOS 完全不支援，因此顏色與文字本身已經足夠傳達
+  if (id === 'BURNING') navigator.vibrate?.(60);
+}
+
+function showTreasureResult(text) {
+  showToast(text);
 }
 
 function handleMissionMessage(msg) {
@@ -990,6 +1096,33 @@ function handleMissionMessage(msg) {
 
     case EV.PAIR_RESULT:
       handlePairResult(msg);
+      break;
+
+    // ── 尋寶 ──────────────────────────────────────────────
+    case EV.TREASURE_START:
+      isProphet = msg.round.prophetId === myId;
+      renderTreasure(msg.round);
+      break;
+
+    case EV.TREASURE_HEAT:
+      // 只有先知會收到這則訊息（伺服器單獨送給他），
+      // 其他人的手機上不會有任何冷熱資訊 —— 這是玩法的核心。
+      renderHeat(msg.heat);
+      break;
+
+    case EV.TREASURE_FOUND:
+      showTreasureResult(
+        msg.by === myId
+          ? `你找到寶藏了！　+${msg.points} 分`
+          : `${msg.byName} 找到了寶藏（先知 ${msg.prophetName}）`,
+      );
+      isProphet = false;
+      renderTreasure(null);
+      break;
+
+    case EV.TREASURE_ENDED:
+      isProphet = false;
+      renderTreasure(null);
       break;
   }
 }
@@ -1131,6 +1264,8 @@ let joyVec = { x: 0, y: 0 };
 let joyIntensity = 0;
 let joyEngaged = false;
 let lastInputAt = 0;
+/** 上次真的送出 INPUT_MOVE 的時間，供節流與「第一幀立即送出」協調 */
+let lastSentAt = 0;
 
 /** @type {AvatarRenderer|null} 個人視角畫布。進場時建立，離場時停止。 */
 let renderer = null;
@@ -1167,9 +1302,17 @@ function initJoystick() {
     // nipplejs 的 y 軸向上為正，場域座標則向下為正，故取負號對齊
     joyVec = { x: data.vector.x, y: -data.vector.y };
     joyIntensity = Math.min(1, data.force ?? 0);
+    const first = !joyEngaged;
     joyEngaged = true;
     lastInputAt = Date.now();
     renderer?.setInput(joyVec, joyIntensity);
+
+    // 按下的第一幀立刻送出，不等節流計時器。
+    //
+    // 20Hz 節流的下一格最遠在 50ms 之後，而那 50ms 正好落在使用者
+    // 最期待回應的瞬間（手指剛碰到搖桿）。後續的連續推桿仍走節流，
+    // 因此頻寬幾乎不變 —— 只多了每次觸碰的第一則封包。
+    if (first) sendInput();
   });
 
   joystick.on('end', () => {
@@ -1183,11 +1326,20 @@ function initJoystick() {
   });
 }
 
+function sendInput() {
+  sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: joyIntensity });
+  lastSentAt = Date.now();
+}
+
 // 20 Hz 節流發送（技術文件 M1 §操控輸入發送規格）。
 // 僅在推桿期間發送，閒置時保持靜默以節省現場無線頻寬。
+//
+// 帶上 lastSentAt 檢查是為了配合「第一幀立即送出」：
+// 剛在 move 事件送過的話，這一格就跳過，避免兩則封包擠在一起。
 setInterval(() => {
   if (!joyEngaged) return;
-  sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: joyIntensity });
+  if (Date.now() - lastSentAt < INPUT_THROTTLE_MS / 2) return;
+  sendInput();
 }, INPUT_THROTTLE_MS);
 
 $('#emotes').addEventListener('click', (e) => {
@@ -1207,12 +1359,30 @@ $('#emotes').addEventListener('click', (e) => {
   // 不支援的裝置（iOS Safari）直接不顯示，而不是顯示一個按了沒反應的開關
   if (btn && canVibrate) {
     btn.hidden = false;
-    const sync = () => btn.setAttribute('aria-pressed', String(hapticsOn));
+    const sync = () => {
+      btn.setAttribute('aria-pressed', String(hapticsOn));
+      // 文字說明「按下去會發生什麼」，而不是只標示目前狀態。
+      // 單看「震動」兩個字，使用者無從判斷那是開關還是現在的狀態。
+      btn.textContent = hapticsOn ? '震動 開' : '震動 關';
+    };
     sync();
+
+    // 第一次進場時讓開關搏動幾下。腳步震動是沉浸感最強的一環，
+    // 但預設關閉（電池與體感疲勞的取捨），不主動指出就幾乎不會有人發現。
+    // 只做一次並記住 —— 每次進場都閃會變成噪音。
+    let hinted = true;
+    try { hinted = localStorage.getItem(HAPTICS_HINT_KEY) === 'seen'; } catch { /* 略 */ }
+    if (!hinted && !hapticsOn) {
+      btn.classList.add('nudge');
+      setTimeout(() => btn.classList.remove('nudge'), 6000);
+      try { localStorage.setItem(HAPTICS_HINT_KEY, 'seen'); } catch { /* 略 */ }
+    }
+
     btn.addEventListener('click', () => {
       hapticsOn = !hapticsOn;
       try { localStorage.setItem(HAPTICS_KEY, hapticsOn ? 'on' : 'off'); } catch { /* 略 */ }
       sync();
+      btn.classList.remove('nudge');
       // 開啟的當下震一下，讓使用者立刻確認它真的有作用
       if (hapticsOn) vibrate(20);
     });
@@ -1232,11 +1402,25 @@ $('#emotes').addEventListener('click', (e) => {
 setInterval(() => {
   const el = $('#agency');
   if (!el || $('#controller').hidden) return;
-  const active = Date.now() - lastInputAt < IDLE_THRESHOLD_MS;
+
+  // 優先採用伺服器的 α —— 那是控制權的真實來源。
+  // 本地計時器只在還沒收到同步（剛進場）或同步中斷時當備援：
+  // 兩者不一致時（例如伺服器因合照鎖定場域而收回控制權），
+  // 本地計時器會顯示「你正在操控」，而角色其實動不了。
+  const fresh = serverAlpha !== null && Date.now() - lastSyncSeenAt < 1000;
+  const active = fresh
+    ? serverAlpha > 0.5
+    : Date.now() - lastInputAt < IDLE_THRESHOLD_MS;
+
   el.classList.toggle('active', active);
-  el.textContent = active
-    ? '你正在操控'
-    : '推動搖桿即可操控你的角色';
+
+  // STAGED 代表場域被鎖定（正在拍大合照），此時推桿不會有任何效果 ——
+  // 不說清楚的話，使用者會以為是自己的手機壞了。
+  if (fresh && serverMode === 'STAGED') {
+    el.textContent = '正在拍大合照，請看大螢幕';
+  } else {
+    el.textContent = active ? '你正在操控' : '推動搖桿即可操控你的角色';
+  }
 }, 200);
 
 // 手機息屏或切換到其他 App 時主動歸零，避免角色維持在最後的推桿方向

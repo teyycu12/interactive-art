@@ -8,6 +8,8 @@
 
 import { EV, MISSION_TYPES, QUIZ, QUIZ_CHOICES, QUIZ_PHASE } from '/shared/protocol.js';
 import { renderAvatarSVG, CV_FULL_PART } from '/shared/avatars.js';
+import { COLOR_FAMILIES } from '/shared/colorFamily.js';
+import { HEAT_LEVELS } from '/shared/heat.js';
 
 const $ = (s) => document.querySelector(s);
 const SS_KEY = 'personaflow.hostKey';
@@ -80,6 +82,25 @@ function handle(msg, key) {
 
     case EV.MISSION_COMPLETE:
       pushFeed(`${msg.a.name} × ${msg.b.name} 完成配對`, 'ev-pair');
+      break;
+
+    case EV.TREASURE_START:
+      renderTreasure(msg.round);
+      pushFeed(`尋寶開始，先知＝${nameOfAgent(msg.round.prophetId)}`, 'ev-mission');
+      break;
+
+    case EV.TREASURE_HEAT:
+      $('#treasure-heat').textContent = heatLabel(msg.heat);
+      break;
+
+    case EV.TREASURE_FOUND:
+      pushFeed(`${msg.byName} 找到寶藏（先知 ${msg.prophetName}）`, 'ev-pair');
+      renderTreasure(null);
+      break;
+
+    case EV.TREASURE_ENDED:
+      pushFeed('尋寶中止', 'ev-mission');
+      renderTreasure(null);
       break;
 
     case EV.MISSION_CLOSED:
@@ -177,9 +198,25 @@ function showAuthError(text) {
   el.hidden = false;
 }
 
-/** 錯誤顯示在目前操作的面板旁：出題中的錯誤屬於問答，其餘歸任務 */
+/** 各面板的錯誤欄位。lastAction 決定訊息落在哪一格 */
+const ERR_SLOT = {
+  quiz: '#quiz-err',
+  treasure: '#treasure-err',
+  mission: '#mission-err',
+};
+
+/**
+ * 錯誤顯示在目前操作的面板旁。
+ *
+ * 落錯格子的代價不小：「至少需要 2 位參與者才能開始尋寶」若顯示在
+ * 任務面板，主辦端會以為是任務發布失敗，而尋寶那一格看起來毫無反應。
+ */
 function showError(text, where = null) {
-  const el = $(where ?? (quiz === null && lastAction === 'quiz' ? '#quiz-err' : '#mission-err'));
+  // 問答的錯誤只在「還沒有題目」時才歸問答面板（沿用原本的判斷）
+  const slot = lastAction === 'quiz'
+    ? (quiz === null ? ERR_SLOT.quiz : ERR_SLOT.mission)
+    : (ERR_SLOT[lastAction] ?? ERR_SLOT.mission);
+  const el = $(where ?? slot);
   el.textContent = text;
   el.hidden = false;
   setTimeout(() => { el.hidden = true; }, 4000);
@@ -208,6 +245,10 @@ try {
 // ─────────────────────────────────────────────────────────────
 // 任務控制
 // ─────────────────────────────────────────────────────────────
+
+/** 目前選定的顏色。COLOR_HUNT 以外的任務型別不會用到 */
+let pickedColor = COLOR_FAMILIES[0].id;
+
 function buildMissionTypes() {
   const sel = $('#mission-type');
   sel.replaceChildren();
@@ -218,21 +259,53 @@ function buildMissionTypes() {
     sel.append(opt);
   }
   syncBrief();
+  buildColorPicker();
+}
+
+function buildColorPicker() {
+  const box = $('#mission-color');
+  box.replaceChildren();
+  for (const f of COLOR_FAMILIES) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'color-swatch';
+    btn.dataset.family = f.id;
+    btn.style.setProperty('--swatch', f.swatch);
+    btn.title = f.label;
+    btn.textContent = f.label;
+    btn.addEventListener('click', () => {
+      pickedColor = f.id;
+      syncColorPicker();
+    });
+    box.append(btn);
+  }
+  syncColorPicker();
+}
+
+function syncColorPicker() {
+  for (const btn of $('#mission-color').children) {
+    btn.classList.toggle('is-picked', btn.dataset.family === pickedColor);
+  }
 }
 
 function syncBrief() {
   const t = missionTypes.find((m) => m.id === $('#mission-type').value);
   $('#mission-brief').textContent = t?.brief ?? '';
   if (t?.defaultTarget) $('#mission-target').value = t.defaultTarget;
+  // 只有需要顏色參數的型別才顯示選單，避免主辦端誤以為每種任務都要選色
+  $('#mission-color-field').hidden = t?.param !== 'colorFamily';
 }
 $('#mission-type').addEventListener('change', syncBrief);
 
 $('#btn-publish').addEventListener('click', () => {
   lastAction = 'mission';
+  const t = missionTypes.find((m) => m.id === $('#mission-type').value);
   ws?.send(JSON.stringify({
     type: EV.HOST_PUBLISH_MISSION,
     missionType: $('#mission-type').value,
     target: Number($('#mission-target').value),
+    // 不需要顏色的型別送 null，伺服器會忽略
+    colorFamily: t?.param === 'colorFamily' ? pickedColor : null,
   }));
 });
 
@@ -304,7 +377,57 @@ function avatarThumb(avatar) {
   return img;
 }
 
+// ── 尋寶 ──────────────────────────────────────────────────
+/** 場上名冊快取，供先知下拉選單與事件文案使用 */
+let roster = [];
+const nameOfAgent = (id) => roster.find((a) => a.id === id)?.name ?? id;
+const heatLabel = (id) => {
+  const h = HEAT_LEVELS.find((x) => x.id === id);
+  return h ? `${h.glyph} ${h.label}` : '—';
+};
+
+function renderTreasure(round) {
+  $('#treasure-idle').hidden = !!round;
+  $('#treasure-live').hidden = !round;
+  if (round) {
+    $('#treasure-prophet-name').textContent = nameOfAgent(round.prophetId);
+    $('#treasure-heat').textContent = '—';
+  }
+}
+
+function syncProphetOptions() {
+  const sel = $('#treasure-prophet');
+  const keep = sel.value;
+  sel.replaceChildren();
+  const any = document.createElement('option');
+  any.value = '';
+  any.textContent = '隨機指定';
+  sel.append(any);
+  for (const a of roster) {
+    const o = document.createElement('option');
+    o.value = a.id;
+    o.textContent = a.name;
+    sel.append(o);
+  }
+  // 保留主辦端已經選好的人，重新渲染名冊不該把選擇清掉
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+}
+
+$('#btn-treasure-start').addEventListener('click', () => {
+  lastAction = 'treasure';
+  ws?.send(JSON.stringify({
+    type: EV.HOST_START_TREASURE,
+    prophetId: $('#treasure-prophet').value || null,
+  }));
+});
+
+$('#btn-treasure-stop').addEventListener('click', () => {
+  ws?.send(JSON.stringify({ type: EV.HOST_STOP_TREASURE }));
+});
+
 function renderState(state) {
+  roster = state.agents ?? [];
+  syncProphetOptions();
   $('#stat-people').textContent = state.agents.length;
   $('#stat-edges').textContent = state.graphEdges;
   $('#people-count').textContent = state.agents.length;

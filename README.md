@@ -36,7 +36,7 @@ python backend/service.py     # 角色生成服務（127.0.0.1:5055）
 - 主辦端控制台：<http://localhost:3000/host/>（需要終端機印出的通行密鑰）
 - 生成服務健康檢查：<http://127.0.0.1:5055/health>
 
-完整說明見 [CLAUDE.md](CLAUDE.md) 與 [docs/](docs/)。
+完整說明見 [CLAUDE.md](CLAUDE.md)（精簡索引）與 [docs/notes/](docs/notes/)（各主題的踩坑筆記）。
 
 ---
 
@@ -375,11 +375,12 @@ PersonaFlow/
 │   ├── README-PersonaFlow2.md  # 整合版說明
 │   ├── TECH-PersonaFlow2.md    # 整合版互動層技術說明
 │   ├── m3/                     # M3 交接文件與效能報告
+│   ├── notes/                  # 各主題的踩坑筆記（由 CLAUDE.md 拆出）
 │   └── style_reference/        # 風格參考圖集（含圖檔，見 PROVENANCE.md）
 ├── .github/workflows/ci.yml    # CI：前端 Node 測試＋整合版 npm test＋後端 pytest
 ├── package.json                # 整合版 Node 相依與指令
 ├── start.sh                    # 2D 備援版一鍵啟動（後端＋前端＋顯示 LAN IP）
-├── CLAUDE.md                   # 專案結構、規範與啟動方式
+├── CLAUDE.md                   # 精簡索引：架構、快速啟動、規範，其餘導向 docs/notes/
 ├── .env.example
 ├── requirements.txt
 └── requirements-dev.txt
@@ -431,7 +432,7 @@ bash start.sh                 # 同時啟動後端與前端，並顯示 LAN IP
 
 啟動後終端會顯示 LAN IP，現場手機／平板可直接用該 IP 連入互動端。
 
-要停止服務，回到各自終端機按 `Ctrl+C`。完整的啟動、開啟與依 PID 關閉方式請參考 `CLAUDE.md`。
+要停止服務，回到各自終端機按 `Ctrl+C`。完整的啟動、開啟與依 PID 關閉方式請參考 [docs/notes/LOCAL-PREVIEW.md](./docs/notes/LOCAL-PREVIEW.md)。
 
 ---
 

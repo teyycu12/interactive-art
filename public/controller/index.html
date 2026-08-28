@@ -198,6 +198,18 @@
       <span class="mb-code">你的配對碼 <b id="mb-code">----</b>　·　點此輸入對方的碼</span>
     </button>
 
+    <!-- 所在分區。走進舞台／暢飲／沙發區時出現 -->
+    <p class="zone-chip" id="zone-chip" hidden></p>
+
+    <!-- 尋寶。先知與其他人看到的內容刻意不同，見 app.js 的 renderTreasure -->
+    <div class="treasure" id="treasure-box" hidden>
+      <div class="tr-row">
+        <span class="tr-role" id="treasure-role">尋寶中</span>
+        <span class="tr-heat" id="treasure-heat" hidden>—</span>
+      </div>
+      <p class="tr-hint" id="treasure-hint"></p>
+    </div>
+
     <!-- 社交連結：這場活動真正在累積的東西，但手機端原本完全看不到。
          配對成功才出現，沒有連結時不佔版面。 -->
     <button class="links-strip" id="links-strip" hidden>
@@ -271,6 +283,7 @@
     <button class="sheet-close" id="btn-pair-close" aria-label="關閉">✕</button>
     <h2 id="pair-title">找一個人配對</h2>
     <p class="sheet-brief" id="pair-brief">走向另一位參與者，互相交換配對碼</p>
+    <p class="color-chip" id="mission-color-chip" hidden></p>
 
     <div class="mycode">
       <span class="mycode-label">把這組碼唸給對方</span>

@@ -25,6 +25,7 @@ LAN_IP=$(ifconfig 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | head -1 | a
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
+YELLOW='\033[0;33m'
 BOLD='\033[1m'
 NC='\033[0m'
 
@@ -60,9 +61,23 @@ start_vision() {
 }
 
 start_node() {
-  echo -e "${GREEN}▶ 啟動 Node.js 互動伺服器${NC} (http://0.0.0.0:${NODE_PORT})"
-  echo -e "  手機控制器：${BOLD}http://${LAN_IP}:${NODE_PORT}/controller/index.html${NC}"
-  echo -e "  3D 投影牆：${BOLD}http://${LAN_IP}:${NODE_PORT}/screen/index.html${NC}"
+  # 有憑證就自動走 HTTPS。手機的 getUserMedia 要求安全情境，
+  # 在 http://192.168.x.x 上會直接拒絕相機 —— 掃描進場等於不存在。
+  # 憑證產生：bash scripts/make-cert.sh
+  local scheme="http"
+  if [ -f "$ROOT_DIR/certs/cert.pem" ] && [ -f "$ROOT_DIR/certs/key.pem" ]; then
+    export TLS_CERT="$ROOT_DIR/certs/cert.pem"
+    export TLS_KEY="$ROOT_DIR/certs/key.pem"
+    scheme="https"
+  else
+    # 不預設失敗，只是說清楚代價 —— 沒有憑證仍然可以完整展演（捏臉路徑）
+    echo -e "${YELLOW}  ⚠ 找不到 certs/，將以 HTTP 啟動：手機無法使用相機，掃描會退回捏臉。${NC}"
+    echo -e "${YELLOW}    要啟用掃描：bash scripts/make-cert.sh${NC}"
+  fi
+
+  echo -e "${GREEN}▶ 啟動 Node.js 互動伺服器${NC} (${scheme}://0.0.0.0:${NODE_PORT})"
+  echo -e "  手機控制器：${BOLD}${scheme}://${LAN_IP}:${NODE_PORT}/controller/${NC}"
+  echo -e "  3D 投影牆：${BOLD}${scheme}://${LAN_IP}:${NODE_PORT}/screen/${NC}"
   echo ""
   node "$SERVER_DIR/index.js" &
   NODE_PID=$!

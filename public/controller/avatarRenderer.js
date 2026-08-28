@@ -74,6 +74,8 @@ export class AvatarRenderer {
     this.neighbors = new Map();
     /** 最後一次收到 CLIENT_SYNC 的時間，用於判斷狀態是否過期 */
     this.lastSyncAt = 0;
+    /** id → 名字（CLIENT_ROSTER）。名字是靜態資料，不隨座標重送。 */
+    this.names = new Map();
 
     this.running = false;
     this.lastAt = 0;
@@ -112,6 +114,14 @@ export class AvatarRenderer {
   setInput(vector, intensity) {
     this.inputVx = (vector?.x ?? 0) * intensity;
     this.inputVy = (vector?.y ?? 0) * intensity;
+  }
+
+  /**
+   * 套用手機端名冊（EV.CLIENT_ROSTER）。
+   * @param {{id:string,name:string}[]} agents
+   */
+  setNames(agents) {
+    this.names = new Map(agents.map((a) => [a.id, a.name]));
   }
 
   /**
@@ -331,6 +341,30 @@ export class AvatarRenderer {
         { time: this.time, maxSpeed: MAX_SPEED,
           height: CHARACTER_HEIGHT * NEIGHBOR_SCALE * (0.8 + fade * 0.2) });
       ctx.restore();
+
+      // 名字：配對任務要「走向另一位參與者」，看不出誰是誰就無從找起。
+      // 太遠的不畫 —— 小字疊在一起反而比沒有更難讀。
+      const name = this.names.get(n.id);
+      if (name && fade > 0.35) {
+        const h = CHARACTER_HEIGHT * NEIGHBOR_SCALE * (0.8 + fade * 0.2);
+        const fs = Math.max(10, Math.round(h * 0.13));
+        ctx.save();
+        ctx.font = `700 ${fs}px "Noto Sans TC", "PingFang TC", system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        const ny = y + 4;
+        // 米白底襯：名字會落在網格線上，純色文字讀不清
+        const w = ctx.measureText(name).width + 10;
+        ctx.globalAlpha = (0.25 + fade * 0.55) * 0.9;
+        ctx.fillStyle = '#FAF8F5';
+        ctx.beginPath();
+        ctx.roundRect(x - w / 2, ny, w, fs + 6, 5);
+        ctx.fill();
+        ctx.globalAlpha = 0.35 + fade * 0.65;
+        ctx.fillStyle = '#2F2A26';
+        ctx.fillText(name, x, ny + 3);
+        ctx.restore();
+      }
 
       if (n.emote) {
         ctx.save();

@@ -7,6 +7,7 @@
 
 // 閒置門檻由協定層定義並直接再匯出 —— 手機端提示與伺服器仲裁必須共用同一個值
 export { IDLE_THRESHOLD_MS } from '../shared/protocol.js';
+import { TREASURE_RADIUS } from '../shared/heat.js';
 
 export const TICK_HZ = 30;                    // 伺服器模擬與廣播頻率（技術文件 §3：30 FPS）
 export const TICK_MS = 1000 / TICK_HZ;
@@ -142,6 +143,37 @@ export const PAIRING = {
   graceMs: 15000,         // 輪換後舊碼仍可用的寬限，避免正在交換時被打斷
   claimCooldownMs: 3000,  // 單人提交冷卻。沒有這個，4 位碼可被窮舉
   confirmTimeoutMs: 30000, // 對方未回應即作廢
+};
+
+/**
+ * 尋寶任務（先知模式，見 server/treasure.js）
+ */
+export const TREASURE = {
+  // 判定半徑由 shared/heat.js 定義 —— 大螢幕要畫出同一個圈，
+  // 兩邊各存一份會出現「看起來踩到了卻沒反應」
+  claimRadius: TREASURE_RADIUS,
+
+  /**
+   * 冷熱門檻（邏輯單位），由近到遠。
+   *
+   * 場域是 1920×1080，對角線約 2200。最遠一級刻意涵蓋大半個場地，
+   * 讓「結冰」真的代表方向錯了，而不是每個人都一直看到結冰。
+   */
+  heatThresholds: [70, 220, 480, 900],
+
+  /** 藏寶點與場邊的最小距離，避免藏在角色難以貼近的邊角 */
+  edgeMargin: 160,
+
+  /** 找到寶藏的得分。高於一次配對（20），因為它需要整隊合作 */
+  points: 80,
+
+  /**
+   * 先知的得分。
+   *
+   * 刻意設為 0 —— 先知一旦能得分，就有動機自己走過去而不是喊出來，
+   * 整個「必須開口」的設計就垮了。改以榮譽呈現（大螢幕標示先知身分）。
+   */
+  prophetPoints: 0,
 };
 
 // ── 即時問答與積分 ────────────────────────────────────────

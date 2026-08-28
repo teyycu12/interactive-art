@@ -66,3 +66,30 @@ export const PROPS = [
 
 /** 供 Boids 避障使用的精簡清單 */
 export const OBSTACLES = PROPS.map((p) => ({ x: p.x, y: p.y, r: p.r }));
+
+/**
+ * 角色目前站在哪一區。
+ *
+ * 分區原本只是地板上的色塊 —— 伺服器完全不知道它們存在，走進暢飲區
+ * 與走到空地對系統毫無差別。有了這個判定，「站到某個地方就會發生事」
+ * 才成立，而那是展場裡最容易被觀眾自己發現的互動語言：不需要說明牌。
+ *
+ * 放在 shared/ 而非伺服器：大螢幕要把所在分區高亮、手機要顯示
+ * 「你在暢飲區」，三端必須用同一套判定，否則會出現
+ * 「畫面說你在區內、伺服器說不在」而兩邊都不報錯。
+ *
+ * 重疊時取先定義的那一區。ZONES 目前互不重疊（test/scene.test.mjs
+ * 有把關），這條規則只是讓行為在未來新增分區時仍然確定。
+ *
+ * @returns {string|null} 分區 id；不在任何分區內回傳 null
+ */
+export function zoneAt(x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  for (const z of ZONES) {
+    if (x >= z.x && x < z.x + z.w && y >= z.y && y < z.y + z.h) return z.id;
+  }
+  return null;
+}
+
+/** 依 id 取分區定義，供三端顯示名稱與顏色 */
+export const ZONE_MAP = Object.fromEntries(ZONES.map((z) => [z.id, z]));

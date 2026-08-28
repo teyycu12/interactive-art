@@ -134,10 +134,12 @@ phone.on('open', () => phone.send(JSON.stringify({
   type: 'CLIENT_JOIN', name: '冠儀', avatar: AVATAR,
 })));
 const phoneSyncs = [];
+const phoneRosters = [];
 phone.on('message', (d) => {
   const m = JSON.parse(d);
   if (m.type === 'CLIENT_WELCOME') welcome = m;
   if (m.type === 'CLIENT_SYNC') phoneSyncs.push(m);
+  if (m.type === 'CLIENT_ROSTER') phoneRosters.push(m);
 });
 await sleep(400);
 check('手機登入成功', !!welcome?.userId, welcome?.userId);
@@ -184,8 +186,9 @@ check('模式切換為湧現漫遊態', idle.mode === 'SWARM');
   const n0 = phoneSyncs.length;
   await sleep(2000);
   const hz = (phoneSyncs.length - n0) / 2;
-  // 刻意低於大螢幕的 30Hz：手機是每人一條連線，30Hz×10人 會吃掉現場頻寬
-  check('CLIENT_SYNC 約 10 Hz（±2）', hz >= 8 && hz <= 12, `${hz.toFixed(1)} Hz`);
+  // 刻意低於大螢幕的 30Hz：手機是每人一條連線，30Hz×10人 會吃掉現場頻寬。
+  // 取 15 是因為它整除 30Hz 主迴圈 —— 10Hz 會落在 33.3ms 格線之間而少送一格。
+  check('CLIENT_SYNC 約 15 Hz（±2）', hz >= 13 && hz <= 17, `${hz.toFixed(1)} Hz`);
 
   const self = phoneSyncs.at(-1)?.self;
   check('CLIENT_SYNC 帶有自身座標與 α',
@@ -203,6 +206,26 @@ check('模式切換為湧現漫遊態', idle.mode === 'SWARM');
   check('CLIENT_SYNC 與 STAGE_SYNC 是同一份座標',
     Math.abs(onScreen.x - self.x) < 40 && Math.abs(onScreen.y - self.y) < 40,
     `螢幕 ${onScreen.x},${onScreen.y} / 手機 ${self.x},${self.y}`);
+}
+
+// ── 手機端名冊（CLIENT_ROSTER）──────────────────────────────
+{
+  check('手機收到 CLIENT_ROSTER', phoneRosters.length > 0, `${phoneRosters.length} 則`);
+  const agents = phoneRosters.at(-1)?.agents ?? [];
+  check('名冊含自己的 id 與名字',
+    agents.some((a) => a.id === welcome.userId && a.name === '冠儀'),
+    JSON.stringify(agents));
+  // 手機的 POV 鄰居只有幾十像素高，不載入貼圖 —— 外觀是白送的頻寬
+  check('名冊不含捏臉外觀', agents.every((a) => !('avatar' in a)));
+
+  // 名冊只在成員變動時送。
+  // 註：本檔全程接著大螢幕，因此測不到「沒有大螢幕時每幀重送」那個情境
+  //（stage.rosterDirty 會被大螢幕那段清掉）。該情境由
+  // test/client-roster.test.mjs 直接對節流條件把關。
+  const n0 = phoneRosters.length;
+  await sleep(1500);
+  check('成員沒變動時不重送名冊', phoneRosters.length === n0,
+    `靜止 1.5 秒送了 ${phoneRosters.length - n0} 次`);
 }
 
 // ── 鄰居可見性 ────────────────────────────────────────────
@@ -260,6 +283,11 @@ check('模式切換為湧現漫遊態', idle.mode === 'SWARM');
     seen && Math.hypot(seen.dx, seen.dy) <= CLIENT_SYNC_RADIUS,
     `${Math.hypot(seen?.dx ?? 0, seen?.dy ?? 0).toFixed(0)} / ${CLIENT_SYNC_RADIUS}`);
 
+  const roster = phoneRosters.at(-1)?.agents ?? [];
+  check('有人加入時名冊會更新',
+    roster.some((a) => a.id === mateWelcome?.userId),
+    JSON.stringify(roster.map((a) => a.name)));
+
   mate.close();
   await sleep(2700);   // 等 TTL 回收，避免影響後續測項
 }
@@ -287,9 +315,23 @@ let welcome2 = null;
 phone2.on('open', () => phone2.send(JSON.stringify({
   type: 'CLIENT_JOIN', userId: uid, rejoinToken: welcome.rejoinToken, name: '冠儀', avatar: AVATAR,
 })));
-phone2.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'CLIENT_WELCOME') welcome2 = m; });
+const phone2Rosters = [];
+phone2.on('message', (d) => {
+  const m = JSON.parse(d);
+  if (m.type === 'CLIENT_WELCOME') welcome2 = m;
+  if (m.type === 'CLIENT_ROSTER') phone2Rosters.push(m);
+});
 await sleep(400);
 check('憑證正確時接回同一角色', welcome2?.userId === uid);
+// 主迴圈那份名冊是「內容變了才廣播」，而重連時場上成員多半沒變 ——
+// 少了進場當下這一次，該手機的鄰居會永遠沒有名字（重整分頁也一樣）。
+//
+// 註：此處只確認「有收到」。無法在這裡驗證「若不補送就收不到」——
+// 上面的 hijack 角色要等 AGENT_TTL_MS（45 秒）才回收，在那之前名冊
+// 一直在變動，主迴圈的廣播會蓋過差異。該條件由
+// test/client-roster.test.mjs 以確定性的方式把關。
+check('重連時補送 CLIENT_ROSTER', phone2Rosters.length > 0,
+  `${phone2Rosters.length} 則`);
 
 // ── 重複登入不得產生幽靈 ──────────────────────────────────
 const countBefore = live().length;
@@ -369,6 +411,7 @@ function joinPhone(name) {
   const box = {
     ws, name, welcome: null, code: null, mission: null, results: [], confirmReq: null,
     quiz: null, acks: [], quizResult: null, scores: [],
+    treasureStart: null, heats: [], treasureFound: null, raw: [],
   };
   ws.on('open', () => ws.send(JSON.stringify({ type: 'CLIENT_JOIN', name, avatar: AVATAR })));
   ws.on('message', (d) => {
@@ -382,6 +425,11 @@ function joinPhone(name) {
     if (m.type === 'QUIZ_ACK') box.acks.push(m);
     if (m.type === 'QUIZ_RESULT') box.quizResult = m;
     if (m.type === 'SCORE_SELF') box.scores.push(m);
+    if (m.type === 'TREASURE_START') box.treasureStart = m;
+    if (m.type === 'TREASURE_HEAT') box.heats.push(m);
+    if (m.type === 'TREASURE_FOUND') box.treasureFound = m;
+    // 保留原始字串，供「座標絕不外洩到手機」的檢查
+    if (m.type?.startsWith('TREASURE')) box.raw.push(d.toString());
   });
   return box;
 }
@@ -517,6 +565,159 @@ check('時間到自動公布正解', amy.quizResult?.correctIndex === 0 && amy.q
   `answered=${amy.quizResult?.answered}`);
 host.send(JSON.stringify({ type: 'HOST_END_QUIZ' }));
 await sleep(300);
+
+// ── 尋寶（先知模式）────────────────────────────────────────
+//
+// 這個玩法完全建立在資訊不對稱上，而「座標有沒有外洩到手機」
+// 是單元測試看不到的 —— 它取決於伺服器實際送出的封包內容。
+{
+  // 先收掉進行中的任務，避免與尋寶的公告互相干擾
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
+  await sleep(300);
+
+  // 場上只留小美與阿賓。
+  //
+  // 前面的安全性測試（偽造憑證、角色轉換）留下了幾個角色，而**關掉 socket
+  // 不等於角色離場** —— 那是刻意的設計（賓客關分頁角色仍留 AGENT_TTL_MS＝45 秒，
+  // 見 CLAUDE.md），遠長於整套 e2e。
+  //
+  // 而 `treasure.check()` 掃的是場上**所有**非先知角色，不管有沒有連線。
+  // 於是藏寶點若隨機落在那個殘留角色附近，它會在阿賓走到之前就「找到」寶藏，
+  // 一次讓四條測試同時失敗（找到者不是阿賓、阿賓沒拿到分數、
+  // 冷熱因本輪已結束而一則都沒送出）。實測抓到的兇手正是叫「攻擊者」的那一個。
+  //
+  // 這是測試的前置條件沒清乾淨，不是伺服器的錯 —— 因此在這裡明確清場，
+  // 而不是把 TTL 調短或讓尋寶忽略離線角色（後者會改掉現場真正想要的行為）。
+  const keep = new Set([amy.welcome.userId, ben.welcome.userId]);
+  for (const a of hostStates.at(-1)?.agents ?? []) {
+    if (!keep.has(a.id)) host.send(JSON.stringify({ type: 'HOST_KICK', agentId: a.id }));
+  }
+  await sleep(300);
+  check('尋寶開始前場上只剩兩位參與者',
+    (hostStates.at(-1)?.agents ?? []).length === 2,
+    (hostStates.at(-1)?.agents ?? []).map((a) => a.name).join(', '));
+
+  const treasureHostMsgs = [];
+  const onHost = (d) => {
+    const m = JSON.parse(d);
+    if (m.type?.startsWith('TREASURE')) treasureHostMsgs.push(m);
+  };
+  host.on('message', onHost);
+
+  // 指定小美當先知
+  host.send(JSON.stringify({
+    type: 'HOST_START_TREASURE', prophetId: amy.welcome.userId,
+  }));
+  await sleep(500);
+
+  check('尋寶開始後兩支手機都收到通知',
+    !!amy.treasureStart && !!ben.treasureStart);
+  check('手機知道誰是先知',
+    amy.treasureStart?.round?.prophetId === amy.welcome.userId);
+
+  // 最關鍵的一條：座標絕不能出現在手機收到的任何一則訊息裡。
+  // 手機端只要拿得到座標，開發者工具就能直接看到答案。
+  const spot = treasureHostMsgs.find((m) => m.type === 'TREASURE_START')?.spot;
+  check('主辦端拿得到藏寶座標', Number.isFinite(spot?.x) && Number.isFinite(spot?.y));
+  // TREASURE_FOUND 例外：本輪已經結束，那時公布座標是刻意的
+  // （見 CLAUDE.md「中止尋寶不公布座標，找到才公布」）。少了這個排除，
+  // 這條檢查會在阿賓踩中得夠快時誤判「正確行為」為外洩。
+  const phoneSawCoords = [...amy.raw, ...ben.raw].some((raw) => {
+    const m = JSON.parse(raw);
+    if (m.type === 'TREASURE_FOUND') return false;
+    return m.round?.x !== undefined || m.spot !== undefined;
+  });
+  check('藏寶座標不會外洩給手機', !phoneSawCoords);
+
+  // 把阿賓推到寶藏上：先知（小美）應收到冷熱，阿賓不該收到
+  // ⚠ payload 形狀必須是 {vector:{x,y}}：伺服器讀的是
+  //   `msg.vector ?? {x: msg.vx, y: msg.vy}`，寫成裸的 {x,y} 會兩邊都拿到
+  //   undefined，角色完全不動 —— 而這條測試仍然會過（它斷言的是先知收到
+  //   冷熱，那與角色有沒有移動無關），所以錯了也看不出來。
+  const nudge = (box, x, y) => box.ws.send(JSON.stringify({
+    type: 'INPUT_MOVE', vector: { x, y }, intensity: 1,
+  }));
+  // 一路把阿賓推向寶藏，直到踩中為止。
+  //
+  // 圈數必須由「實際還要走多遠」算出，不能寫死。原本寫死 120 圈 × 40ms＝4.8 秒，
+  // 而 MAX_SPEED 是 190 px/s，等於最遠只走得了約 912px —— 但藏寶點是在
+  // 1920×1080（對角線約 2200px）裡隨機挑的，且要繞開道具。
+  // 於是這條測試實際上是在擲骰子：藏寶點剛好落在附近才過得了，
+  // 落在對角就必然「未踩中」，一次帶垮四條斷言。
+  //
+  // 這裡改成依起始距離估算所需時間再乘 3 倍餘裕（繞道具、α 爬升、
+  // 對齊誤差都會讓實際路徑長於直線），並保留上限避免真的壞掉時無限空轉。
+  {
+    const start = live().find((a) => a.id === ben.welcome.userId);
+    const startDist = Math.hypot(spot.x - start.x, spot.y - start.y);
+    const needMs = (startDist / MAX_SPEED) * 1000 * 3 + 2000;
+    const maxTicks = Math.min(600, Math.ceil(needMs / 40));
+
+    let ticks = 0;
+    for (; ticks < maxTicks && !ben.treasureFound; ticks++) {
+      const me = live().find((a) => a.id === ben.welcome.userId);
+      if (!me) break;
+      const dx = spot.x - me.x;
+      const dy = spot.y - me.y;
+      const d = Math.hypot(dx, dy) || 1;
+      nudge(ben, dx / d, dy / d);
+      await sleep(40);
+    }
+    // 沒踩到時要說得出「差多遠」，否則下面四條失敗看起來像功能壞掉，
+    // 實際上只是走的時間不夠。
+    if (!ben.treasureFound) {
+      const me = live().find((a) => a.id === ben.welcome.userId);
+      console.log(`   [尋寶] 走了 ${ticks}/${maxTicks} 圈仍未踩中；`
+        + `起始距離 ${startDist.toFixed(0)}px，`
+        + `目前距離 ${me ? Math.hypot(spot.x - me.x, spot.y - me.y).toFixed(0) : '?'}px`);
+    }
+  }
+
+  check('只有先知收得到冷熱提示',
+    amy.heats.length > 0 && ben.heats.length === 0,
+    `先知 ${amy.heats.length} 則 / 非先知 ${ben.heats.length} 則`);
+
+  // 走完整條「踩中 → 廣播 → 記分」。單元測試只驗規則，這裡驗真的接起來了。
+  check('非先知踩到寶藏即完成本輪', !!ben.treasureFound,
+    ben.treasureFound ? `由 ${ben.treasureFound.byName} 找到` : '未踩中');
+  check('找到者就是走過去的那個人，不是先知',
+    ben.treasureFound?.by === ben.welcome.userId
+    && ben.treasureFound?.prophetId === amy.welcome.userId);
+  check('找到之後才公布座標',
+    Number.isFinite(ben.treasureFound?.spot?.x),
+    JSON.stringify(ben.treasureFound?.spot));
+  check('找到者拿到分數',
+    ben.scores.some((s) => s.source === 'TREASURE'),
+    ben.scores.map((s) => s.source).join(', '));
+  check('先知拿 0 分（不能得分是這個玩法的前提）',
+    !amy.scores.some((s) => s.source === 'TREASURE'));
+
+  host.send(JSON.stringify({ type: 'HOST_STOP_TREASURE' }));
+  await sleep(300);
+  host.off('message', onHost);
+}
+
+// ── COLOR_HUNT 任務 ───────────────────────────────────────
+{
+  hostRejects = [];
+  host.send(JSON.stringify({
+    type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1,
+  }));
+  await sleep(300);
+  check('COLOR_HUNT 缺少顏色時被拒絕', hostRejects.length > 0);
+
+  host.send(JSON.stringify({
+    type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1,
+    colorFamily: 'RED',
+  }));
+  await sleep(400);
+  check('手機收到帶顏色的任務公告',
+    amy.mission?.mission?.colorFamily === 'RED',
+    amy.mission?.mission?.colorFamily);
+
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
+  await sleep(200);
+}
 
 // ── 主辦端踢人 ────────────────────────────────────────────
 const benId = ben.welcome.userId;
@@ -736,8 +937,36 @@ await sleep(200);
 
 // 生成端點是唯一會花錢的路徑（每次兩支 Gemini 加一次生圖），
 // 原本沒有任何速率限制 —— 場館 Wi-Fi 上一台裝置寫個迴圈就能把額度燒光。
+/**
+ * 對 Gateway 發一個 POST，回傳回應 body 裡的 error 欄位。
+ *
+ * ⚠ 送出過大的 body 時會與伺服器的 `req.destroy()` 賽跑，見下方 sendPost 的說明。
+ */
 function postApi(path, body = Buffer.from('{}')) {
+  return sendPost(path, body).then((json) => (json === null ? null : json.error));
+}
+
+/**
+ * POST 的共用實作。回傳解析後的 JSON，解析不出來回 null。
+ *
+ * **為什麼要自己接 socket 的 error**：伺服器對超過上限的 body 會在讀到一半時
+ * 直接 `req.destroy()` 把連線切掉（這是對的，不能為了讓客戶端寫完而先收下
+ * 一個 2MB 的 body）。但此時客戶端往往還沒把 body 寫完，於是那個 write 會
+ * 收到 EPIPE —— 而且它是在 **socket** 上觸發，不是在 request 物件上，
+ * `req.on('error')` 接不到。未處理的 'error' 事件會讓整個 e2e 行程直接崩潰。
+ *
+ * 這是這支測試長期間歇性失敗的真正原因：伺服器的行為一直是對的
+ * （單獨用 curl 連打 20 次，20 次都正確回 frame_too_large），
+ * 壞的是測試客戶端 —— 它在賽跑輸掉時不是回報失敗，而是整個行程被 EPIPE 帶走。
+ *
+ * 因此：socket 的錯誤一律吞掉，並且**以伺服器真的回了什麼為準** ——
+ * 回應先到就用回應，連線先斷才回 null。
+ */
+function sendPost(path, body) {
   return new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+
     const req = http.request({
       host: '127.0.0.1', port: PORT, path, method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
@@ -745,11 +974,14 @@ function postApi(path, body = Buffer.from('{}')) {
       const out = [];
       res.on('data', (c) => out.push(c));
       res.on('end', () => {
-        try { resolve(JSON.parse(Buffer.concat(out).toString()).error); }
-        catch { resolve(null); }
+        try { done(JSON.parse(Buffer.concat(out).toString())); }
+        catch { done(null); }
       });
     });
-    req.on('error', () => resolve(null));
+
+    // 伺服器切線導致的寫入失敗不是測試失敗，交由上面的回應處理決定結果。
+    req.on('socket', (s) => s.on('error', () => {}));
+    req.on('error', () => done(null));
     req.end(body);
   });
 }
@@ -758,21 +990,7 @@ const postGenerate = () => postApi('/api/generate');
 
 /** 同 postApi，但回傳整包 body 而非只取 error 欄位 */
 function postApiBody(path, body = Buffer.from('{}')) {
-  return new Promise((resolve) => {
-    const req = http.request({
-      host: '127.0.0.1', port: PORT, path, method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
-    }, (res) => {
-      const out = [];
-      res.on('data', (c) => out.push(c));
-      res.on('end', () => {
-        try { resolve(JSON.parse(Buffer.concat(out).toString())); }
-        catch { resolve(null); }
-      });
-    });
-    req.on('error', () => resolve(null));
-    req.end(body);
-  });
+  return sendPost(path, body);
 }
 
 // 容量 3：前三次會被放行（生成服務沒開，因此回 vision_service_unavailable），

@@ -15,6 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { MISSION_TYPES } from '../shared/protocol.js';
+import { COLOR_FAMILY_MAP } from '../shared/colorFamily.js';
 
 export class MissionBoard {
   constructor() {
@@ -28,7 +29,7 @@ export class MissionBoard {
    * 發布任務。
    * @returns {{ok: true, mission: object} | {ok: false, reason: string}}
    */
-  publish({ type, target }) {
+  publish({ type, target, colorFamily = null }) {
     if (this.active) return { ok: false, reason: '已有進行中的任務，請先結算' };
 
     const spec = MISSION_TYPES[type];
@@ -39,12 +40,23 @@ export class MissionBoard {
       return { ok: false, reason: `目標次數須為 1 至 ${spec.maxTarget} 的整數` };
     }
 
+    // 帶額外參數的任務型別在這裡驗證。白名單比對而非只檢查非空 ——
+    // 這個值會被送到三端顯示，且是配對判定的依據。
+    let param = null;
+    if (spec.param === 'colorFamily') {
+      if (!COLOR_FAMILY_MAP[colorFamily]) {
+        return { ok: false, reason: `未知的顏色：${colorFamily}` };
+      }
+      param = colorFamily;
+    }
+
     this.active = {
       id: `msn_${randomUUID().slice(0, 8)}`,
       type: spec.id,
       title: spec.label,
       brief: spec.brief,
       target: n,
+      colorFamily: param,
       publishedAt: Date.now(),
       closedAt: null,
       /** @type {Map<string, number>} 每位參與者的完成次數 */
@@ -90,7 +102,10 @@ export class MissionBoard {
   announcement() {
     if (!this.active) return null;
     const m = this.active;
-    return { id: m.id, type: m.type, title: m.title, brief: m.brief, target: m.target };
+    return {
+      id: m.id, type: m.type, title: m.title, brief: m.brief, target: m.target,
+      colorFamily: m.colorFamily ?? null,
+    };
   }
 
   /**
@@ -144,6 +159,7 @@ export class MissionBoard {
       title: m.title,
       brief: m.brief,
       target: m.target,
+      colorFamily: m.colorFamily ?? null,
       publishedAt: m.publishedAt,
       closedAt: m.closedAt,
       progress: Object.fromEntries(m.progress),

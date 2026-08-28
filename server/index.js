@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { WebSocketServer } from 'ws';
 
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes, timingSafeEqual, X509Certificate } from 'node:crypto';
 
 import {
   EV, ACTIONS, STAGE, SYNC_FPS, PAIR_ERRORS, MISSION_TYPES,
@@ -28,19 +28,23 @@ import {
   SCORE_SOURCES,
 } from '../shared/protocol.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
+import { avatarMatchesFamily } from '../shared/colorFamily.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
-  PERSISTENCE,
+  PERSISTENCE, TREASURE,
 } from './config.js';
 import { Stage } from './state.js';
 import { RateLimiter } from './ratelimit.js';
+import { certificateReport } from './certcheck.js';
 import { startTicker } from './scheduler.js';
 import { MissionBoard } from './missions.js';
+import { TreasureHunt } from './treasure.js';
 import { SocialGraph } from './socialgraph.js';
 import { PairingSession } from './pairing.js';
 import { QuizSession } from './quiz.js';
 import { ScoreBoard } from './scores.js';
 import { SnapshotStore, Directory } from './persistence.js';
+import { createHttpLayer } from './httplayer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -49,6 +53,7 @@ const PORT = Number(process.env.PORT) || 3000;
 
 const stage = new Stage();
 const missions = new MissionBoard();
+const treasure = new TreasureHunt();
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
 const quiz = new QuizSession();
@@ -133,447 +138,6 @@ function keyMatches(input) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 靜態資源服務
-// ─────────────────────────────────────────────────────────────
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.webp': 'image/webp',
-  '.ico': 'image/x-icon',
-};
-
-/**
- * 把 URL 路徑解析成實體檔案路徑。
- * 解析後強制檢查結果仍位於允許的根目錄下，阻斷 ../ 路徑穿越。
- */
-function resolveStatic(urlPath) {
-  // 前端相依一律由 node_modules 直出，不依賴 CDN —— 現場網路不穩時仍能載入（§6 風險 1）
-  if (urlPath === '/vendor/nipplejs.js') {
-    return path.join(ROOT, 'node_modules', 'nipplejs', 'dist', 'nipplejs.js');
-  }
-  if (urlPath === '/vendor/rough.esm.js') {
-    return path.join(ROOT, 'node_modules', 'roughjs', 'bundled', 'rough.esm.js');
-  }
-  if (urlPath === '/vendor/three.module.js') {
-    return path.join(ROOT, 'node_modules', 'three', 'build', 'three.module.js');
-  }
-  // three 的 addons 是整棵目錄樹：OrbitControls 等檔案會再 import 同目錄下的
-  // 其他模組，逐檔白名單列不完，因此整個目錄開放。但也因為是目錄映射，
-  // 這裡必須自己做穿越防護 —— 下方那套通用檢查只涵蓋 PUBLIC_DIR 與 shared。
-  if (urlPath.startsWith('/vendor/three-addons/')) {
-    if (urlPath.includes('\0')) return null;
-    const addonsRoot = path.join(ROOT, 'node_modules', 'three', 'examples', 'jsm');
-    const target = path.resolve(addonsRoot, urlPath.slice('/vendor/three-addons/'.length));
-    if (target !== addonsRoot && !target.startsWith(addonsRoot + path.sep)) return null;
-    return target;
-  }
-
-  // NUL 位元組會讓底層 fs 呼叫的路徑在 C 層被截斷，先擋掉
-  if (urlPath.includes('\0')) return null;
-
-  let base = PUBLIC_DIR;
-  let rel;
-  if (urlPath.startsWith('/shared/')) {
-    // 根目錄必須是 ROOT/shared 而不是 ROOT。
-    // 用 ROOT 當根時，`/shared/..%2f.env` 解碼後是 `/shared/../.env`，
-    // 解析結果 ROOT/.env 仍在 ROOT 底下 —— 包含性檢查會放行，
-    // 於是 .env 與 data/state.json（內含主辦密鑰與重連憑證）全都讀得到。
-    base = path.join(ROOT, 'shared');
-    rel = urlPath.slice('/shared/'.length);
-  } else {
-    rel = urlPath === '/' ? 'index.html' : urlPath.slice(1);
-    if (rel.endsWith('/')) rel += 'index.html';
-  }
-
-  const full = path.resolve(base, rel);
-  if (full !== base && !full.startsWith(base + path.sep)) return null;
-  return full;
-}
-
-// ─────────────────────────────────────────────────────────────
-// 角色資產生成代理（整合計畫階段 4）
-//
-// 手機端不直接打 Python 服務，而是經由這裡轉發，理由有三：
-//   1. 同源 —— 免去 CORS，也免去 HTTPS 頁面打 http 服務的混合內容封鎖
-//   2. Python 服務只綁 127.0.0.1，不暴露在場館網路上
-//   3. 生成服務掛掉時，這裡能回一個結構化的降級結果，而不是讓手機端看到
-//      連線錯誤 —— 對參與者而言那應該是「用預設外觀進場」，不是故障
-// ─────────────────────────────────────────────────────────────
-// 用 || 而非 ??：?? 只接住 null/undefined，接不到空字串，
-// 而 .env 裡留一行 VISION_PORT= 正是會產生空字串的寫法。
-const VISION_HOST = process.env.VISION_HOST || '127.0.0.1';
-const VISION_PORT = Number(process.env.VISION_PORT || 5055);
-
-/** 手機照片經 base64 後可達數 MB；超過此上限直接拒收，不讓記憶體被灌爆 */
-const MAX_PHOTO_BYTES = 12 * 1024 * 1024;
-
-/** 生成走兩次外部 API（VLM + 生圖），比一般請求慢得多 */
-const GENERATE_TIMEOUT_MS = 150_000;
-
-const DEFAULT_FALLBACK_COLORS = {
-  skin: '#F4C08A', hair: '#4A2C1A', torso: '#8FA05E', legs: '#B7A98A',
-};
-
-function sendJSON(res, code, body) {
-  const payload = JSON.stringify(body);
-  res.writeHead(code, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(payload),
-  });
-  res.end(payload);
-}
-
-// 生成是整套系統唯一會花錢的路徑：每次要兩支 Gemini 加一次生圖。
-// WebSocket 那端有 token bucket，這個 HTTP 端點原本什麼都沒有 ——
-// 場館 Wi-Fi 上任何一台裝置寫個迴圈就能把 API 額度燒光，也會讓
-// Python 服務的執行緒池被塞滿而排擠正在報到的人。
-const GENERATE_RATE = { capacity: 3, refillPerSec: 1 / 30, violationLimit: Infinity };
-
-/** 同時進行中的生成上限。Python 端每個請求要 4 個 worker（共 16 個）。 */
-const MAX_CONCURRENT_GENERATES = 4;
-let inFlightGenerates = 0;
-
-/** @type {Map<string, {limiter: RateLimiter, seenAt: number}>} 依來源位址計費 */
-const generateLimiters = new Map();
-const LIMITER_TTL_MS = 10 * 60 * 1000;
-
-/**
- * 取得該來源的限流器，並順手清掉久未出現的條目。
- * 少了清理，這個 Map 會隨著到訪過的位址無限成長 —— 修掉一個資源耗盡問題
- * 卻換來另一個並不划算。
- */
-function limiterFor(ip, now) {
-  if (generateLimiters.size > 256) {
-    for (const [key, entry] of generateLimiters) {
-      if (now - entry.seenAt > LIMITER_TTL_MS) generateLimiters.delete(key);
-    }
-  }
-  let entry = generateLimiters.get(ip);
-  if (!entry) {
-    entry = { limiter: new RateLimiter(GENERATE_RATE, performance.now()), seenAt: now };
-    generateLimiters.set(ip, entry);
-  }
-  entry.seenAt = now;
-  return entry.limiter;
-}
-
-// ── 站位引導的代理 ──────────────────────────────────────────
-//
-// 預覽每秒會被打數次，不能沿用生成那條 3 次 / 30 秒的限流；但也不能沒有限流，
-// 否則場館裡任何一台裝置寫個迴圈就能把 Python 端的執行緒池塞滿，排擠正在
-// 報到的人。預覽只跑 CV、不呼叫任何付費 API，因此額度可以放寬得多。
-const PREVIEW_RATE = { capacity: 12, refillPerSec: 8, violationLimit: Infinity };
-
-/** 預覽影格是縮圖，不該有生成那種數 MB 的尺寸 */
-const MAX_PREVIEW_BYTES = 1024 * 1024;
-
-/** 預覽逾時要短：慢到這個程度的引導已經沒有意義，不如讓下一幀補上 */
-const PREVIEW_TIMEOUT_MS = 4000;
-
-/** 同時進行中的預覽上限。超過就直接丟棄，引導少一幀不影響體驗 */
-const MAX_CONCURRENT_PREVIEWS = 6;
-let inFlightPreviews = 0;
-
-/** @type {Map<string, {limiter: RateLimiter, seenAt: number}>} 預覽獨立計費 */
-const previewLimiters = new Map();
-
-function previewLimiterFor(ip, now) {
-  if (previewLimiters.size > 256) {
-    for (const [key, entry] of previewLimiters) {
-      if (now - entry.seenAt > LIMITER_TTL_MS) previewLimiters.delete(key);
-    }
-  }
-  let entry = previewLimiters.get(ip);
-  if (!entry) {
-    entry = { limiter: new RateLimiter(PREVIEW_RATE, performance.now()), seenAt: now };
-    previewLimiters.set(ip, entry);
-  }
-  entry.seenAt = now;
-  return entry.limiter;
-}
-
-function proxyPreview(req, res) {
-  if (req.method !== 'POST') {
-    sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
-    return;
-  }
-  const ip = req.socket.remoteAddress ?? 'unknown';
-  // 引導丟一幀沒有代價，下一幀就補上了 —— 因此逾量、滿載、逾時一律安靜丟棄，
-  // 不回降級外觀（那是生成才需要的東西）。
-  if (previewLimiterFor(ip, Date.now()).check() !== 'ok') {
-    sendJSON(res, 200, { ok: false, error: 'rate_limited' });
-    return;
-  }
-  if (inFlightPreviews >= MAX_CONCURRENT_PREVIEWS) {
-    sendJSON(res, 200, { ok: false, error: 'too_busy' });
-    return;
-  }
-
-  const chunks = [];
-  let size = 0;
-  let aborted = false;
-  req.on('data', (chunk) => {
-    if (aborted) return;
-    size += chunk.length;
-    if (size > MAX_PREVIEW_BYTES) {
-      aborted = true;
-      sendJSON(res, 413, { ok: false, error: 'frame_too_large' });
-      req.destroy();
-      return;
-    }
-    chunks.push(chunk);
-  });
-
-  req.on('end', () => {
-    if (aborted) return;
-    const body = Buffer.concat(chunks);
-    inFlightPreviews += 1;
-    let settled = false;
-    const release = () => { if (settled) return; settled = true; inFlightPreviews -= 1; };
-
-    const upstream = http.request({
-      host: VISION_HOST, port: VISION_PORT, path: '/preview', method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
-      timeout: PREVIEW_TIMEOUT_MS,
-    }, (up) => {
-      const out = [];
-      up.on('data', (c) => out.push(c));
-      up.on('end', () => {
-        release();
-        res.writeHead(up.statusCode ?? 200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(Buffer.concat(out));
-      });
-    });
-
-    const degrade = (error) => {
-      release();
-      if (res.headersSent) return;
-      sendJSON(res, 200, { ok: false, error });
-    };
-    upstream.on('timeout', () => { upstream.destroy(); degrade('preview_timeout'); });
-    upstream.on('error', () => degrade('vision_service_unavailable'));
-    res.on('close', release);
-    upstream.end(body);
-  });
-}
-
-// 風格清單。手機端的選單不寫死，否則某個風格的參考圖集沒放進去時，
-// 選項照樣出現在畫面上，選了就靜默退回預設 —— 參與者只會覺得沒作用。
-let stylesCache = null;
-let stylesCacheAt = 0;
-const STYLES_TTL_MS = 60_000;
-
-function proxyStyles(req, res) {
-  if (req.method !== 'GET') {
-    sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
-    return;
-  }
-  if (stylesCache && Date.now() - stylesCacheAt < STYLES_TTL_MS) {
-    sendJSON(res, 200, stylesCache);
-    return;
-  }
-
-  const upstream = http.request({
-    host: VISION_HOST,
-    port: VISION_PORT,
-    path: '/health',
-    method: 'GET',
-    timeout: 3000,
-  }, (up) => {
-    const out = [];
-    up.on('data', (c) => out.push(c));
-    up.on('end', () => {
-      let body = null;
-      try { body = JSON.parse(Buffer.concat(out).toString('utf8')); } catch { /* 見下 */ }
-      const payload = {
-        ok: true,
-        styles: Array.isArray(body?.styles) ? body.styles : [],
-        defaultStyle: typeof body?.default_style === 'string' ? body.default_style : null,
-      };
-      stylesCache = payload;
-      stylesCacheAt = Date.now();
-      sendJSON(res, 200, payload);
-    });
-  });
-
-  // 生成服務還沒起來時**不要快取空清單** —— 佈場時先開手機、後開生成服務
-  // 是常態，快取下去就要等 TTL 過了選單才會出現。
-  const degrade = () => {
-    if (!res.headersSent) sendJSON(res, 200, { ok: false, styles: [], defaultStyle: null });
-  };
-  upstream.on('timeout', () => { upstream.destroy(); degrade(); });
-  upstream.on('error', degrade);
-  upstream.end();
-}
-
-// ── 主辦端生成歷史代理 ──────────────────────────────────────
-//
-// 原始照片、生成結果、token、花費、使用模型都已經由生成服務記在
-// backend/logs/generation_history.sqlite3，這裡只是開一條讀取路徑給主辦端
-// 控制台。資料含參與者照片與花費，比一般靜態頁面敏感，因此比照 HOST_AUTH
-// 的理由（同一區網、路徑可被掃出，不能只靠「網址沒人知道」）比對通行密鑰，
-// 而不是直接開放讀取。
-const HISTORY_TIMEOUT_MS = 8000;
-
-function proxyHostHistory(req, res, upstreamPath, isBinary) {
-  const upstream = http.request({
-    host: VISION_HOST, port: VISION_PORT, path: upstreamPath, method: 'GET',
-    timeout: HISTORY_TIMEOUT_MS,
-  }, (up) => {
-    if (isBinary) {
-      res.writeHead(up.statusCode ?? 200, {
-        'Content-Type': up.headers['content-type'] ?? 'application/octet-stream',
-      });
-      up.pipe(res);
-      return;
-    }
-    const out = [];
-    up.on('data', (c) => out.push(c));
-    up.on('end', () => {
-      res.writeHead(up.statusCode ?? 200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(Buffer.concat(out));
-    });
-  });
-
-  const degrade = () => {
-    if (res.headersSent) return;
-    if (isBinary) { res.writeHead(502).end(); return; }
-    sendJSON(res, 200, { ok: false, error: 'vision_service_unavailable' });
-  };
-  upstream.on('timeout', () => { upstream.destroy(); degrade(); });
-  upstream.on('error', degrade);
-  upstream.end();
-}
-
-/** 落地檔名一律是 generation_history 自己 sanitize 過的 [A-Za-z0-9_.-]，見這裡防禦性再擋一次 */
-const SAFE_FILENAME = /^[A-Za-z0-9_.-]+$/;
-/** request_id 是 uuid4().hex，只會有小寫十六進位 */
-const SAFE_REQUEST_ID = /^[A-Za-z0-9_-]+$/;
-
-function handleHostHistory(req, res, urlPath, searchParams) {
-  if (req.method !== 'GET') {
-    sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
-    return;
-  }
-  if (!keyMatches(searchParams.get('key'))) {
-    sendJSON(res, 403, { ok: false, error: 'invalid_key' });
-    return;
-  }
-
-  const suffix = urlPath.slice('/api/host/history'.length);
-  if (suffix === '' || suffix === '/') {
-    const limit = searchParams.get('limit');
-    const qs = limit ? `?limit=${encodeURIComponent(limit)}` : '';
-    proxyHostHistory(req, res, `/api/dev/generations${qs}`, false);
-    return;
-  }
-  if (suffix === '/summary') {
-    proxyHostHistory(req, res, '/api/dev/summary', false);
-    return;
-  }
-  if (suffix.startsWith('/outputs/')) {
-    const filename = suffix.slice('/outputs/'.length);
-    if (!SAFE_FILENAME.test(filename)) { res.writeHead(400).end('Bad Request'); return; }
-    proxyHostHistory(req, res, `/api/dev/outputs/${filename}`, true);
-    return;
-  }
-  if (suffix.startsWith('/inputs/')) {
-    const filename = suffix.slice('/inputs/'.length);
-    if (!SAFE_FILENAME.test(filename)) { res.writeHead(400).end('Bad Request'); return; }
-    proxyHostHistory(req, res, `/api/dev/inputs/${filename}`, true);
-    return;
-  }
-  const requestId = suffix.slice(1);
-  if (!SAFE_REQUEST_ID.test(requestId)) { res.writeHead(400).end('Bad Request'); return; }
-  proxyHostHistory(req, res, `/api/dev/generations/${requestId}`, false);
-}
-
-function proxyGenerate(req, res) {
-  if (req.method !== 'POST') {
-    sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
-    return;
-  }
-
-  // 逾量與滿載都回降級結果而非 429/503：對手機端而言這兩種情況與
-  // 「生成失敗」沒有差別，都應該安靜地退回捏臉，不是彈出錯誤。
-  const ip = req.socket.remoteAddress ?? 'unknown';
-  if (limiterFor(ip, Date.now()).check() !== 'ok') {
-    sendJSON(res, 200, { ok: false, error: 'rate_limited', fallbackColors: DEFAULT_FALLBACK_COLORS });
-    return;
-  }
-  if (inFlightGenerates >= MAX_CONCURRENT_GENERATES) {
-    sendJSON(res, 200, { ok: false, error: 'too_busy', fallbackColors: DEFAULT_FALLBACK_COLORS });
-    return;
-  }
-
-  const chunks = [];
-  let size = 0;
-  let aborted = false;
-
-  req.on('data', (chunk) => {
-    if (aborted) return;
-    size += chunk.length;
-    if (size > MAX_PHOTO_BYTES) {
-      aborted = true;
-      sendJSON(res, 413, { ok: false, error: 'photo_too_large', fallbackColors: DEFAULT_FALLBACK_COLORS });
-      req.destroy();
-      return;
-    }
-    chunks.push(chunk);
-  });
-
-  req.on('end', () => {
-    if (aborted) return;
-    const body = Buffer.concat(chunks);
-
-    inFlightGenerates += 1;
-    let settled = false;
-    const release = () => {
-      if (settled) return;   // 成功、逾時、錯誤只能還一次計數
-      settled = true;
-      inFlightGenerates -= 1;
-    };
-
-    const upstream = http.request({
-      host: VISION_HOST,
-      port: VISION_PORT,
-      path: '/generate',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
-      timeout: GENERATE_TIMEOUT_MS,
-    }, (up) => {
-      const out = [];
-      up.on('data', (c) => out.push(c));
-      up.on('end', () => {
-        release();
-        res.writeHead(up.statusCode ?? 200, {
-          'Content-Type': 'application/json; charset=utf-8',
-        });
-        res.end(Buffer.concat(out));
-      });
-    });
-
-    // 生成服務沒開或逾時，都回降級結果讓參與者仍能進場（整合計畫 §3.5）
-    const degrade = (error) => {
-      release();
-      if (res.headersSent) return;
-      sendJSON(res, 200, { ok: false, error, fallbackColors: DEFAULT_FALLBACK_COLORS });
-    };
-    upstream.on('timeout', () => { upstream.destroy(); degrade('generation_timeout'); });
-    upstream.on('error', () => degrade('vision_service_unavailable'));
-    // 手機在生成途中關掉分頁時 upstream 不一定會收到 error，
-    // 沒有這一條，名額會被這類中斷請求一個個吃掉直到永遠滿載。
-    res.on('close', release);
-
-    upstream.end(body);
-  });
-}
-
-// ─────────────────────────────────────────────────────────────
 // TLS
 //
 // 手機瀏覽器的 getUserMedia 要求安全情境（HTTPS 或 localhost）。
@@ -602,107 +166,57 @@ function readTLSOptions() {
 const tlsOptions = readTLSOptions();
 const SCHEME = tlsOptions ? 'https' : 'http';
 
-function handleRequest(req, res) {
-  // decodeURIComponent 對不完整的百分比編碼（如 /%E0%A4%A）會同步拋 URIError。
-  // 這個例外會從 request handler 冒出去成為 uncaughtException，直接終止行程 ——
-  // 現場任何一支手機送出一個壞掉的網址，整個裝置就下線了。
-  let urlPath;
+/**
+ * 憑證健檢：SAN 是否涵蓋當下的 LAN IP，以及是否過期。
+ *
+ * 為什麼需要：憑證是按「產生當下的 IP」簽發的，而區網 IP 多半由 DHCP 配發，
+ * 筆電重連 Wi-Fi 或隔天再來就可能換號。憑證一旦與實際位址不符，
+ * 手機上會多跳一個「網域不符」的錯誤 —— 而現場只會看到「掃不進來」，
+ * 完全看不出跟 IP 有關。這種故障必須在啟動時就講清楚，不能等到現場。
+ *
+ * 只警告、不阻擋啟動：憑證不符仍然可以用（使用者點過警告即可），
+ * 而展演進行到一半時，「能跑但有警告」永遠優於「直接不給啟動」。
+ *
+ * @returns {{expired: boolean, daysLeft: number, missing: string[]}|null}
+ */
+function inspectCertificate(addrs) {
+  if (!tlsOptions) return null;
   try {
-    urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+    const cert = new X509Certificate(tlsOptions.cert);
+    return certificateReport(cert.subjectAltName, cert.validTo, addrs);
   } catch {
-    res.writeHead(400).end('Bad Request');
-    return;
+    // 憑證讀得到但解析不了：不是啟動的阻礙，交由 TLS 層自己去報錯
+    return null;
   }
-
-  // 解碼後的路徑會被放進 302 的 Location 標頭。含 CR/LF 時 writeHead 會丟
-  // ERR_INVALID_CHAR，而那是在 fs.readFile 的非同步回呼裡拋出的 ——
-  // 沒有任何 try 接得到，整個 Gateway 直接結束。
-  // 控制字元對合法的靜態資源路徑一律無用，在入口擋掉最乾淨。
-  if (/[\u0000-\u001f\u007f]/.test(urlPath)) {
-    res.writeHead(400).end('Bad Request');
-    return;
-  }
-
-  // 大螢幕上傳合照底圖。走 HTTP 而非 WebSocket：一張 1080p 截圖遠大於
-  // MAX_MESSAGE_BYTES(4KB)，而那個上限是擋惡意客戶端灌爆記憶體用的，
-  // 不該為了單一功能對所有連線放寬。
-  if (urlPath === '/api/screen-capture' && req.method === 'POST') {
-    const chunks = [];
-    let size = 0;
-    let aborted = false;
-    req.on('data', (chunk) => {
-      if (aborted) return;
-      size += chunk.length;
-      if (size > MAX_PHOTO_BYTES) {
-        aborted = true;
-        sendJSON(res, 413, { ok: false, error: 'capture_too_large' });
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (aborted) return;
-      let msg;
-      try { msg = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-      catch { sendJSON(res, 400, { ok: false, error: 'bad_json' }); return; }
-
-      const pending = pendingCaptures.get(msg?.requestId);
-      // requestId 認不得就丟掉：它是伺服器剛剛才發出去的隨機值，
-      // 猜不中等於這不是我們要的那張截圖。
-      if (!pending) { sendJSON(res, 200, { ok: false, error: 'unknown_request' }); return; }
-      pendingCaptures.delete(msg.requestId);
-      clearTimeout(pending.timer);
-      pending.resolve(typeof msg.image === 'string' ? msg.image : null);
-      sendJSON(res, 200, { ok: true });
-    });
-    return;
-  }
-
-  if (urlPath === '/api/generate') {
-    proxyGenerate(req, res);
-    return;
-  }
-
-  if (urlPath === '/api/preview') {
-    proxyPreview(req, res);
-    return;
-  }
-
-  if (urlPath === '/api/styles') {
-    proxyStyles(req, res);
-    return;
-  }
-
-  if (urlPath === '/api/host/history' || urlPath.startsWith('/api/host/history/')) {
-    handleHostHistory(req, res, urlPath, new URL(req.url, 'http://localhost').searchParams);
-    return;
-  }
-
-  const filePath = resolveStatic(urlPath);
-
-  if (!filePath) {
-    res.writeHead(403).end('Forbidden');
-    return;
-  }
-
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      // 目錄請求少了尾斜線時，補上再試一次（/controller → /controller/）
-      if (err.code === 'EISDIR' || (err.code === 'ENOENT' && !path.extname(filePath))) {
-        res.writeHead(302, { Location: encodeURI(`${urlPath.replace(/\/$/, '')}/`) }).end();
-        return;
-      }
-      res.writeHead(404).end('Not Found');
-      return;
-    }
-    res.writeHead(200, {
-      'Content-Type': MIME[path.extname(filePath)] ?? 'application/octet-stream',
-      'Cache-Control': 'no-cache',
-    });
-    res.end(data);
-  });
 }
+
+
+// 大螢幕交回的截圖暫存區：requestId → { resolve, timer }
+// 只在一次合照流程中短暫存在，用完即刪。
+// 定義在這裡而不是跟 requestScreenCapture 放一起，是因為下面的 createHttpLayer
+// 在模組載入當下就要拿到 resolveScreenCapture —— const 沒有提升，
+// 放到檔案後段會在啟動時就 ReferenceError。
+const pendingCaptures = new Map();
+
+/**
+ * 收下大螢幕 POST 回來的合照底圖。
+ * @returns {boolean} requestId 是否認得（認不得代表這不是我們要的那張）
+ */
+function resolveScreenCapture(requestId, image) {
+  const pending = pendingCaptures.get(requestId);
+  if (!pending) return false;
+  pendingCaptures.delete(requestId);
+  clearTimeout(pending.timer);
+  pending.resolve(image);
+  return true;
+}
+
+const { handleRequest } = createHttpLayer({
+  root: ROOT,
+  publicDir: PUBLIC_DIR,
+  keyMatches,
+  onScreenCapture: resolveScreenCapture,
+});
 
 const server = tlsOptions
   ? https.createServer(tlsOptions, handleRequest)
@@ -731,6 +245,18 @@ function sendToAgent(agentId, type, payload) {
 }
 
 /** 對一組連線廣播同一份已序列化的訊息 */
+/**
+ * 送出手機端名冊給單一連線。
+ *
+ * 進場與重連都必須送 —— 主迴圈那份是「內容變了才廣播」，
+ * 而新連上的手機碰到的常常正是「名冊沒變」的情況（例如重整分頁、
+ * 或斷線後在 AGENT_TTL 內接回原角色）。少了這裡，那支手機的
+ * renderer.names 會一直是空的，鄰居全部沒有名字直到有人進出為止。
+ */
+function sendClientRoster(ws) {
+  send(ws, EV.CLIENT_ROSTER, { agents: stage.nameRoster() });
+}
+
 function blast(targets, type, payload) {
   const raw = JSON.stringify({ type, ...payload });
   for (const ws of targets) if (ws.readyState === ws.OPEN) ws.send(raw);
@@ -826,6 +352,19 @@ function sanitizeName(raw) {
 const finite = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : 0);
 const clamp01 = (n) => Math.max(0, Math.min(1, n));
 
+/**
+ * 補送進行中的尋寶給單一連線（中途進場與斷線重連都要）。
+ *
+ * ⚠ 送的是 publicView（不含座標）—— 補送給手機的東西一樣不能夾帶答案。
+ */
+function sendTreasureCatchUp(ws, agentId) {
+  if (!treasure.isActive) return;
+  send(ws, EV.TREASURE_START, { round: treasure.publicView() });
+  // 回來的若正好是先知，強制下一幀重送冷熱：否則要等到等級**變動**
+  // 才收得到，而隊伍恰好停在原地時那可以是好幾十秒。
+  if (agentId === treasure.round.prophetId) treasure.resendHeat();
+}
+
 function handleJoin(ws, msg) {
   // 一條連線只能綁定一個角色。
   // 初版未設此限，重複送出 CLIENT_JOIN 會不斷新建角色並覆寫 ws.agentId，
@@ -848,6 +387,11 @@ function handleJoin(ws, msg) {
       });
       // 重連的人可能已經累積了社交連結（邊是既成事實，不隨斷線消失）
       sendSocialSelf(existing.id);
+      sendClientRoster(ws);
+      // 尋寶進行中就補送。這個分支會 return，走不到下面正常入場的補送 ——
+      // 少了這裡，瞬斷重連的先知會在剩下的整輪裡看著一片空白，
+      // 而他正是所有人都在等著聽他喊話的那一個。
+      sendTreasureCatchUp(ws, existing.id);
       return;
     }
     ws.agentId = null; // 角色已被回收，往下走正常入場流程
@@ -907,6 +451,8 @@ function handleJoin(ws, msg) {
     stage: STAGE,
   });
 
+  sendClientRoster(ws);
+
   // 補送目前的任務狀態與配對碼，讓中途進場的人立刻能參與
   send(ws, EV.PAIR_CODE, { code: pairing.register(agent.id) });
   if (missions.isActive) {
@@ -918,6 +464,10 @@ function handleJoin(ws, msg) {
   // 問答進行中就補送題目。剩餘時間由伺服器算，所以晚到的人拿到的是
   // 真正剩下的秒數，而不是從頭開始的完整倒數。
   if (quiz.isActive) sendQuestion(ws);
+  // 尋寶同理：中途進場的人若什麼都沒收到，會在其他人都在跑的時候
+  // 盯著一片空白的畫面。⚠ 送的是 publicView（不含座標）——
+  // 補送給手機的東西一樣不能夾帶答案。
+  sendTreasureCatchUp(ws, agent.id);
   send(ws, EV.SCORE_SELF, {
     score: scores.totalOf(agent.id),
     delta: 0,
@@ -952,10 +502,41 @@ function detachAgent(agentId, { forget = false } = {}) {
 // ─────────────────────────────────────────────────────────────
 // 配對任務處理
 // ─────────────────────────────────────────────────────────────
+/** 走配對流程的任務型別。COLOR_HUNT 只是多一道顏色條件，驗證模型與 PAIRING 相同 */
+const PAIR_MISSION_TYPES = new Set(['PAIRING', 'COLOR_HUNT']);
+
 function handlePairClaim(ws, msg) {
-  if (!missions.isActive || missions.active.type !== 'PAIRING') {
+  if (!missions.isActive || !PAIR_MISSION_TYPES.has(missions.active.type)) {
     send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.NO_MISSION });
     return;
+  }
+
+  // 顏色條件在「提交碼」這一步就擋下，而不是等對方確認 ——
+  // 讓 A 白等 30 秒才被告知「他不是紅色的」是很差的體驗，
+  // 而且會佔用雙方的 pending 名額。
+  //
+  // ⚠ 這條路徑必須自己處理冷卻（peekTarget 不含冷卻，見該方法的說明）：
+  //   直接 return 而不記冷卻的話，攻擊者可從 COLOR_MISMATCH ↔ NOT_FOUND
+  //   的差異無限次試碼，把 claim() 的防枚舉冷卻整套繞過去。
+  if (missions.active.colorFamily) {
+    if (pairing.inCooldown(ws.agentId)) {
+      send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.COOLDOWN });
+      return;
+    }
+    const targetAgent = stage.get(pairing.peekTarget(msg.code));
+    if (targetAgent && !avatarMatchesFamily(targetAgent.avatar, missions.active.colorFamily)) {
+      // 顏色不符是正當使用者會遇到的情況（走向了不對的人），
+      // 因此刻意不記冷卻 —— 讓他能馬上改找正確的人。
+      send(ws, EV.PAIR_RESULT, {
+        ok: false,
+        reason: PAIR_ERRORS.COLOR_MISMATCH,
+        colorFamily: missions.active.colorFamily,
+      });
+      return;
+    }
+    // 沒有命中「顏色不符」的情況（查無此碼、或對方符合條件）一律記冷卻，
+    // 使這條預檢路徑的成本與正常的 claim() 相同
+    if (!targetAgent) pairing.noteClaim(ws.agentId);
   }
   const result = pairing.claim(ws.agentId, msg.code, Date.now(),
     missions.active?.id ?? null);
@@ -1149,7 +730,11 @@ function handleQuizAnswer(ws, msg) {
 function handleHostMessage(ws, msg) {
   switch (msg.type) {
     case EV.HOST_PUBLISH_MISSION: {
-      const result = missions.publish({ type: msg.missionType, target: msg.target });
+      const result = missions.publish({
+        type: msg.missionType,
+        target: msg.target,
+        colorFamily: msg.colorFamily ?? null,
+      });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       console.log(`[mission] 發布「${result.mission.title}」目標 ${result.mission.target} 次`);
       markDirty();
@@ -1162,6 +747,40 @@ function handleHostMessage(ws, msg) {
       }
       blast(screens, EV.MISSION_ANNOUNCE, { mission: missions.announcement() });
       broadcastMissionState();
+      break;
+    }
+
+    case EV.HOST_START_TREASURE: {
+      const result = treasure.start([...stage.agents.keys()], {
+        prophetId: msg.prophetId ?? null,
+      });
+      if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
+      const view = treasure.publicView();
+      console.log(`[treasure] 開始，先知＝${nameOf(view.prophetId)}`);
+      // 公開狀態不含座標（見 treasure.js 的 publicView 說明）。
+      // 大螢幕與主辦端另外收到座標，因為它們是「公開的畫面」，
+      // 不在參與者手上 —— 大螢幕要畫出寶箱，主辦端要知道自己藏了哪。
+      blast(controllers.values(), EV.TREASURE_START, { round: view });
+      blast([...screens, ...hosts], EV.TREASURE_START, {
+        round: view, spot: treasure.spot(),
+      });
+      pushHostState();
+      break;
+    }
+
+    case EV.HOST_STOP_TREASURE: {
+      const r = treasure.stop();
+      if (!r) return;
+      console.log('[treasure] 本輪中止');
+      // ⚠ 中止不公布座標。沒有人找到，那個點就還是秘密 ——
+      //   主辦端可能馬上重開一輪（甚至同一個點），先講出來等於直接送答案。
+      //   只有 TREASURE_FOUND 才公布，因為那時本輪已經真的結束了。
+      //   大螢幕與主辦端另外收到座標：它們是公開畫面，不在參與者手上。
+      blast(controllers.values(), EV.TREASURE_ENDED, { id: r.id });
+      blast([...screens, ...hosts], EV.TREASURE_ENDED, {
+        id: r.id, spot: { x: r.x, y: r.y },
+      });
+      pushHostState();
       break;
     }
 
@@ -1372,6 +991,8 @@ wss.on('connection', (ws) => {
 
       case EV.HOST_PUBLISH_MISSION:
       case EV.HOST_CLOSE_MISSION:
+      case EV.HOST_START_TREASURE:
+      case EV.HOST_STOP_TREASURE:
       case EV.HOST_START_QUIZ:
       case EV.HOST_REVEAL_QUIZ:
       case EV.HOST_END_QUIZ:
@@ -1417,14 +1038,33 @@ const heartbeat = setInterval(() => {
 // （實測有效頻率由 27.3 Hz 修正為 30.0 Hz，詳見 scheduler.js）
 let lastTallyAt = 0;
 let lastScoreAt = 0;
-/** CLIENT_SYNC 的節流基準。主迴圈是 30Hz，個人視角只需 10Hz。 */
+/** CLIENT_SYNC 的節流基準。主迴圈是 30Hz，個人視角只需 15Hz。 */
 let lastClientSyncAt = 0;
+/** 手機名冊待重送。與 stage.rosterDirty 分開，理由見主迴圈內的說明。 */
+let clientRosterDirty = false;
+/** 上次送給手機的名冊內容指紋，用來判斷是否真的變了 */
+let lastClientRosterSig = '';
 
 const loop = startTicker({
   intervalMs: TICK_MS,
   onTick(dt) {
     // 傳入社交圖譜：配對過的角色之間凝聚力較強，關係會表現為畫面上的群聚
-    stage.tick(dt, graph);
+    const zoneMoves = stage.tick(dt, graph);
+
+    // 分區進出。只在換區時送，不是每幀 ——
+    // 每幀回報所在分區的話，30Hz × 10 人是每秒 300 則重複訊息。
+    //
+    // ⚠ 與 CLIENT_SYNC 同樣放在 `screens.size === 0` 早退之前，
+    //   否則投影機還沒接上時手機完全收不到分區提示。
+    if (zoneMoves.length) {
+      for (const mv of zoneMoves) {
+        sendToAgent(mv.id, EV.ZONE_SELF, { from: mv.from, to: mv.to });
+      }
+      // 大螢幕與主辦端要的是「哪一區現在有幾人」，不是逐筆進出
+      blast([...screens, ...hosts], EV.ZONE_STATE, {
+        zones: stage.zoneOccupancy(),
+      });
+    }
 
     // 配對碼輪換。舊碼在寬限期內仍有效，因此輪換不會打斷正在進行的交換。
     if (pairing.rotate()) {
@@ -1467,15 +1107,40 @@ const loop = startTicker({
       broadcastScoreBoard();
     }
 
-    // 手機端個人視角（10Hz）。
+    // 手機端的名冊（id → 名字）。與 CLIENT_SYNC 分開送：
+    // 名字是靜態資料，隨 15Hz 的座標重送等於每秒多耗十幾 KB 的重複字串。
+    //
+    // 觸發沿用 stage.rosterDirty（state.js 的五個變動點已統一維護它，
+    // 另設一份鏡射旗標只要漏掉一處，手機名冊就會默默過期）。
+    //
+    // 但**不能**只寫 `if (stage.rosterDirty) clientRosterDirty = true`：
+    // stage.rosterDirty 要等下面大螢幕那段才清除，而那段在
+    // `screens.size === 0` 早退之後 —— 沒有大螢幕連線時它會一直是 true，
+    // 於是每一幀都重新舉旗，名冊變成 30Hz 廣播（實測 2 秒送了 60 次）。
+    // 因此改為比對「上次送出的名冊內容」，與大螢幕的清除時機完全脫鉤。
+    const rosterSig = stage.agents.size
+      ? `${stage.agents.size}:${[...stage.agents.values()].map((a) => `${a.id}~${a.name}`).join('|')}`
+      : '';
+    if (rosterSig !== lastClientRosterSig) clientRosterDirty = true;
+    if (controllers.size && clientRosterDirty) {
+      clientRosterDirty = false;
+      lastClientRosterSig = rosterSig;
+      const payload = JSON.stringify({
+        type: EV.CLIENT_ROSTER, agents: stage.nameRoster(),
+      });
+      for (const sock of controllers.values()) {
+        if (sock.readyState === sock.OPEN) sock.send(payload);
+      }
+    }
+
+    // 手機端個人視角（15Hz）。
     //
     // 必須放在下面那道 `screens.size === 0` 早退之前 ——
     // 放在後面的話，大螢幕沒連上時所有手機的畫面會整個凍結，
     // 而這正是佈場與除錯時最常見的狀態（先開手機、投影機還沒接）。
-    // 半個 tick 的容差：主迴圈是 30Hz（33.3ms），而 CLIENT_SYNC_MS 是 100ms。
-    // 用嚴格的 `>= 100` 比較時，第 3 個 tick 只累積到 99.9ms 而擋下，
-    // 於是實際變成每 4 個 tick 送一次 —— 7.5Hz 而非 10Hz，
-    // 且會隨 tick 抖動在 7.5～10Hz 之間跳動。
+    // 半個 tick 的容差：主迴圈是 30Hz（33.3ms），若頻率不整除 tick，
+    // 嚴格比較會讓某些格子差零點幾毫秒被擋下，實際頻率掉一整格
+    // （10Hz 曾因此實測只有 7.5Hz）。15Hz 整除 30，這裡是雙重保險。
     if (controllers.size && now - lastClientSyncAt >= CLIENT_SYNC_MS - TICK_MS / 2) {
       lastClientSyncAt = now;
       for (const [id, sock] of controllers) {
@@ -1483,6 +1148,66 @@ const loop = startTicker({
         const view = stage.personalSnapshot(id, CLIENT_SYNC_RADIUS);
         // 角色可能已被 TTL 回收，但連線還在（下一次 CLIENT_JOIN 會重建）
         if (view) send(sock, EV.CLIENT_SYNC, view);
+      }
+    }
+
+    // 尋寶：冷熱推播與踩中判定。
+    //
+    // 與 CLIENT_SYNC 同樣必須放在下面那道 `screens.size === 0` 早退**之前** ——
+    // 放在後面的話，投影機還沒接上時整場尋寶會完全沒有反應，
+    // 而先知會以為是自己的手機壞了。
+    // 先確認本輪還成立：先知離場、或除了先知沒有別人時，
+    // 這一輪已經永遠不可能結束（見 treasure.js 的 viability 說明）。
+    //
+    // ⚠ 不能在這裡 return —— 下面還有大螢幕的整段廣播，
+    //   提早跳出會讓投影畫面停一幀。改以旗標往下讓它自然跳過。
+    if (treasure.isActive) {
+      const viable = treasure.viability(stage.agents);
+      if (!viable.ok) {
+        const r = treasure.stop();
+        console.log(`[treasure] 本輪中止：${viable.reason}`);
+        // 同上：中止不對手機公布座標
+        blast(controllers.values(), EV.TREASURE_ENDED, {
+          id: r.id, reason: viable.reason,
+        });
+        blast([...screens, ...hosts], EV.TREASURE_ENDED, {
+          id: r.id, reason: viable.reason, spot: { x: r.x, y: r.y },
+        });
+        pushHostState();
+      }
+    }
+
+    if (treasure.isActive) {
+      const found = treasure.check(stage.agents);
+      if (found) {
+        const r = treasure.round;
+        const name = nameOf(found.id);
+        console.log(`[treasure] ${name} 找到寶藏`);
+        // 找到之後座標才公布 —— 在那之前它是本輪唯一的秘密
+        blastAll(EV.TREASURE_FOUND, {
+          id: r.id,
+          by: found.id,
+          byName: name,
+          prophetId: r.prophetId,
+          prophetName: nameOf(r.prophetId),
+          spot: { x: r.x, y: r.y },
+          points: TREASURE.points,
+        });
+        if (TREASURE.points > 0) {
+          award(found.id, TREASURE.points, { source: SCORE_SOURCES.TREASURE });
+        }
+        treasure.stop();
+        pushHostState();
+      } else {
+        // 冷熱只送先知一個人。這是整個玩法的核心：
+        // 送給所有人就退化成普通尋寶，沒有人需要開口講話。
+        const heat = treasure.heatFor(stage.agents);
+        // 只在等級變動時推送，而非每幀 —— 先知要的是「變熱了」這個事件，
+        // 每幀重送同一個字只是白白佔用現場頻寬。
+        if (heat && heat.changed) {
+          sendToAgent(treasure.round.prophetId, EV.TREASURE_HEAT, { heat: heat.heat });
+          blast([...screens, ...hosts], EV.TREASURE_HEAT, { heat: heat.heat });
+        }
       }
     }
 
@@ -1555,10 +1280,30 @@ server.listen(PORT, '0.0.0.0', () => {
   if (addrs.length) {
     console.log('\n  同一區網的手機請改用下列位址（現場請用這個做 QR Code）：');
     for (const a of addrs) console.log(`            ${SCHEME}://${a}:${PORT}/controller/`);
+    console.log('\n  手機必須與這台電腦連在同一個 Wi-Fi —— 上面是私有位址，'
+      + '手機用行動網路或別的網路都連不到。');
   }
   if (!tlsOptions) {
     console.log('\n  ⚠ 目前是 HTTP：手機在區網位址上無法使用相機，掃描進場會自動退回捏臉。');
     console.log('    要啟用掃描請先產生憑證：bash scripts/make-cert.sh');
+  } else {
+    const cert = inspectCertificate(addrs);
+    if (cert?.expired) {
+      // daysLeft 可能是 NaN（到期時間解析不出來），此時不報天數
+      console.log(Number.isFinite(cert.daysLeft)
+        ? `\n  ⚠ 憑證已於 ${-cert.daysLeft} 天前過期，手機會擋下連線。`
+        : '\n  ⚠ 讀不出憑證的到期時間，無法確認是否仍然有效。');
+      console.log('    請重新產生：bash scripts/make-cert.sh');
+    } else if (cert && cert.daysLeft <= 14) {
+      console.log(`\n  ⚠ 憑證再 ${cert.daysLeft} 天到期，建議在展演前重新產生。`);
+    }
+    if (cert?.missing.length) {
+      // 這是最容易在現場才爆炸的一種：位址看起來正常、服務也活著，
+      // 只有手機端會說憑證有問題，而錯誤訊息完全不提 IP。
+      console.log(`\n  ⚠ 憑證不涵蓋目前的區網位址：${cert.missing.join('、')}`);
+      console.log('    IP 多半是 DHCP 配發的，換過網路或重開機就會變。');
+      console.log('    手機會多跳一個「網域不符」錯誤，請重新產生：bash scripts/make-cert.sh');
+    }
   }
   console.log('');
 });
@@ -1579,9 +1324,6 @@ let photoInFlight = false;
 /** 面向鏡頭（畫面下方＝觀眾席）的朝向角 */
 const FACING_CAMERA = Math.PI / 2;
 
-// 大螢幕交回的截圖暫存區：requestId → { resolve, timer }
-// 只在一次合照流程中短暫存在，用完即刪。
-const pendingCaptures = new Map();
 const CAPTURE_TIMEOUT_MS = 8000;
 
 /**

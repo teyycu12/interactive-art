@@ -50,6 +50,10 @@
           <select id="mission-type"></select>
         </label>
         <p class="brief" id="mission-brief"></p>
+        <label class="field" id="mission-color-field" hidden>
+          <span>要找的顏色</span>
+          <div class="color-picker" id="mission-color"></div>
+        </label>
         <label class="field">
           <span>每人目標次數</span>
           <input type="number" id="mission-target" min="1" max="10" value="2">
@@ -71,6 +75,34 @@
       </div>
 
       <p class="err" id="mission-err" hidden></p>
+    </div>
+
+    <!-- 尋寶（先知模式）-->
+    <div class="panel">
+      <h2>尋寶</h2>
+      <div id="treasure-idle">
+        <p class="hint">隨機藏一個寶箱，並指定一位「先知」。
+          <b>只有先知看得到冷熱提示，而且先知本人不能得分</b> ——
+          他必須用喊的把其他人導過去。這是讓現場開口講話的關鍵，
+          若讓先知也能得分，他會自己走過去而不是喊出來。</p>
+        <label class="field">
+          <span>先知</span>
+          <select id="treasure-prophet"><option value="">隨機指定</option></select>
+        </label>
+        <button class="btn-primary" id="btn-treasure-start">開始尋寶</button>
+      </div>
+
+      <div id="treasure-live" hidden>
+        <div class="live-head">
+          <b>尋寶進行中</b>
+          <span class="tag" id="treasure-heat">—</span>
+        </div>
+        <p class="hint">先知　<b id="treasure-prophet-name">—</b>
+          　寶箱位置已顯示在大螢幕上。</p>
+        <button class="btn-danger" id="btn-treasure-stop">中止本輪</button>
+      </div>
+
+      <p class="err" id="treasure-err" hidden></p>
     </div>
 
     <!-- 即時問答 -->
