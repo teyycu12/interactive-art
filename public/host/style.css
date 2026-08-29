@@ -407,3 +407,35 @@ td.act { text-align: right; }
 }
 .photo-actions #photo-qr { width: 64px; height: 64px; border-radius: 6px; }
 .photo-actions .btn-ghost { flex: 1; text-align: center; text-decoration: none; }
+
+/* ── 分組與隊伍比分 ───────────────────────────────────────
+   類名前綴 team- 是先 grep 過確認沒撞名的（.swatch 與 .bar 都出過事，
+   見 docs/notes/UI-STYLING.md）。--team-color 是色塊、--team-ink 是文字，
+   兩者不可互換：色塊色當文字只有 3.8:1，達不到 AA 的 4.5:1。 */
+.team-score { margin-top: 12px; display: grid; gap: 8px; }
+.team-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.team-row b {
+  flex: none;
+  min-width: 5em;
+  color: var(--team-ink);
+}
+.team-meter {
+  flex: 1;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .06);
+  overflow: hidden;
+}
+.team-meter i {
+  display: block;
+  height: 100%;
+  background: var(--team-color);
+  border-radius: 999px;
+  transition: width .3s ease;
+}
+.team-val { flex: none; color: var(--ink-soft); font-variant-numeric: tabular-nums; }

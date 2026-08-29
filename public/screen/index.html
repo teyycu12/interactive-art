@@ -173,6 +173,30 @@
 
   /* ── 排行榜 ─────────────────────────────────────────────
      常駐在右下角：積分要一直看得到才會有人在意它。 */
+  /* 兩隊對抗條。置頂置中 —— 這是全場唯一的「比賽狀態」，
+     跟角落的個人排行榜分開放，遠處也看得到。 */
+  .versus {
+    position: fixed; top: 22px; left: 50%; transform: translateX(-50%);
+    width: min(560px, 46vw);
+  }
+  .versus[hidden] { display: none; }
+  .versus-bar {
+    display: flex;
+    height: 22px;
+    border: 3px solid var(--ink);
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(250, 248, 245, .94);
+  }
+  .versus-bar i { display: block; height: 100%; transition: width .45s ease; }
+  .versus-b { flex: 1; }
+  .versus-labels {
+    display: flex; justify-content: space-between;
+    margin-top: 6px;
+    font-size: 17px; font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+
   .ranks {
     position: fixed; right: 22px; bottom: 22px;
     width: 296px;
@@ -240,6 +264,19 @@
   <div class="q-timebar" id="q-timebar"><i id="q-timefill"></i></div>
   <div class="q-opts" id="q-opts"></div>
   <div class="q-foot" id="q-foot">已作答 <b id="q-answered">0</b> 人</div>
+</div>
+
+<!-- 兩隊對抗條。分界線隨分數移動，一眼看得出哪邊領先 —— 兩隊只要一條，
+     比多隊排行榜省版面得多，也是「兩隊」這個選擇換來的簡化。 -->
+<div class="versus" id="versus" hidden>
+  <div class="versus-bar">
+    <i class="versus-a" id="versus-a"></i>
+    <i class="versus-b" id="versus-b"></i>
+  </div>
+  <div class="versus-labels">
+    <span id="versus-a-label"></span>
+    <span id="versus-b-label"></span>
+  </div>
 </div>
 
 <div class="ranks" id="ranks" hidden>

@@ -33,6 +33,8 @@ export const EV = {
   HOST_PUBLISH_MISSION: 'HOST_PUBLISH_MISSION', // Host → Server：發布任務
   HOST_CLOSE_MISSION: 'HOST_CLOSE_MISSION',   // Host → Server：結算並關閉任務
   HOST_KICK: 'HOST_KICK',                     // Host → Server：踢除參與者
+  HOST_SET_GROUPING: 'HOST_SET_GROUPING',     // Host → Server：選定本場的分組題
+  TEAM_BOARD: 'TEAM_BOARD',                   // Server → Screen/Host：兩隊比分
   HOST_TAKE_PHOTO: 'HOST_TAKE_PHOTO',         // Host → Server：拍大合照（定位→合成）
   HOST_PHOTO_STATE: 'HOST_PHOTO_STATE',       // Server → Host：合照進度與結果
   SCREEN_CAPTURE_REQ: 'SCREEN_CAPTURE_REQ',   // Server → Screen：請大螢幕交出當下畫面
@@ -108,6 +110,21 @@ export const MISSION_TYPES = {
      */
     param: 'colorFamily',
   },
+  CROSS_TEAM: {
+    id: 'CROSS_TEAM',
+    label: '找對面那隊的人配對',
+    brief: '找一位不同隊的參與者，交換配對碼',
+    defaultTarget: 2,
+    maxTarget: 10,
+    /**
+     * 不需要額外參數 —— 條件是「與自己不同隊」，由伺服器兩邊比對即可，
+     * 主辦端不必多渲染任何選單。
+     *
+     * 兩隊對抗天然會產生敵我意識，若放著不管，兩隊會各自縮成小圈圈，
+     * 那比不分隊更不破冰。這個任務是刻意的解藥：它讓跨隊互動變成得分路徑。
+     */
+    crossTeam: true,
+  },
 };
 
 /**
@@ -142,6 +159,62 @@ export const QUIZ_CHOICES = [
 
 /** 問答階段。ASKING 期間正解絕不離開伺服器。 */
 export const QUIZ_PHASE = { ASKING: 'ASKING', REVEALED: 'REVEALED' };
+
+/**
+ * 隊伍（破冰分組）。
+ *
+ * 兩隊對抗。隊伍在入場時由一道分組題決定，活動期間不可更改 ——
+ * 可改的話現場一定會出現「大家都換去朋友那隊」，分組就失去意義。
+ *
+ * 顏色刻意不沿用 QUIZ_CHOICES：那四個顏色在問答期間已有既定語意
+ * （▲◆●■ 對應四個選項），混用會讓現場分不清「這是隊伍色還是選項色」。
+ *
+ * 隊名不在這裡定義 —— 它取自當場那道分組題的選項文字
+ * （「甜派隊 vs 鹹派隊」），比「A 隊 vs B 隊」好懂得多，
+ * 且不必另設一組設定。
+ *
+ * 每隊兩個顏色，用途不可互換：
+ *   color 是**色塊**（對抗長條、角色色標）—— 飽和、遠看認得出來；
+ *   ink   是**文字**（隊名、隊伍分數）—— 對紙底 5.8:1 以上，過 WCAG AA。
+ * 拿 color 當文字色會落在 3.7:1 左右，投影出去在場地光線下就讀不清了
+ * （見 docs/notes/UI-STYLING.md：挑顏色不要挑剛好壓線的值）。
+ */
+export const TEAMS = {
+  A: { id: 'A', color: '#C1666B', ink: '#A63F45' },
+  B: { id: 'B', color: '#48A9A6', ink: '#1F6B69' },
+};
+
+/** 隊伍 id 白名單。伺服器據此驗證客戶端送來的隊伍，不可信任前端 */
+export const TEAM_IDS = Object.keys(TEAMS);
+
+/**
+ * 分組題庫。
+ *
+ * 主辦端從這裡選一題，不開放自由輸入。分組品質完全押在這一題上 ——
+ * 挑到分佈 8:2 的題目會得到一個極不平衡的場子，而現場沒有機會重來。
+ * 內建題庫等於把這個單點失敗在開發期就消化掉。
+ *
+ * 選題的三個條件：
+ *   1. 分佈接近 50:50（辦公室裡沒有明顯多數）
+ *   2. 答案自帶話題（選完會想跟人聊，而不只是個標籤）
+ *   3. 沒有社會期待偏誤（「你加班嗎」會讓人選正確答案而非真心話）
+ *
+ * options[0] → TEAMS.A，options[1] → TEAMS.B。順序即隊伍歸屬。
+ */
+export const GROUPING_QUESTIONS = [
+  { id: 'douhua', text: '豆花你吃哪一種？', options: ['甜', '鹹'] },
+  { id: 'holiday', text: '放假想去哪？', options: ['海邊', '山上'] },
+  { id: 'chronotype', text: '你是哪一種人？', options: ['早鳥', '夜貓'] },
+  { id: 'planning', text: '出遊前你會？', options: ['排好行程', '隨興走'] },
+];
+
+/** 依 id 取分組題，查無回傳 null */
+export const GROUPING_MAP = Object.fromEntries(
+  GROUPING_QUESTIONS.map((q) => [q.id, q]),
+);
+
+/** 分組題的預設題（主辦端未選時採用，確保任何時候都問得出題目） */
+export const DEFAULT_GROUPING_ID = 'douhua';
 
 /** 問答失敗原因 */
 export const QUIZ_ERRORS = {
@@ -178,6 +251,7 @@ export const PAIR_ERRORS = {
   DECLINED: 'DECLINED',
   EXPIRED: 'EXPIRED',
   COLOR_MISMATCH: 'COLOR_MISMATCH',  // COLOR_HUNT：對方身上沒有指定的顏色
+  SAME_TEAM: 'SAME_TEAM',            // CROSS_TEAM：對方跟自己同一隊
 };
 
 /** 社交動作白名單（技術文件 M1 §操控輸入發送規格） */

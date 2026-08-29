@@ -103,7 +103,7 @@ export class SnapshotStore {
  */
 export class Directory {
   constructor({ limit = 500, ttlMs = 12 * 60 * 60 * 1000 } = {}) {
-    /** @type {Map<string, {id: string, name: string, avatar: object, rejoinToken: string, lastSeenAt: number}>} */
+    /** @type {Map<string, {id: string, name: string, avatar: object, team: string, rejoinToken: string, lastSeenAt: number}>} */
     this.entries = new Map();
     this.limit = limit;
     this.ttlMs = ttlMs;
@@ -116,6 +116,9 @@ export class Directory {
       id: agent.id,
       name: agent.name,
       avatar: agent.avatar,
+      // 隊伍要跨重連與跨重啟存活：人斷線逾 AGENT_TTL 後角色被回收，
+      // 重進時走 claimAgent，隊伍就是從這裡取回的。
+      team: agent.team ?? null,
       rejoinToken: agent.rejoinToken,
       lastSeenAt: Date.now(),
     });
@@ -160,6 +163,9 @@ export class Directory {
         id: r.id,
         name: typeof r.name === 'string' ? r.name : '',
         avatar: r.avatar ?? null,
+        // 舊快照沒有 team 欄位，一律當作缺失往下傳 null ——
+        // 由 state.js 的 assignTeam 補位，不讓 undefined 流進場上。
+        team: typeof r.team === 'string' ? r.team : null,
         rejoinToken: r.rejoinToken,
         lastSeenAt: Number(r.lastSeenAt) || Date.now(),
       });

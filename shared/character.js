@@ -122,7 +122,7 @@ export function drawCharacter(ctx, agent, pos, sprite, opts) {
  * 名牌。與角色分開繪製，因此不受彈跳與擺動影響 ——
  * 跟著角色一起晃動的文字會非常難讀。
  */
-export function drawNameplate(ctx, pos, name, { fontSize = 17 } = {}) {
+export function drawNameplate(ctx, pos, name, { fontSize = 17, teamColor = null } = {}) {
   ctx.save();
   ctx.font = `700 ${fontSize}px "Noto Sans TC", "PingFang TC", system-ui, sans-serif`;
   ctx.textAlign = 'center';
@@ -138,6 +138,19 @@ export function drawNameplate(ctx, pos, name, { fontSize = 17 } = {}) {
   ctx.beginPath();
   ctx.roundRect(pos.x - w / 2, y, w, h, 7);
   ctx.fill();
+
+  // 隊伍色標：名牌左緣一道色條。
+  //
+  // 刻意不把整張名牌染成隊伍色 —— 名字是要讀的，底色一變就得重新確認
+  // 對比（隊伍色當底時 INK 的對比會掉），而色條不碰文字區，
+  // 兩隊在遠處也分得出來。
+  if (teamColor) {
+    const barW = Math.max(3, fontSize * 0.22);
+    ctx.fillStyle = teamColor;
+    ctx.beginPath();
+    ctx.roundRect(pos.x - w / 2, y, barW, h, [7, 0, 0, 7]);
+    ctx.fill();
+  }
 
   ctx.fillStyle = INK;
   ctx.fillText(name, pos.x, y + 4);

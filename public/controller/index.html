@@ -107,6 +107,14 @@
           <p class="lede" id="scan-status">正在分析服裝特徵…</p>
           <div class="progress-bar"><i id="scan-progress"></i></div>
           <p class="hint" id="scan-elapsed">約需 25 秒</p>
+          <!-- 分組題。放在這 25 秒裡是刻意的：這是整條動線上唯一的空檔，
+               而它原本只有進度文案。答題會決定隊伍，因此比小知識更值得佔用這段時間。 -->
+          <div class="team-ask" id="scan-team" hidden>
+            <p class="team-ask-label">順便決定你的隊伍</p>
+            <p class="team-ask-q" id="scan-team-q"></p>
+            <div class="team-ask-opts" id="scan-team-opts" role="group"
+                 aria-labelledby="scan-team-q"></div>
+          </div>
           <div class="wait-tip" id="scan-tip" hidden>
             <span class="wait-tip-label">等待中，不如</span>
             <p class="wait-tip-text" id="scan-tip-text"></p>
@@ -183,6 +191,17 @@
     </div>
   </section>
 
+  <!-- ── 分組題（捏臉路徑）───────────────────────────────
+       掃描路徑在生成的 25 秒裡順便問完，捏臉沒有那段空檔，因此獨立一頁。
+       兩條路徑都要問 —— 少了任何一條，那條路徑進場的人就沒有隊伍。 -->
+  <section id="grouping" hidden>
+    <h1>最後一題</h1>
+    <p class="lede">這一題會決定你的隊伍，選了就不能改。</p>
+    <p class="team-ask-q" id="grouping-q"></p>
+    <div class="team-ask-opts" id="grouping-opts" role="group"
+         aria-labelledby="grouping-q"></div>
+  </section>
+
   <!-- ── 控制器 ─────────────────────────────────────────── -->
   <section id="controller" hidden>
     <!-- 個人視角畫布。純背景層（aria-hidden + pointer-events:none），
@@ -195,6 +214,7 @@
         <b id="my-name">—</b>
         <small id="my-id">—</small>
       </div>
+      <span class="team-chip" id="my-team" hidden></span>
       <span class="score" id="score-chip">0<small>分</small></span>
       <span class="pill" id="status">連線中…</span>
       <button class="btn-exit" id="btn-exit" aria-label="離開現場">離開</button>

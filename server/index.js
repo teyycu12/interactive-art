@@ -25,7 +25,7 @@ import { randomBytes, timingSafeEqual, X509Certificate } from 'node:crypto';
 import {
   EV, ACTIONS, STAGE, SYNC_FPS, PAIR_ERRORS, MISSION_TYPES,
   CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS,
-  SCORE_SOURCES,
+  SCORE_SOURCES, GROUPING_MAP, DEFAULT_GROUPING_ID, TEAMS, TEAM_IDS,
 } from '../shared/protocol.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
 import { avatarMatchesFamily } from '../shared/colorFamily.js';
@@ -75,6 +75,18 @@ const directory = new Directory({
   ttlMs: PERSISTENCE.directoryTtlMs,
 });
 
+/**
+ * 本場的分組題。
+ *
+ * 活動開始後不該再改：改了會讓前後進場的人依不同的題目分隊，
+ * 而隊伍是不可更改的，等於留下一批分錯的人。主辦端的 UI 據此鎖定。
+ *
+ * 必須落地：重開後若退回預設題，被 claimAgent 認領回來的人仍帶著舊隊伍，
+ * 而畫面上的隊名已經換成另一題的選項 —— 兩邊對不上，
+ * 且「有人入場後不准換題」那道防護也會因為場上暫時是空的而失效。
+ */
+let groupingId = DEFAULT_GROUPING_ID;
+
 const snapshot = store.load();
 if (snapshot) {
   scores.hydrate(snapshot.scores);
@@ -82,6 +94,7 @@ if (snapshot) {
   missions.hydrate(snapshot.missions);
   quiz.hydrate(snapshot.quiz);
   directory.hydrate(snapshot.directory);
+  if (GROUPING_MAP[snapshot.groupingId]) groupingId = snapshot.groupingId;
 }
 
 /** 快照內容。集中在一處，新增要落地的東西時只改這裡與還原段。 */
@@ -94,6 +107,7 @@ const snapshotData = () => ({
   missions: missions.export(),
   quiz: quiz.export(),
   directory: directory.export(),
+  groupingId,
 });
 
 /** 狀態有變動，等下一次自動存檔 */
@@ -216,6 +230,7 @@ const { handleRequest } = createHttpLayer({
   publicDir: PUBLIC_DIR,
   keyMatches,
   onScreenCapture: resolveScreenCapture,
+  groupingId: () => groupingId,
 });
 
 const server = tlsOptions
@@ -274,6 +289,45 @@ const isPresent = (id) => stage.agents.has(id);
 const nameOf = (id) => stage.get(id)?.name ?? '';
 
 /** 主辦端的現況面板資料 */
+/**
+ * 兩隊比分。
+ *
+ * 隊伍分用**總分**而非平均：assignTeam 的補位保證兩隊人數差不超過 1，
+ * 平均分反而會讓「一個掛機的隊友」把整隊拉下來，而現場看不出原因。
+ *
+ * 刻意**不套用 isPresent 過濾**（排行榜有套）：隊伍是活動期間的固定編制，
+ * 隊員瞬斷（AGENT_TTL 45 秒內）不該讓隊伍分數掉下去又跳回來 ——
+ * 大螢幕上的分數跳動會讓現場以為系統壞了。
+ */
+function teamBoard() {
+  const q = GROUPING_MAP[groupingId] ?? GROUPING_MAP[DEFAULT_GROUPING_ID];
+  const tally = Object.fromEntries(TEAM_IDS.map((t) => [t, { score: 0, members: 0 }]));
+  // 分數走帳本而非場上角色：離場者的分數仍屬於他的隊伍，
+  // 否則有人關掉分頁就會讓該隊憑空掉分。
+  for (const [id, entry] of scores.ledger) {
+    const team = teamOfId(id);
+    if (tally[team]) tally[team].score += entry.total;
+  }
+  for (const a of stage.agents.values()) {
+    if (tally[a.team]) tally[a.team].members++;
+  }
+  return TEAM_IDS.map((t, i) => ({
+    id: t,
+    label: q.options[i],
+    color: TEAMS[t].color,
+    ink: TEAMS[t].ink,
+    ...tally[t],
+  }));
+}
+
+/**
+ * 某個 id 屬於哪一隊。場上找得到就用場上的，否則回頭問身分目錄 ——
+ * 離場者的分數仍要算進他原本的隊伍。
+ */
+function teamOfId(id) {
+  return stage.get(id)?.team ?? directory.get(id)?.team ?? null;
+}
+
 function hostState() {
   return {
     agents: [...stage.agents.values()].map((a) => ({
@@ -294,6 +348,8 @@ function hostState() {
     quiz: quiz.publicView(),
     quizReveal: quiz.revealView(),
     leaderboard: scores.leaderboard(SCORING.leaderboardSize, nameOf, isPresent),
+    teams: teamBoard(),
+    groupingId,
   };
 }
 
@@ -326,6 +382,9 @@ function broadcastScoreBoard() {
   blast([...screens, ...hosts], EV.SCORE_BOARD, {
     leaderboard: scores.leaderboard(SCORING.leaderboardSize, nameOf, isPresent),
     players: stage.agents.size,
+    // 隊伍比分搭同一則訊息，不另開事件：兩者的更新時機完全相同
+    // （都是有人得分），拆成兩則只是多一次廣播。
+    teams: teamBoard(),
   });
 }
 
@@ -383,6 +442,8 @@ function handleJoin(ws, msg) {
         userId: existing.id,
         rejoinToken: existing.rejoinToken,
         name: existing.name,
+        // 重連不重新分隊：隊伍是既成事實，且他的分數已經記在那一隊帳上
+        team: existing.team,
         stage: STAGE,
       });
       // 重連的人可能已經累積了社交連結（邊是既成事實，不隨斷線消失）
@@ -429,7 +490,10 @@ function handleJoin(ws, msg) {
     agent.name = name;
     agent.avatar = avatar.value;
   } else {
-    agent = stage.addAgent({ name, avatar: avatar.value });
+    // 隊伍未經驗證就交給 addAgent —— 那裡的 assignTeam 會白名單比對，
+    // 不合法或缺失時補位到人少的隊。不在這裡擋下是刻意的：
+    // 拒絕入場會違反「掃描失敗一律降級，不擋人進場」。
+    agent = stage.addAgent({ name, avatar: avatar.value, team: msg.team });
     if (!agent) {
       send(ws, EV.CLIENT_REJECT, { reason: '現場人數已滿，請稍候再試' });
       return;
@@ -448,6 +512,9 @@ function handleJoin(ws, msg) {
     userId: agent.id,
     rejoinToken: agent.rejoinToken,
     name: agent.name,
+    // 伺服器指派的隊伍。手機顯示的隊伍必須以這個為準而非自己送出的那個 ——
+    // 沒答題（或送了非法值）的人是由 assignTeam 補位的，兩者可能不同。
+    team: agent.team,
     stage: STAGE,
   });
 
@@ -503,7 +570,7 @@ function detachAgent(agentId, { forget = false } = {}) {
 // 配對任務處理
 // ─────────────────────────────────────────────────────────────
 /** 走配對流程的任務型別。COLOR_HUNT 只是多一道顏色條件，驗證模型與 PAIRING 相同 */
-const PAIR_MISSION_TYPES = new Set(['PAIRING', 'COLOR_HUNT']);
+const PAIR_MISSION_TYPES = new Set(['PAIRING', 'COLOR_HUNT', 'CROSS_TEAM']);
 
 function handlePairClaim(ws, msg) {
   if (!missions.isActive || !PAIR_MISSION_TYPES.has(missions.active.type)) {
@@ -538,6 +605,30 @@ function handlePairClaim(ws, msg) {
     // 使這條預檢路徑的成本與正常的 claim() 相同
     if (!targetAgent) pairing.noteClaim(ws.agentId);
   }
+
+  // 跨隊條件同理，冷卻規則與顏色預檢逐字相同。
+  //
+  // ⚠ 這裡的冷卻不是為了節流，是防枚舉：4 位碼只有 10000 組，
+  //   若「同隊」這條路徑直接 return 而不記冷卻，攻擊者只要狂送 PAIR_CLAIM，
+  //   就能從 SAME_TEAM ↔ NOT_FOUND 的差異反推出哪些碼是有效的
+  //   （實測 15ms 可試完全部），等於繞過 claim() 的整套防護。
+  //   規則是：**只有真的同隊才免計冷卻**，其餘一律照記。
+  if (missions.active.type === 'CROSS_TEAM') {
+    if (pairing.inCooldown(ws.agentId)) {
+      send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.COOLDOWN });
+      return;
+    }
+    const me = stage.get(ws.agentId);
+    const targetAgent = stage.get(pairing.peekTarget(msg.code));
+    if (targetAgent && me && targetAgent.team === me.team) {
+      // 同隊是正當使用者會遇到的情況（走向了自己人），
+      // 因此刻意不記冷卻 —— 讓他能馬上改找對面的人。
+      send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.SAME_TEAM });
+      return;
+    }
+    if (!targetAgent) pairing.noteClaim(ws.agentId);
+  }
+
   const result = pairing.claim(ws.agentId, msg.code, Date.now(),
     missions.active?.id ?? null);
   if (!result.ok) {
@@ -729,6 +820,27 @@ function handleQuizAnswer(ws, msg) {
 // ─────────────────────────────────────────────────────────────
 function handleHostMessage(ws, msg) {
   switch (msg.type) {
+    case EV.HOST_SET_GROUPING: {
+      if (!GROUPING_MAP[msg.questionId]) {
+        send(ws, EV.HOST_REJECT, { reason: '未知的分組題' });
+        return;
+      }
+      // 已經有人入場就不准換題：換了會讓前後進場的人依不同的題目分隊，
+      // 而隊伍不可更改，等於留下一批分錯的人。
+      if (stage.agents.size > 0) {
+        send(ws, EV.HOST_REJECT, { reason: '已有人入場，本場的分組題不能再換' });
+        // 一併回推現況：主辦端的選單此刻停在被拒的那一項，
+        // 看起來像換成功了。這則會把它撥回真正生效的題目。
+        send(ws, EV.HOST_STATE, hostState());
+        return;
+      }
+      groupingId = msg.questionId;
+      console.log(`[grouping] 本場分組題設為「${GROUPING_MAP[groupingId].text}」`);
+      markDirty();
+      pushHostState();
+      return;
+    }
+
     case EV.HOST_PUBLISH_MISSION: {
       const result = missions.publish({
         type: msg.missionType,
@@ -910,6 +1022,7 @@ wss.on('connection', (ws) => {
         send(ws, EV.SCORE_BOARD, {
           leaderboard: scores.leaderboard(SCORING.leaderboardSize, nameOf, isPresent),
           players: stage.agents.size,
+          teams: teamBoard(),
         });
         console.log(`[screen] 大螢幕已連線　共 ${screens.size} 台`);
         break;
@@ -1008,6 +1121,7 @@ wss.on('connection', (ws) => {
       case EV.HOST_END_QUIZ:
       case EV.HOST_KICK:
       case EV.HOST_TAKE_PHOTO:
+      case EV.HOST_SET_GROUPING:
         // 未通過認證的連線一律忽略，不回應也不透露任何狀態
         if (ws.role !== 'host') return;
         handleHostMessage(ws, msg);

@@ -6,7 +6,10 @@
  * 光靠「網址沒人知道」保護不了任何東西。
  */
 
-import { EV, MISSION_TYPES, QUIZ, QUIZ_CHOICES, QUIZ_PHASE } from '/shared/protocol.js';
+import {
+  EV, MISSION_TYPES, QUIZ, QUIZ_CHOICES, QUIZ_PHASE,
+  GROUPING_QUESTIONS,
+} from '/shared/protocol.js';
 import { renderAvatarSVG, CV_FULL_PART } from '/shared/avatars.js';
 import { COLOR_FAMILIES } from '/shared/colorFamily.js';
 import { HEAT_LEVELS } from '/shared/heat.js';
@@ -55,6 +58,7 @@ function handle(msg, key) {
       }
       if (msg.scoring) { scoring = msg.scoring; renderScoringRule(); }
       buildMissionTypes();
+      buildGroupingSelect();
       $('#auth').hidden = true;
       $('#console').hidden = false;
       setConn('已連線', false);
@@ -203,6 +207,7 @@ const ERR_SLOT = {
   quiz: '#quiz-err',
   treasure: '#treasure-err',
   mission: '#mission-err',
+  grouping: '#grouping-err',
 };
 
 /**
@@ -248,6 +253,60 @@ try {
 
 /** 目前選定的顏色。COLOR_HUNT 以外的任務型別不會用到 */
 let pickedColor = COLOR_FAMILIES[0].id;
+
+// ── 分組 ──────────────────────────────────────────────────
+function buildGroupingSelect() {
+  const sel = $('#grouping-select');
+  if (!sel) return;
+  sel.replaceChildren();
+  for (const q of GROUPING_QUESTIONS) {
+    const opt = document.createElement('option');
+    opt.value = q.id;
+    opt.textContent = `${q.text}（${q.options.join(' / ')}）`;
+    sel.append(opt);
+  }
+  sel.addEventListener('change', () => {
+    // 標記來源，讓伺服器的拒絕訊息落在分組面板自己的欄位上，
+    // 而不是預設的任務面板（沿用既有的 lastAction / ERR_SLOT 機制）
+    lastAction = 'grouping';
+    send(EV.HOST_SET_GROUPING, { questionId: sel.value });
+  });
+}
+
+/** 兩隊比分。人數一併顯示，讓主辦端看得出分差是不是人數造成的 */
+function renderTeams(teams = [], groupingId = null) {
+  // 選單一律跟隨伺服器的值：換題被拒時（已有人入場）選單會停在被拒的那一項，
+  // 看起來像換成功了，下一則 HOST_STATE 會把它撥回真正生效的題目。
+  const sel = $('#grouping-select');
+  if (sel && groupingId && sel.value !== groupingId) sel.value = groupingId;
+
+  const box = $('#team-score');
+  if (!box) return;
+  if (teams.length === 0) { box.replaceChildren(); return; }
+
+  const top = Math.max(1, ...teams.map((t) => t.score));
+  box.replaceChildren();
+  for (const t of teams) {
+    const row = document.createElement('div');
+    row.className = 'team-row';
+    row.style.setProperty('--team-color', t.color);
+    row.style.setProperty('--team-ink', t.ink);
+
+    const name = document.createElement('b');
+    name.textContent = t.label;
+    const meter = document.createElement('div');
+    meter.className = 'team-meter';
+    const fill = document.createElement('i');
+    fill.style.width = `${(t.score / top) * 100}%`;
+    meter.append(fill);
+    const val = document.createElement('span');
+    val.className = 'team-val';
+    val.textContent = `${t.score} 分・${t.members} 人`;
+
+    row.append(name, meter, val);
+    box.append(row);
+  }
+}
 
 function buildMissionTypes() {
   const sel = $('#mission-type');
@@ -428,6 +487,11 @@ $('#btn-treasure-stop').addEventListener('click', () => {
 function renderState(state) {
   roster = state.agents ?? [];
   syncProphetOptions();
+  renderTeams(state.teams ?? [], state.groupingId ?? null);
+  // 有人入場後就鎖住選題 —— 伺服器也會擋，但先在 UI 上講清楚，
+  // 免得主辦端選了才被退回
+  const gsel = $('#grouping-select');
+  if (gsel) gsel.disabled = (state.agents?.length ?? 0) > 0;
   $('#stat-people').textContent = state.agents.length;
   $('#stat-edges').textContent = state.graphEdges;
   $('#people-count').textContent = state.agents.length;

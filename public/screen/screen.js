@@ -8,7 +8,7 @@
  * 除錯視圖（按 D）保留自 M2 開發期，用於檢查 α 權重、避障半徑與速度向量。
  */
 
-import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protocol.js';
+import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH, TEAMS } from '/shared/protocol.js';
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
 import { TREASURE_RADIUS } from '/shared/heat.js';
@@ -180,6 +180,9 @@ function connect() {
             roster.set(a.id, { ...a, img: avatarImage(a.avatar) });
           } else {
             prev.name = a.name;
+            // 隊伍也要跟著更新 —— 這條分支（外觀沒變）會在整場活動裡
+            // 走無數次，只更新名字的話色標會永遠停在第一次收到的值。
+            prev.team = a.team;
           }
           // 新加入者標記為「剛進場」：參與者剛抬頭看大螢幕時，
           // 十個角色裡找自己並不容易，給一段時間的指示才接得上。
@@ -279,6 +282,7 @@ function connect() {
 
       case EV.SCORE_BOARD:
         renderRanks(msg.leaderboard ?? []);
+        renderVersus(msg.teams ?? []);
         break;
 
       case EV.SCREEN_CAPTURE_REQ:
@@ -644,7 +648,10 @@ function render(now) {
 
     drawCharacter(ctx, a, pos, entry?.img, { time, maxSpeed: MAX_SPEED, height });
     // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
-    drawNameplate(ctx, pos, entry?.name ?? a.id, { fontSize: Math.max(10, height * 0.12) });
+    drawNameplate(ctx, pos, entry?.name ?? a.id, {
+      fontSize: Math.max(10, height * 0.12),
+      teamColor: entry?.team ? (TEAMS[entry.team]?.color ?? null) : null,
+    });
     if (a.emote) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }
@@ -784,6 +791,37 @@ function hideQuiz() {
   cancelAnimationFrame(quizRaf);
   quizEl.hidden = true;
   syncBanners();
+}
+
+/**
+ * 兩隊對抗條。
+ *
+ * 兩隊都是 0 分時各佔一半（而非 0 寬度）—— 活動剛開始時一條空白的
+ * 長條看起來像壞掉，對半分才看得出「還沒開始拉開差距」。
+ */
+function renderVersus(teams) {
+  const box = document.getElementById('versus');
+  if (!box) return;
+  if (teams.length < 2) { box.hidden = true; return; }
+
+  const [a, b] = teams;
+  const total = a.score + b.score;
+  const aPct = total === 0 ? 50 : (a.score / total) * 100;
+
+  const barA = document.getElementById('versus-a');
+  const barB = document.getElementById('versus-b');
+  barA.style.width = `${aPct}%`;
+  barA.style.background = a.color;
+  barB.style.background = b.color;
+
+  const la = document.getElementById('versus-a-label');
+  const lb = document.getElementById('versus-b-label');
+  la.textContent = `${a.label} ${a.score}`;
+  lb.textContent = `${b.score} ${b.label}`;
+  // 文字用 ink 而非色塊色：色塊色當文字在紙底上只有 3.7:1
+  la.style.color = a.ink;
+  lb.style.color = b.ink;
+  box.hidden = false;
 }
 
 function renderRanks(rows) {

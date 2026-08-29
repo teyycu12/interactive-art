@@ -1089,3 +1089,85 @@ input:focus-visible,
   font-size: 13px;
   font-weight: 700;
 }
+
+/* ── 分組題與隊伍 ─────────────────────────────────────────
+   隊伍色分兩個變數：--team-color 是色塊，--team-ink 是文字。
+   兩者不可互換 —— 直接拿色塊色當文字只有 3.7:1，達不到 WCAG AA 的 4.5:1
+   （見本檔開頭的對比規則與 docs/notes/UI-STYLING.md）。 */
+.team-ask {
+  margin-top: 18px;
+  padding: 14px;
+  border: 2px solid var(--line);
+  border-radius: 14px;
+  max-width: 22em;
+}
+.team-ask[hidden] { display: none; }
+.team-ask-label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  color: var(--ink-soft);
+}
+.team-ask-q {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.team-ask-opts {
+  display: flex;
+  gap: 10px;
+}
+.team-opt {
+  flex: 1;
+  /* 44px 是觸控下限；這裡直接給足高度，不必再用 ::after 補 */
+  min-height: 52px;
+  padding: 12px 10px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--team-ink);
+  background: color-mix(in srgb, var(--team-color) 12%, transparent);
+  border: 2px solid var(--team-color);
+  border-radius: 12px;
+  cursor: pointer;
+}
+/* 選中狀態不只靠顏色 —— 色弱使用者也要分得出來，因此同時加粗邊框與勾號 */
+.team-opt[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--team-color) 26%, transparent);
+  border-width: 3px;
+}
+.team-opt[aria-pressed="true"]::after {
+  content: ' ✓';
+}
+.team-opt:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* 捏臉路徑的獨立分組頁 */
+#grouping {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  min-height: 100%;
+}
+#grouping[hidden] { display: none; }
+#grouping .team-ask-q { font-size: 20px; margin-top: 10px; }
+
+/* 控制器頂端的隊伍標。flex: none —— .bar 裡只有 .who 可以被壓縮，
+   其餘都是固定寬度的功能性元件（見 .bar .who 的註解）。 */
+.team-chip {
+  flex: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--team-ink);
+  background: color-mix(in srgb, var(--team-color) 16%, transparent);
+  border: 1.5px solid var(--team-color);
+  white-space: nowrap;
+}
+.team-chip[hidden] { display: none; }

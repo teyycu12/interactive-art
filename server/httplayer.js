@@ -28,7 +28,7 @@ import { RateLimiter } from './ratelimit.js';
  *        大螢幕回傳合照底圖。回傳 false 表示 requestId 認不得。
  * @returns {{handleRequest: (req, res) => void, resolveStatic: (p: string) => string|null}}
  */
-export function createHttpLayer({ root, publicDir, keyMatches, onScreenCapture }) {
+export function createHttpLayer({ root, publicDir, keyMatches, onScreenCapture, groupingId }) {
 const ROOT = root;
 const PUBLIC_DIR = publicDir;
 
@@ -541,6 +541,14 @@ function handleRequest(req, res) {
 
   if (urlPath === '/api/styles') {
     proxyStyles(req, res);
+    return;
+  }
+
+  // 本場的分組題。手機在入場前取一次；取不到會沿用內建預設題，
+  // 因此這個端點掛掉也不會擋人進場。
+  if (urlPath === '/api/grouping') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: true, questionId: groupingId?.() ?? null }));
     return;
   }
 

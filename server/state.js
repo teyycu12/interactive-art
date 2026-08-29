@@ -8,7 +8,7 @@
  */
 
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
-import { STAGE, AGENT_STATE, AGENT_MODE } from '../shared/protocol.js';
+import { STAGE, AGENT_STATE, AGENT_MODE, TEAM_IDS } from '../shared/protocol.js';
 import { OBSTACLES, zoneAt } from '../shared/scene.js';
 import {
   EMOTE_DURATION_MS, EMOTE_COOLDOWN_MS, AGENT_TTL_MS, INPUT_DEADZONE,
@@ -29,6 +29,36 @@ function spawnPoint() {
     if (!OBSTACLES.some((o) => Math.hypot(x - o.x, y - o.y) < o.r + 30)) return { x, y };
   }
   return { x: STAGE.width / 2, y: STAGE.height / 2 };
+}
+
+/**
+ * 隊伍分派的不變式：場上不存在沒有隊伍的角色。
+ *
+ * 「不要無隊伍」是刻意的需求 —— 沒有它，每個下游（計分聚合、跨隊配對
+ * 判定、大螢幕色標）都要各自判空，而漏判的症狀是角色沒有顏色、
+ * 或跨隊任務把他算成兩邊都不是。集中在這裡保證之後，下游可以直接信任
+ * agent.team 一定有效。
+ *
+ * 缺答案時**補位而非拒絕**：伺服器不能假設前端一定帶 team
+ * （舊版前端、手動送 WebSocket 都可能沒有），但拒絕入場會違反
+ * 「掃描失敗一律降級，不擋人進場」那條鐵律。補位順便平衡人數 ——
+ * 往人少的隊丟，兩隊人數差因此不會超過 1。
+ *
+ * @param {Map<string, object>} agents 目前場上的角色
+ * @param {*} requested 客戶端聲稱的隊伍，未驗證
+ * @returns {string} 必定是 TEAM_IDS 裡的其中一個
+ */
+function assignTeam(agents, requested) {
+  if (TEAM_IDS.includes(requested)) return requested;
+
+  const counts = Object.fromEntries(TEAM_IDS.map((t) => [t, 0]));
+  for (const a of agents.values()) {
+    if (counts[a.team] !== undefined) counts[a.team]++;
+  }
+  const fewest = Math.min(...TEAM_IDS.map((t) => counts[t]));
+  const candidates = TEAM_IDS.filter((t) => counts[t] === fewest);
+  // 同數時隨機，避免每次重開伺服器前幾個人都固定進同一隊
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
 /** 定時安全比較，避免以回應時間差逐字元試出 token */
@@ -61,7 +91,7 @@ export class Stage {
    *
    * @returns {object|null} 達人數上限、或該 id 已在場上時回傳 null
    */
-  addAgent({ name, avatar, id: keepId = null, rejoinToken: keepToken = null }) {
+  addAgent({ name, avatar, id: keepId = null, rejoinToken: keepToken = null, team = null }) {
     if (this.isFull()) return null;
     if (keepId && this.agents.has(keepId)) return null;
     const id = keepId ?? `usr_${randomUUID().slice(0, 8)}`;
@@ -69,6 +99,9 @@ export class Stage {
       id,
       name,
       avatar,
+      // 破冰分組。這是所有角色建立路徑的單一咽喉點（claimAgent 也走這裡），
+      // 因此「場上不存在沒有隊伍的角色」這條不變式只需要在 assignTeam 保證一次。
+      team: assignTeam(this.agents, team),
       // 重連憑證：僅存於伺服器，絕不出現在 STAGE_ROSTER / STAGE_SYNC 等任何廣播中。
       // 只在 CLIENT_WELCOME 中單獨回傳給該角色本人的連線。
       rejoinToken: keepToken ?? randomBytes(16).toString('hex'),
@@ -211,7 +244,7 @@ export class Stage {
    * 角色是全新出生的（座標、速度都重來），但身分不變，
    * 因此積分、社交圖譜、任務進度全部自動接回。
    *
-   * @param {{id: string, name: string, avatar: object, rejoinToken: string}} entry 目錄項目
+   * @param {{id: string, name: string, avatar: object, team?: string, rejoinToken: string}} entry 目錄項目
    * @param {string} rejoinToken 客戶端出示的憑證
    * @returns {object|null} 憑證不符、id 已在場上、或人數已滿時皆回傳 null
    */
@@ -223,6 +256,10 @@ export class Stage {
       avatar: entry.avatar,
       id: entry.id,
       rejoinToken: entry.rejoinToken,
+      // 隊伍必須跟著身分回來。少了這一行，重連的人會被 assignTeam
+      // 重新隨機分派，而他先前的分數仍記在原隊帳上 ——
+      // 現場的症狀是「我怎麼變成敵隊了」。
+      team: entry.team ?? null,
     });
   }
 
@@ -440,12 +477,15 @@ export class Stage {
     return [...this.agents.values()].map((a) => ({ id: a.id, name: a.name }));
   }
 
-  /** 參與者名冊：id、顯示名稱與捏臉設定，僅在成員變動時廣播 */
+  /** 參與者名冊：id、顯示名稱、捏臉設定與隊伍，僅在成員變動時廣播 */
   roster() {
     return [...this.agents.values()].map((a) => ({
       id: a.id,
       name: a.name,
       avatar: a.avatar,
+      // 大螢幕據此畫隊伍色標。這裡是逐欄白名單而非整個 agent 序列化，
+      // rejoinToken 因此不會混進廣播 —— 新增欄位時務必維持這個形狀。
+      team: a.team,
     }));
   }
 }

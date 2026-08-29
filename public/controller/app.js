@@ -12,6 +12,7 @@ import {
 import {
   EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS,
   QUIZ_CHOICES, QUIZ_ERRORS,
+  TEAMS, TEAM_IDS, GROUPING_MAP, DEFAULT_GROUPING_ID,
 } from '/shared/protocol.js';
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
@@ -188,6 +189,79 @@ try {
   displayName = localStorage.getItem(LS.name) ?? '';
 } catch { /* 隱私模式下 localStorage 可能拋錯，忽略即可 */ }
 
+// ── 分組題與隊伍 ──────────────────────────────────────────
+//
+// 兩條入場路徑都要問：掃描在生成的 25 秒裡順便問完，捏臉獨立一頁。
+// 少了任何一條，那條路徑進場的人就沒有隊伍。
+//
+// 刻意**不寫進 localStorage**：隊伍一旦決定就不可更改，而存在本機
+// 等於讓人清掉儲存空間就能重選。真正的權威在伺服器 ——
+// CLIENT_WELCOME 回傳的 team 才算數（沒答題的人是由伺服器補位的）。
+
+/** 本場的分組題。伺服器在 /api/grouping 指定，取不到時用預設題 */
+let groupingQuestion = GROUPING_MAP[DEFAULT_GROUPING_ID];
+/** 我選的隊伍。null 代表還沒答 —— 送出時伺服器會補位，不會擋人進場 */
+let myTeam = null;
+
+/** 取本場分組題。失敗不阻斷入場，靜靜沿用預設題 */
+async function loadGroupingQuestion() {
+  try {
+    const res = await fetch('/api/grouping');
+    const body = await res.json();
+    const q = GROUPING_MAP[body?.questionId];
+    if (q) groupingQuestion = q;
+  } catch { /* 沿用預設題 */ }
+}
+
+/**
+ * 把分組題渲染進指定容器。
+ * @param {HTMLElement} qEl 題目文字的容器
+ * @param {HTMLElement} optsEl 選項按鈕的容器
+ * @param {(team: string) => void} [onPick] 選完之後
+ */
+function renderGrouping(qEl, optsEl, onPick) {
+  if (!qEl || !optsEl) return;
+  qEl.textContent = groupingQuestion.text;
+  optsEl.replaceChildren();
+
+  groupingQuestion.options.forEach((label, i) => {
+    const team = TEAM_IDS[i];
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'team-opt';
+    btn.textContent = label;
+    // 隊伍色只當色塊用，文字另有 ink —— 直接拿 color 當文字色只有 3.7:1，
+    // 投影與場地光線下讀不清（見 docs/notes/UI-STYLING.md）
+    btn.style.setProperty('--team-color', TEAMS[team].color);
+    btn.style.setProperty('--team-ink', TEAMS[team].ink);
+    btn.setAttribute('aria-pressed', String(myTeam === team));
+    btn.addEventListener('click', () => {
+      myTeam = team;
+      for (const el of optsEl.querySelectorAll('.team-opt')) {
+        el.setAttribute('aria-pressed', String(el === btn));
+      }
+      onPick?.(team);
+    });
+    optsEl.append(btn);
+  });
+}
+
+/** 隊名（取自當場那道題的選項文字），伺服器補位時也叫得出名字 */
+function teamLabel(team) {
+  const i = TEAM_IDS.indexOf(team);
+  return i >= 0 ? groupingQuestion.options[i] : '';
+}
+
+/** 把隊伍畫進控制器頂端的狀態列 */
+function renderMyTeam() {
+  const el = $('#my-team');
+  if (!el || !myTeam) return;
+  el.textContent = teamLabel(myTeam);
+  el.style.setProperty('--team-color', TEAMS[myTeam].color);
+  el.style.setProperty('--team-ink', TEAMS[myTeam].ink);
+  el.hidden = false;
+}
+
 /** 切回捏臉時，先把掃描的外觀清掉，否則調整選項不會有任何效果 */
 function ensureTokenConfig() {
   if (config?.source === 'CV') config = randomAvatarConfig();
@@ -256,7 +330,7 @@ function showStep(n) {
 
 /** 只切換單一畫面，其餘全部隱藏 */
 function showScreen(id) {
-  for (const s of ['entry', 'scan', 'builder', 'controller', 'farewell']) {
+  for (const s of ['entry', 'scan', 'builder', 'grouping', 'controller', 'farewell']) {
     $(`#${s}`).hidden = s !== id;
   }
 }
@@ -862,6 +936,23 @@ function startScanProgress() {
     '問問身邊的人，他的角色被生成成什麼樣子。',
   ];
 
+  // 這 25 秒是整條動線上唯一的空檔，順便把分組題問完 ——
+  // 答過的人（重拍、或先前已選）不再重問。
+  const teamEl = $('#scan-team');
+  if (teamEl) {
+    teamEl.hidden = myTeam !== null;
+    const paint = () => renderGrouping($('#scan-team-q'), $('#scan-team-opts'), () => {
+      // 答完就收起來，把版面讓回給提示
+      teamEl.hidden = true;
+    });
+    if (!myTeam) {
+      paint();
+      // 主辦端可能在這支手機開著的期間才選題，重取一次再重畫。
+      // 已經答過就不動，免得選項在手指底下換掉。
+      loadGroupingQuestion().then(() => { if (!myTeam) paint(); });
+    }
+  }
+
   const bar = $('#scan-progress');
   const statusEl = $('#scan-status');
   const elapsedEl = $('#scan-elapsed');
@@ -898,6 +989,7 @@ function startScanProgress() {
     bar.style.width = '100%';
     // 收起提示，否則它會殘留到「確認角色」那一頁
     if (tipEl) tipEl.hidden = true;
+    if (teamEl) teamEl.hidden = true;
   };
 }
 
@@ -967,6 +1059,9 @@ $('#btn-next').addEventListener('click', () => {
 
 refresh();
 showScreen('entry');
+// 開場就取本場的分組題。不 await —— 取題失敗或很慢都不該擋住命名畫面，
+// 沿用內建預設題即可（與「掃描失敗一律降級，不擋人進場」同一個原則）。
+loadGroupingQuestion();
 
 // ─────────────────────────────────────────────────────────────
 // WebSocket 連線
@@ -1017,7 +1112,11 @@ function connect() {
       userId = localStorage.getItem(LS.userId);
       rejoinToken = localStorage.getItem(LS.rejoinToken);
     } catch { /* 略 */ }
-    sendMsg(EV.CLIENT_JOIN, { userId, rejoinToken, name: displayName, avatar: config });
+    // team 由伺服器最終裁定：沒答題或送了非法值時它會補位，
+    // 重連時則一律沿用原隊（客戶端無法靠重送換隊）
+    sendMsg(EV.CLIENT_JOIN, {
+      userId, rejoinToken, name: displayName, avatar: config, team: myTeam,
+    });
   });
 
   ws.addEventListener('message', (e) => {
@@ -1030,6 +1129,12 @@ function connect() {
         if (msg.rejoinToken) localStorage.setItem(LS.rejoinToken, msg.rejoinToken);
       } catch { /* 略 */ }
       myId = msg.userId;
+      // 伺服器指派的隊伍才算數：沒答題的人是被補位的，重連的人一律沿用原隊。
+      // 以本地選擇為準會讓這兩種情況顯示成錯的隊伍。
+      if (msg.team) {
+        myTeam = msg.team;
+        renderMyTeam();
+      }
       $('#my-name').textContent = msg.name;
       $('#my-id').textContent = msg.userId;
       setStatus('已連線', 'ok');
@@ -1100,6 +1205,7 @@ const PAIR_MESSAGES = {
   [PAIR_ERRORS.DECLINED]: '對方沒有確認這次配對。',
   [PAIR_ERRORS.EXPIRED]: '配對逾時，請重新輸入。',
   [PAIR_ERRORS.COLOR_MISMATCH]: '這位的身上沒有指定的顏色，再找找看。',
+  [PAIR_ERRORS.SAME_TEAM]: '這位跟你同一隊，去找對面那隊的人。',
 };
 
 function showPairMsg(text, ok = false) {
@@ -1588,7 +1694,33 @@ document.addEventListener('visibilitychange', () => {
 // ─────────────────────────────────────────────────────────────
 // 進場
 // ─────────────────────────────────────────────────────────────
+/**
+ * 還沒答分組題的話，先問完再進場。
+ *
+ * 掛在 enterStage 之前而非各個按鈕上：捏臉與掃描兩條路徑最後都會匯流到
+ * enterStage，擋在這裡等於一次涵蓋兩條，日後新增入場路徑也不會漏掉
+ * （與伺服器把不變式集中在 addAgent 是同一個思路）。
+ *
+ * @returns {boolean} true 代表已攔下（畫面已切到分組題）
+ */
+function requireGrouping() {
+  if (myTeam) return false;
+  // 再取一次：手機可能在主辦端選題之前就開著了，開場那次拿到的是舊題。
+  // 非同步回來後重畫，不阻塞畫面切換。
+  loadGroupingQuestion().then(() => {
+    if (!myTeam) renderGrouping($('#grouping-q'), $('#grouping-opts'), () => enterStage());
+  });
+  renderGrouping($('#grouping-q'), $('#grouping-opts'), () => {
+    // 選完立刻進場，不再多一個「下一步」——
+    // 這一題只有兩個選項，多一次點擊只是拖慢入場
+    enterStage();
+  });
+  showScreen('grouping');
+  return true;
+}
+
 function enterStage() {
+  if (requireGrouping()) return;
   showScreen('controller');
   requestWakeLock();
   $('#mini-avatar').innerHTML = renderAvatarSVG(config);
