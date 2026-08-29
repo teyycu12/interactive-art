@@ -92,4 +92,6 @@ export function zoneAt(x, y) {
 }
 
 /** 依 id 取分區定義，供三端顯示名稱與顏色 */
-export const ZONE_MAP = Object.fromEntries(ZONES.map((z) => [z.id, z]));
+/** 依 id 取分區。null 原型的理由同 COLOR_FAMILY_MAP */
+export const ZONE_MAP = Object.assign(Object.create(null),
+  Object.fromEntries(ZONES.map((z) => [z.id, z])));

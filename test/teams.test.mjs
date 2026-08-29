@@ -130,6 +130,16 @@ describe('分組題庫', () => {
     }
   });
 
+  test('⚠ 查表不得回傳原型成員', () => {
+    // 一般物件會繼承 Object.prototype，GROUPING_MAP['constructor'] 因此
+    // 回傳函式而非 undefined —— 那足以通過「查得到就採用」的檢查，
+    // 接著 q.options[0] 就會炸掉。實測 HOST_SET_GROUPING 送
+    // questionId:'constructor' 可讓整台伺服器崩潰。
+    for (const key of ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty']) {
+      assert.equal(GROUPING_MAP[key], undefined, `GROUPING_MAP['${key}'] 應為 undefined`);
+    }
+  });
+
   test('題目 id 唯一且查得到', () => {
     const ids = GROUPING_QUESTIONS.map((q) => q.id);
     assert.equal(new Set(ids).size, ids.length, '題目 id 不可重複');
@@ -153,11 +163,33 @@ describe('分組題庫', () => {
       return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
     };
 
+    // color-mix(in srgb, C pct%, transparent) 疊在 bg 上的實際結果
+    const mix = (fg, bg, pct) => {
+      const ch = (hex, i) => parseInt(hex.replace('#', '').slice(i, i + 2), 16);
+      let out = '#';
+      for (const i of [0, 2, 4]) {
+        out += Math.round(ch(fg, i) * pct + ch(bg, i) * (1 - pct))
+          .toString(16).padStart(2, '0');
+      }
+      return out;
+    };
+
     // 控制器與大螢幕底色 #FAF8F5、主辦端表面 #FFFDFA
     for (const t of Object.values(TEAMS)) {
       for (const bg of ['#FAF8F5', '#FFFDFA']) {
         const r = ratio(t.ink, bg);
         assert.ok(r >= 4.5, `隊伍 ${t.id} 的文字色 ${t.ink} 對 ${bg} 只有 ${r.toFixed(2)}:1`);
+      }
+
+      // ⚠ 文字實際上不是坐在紙底上，而是坐在「隊伍色混入紙底」的按鈕底上，
+      //   那比紙底暗，對比一定更差。只檢查紙底會漏掉真正會發生的情況 ——
+      //   隊 A 的選中態就曾因此是 4.29:1（未達標）而測試全綠。
+      //   百分比對應 style.css 的 .team-opt(12%/26%) 與 .team-chip(16%)。
+      for (const pct of [0.12, 0.16, 0.26]) {
+        const bg = mix(t.color, '#FAF8F5', pct);
+        const r = ratio(t.ink, bg);
+        assert.ok(r >= 4.5,
+          `隊伍 ${t.id} 的文字色 ${t.ink} 在 ${pct * 100}% 底色 ${bg} 上只有 ${r.toFixed(2)}:1`);
       }
     }
   });

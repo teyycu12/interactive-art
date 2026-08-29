@@ -913,6 +913,15 @@ input:focus-visible,
   }
   .scan-side { flex: 0 0 auto; justify-content: flex-start; }
   .scan-panel h1 { font-size: 22px; }
+
+  /* 問分組題時把版面讓出來。
+     小螢幕（iPhone SE 375×667）上，取景框 58vh 之後只剩約 240px，
+     而既有內容已用掉約 200px —— 再放進分組題會溢出約 120px，
+     且 html 是 overflow:hidden，被切掉的按鈕捲不出來也按不到。
+     提示卡與分組題本來就不必同時出現（提示是拿來填空檔的）。 */
+  #scan.asking-team .scan-stage { max-height: 34vh; }
+  #scan.asking-team .wait-tip { display: none; }
+  #scan.asking-team .scan-panel h1 { font-size: 18px; }
 }
 
 #reconnect-overlay {

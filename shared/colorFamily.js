@@ -36,9 +36,16 @@ export const COLOR_FAMILIES = [
   { id: 'MONO',   label: '黑白灰', glyph: '⚪', swatch: '#6D6875', hueRange: null },
 ];
 
-export const COLOR_FAMILY_MAP = Object.fromEntries(
+/**
+ * 依 id 取色族。
+ *
+ * null 原型：一般物件會繼承 Object.prototype，於是 MAP['constructor']
+ * 會回傳函式而非 undefined，足以通過 missions.js 的「查得到就採用」檢查。
+ * 實測可發布出一個顏色是 undefined、沒有人比對得上的任務。
+ */
+export const COLOR_FAMILY_MAP = Object.assign(Object.create(null), Object.fromEntries(
   COLOR_FAMILIES.map((f) => [f.id, f]),
-);
+));
 
 /**
  * 飽和度低於此值視為無彩色。

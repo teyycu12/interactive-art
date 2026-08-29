@@ -50,6 +50,16 @@ describe('色族判定', () => {
     }
   });
 
+  test('⚠ 色族查表不得回傳原型成員', () => {
+    // 與 GROUPING_MAP 同一類的陷阱：missions.js 用
+    // `if (!COLOR_FAMILY_MAP[colorFamily])` 驗證主辦端送來的值，
+    // 而 'constructor' 會取到函式並通過檢查 —— 結果是發布出一個
+    // 顏色顯示為 undefined、沒有任何人比對得上的任務。
+    for (const key of ['constructor', 'toString', '__proto__', 'valueOf']) {
+      assert.equal(COLOR_FAMILY_MAP[key], undefined, `COLOR_FAMILY_MAP['${key}'] 應為 undefined`);
+    }
+  });
+
   test('非法輸入回傳 null 而非誤判成某個顏色', () => {
     for (const bad of ['', 'red', '#GGG', null, undefined, '#12345']) {
       assert.equal(familyOf(bad), null);

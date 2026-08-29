@@ -21,7 +21,9 @@ export const HEAT_LEVELS = [
   { id: 'BURNING',  label: '燙',   glyph: '🌋', color: '#E63946' },
 ];
 
-export const HEAT_MAP = Object.fromEntries(HEAT_LEVELS.map((h) => [h.id, h]));
+/** 依 id 取冷熱等級。null 原型的理由同 COLOR_FAMILY_MAP */
+export const HEAT_MAP = Object.assign(Object.create(null),
+  Object.fromEntries(HEAT_LEVELS.map((h) => [h.id, h])));
 
 /**
  * 踩中判定半徑（邏輯單位）。

@@ -180,7 +180,7 @@ export const QUIZ_PHASE = { ASKING: 'ASKING', REVEALED: 'REVEALED' };
  * （見 docs/notes/UI-STYLING.md：挑顏色不要挑剛好壓線的值）。
  */
 export const TEAMS = {
-  A: { id: 'A', color: '#C1666B', ink: '#A63F45' },
+  A: { id: 'A', color: '#C1666B', ink: '#96373D' },
   B: { id: 'B', color: '#48A9A6', ink: '#1F6B69' },
 };
 
@@ -208,9 +208,18 @@ export const GROUPING_QUESTIONS = [
   { id: 'planning', text: '出遊前你會？', options: ['排好行程', '隨興走'] },
 ];
 
-/** 依 id 取分組題，查無回傳 null */
-export const GROUPING_MAP = Object.fromEntries(
-  GROUPING_QUESTIONS.map((q) => [q.id, q]),
+/**
+ * 依 id 取分組題，查無回傳 undefined。
+ *
+ * 用 null 原型：一般物件會繼承 Object.prototype，於是
+ * GROUPING_MAP['constructor'] 會回傳一個函式而不是 undefined ——
+ * 那足以通過「查得到就採用」的檢查，接著 q.options[0] 就會炸掉。
+ * 實測 HOST_SET_GROUPING 送 questionId:'constructor' 可讓伺服器整個崩潰。
+ * 同一個陷阱也在手機端：拿到的「題目」會是函式，畫面直接壞掉。
+ */
+export const GROUPING_MAP = Object.assign(
+  Object.create(null),
+  Object.fromEntries(GROUPING_QUESTIONS.map((q) => [q.id, q])),
 );
 
 /** 分組題的預設題（主辦端未選時採用，確保任何時候都問得出題目） */

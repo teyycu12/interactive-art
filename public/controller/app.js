@@ -944,9 +944,14 @@ function startScanProgress() {
     const paint = () => renderGrouping($('#scan-team-q'), $('#scan-team-opts'), () => {
       // 答完就收起來，把版面讓回給提示
       teamEl.hidden = true;
+      $('#scan')?.classList.remove('asking-team');
     });
     if (!myTeam) {
       paint();
+      // 分組題與提示卡不同時出現：小螢幕（iPhone SE 級）上兩者並存會超出
+      // 可用高度約 120px，而 html 是 overflow:hidden —— 被切掉的按鈕
+      // 捲不出來也按不到。標記由 CSS 收掉提示並縮小取景框。
+      $('#scan')?.classList.add('asking-team');
       // 主辦端可能在這支手機開著的期間才選題，重取一次再重畫。
       // 已經答過就不動，免得選項在手指底下換掉。
       loadGroupingQuestion().then(() => { if (!myTeam) paint(); });
@@ -990,6 +995,7 @@ function startScanProgress() {
     // 收起提示，否則它會殘留到「確認角色」那一頁
     if (tipEl) tipEl.hidden = true;
     if (teamEl) teamEl.hidden = true;
+    $('#scan')?.classList.remove('asking-team');
   };
 }
 

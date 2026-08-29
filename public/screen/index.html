@@ -173,11 +173,14 @@
 
   /* ── 排行榜 ─────────────────────────────────────────────
      常駐在右下角：積分要一直看得到才會有人在意它。 */
-  /* 兩隊對抗條。置頂置中 —— 這是全場唯一的「比賽狀態」，
-     跟角落的個人排行榜分開放，遠處也看得到。 */
+  /* 兩隊對抗條。
+     放左下而非置頂置中：.mission 與 .quiz 都是 top:24px + left:50% 置中，
+     對抗條原本壓在同一塊區域，且它在 DOM 裡排最後 ——
+     任務公告與問答題目會被它整個蓋掉，而問答正是全場都在讀的東西。
+     左下只有 .offline（離線標記），往上讓開它的高度即可。 */
   .versus {
-    position: fixed; top: 22px; left: 50%; transform: translateX(-50%);
-    width: min(560px, 46vw);
+    position: fixed; bottom: 96px; left: 22px;
+    width: min(420px, 30vw);
   }
   .versus[hidden] { display: none; }
   .versus-bar {
@@ -189,6 +192,11 @@
     background: rgba(250, 248, 245, .94);
   }
   .versus-bar i { display: block; height: 100%; transition: width .45s ease; }
+  /* A 的寬度由 JS 依分數比例寫成 inline style；B 的 flex-basis 是 0，
+     因此兩者相加永遠不會溢出，A 拿得到它要求的完整寬度。
+     A 明寫 flex-shrink: 0 是保險 —— 日後若有人給 B 加上 basis，
+     沒有這行的話 A 會被默默壓縮，而分數比例就不再準確。 */
+  .versus-a { flex-shrink: 0; }
   .versus-b { flex: 1; }
   .versus-labels {
     display: flex; justify-content: space-between;
