@@ -34,6 +34,21 @@ try:
 except ModuleNotFoundError:
     _HAS_MEDIAPIPE_TASKS = False
 
+# numpy_view() 可安全讀取的遮罩格式（確定是單通道）。
+# 其餘格式 —— 特別是 VEC32F4 —— 會讓 MediaPipe 在 C++ 層 abort()，
+# 而那是 try/except 攔不到的行程級崩潰。見 get_clothing_features 的說明。
+# MediaPipe 缺席時留空集合：那條路徑本來就不會走到遮罩。
+# 是否向 MediaPipe 索取 segmentation mask。預設關閉，理由見 _get_landmarker。
+_WANT_SEG_MASKS = os.environ.get("CV_SEGMENTATION_MASKS", "0").strip().lower() in {
+    "1", "true", "yes",
+}
+
+_SAFE_MASK_FORMATS = (
+    frozenset({ImageFormat.VEC32F1, ImageFormat.GRAY8, ImageFormat.GRAY16})
+    if _HAS_MEDIAPIPE_TASKS
+    else frozenset()
+)
+
 
 _landmarker: Optional[Any] = None
 _landmarker_lock = threading.Lock()
@@ -99,10 +114,44 @@ def _get_landmarker(*, allow_download: bool = True) -> Any:
                 )
             _download_if_missing(model_path, _MODEL_URL)
 
-        base_options = BaseOptions(model_asset_path=model_path)
+        # delegate 必須指定 CPU。
+        #
+        # 在 Apple Silicon 上，MediaPipe 預設會走 Metal GPU 路徑，而該路徑回傳的
+        # segmentation mask 是 4 通道（RGBA）；下方 numpy_view() 讀取時，
+        # MediaPipe 的 C++ 層會斷言只能是 1 通道，於是直接 abort()：
+        #
+        #   F image_frame.cc:415] Check failed: 1 == ChannelSize() (1 vs. 4)
+        #
+        # 這是 abort 不是 Python 例外，**try/except 攔不到**，整個 Flask 行程
+        # 會當場消失。症狀在手機端是「生成服務連不上」—— 因為服務真的沒了，
+        # 而且是在偵測到人之後才崩，所以只要有人真的站進畫面就必然發生。
+        # 服務重啟後看起來又正常，直到下一次有人拍照。
+        base_options = BaseOptions(
+            model_asset_path=model_path,
+            delegate=BaseOptions.Delegate.CPU,
+        )
         options = PoseLandmarkerOptions(
             base_options=base_options,
-            output_segmentation_masks=True,
+            # 預設關閉 segmentation mask。
+            #
+            # MediaPipe 0.10.35 在 Apple Silicon 上回傳的遮罩實際是 4 通道，
+            # 但 image_format 回報 VEC32F1、channels 回報 1 —— **兩個屬性都在說謊**。
+            # numpy_view() 因此走進 MpImageDataFloat32，在 C++ 層斷言失敗並
+            # abort()：
+            #
+            #   F image_frame.cc:415] Check failed: 1 == ChannelSize() (1 vs. 4)
+            #
+            # abort 不是 Python 例外，try/except 攔不到，整個 Flask 行程當場消失。
+            # 由於沒有任何屬性能事先判斷，唯一可靠的作法是不要跟它拿遮罩。
+            #
+            # 實測路徑：/preview 的即時站位引導每秒觸發數次，因此
+            # 「用相簿上傳可以、用拍照必崩」。
+            #
+            # 代價：person_bbox 會是 None，連帶身高分級與站位品質判定會退化，
+            # 顏色取樣改用多邊形而非遮罩。這些下游全部早已處理 None 的情況
+            # （見 assess_capture_quality 與 _sample_grid_with_mask）。
+            # 要在遮罩正常的機器上恢復，設環境變數 CV_SEGMENTATION_MASKS=1。
+            output_segmentation_masks=_WANT_SEG_MASKS,
         )
         _landmarker = PoseLandmarker.create_from_options(options)
         return _landmarker
@@ -288,6 +337,9 @@ def _sample_grid_with_mask(
     return {"cols": grid_cols, "rows": grid_rows, "cells": cells}
 
 
+_MASK_FORMAT_WARNED = False
+
+
 def get_clothing_features(
     frame: np.ndarray,
     *,
@@ -337,10 +389,44 @@ def get_clothing_features(
                 lm.append(SimpleNamespace(x=px, y=py, z=pz, visibility=vis))
 
     # 取得 Segmentation Mask (轉為 0/255 uint8)
+    global _MASK_FORMAT_WARNED
+
     seg_mask_uint8 = None
     if result.segmentation_masks and len(result.segmentation_masks) > 0:
-        mask_np = result.segmentation_masks[0].numpy_view()
-        seg_mask_uint8 = (mask_np > 0.5).astype(np.uint8) * 255
+        mask_img = result.segmentation_masks[0]
+
+        # ⚠ 這裡不能直接呼叫 numpy_view()，也不能只看 .channels。
+        #
+        # MediaPipe 的 numpy_view() 會依 image_format 決定走哪個 C 函式。
+        # 遮罩若是 VEC32F4（4 通道 float），它仍會呼叫 MpImageDataFloat32，
+        # 而那個函式在 C++ 層斷言只能是單通道，不符就直接 abort()：
+        #
+        #   F image_frame.cc:415] Check failed: 1 == ChannelSize() (1 vs. 4)
+        #
+        # **abort 不是 Python 例外，try/except 完全攔不到** —— 整個 Flask 行程
+        # 當場消失，手機端看到的是「生成服務連不上」。這條路徑由 /preview
+        # 的即時站位引導每秒觸發數次，所以「用相簿上傳可以、用拍照必崩」。
+        #
+        # 先前用 .channels 判斷是不夠的：實測它回報 1，資料卻仍是 4 通道
+        # （faulthandler 抓到崩在這一行）。唯一可靠的判準是 image_format ——
+        # 只有 VEC32F1 與 GRAY8/GRAY16 這幾種確定是單通道。
+        fmt = getattr(mask_img, "image_format", None)
+        if fmt in _SAFE_MASK_FORMATS:
+            try:
+                mask_np = mask_img.numpy_view()
+                if mask_np.ndim == 3:
+                    mask_np = mask_np[:, :, 0]
+                seg_mask_uint8 = (mask_np > 0.5).astype(np.uint8) * 255
+            except Exception:
+                seg_mask_uint8 = None
+        elif not _MASK_FORMAT_WARNED:
+            # 只警告一次：這條路徑每秒被打數次，每幀印一行會淹掉整個 log
+            _MASK_FORMAT_WARNED = True
+            print(
+                f"[cv] segmentation mask 格式為 {fmt}，非單通道，略過遮罩。"
+                f"站位品質判定與顏色取樣會退化，但服務不會崩潰。",
+                flush=True,
+            )
 
     person_bbox = None
     if seg_mask_uint8 is not None and np.any(seg_mask_uint8):
