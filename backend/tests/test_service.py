@@ -273,6 +273,9 @@ class TestQualityLoop:
     def test_no_retry_by_default(self, client, monkeypatch):
         """預設不重生 —— 每次重生都是一次付費呼叫。"""
         calls = []
+        # 兩個都要清：整合版優先讀 VISION_GENERATION_MAX_RETRIES，
+        # 而 .env 會設它。只清舊的會讓這則測試依賴執行環境有沒有載入 .env。
+        monkeypatch.delenv("VISION_GENERATION_MAX_RETRIES", raising=False)
         monkeypatch.delenv("GENERATION_MAX_RETRIES", raising=False)
 
         def _gen(*a, **k):
