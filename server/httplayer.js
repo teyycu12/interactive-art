@@ -41,6 +41,7 @@ const MIME = {
   '.png': 'image/png',
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
+  '.glb': 'model/gltf-binary',
 };
 
 /**
