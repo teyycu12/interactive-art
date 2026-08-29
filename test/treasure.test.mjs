@@ -102,7 +102,21 @@ describe('資訊不對稱（本玩法的核心）', () => {
     const view = t.publicView();
     assert.equal(view.x, undefined);
     assert.equal(view.y, undefined);
-    assert.equal(JSON.stringify(view).includes('800'), false);
+
+    // 逐值比對而非在整串 JSON 裡找子字串。
+    //
+    // 原本寫的是 JSON.stringify(view).includes('800')，用意是好的
+    // （座標從任何欄位漏出去都要抓到），但 startedAt 是毫秒時間戳，
+    // 裡面遲早會出現 '800' 這三個連續數字 —— 實測 1788006490658 就是。
+    // 那會讓這個測試在某些時刻無故變紅，而訊息完全看不出跟時間有關。
+    //
+    // 改成檢查「有沒有任何欄位的值等於座標」：一樣涵蓋所有欄位，
+    // 但不會把時間戳裡碰巧相連的數字當成洩漏。
+    for (const [key, value] of Object.entries(view)) {
+      assert.notEqual(value, 800, `publicView 的 ${key} 洩漏了 x 座標`);
+      assert.notEqual(value, 600, `publicView 的 ${key} 洩漏了 y 座標`);
+    }
+
     // 但大螢幕與主辦端拿得到
     assert.deepEqual(t.spot(), { x: 800, y: 600 });
   });

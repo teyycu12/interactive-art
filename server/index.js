@@ -438,6 +438,13 @@ function handleJoin(ws, msg) {
       if (rename) existing.name = rename;
       if (restyle.ok) existing.avatar = restyle.value;
       stage.rosterDirty = true;
+      // 改過的名字與造型要落地。這條分支會提早 return，走不到下面
+      // 正常入場那次 directory.remember —— 少了這裡，伺服器重開後
+      // 認領回來的會是改名前的舊名字與舊造型。
+      if (rename || restyle.ok) {
+        directory.remember(existing);
+        markDirty();
+      }
       send(ws, EV.CLIENT_WELCOME, {
         userId: existing.id,
         rejoinToken: existing.rejoinToken,

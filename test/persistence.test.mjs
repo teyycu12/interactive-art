@@ -117,6 +117,18 @@ describe('身分目錄', () => {
     assert.equal(dir.get('u1'), null);
   });
 
+  test('再次 remember 會覆蓋舊資料（改名要落地）', () => {
+    // 同一條連線內改名走的是 handleJoin 的早退分支，那裡曾經只改記憶體裡的
+    // 角色而不呼叫 remember —— 伺服器重開後認領回來的是改名前的舊名字，
+    // 而且不會有任何錯誤訊息。
+    const dir = new Directory();
+    dir.remember(agent(A, '原本的名字'));
+    dir.remember({ ...agent(A, '改過的名字'), team: 'B' });
+    assert.equal(dir.get(A).name, '改過的名字');
+    assert.equal(dir.get(A).team, 'B');
+    assert.equal(dir.entries.size, 1, '同一個 id 不該產生第二筆');
+  });
+
   test('可原樣還原，缺憑證的項目直接略過', () => {
     const dir = new Directory();
     dir.remember(agent(A, '小美'));
