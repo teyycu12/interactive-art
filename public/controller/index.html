@@ -20,10 +20,14 @@
   <section id="entry">
     <div class="centered">
       <h1>歡迎來到現場</h1>
-      <p class="lede">先告訴大家你叫什麼名字</p>
+      <p class="lede" id="name-label">先告訴大家你叫什麼名字</p>
+      <!-- placeholder 不是 label：讀螢幕軟體只會念出「最多 12 個字」，
+           不會說這格要填什麼。畫面上那句 lede 本來就是標籤，接起來即可，
+           視覺完全不變。 -->
       <input id="name-input" maxlength="12" placeholder="最多 12 個字"
+             aria-labelledby="name-label" aria-describedby="name-hint"
              autocomplete="off" enterkeyhint="next" autocapitalize="off">
-      <p class="hint">這會顯示在大螢幕上你的角色頭上</p>
+      <p class="hint" id="name-hint">這會顯示在大螢幕上你的角色頭上</p>
     </div>
     <div class="foot">
       <button class="btn-primary" id="btn-scan" disabled>拍照生成角色</button>
@@ -94,12 +98,19 @@
           </div>
         </div>
 
-        <!-- 階段 2：生成中 -->
+        <!-- 階段 2：生成中
+             這段等待有 20~25 秒，而參與者能做的只有盯著手機。與其讓它是空白，
+             不如把它變成「抬頭看人」的契機 —— 這件作品要的是人與人開始交流，
+             低頭等待的每一秒都與那個目標相反（見 docs/notes/INTERACTION-DESIGN.md）。 -->
         <div class="scan-panel" data-phase="working" hidden>
           <h1>生成中</h1>
           <p class="lede" id="scan-status">正在分析服裝特徵…</p>
           <div class="progress-bar"><i id="scan-progress"></i></div>
           <p class="hint" id="scan-elapsed">約需 25 秒</p>
+          <div class="wait-tip" id="scan-tip" hidden>
+            <span class="wait-tip-label">等待中，不如</span>
+            <p class="wait-tip-text" id="scan-tip-text"></p>
+          </div>
         </div>
 
         <!-- 階段 3：完成，讓本人決定要不要用 -->
@@ -115,7 +126,7 @@
         <!-- 階段 4：失敗。降級到捏臉是保底，但不該替使用者決定 -->
         <div class="scan-panel" data-phase="failed" hidden>
           <h1 id="fail-title">沒能生成角色</h1>
-          <p class="lede" id="scan-error">再試一次通常就好了。</p>
+          <p class="lede" id="scan-error" role="status" aria-live="polite">再試一次通常就好了。</p>
           <p class="note" id="fail-hint" hidden></p>
           <div class="foot">
             <button class="btn-primary" id="btn-retry">重拍一次</button>
@@ -252,7 +263,7 @@
      此時手上的搖桿本來就不該再是視線焦點 —— 全場角色本來就會停在原地
      （伺服器 IDLE_MOTION 預設為靜止待機），蓋住控制器不影響任何人。 -->
 <div class="quiz" id="quiz-panel" hidden>
-  <div class="quiz-inner">
+  <div class="quiz-inner" role="dialog" aria-modal="true" aria-labelledby="quiz-q">
     <div class="quiz-head">
       <span class="quiz-no" id="quiz-no">第 1 題</span>
       <span class="quiz-timer" id="quiz-timer">20.0</span>
@@ -262,7 +273,7 @@
 
     <div class="quiz-opts" id="quiz-opts"></div>
 
-    <p class="quiz-msg" id="quiz-msg" hidden></p>
+    <p class="quiz-msg" id="quiz-msg" hidden role="status" aria-live="polite"></p>
 
     <div class="quiz-result" id="quiz-result-card" hidden>
       <b id="quiz-verdict">—</b>
@@ -279,7 +290,7 @@
 
 <!-- ── 配對面板 ─────────────────────────────────────────── -->
 <div class="sheet" id="pair-sheet" hidden>
-  <div class="sheet-inner">
+  <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="pair-title">
     <button class="sheet-close" id="btn-pair-close" aria-label="關閉">✕</button>
     <h2 id="pair-title">找一個人配對</h2>
     <p class="sheet-brief" id="pair-brief">走向另一位參與者，互相交換配對碼</p>
@@ -296,7 +307,9 @@
              placeholder="0000" autocomplete="off">
     </label>
 
-    <p class="sheet-msg" id="pair-msg" hidden></p>
+    <!-- 配對失敗的原因只寫進畫面、不播報的話，讀螢幕軟體的使用者
+         按下送出後不會知道發生什麼事 -->
+    <p class="sheet-msg" id="pair-msg" hidden role="alert" aria-live="assertive"></p>
     <button class="btn-primary" id="btn-pair-submit">送出配對</button>
     <p class="sheet-prog" id="pair-progress">—</p>
   </div>
@@ -304,7 +317,7 @@
 
 <!-- 配對確認：對方指定了你 -->
 <div class="overlay" id="pair-confirm" hidden>
-  <div class="dialog">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pair-confirm-title">
     <div id="pair-confirm-avatar"></div>
     <h2 id="pair-confirm-title">有人想和你配對</h2>
     <p id="pair-confirm-text">請確認對方就在你面前。</p>

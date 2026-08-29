@@ -12,8 +12,25 @@
 
 import { renderAvatarSVG, CV_CUTS, CV_PARTS, CV_FULL_PART } from './avatars.js';
 
-export const AVATAR_W = 200;
-export const AVATAR_H = 260;
+// 角色畫布的解析度。
+//
+// 200x260 是捏臉 SVG 的 viewBox 尺寸，CV 掃描角色原本沿用同一組數字 ——
+// 但兩者的性質不同：捏臉是向量圖，放大不失真；CV 角色是點陣貼圖，
+// 這個尺寸就成了硬上限。實測（2026-08-29）在 2560x1664 的 Retina 螢幕上，
+// 靠近相機的角色需要約 533 個實際像素，而資料只有 260 —— 等於放大兩倍，
+// 眼鏡框、衣服印花、鞋子邊緣全部糊掉。
+//
+// 提高到 1024 之後：
+//   - AI 生成的人像本身就有約 975px 高，先前有 73% 的像素被丟掉
+//   - backend/slicer.py 的 NORMALIZED_HEIGHT 必須一起提到 1024，
+//     只改這裡會卡在上游的 512（兩道都是瓶頸，改一道沒有效果）
+//
+// 寬度維持 200:260 的比例（788:1024），畫布比例一變，drawFull 的
+// 「底部對齊」與 composite 的三段疊圖都會跟著偏。
+// 捏臉路徑不受影響：renderAvatarSVG 以 width/height 為參數、viewBox 固定，
+// 放大是向量重繪。
+export const AVATAR_W = 788;
+export const AVATAR_H = 1024;
 
 /**
  * 掃描生成的角色：優先畫未切割的整張圖，缺它才把三張貼圖疊回去。

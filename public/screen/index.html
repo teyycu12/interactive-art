@@ -37,8 +37,11 @@
   .bar { height: 7px; border-radius: 4px; background: var(--line); overflow: hidden; min-width: 60px; }
   .bar i { display: block; height: 100%; background: #E76F51; }
   .m { font-size: 10px; font-weight: 700; color: var(--soft); white-space: nowrap; }
-  .m.ACTIVE { color: #E76F51; }
-  .m.SWARM { color: #457B9D; }
+  /* 這兩個是 10px 的狀態標籤（操控中／群聚中）。原本的 #E76F51 只有 2.9:1、
+     #457B9D 只有 4.3:1，都不到 AA。除錯面板雖然預設 hidden、只有操作者近距離看，
+     但那正是「要一眼掃到異常」的場合，讀不出來就沒有意義。 */
+  .m.ACTIVE { color: #C4462A; }
+  .m.SWARM { color: #3A6A88; }
   .hud[hidden] { display: none; }
   .note { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--soft); font-size: 11px; }
   kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 10px; }
@@ -97,7 +100,9 @@
     margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line);
     font-size: 14px; font-weight: 700;
   }
-  .mission .m-prog b { font-size: 19px; color: #E76F51; }
+  /* 深一階的橘：#E76F51 對紙色只有 2.9:1，投影到大螢幕、又隔著一整個場地看，
+     這個數字是全場在追的進度，不能是最難讀的那一個。#C4462A 為 4.65:1。 */
+  .mission .m-prog b { font-size: 19px; color: #C4462A; }
 
   /* 完成回饋：短暫浮現後淡出 */
   .toasts {
@@ -191,7 +196,9 @@
     width: 26px; flex: none; text-align: center;
     font-family: ui-monospace, Consolas, monospace; font-size: 15px; color: var(--soft);
   }
-  .ranks li.top .no { color: #E76F51; font-weight: 900; }
+  /* 15px 粗體仍算「一般文字」（粗體要 18.66px 以上才降到 3:1），
+     #E76F51 的 2.9:1 不合格。排行榜是投影在大螢幕、隔著整個場地看的東西。 */
+  .ranks li.top .no { color: #C4462A; font-weight: 900; }
   .ranks .who {
     flex: 1; min-width: 0; font-weight: 700;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

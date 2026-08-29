@@ -49,6 +49,24 @@ EPIPE —— 而且是在 **socket** 上觸發，不是 request 物件，`req.on
 改動這一帶時請至少連跑 10 次 `npm run test:e2e` 再下結論，
 單次綠燈對這種機率性失敗沒有意義。
 
+## 主辦端的面板狀態只由事件驅動，HOST_STATE 補不了
+
+2026-08-29 修掉現場回報的「尋寶進行中，中止本輪按下去沒反應」。
+
+實際上按鈕**根本不在畫面上**。`hostState()` 不含尋寶，而 `host.js` 的
+`renderTreasure()` 只有 `TREASURE_START` / `FOUND` / `ENDED` 三個事件會呼叫。
+主辦端中途重整或斷線重連時，只收得到 `HOST_WELCOME` + `HOST_STATE`，
+於是 `#treasure-live` 一直是 `hidden`、`#treasure-idle` 一直開著 ——
+畫面停在「開始尋寶」，而伺服器那輪其實還在跑。看起來就像按鈕壞了。
+
+**手機端早就有補送**（`sendTreasureCatchUp()`，入場與重連兩條路徑都呼叫），
+主辦端沒有，純粹是漏的。修法是在 `HOST_AUTH` 通過後比照補送，
+且**要帶座標** —— 主辦端與大螢幕同屬「公開畫面」，不在參與者手上。
+
+推廣一下：**主辦端任何只由事件驅動的面板，都要在 `HOST_AUTH` 補送一次**，
+否則重整就會失去對那個功能的控制權。展場上主辦端重整頁面是家常便飯。
+e2e 已釘住這條（`主辦端重連後補送進行中的尋寶`）。
+
 ### AppConfig 的欄位凍結在 import 當下，測試不能用 mock.patch.dict 打它
 
 `backend/config.py` 的 `AppConfig` 是 `@dataclass(frozen=True)`，每個欄位寫成
@@ -175,4 +193,19 @@ PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 `three/addons/` 是整棵目錄樹（OrbitControls 會再 import 同目錄的其他模組），
 因此 `/vendor/three-addons/` 走的是目錄映射而非逐檔白名單，該分支自己做了
 路徑穿越防護 —— 下方那套通用檢查只涵蓋 PUBLIC_DIR 與 shared，別誤以為它罩得到。
+
+**這條規則涵蓋的不只函式庫本體，3D 家具模型也算。** 2026-08-28 修掉一個
+漏網之魚：`RoomScene.js` 的 `PROP_URLS` 六個 `.glb` 全部指向
+`https://static.poly.pizza/`，等於整套家具在展場斷網時都要重載。
+症狀比 three 本體消失更陰險 —— `loadProp()` 有程序化後備（`createFallbackProp`），
+所以畫面**不會空，只會變成另一個樣子**：你在家調好的沙發、書櫃、盆栽，
+現場全變成藍色方塊與球體疊的盆栽，而且每個模型都要先等滿 6 秒 timeout。
+模型現已下載至 `public/assets/models/`，隨版本庫走。
+
+同批修掉的還有一個**靜默失效**：`PROP_URLS` 的鍵是 `couch`，但
+`shared/scene.js` 的 `PROPS` 用的是 `sofa`。`populateProps()` 寫的是
+`PROP_URLS[p.type] || PROP_URLS.plant`，於是兩張沙發一直在載盆栽模型，
+再被 `targetH` 拉成沙發高度 —— **不會報錯，也不會走 fallback**。
+新增家具型別時，`PROP_URLS` 的鍵必須與 `PROPS.type` 全集對齊
+（speaker / table / sofa / lowtable / plant）。
 

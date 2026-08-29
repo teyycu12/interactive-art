@@ -24,9 +24,19 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from PIL import Image as PILImage
 
-# 正規化後的固定高度。貼圖最終會貼到 3D 模型上，解析度只需夠用；
-# 過大只是讓名冊載入變慢與 draw call 的貼圖記憶體上升。
-NORMALIZED_HEIGHT = 512
+# 正規化後的固定高度。
+#
+# 原為 512，理由是「解析度只需夠用」。但那個判斷假設了角色在畫面上不會太大 ——
+# 實測（2026-08-29）在 2560x1664 的 Retina 螢幕上，靠近相機的角色需要約
+# 533 個實際像素，而 2D 角色圖層用的是完整 devicePixelRatio（不像 3D 場景
+# 被限制在 1.5），因此 512 會被放大。
+#
+# 更關鍵的是下游：shared/avatarSprite.js 的畫布原本只有 260px，
+# 貼圖到那裡會再被壓一次。兩道都是瓶頸，**必須一起提高才有效果**。
+#
+# AI 生成的人像本身約有 975px 高，設 1024 幾乎不浪費。
+# 代價是每人四張貼圖約 50KB → 150KB，10 人上限 1.5MB，區網可負擔。
+NORMALIZED_HEIGHT = 1024
 
 # 各部位在正規化後的垂直比例區間（含頭髮 / 含手臂 / 含腳）。
 CUTS: Dict[str, Tuple[float, float]] = {
@@ -181,6 +191,23 @@ def slice_character(
     img.save(os.path.join(out_dir, "full.webp"), "WEBP", quality=92)
     textures["full"] = f"{url_prefix}/{asset_id}/full.webp"
 
+    # 高解析預覽圖：只給手機端「確認角色」那一頁，不進名冊、不進場上。
+    #
+    # 那一頁把角色放在 74vh 的直式框裡，手機 dpr=3 時顯示高度接近 2000 實際
+    # 像素 —— 貼圖只有 1024，會被放大近兩倍而糊掉。而「數位轉譯成什麼樣子」
+    # 正是這件作品的核心體驗（見 controller 的 btn-accept 註解），
+    # 那一眼不該是全流程畫質最差的一眼。
+    #
+    # 刻意不共用 full.webp：兩者用途相反。貼圖要小（場上同時要畫十個、
+    # 要進 STAGE_ROSTER、要吃現場無線網路），預覽要清楚（只有一張、只看一次、
+    # 而且是本人在端詳自己）。把貼圖放大到預覽需要的尺寸，等於為了一頁的
+    # 顯示去膨脹整條管線的記憶體與頻寬。
+    #
+    # 存原圖而非再縮一次：normalize() 之前的 decoded 就是模型輸出的最大尺寸
+    # （實測人像高約 980px，部分模型回 1062px），已經比任何顯示需求都大。
+    preview = decode_png(png_b64)
+    preview.save(os.path.join(out_dir, "preview.webp"), "WEBP", quality=95)
+
     return {
         "ok": True,
         "assetId": asset_id,
@@ -190,6 +217,8 @@ def slice_character(
         # 名稱沿用歷史（實際上是 webp）—— 改名要同時動 service.py 的 /compose、
         # server 的名冊組裝與兩邊測試，不值得在這次合併一起做。
         "fullPng": textures["full"],
+        # 只有手機端的確認頁會用它。名冊與大螢幕一律走 textures。
+        "previewPng": f"{url_prefix}/{asset_id}/preview.webp",
     }
 
 

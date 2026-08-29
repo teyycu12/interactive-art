@@ -12,12 +12,18 @@
   --sunk: #F1ECE4;
   --ink: #2F2A26;
   --ink-soft: #6E655D;
-  --ink-faint: #9A9089;
+  --ink-faint: #7C736C;  /* 原 #9A9089 僅 3.1:1，用在 11–13px 的計數與標籤上不合格 */
   --line: #DED6CA;
   --accent: #E76F51;
   --teal: #2A8C80;
   --blue: #457B9D;
   --danger: #C4453C;
+
+  /* 「可當文字用」的深色版本：--accent 對表面色只有 3.1:1、--teal 只有 4.0:1，
+     兩者都被拿來寫 11–13px 的狀態字（事件流、統計、答題結果），達不到 AA 的 4.5:1。
+     大面積填色與邊框仍用原色，只有文字改用 -ink 版本。 */
+  --accent-ink: #C4462A;  /* 4.86:1 */
+  --teal-ink:   #1F7268;  /* 5.64:1 */
 }
 
 * { box-sizing: border-box; }
@@ -107,8 +113,8 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
   border-bottom: 2px solid var(--ink);
   margin-bottom: 22px;
 }
-.topbar .sub { margin: 2px 0 0; font-size: 13px; color: var(--teal); font-weight: 600; }
-.topbar .sub.warn { color: var(--accent); }
+.topbar .sub { margin: 2px 0 0; font-size: 13px; color: var(--teal-ink); font-weight: 600; }
+.topbar .sub.warn { color: var(--accent-ink); }
 
 .stats { display: flex; gap: 26px; }
 .stat { text-align: right; }
@@ -221,7 +227,7 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
   padding: 3px 9px;
   border-radius: 999px;
   border: 1.5px solid var(--accent);
-  color: var(--accent);
+  color: var(--accent-ink);
   white-space: nowrap;
 }
 .progress-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
@@ -269,7 +275,7 @@ td.act { text-align: right; }
   padding: 1px 7px;
   margin-left: 6px;
 }
-.done { color: var(--teal); font-weight: 700; }
+.done { color: var(--teal-ink); font-weight: 700; }
 .btn-kick {
   width: auto;
   padding: 4px 11px;
@@ -299,8 +305,8 @@ td.act { text-align: right; }
   color: var(--ink-faint);
   flex: none;
 }
-.feed .ev-pair { color: var(--teal); font-weight: 600; }
-.feed .ev-mission { color: var(--accent); font-weight: 600; }
+.feed .ev-pair { color: var(--teal-ink); font-weight: 600; }
+.feed .ev-mission { color: var(--accent-ink); font-weight: 600; }
 .feed .ev-empty { color: var(--ink-faint); }
 
 @media (prefers-reduced-motion: reduce) {
@@ -364,7 +370,7 @@ td.act { text-align: right; }
 .q-result .cnt { font-family: ui-monospace, Consolas, monospace; color: var(--ink-faint); flex: none; }
 .q-result .track { height: 8px; border-radius: 5px; background: var(--sunk); overflow: hidden; }
 .q-result .track i { display: block; height: 100%; background: var(--line); }
-.q-result li.right .txt { font-weight: 700; color: var(--teal); }
+.q-result li.right .txt { font-weight: 700; color: var(--teal-ink); }
 .q-result li.right .track i { background: var(--teal); }
 
 /* ── 排行榜 ───────────────────────────────────────────── */
@@ -378,7 +384,7 @@ td.act { text-align: right; }
   width: 22px; flex: none; text-align: center;
   font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--ink-faint);
 }
-.ranks li.top .no { color: var(--accent); font-weight: 700; }
+.ranks li.top .no { color: var(--accent-ink); font-weight: 700; }
 .ranks .who { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ranks .pts {
   font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums;

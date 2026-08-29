@@ -704,6 +704,15 @@ _FULL_CHARACTER_NEGATIVE = (
     "is smooth moulded plastic. Equally, NO flat cel-shaded cartoon styling. "
     "NO side view, NO three-quarter angle, NO sitting pose, NO action pose, "
     "NO twisted torso. Stand strictly straight, facing the viewer. "
+    # 「只准一個人形」必須明講。先前只禁了錯誤的「角度」，模型因此照樣交出
+    # 一張四視圖角色設定表（正面大圖＋側面＋背面＋背側），每一個視角都合乎
+    # 上面每一條規則。而 avatar_quality 的 fragmented_foreground 會把它判為
+    # 失敗 —— 該檢查要求最大連通區塊佔前景 75% 以上，四個分離的人形讓最大
+    # 那個只剩約 50%。使用者看到的是「這張照片沒能生成角色」，但實際上圖
+    # 生得很好，只是多了三個。這是實測抓到的失敗（2026-08-29）。
+    "EXACTLY ONE single figure in the entire image. NO turnaround sheet, "
+    "NO character model sheet, NO multiple views, NO side/back/rear panels, "
+    "NO duplicate or smaller copies of the figure anywhere in the frame. "
     "ABSOLUTELY NO background: NO walls, NO floor, NO scenery, NO patterns, "
     "and NO shadow, contact shadow or reflection cast onto the background - "
     "every pixel outside the figure must be pure solid white #FFFFFF, completely "
@@ -774,6 +783,15 @@ _PIXAR_NEGATIVE = (
     "cloth must read as cloth with real thickness, never as smooth plastic. "
     "NO side view, NO three-quarter angle, NO sitting pose, NO action pose, "
     "NO twisted torso. Stand strictly straight, facing the viewer. "
+    # 「只准一個人形」必須明講。先前只禁了錯誤的「角度」，模型因此照樣交出
+    # 一張四視圖角色設定表（正面大圖＋側面＋背面＋背側），每一個視角都合乎
+    # 上面每一條規則。而 avatar_quality 的 fragmented_foreground 會把它判為
+    # 失敗 —— 該檢查要求最大連通區塊佔前景 75% 以上，四個分離的人形讓最大
+    # 那個只剩約 50%。使用者看到的是「這張照片沒能生成角色」，但實際上圖
+    # 生得很好，只是多了三個。這是實測抓到的失敗（2026-08-29）。
+    "EXACTLY ONE single figure in the entire image. NO turnaround sheet, "
+    "NO character model sheet, NO multiple views, NO side/back/rear panels, "
+    "NO duplicate or smaller copies of the figure anywhere in the frame. "
     "ABSOLUTELY NO background: NO walls, NO floor, NO scenery, NO patterns, "
     "and NO shadow, contact shadow or reflection cast onto the background - "
     "every pixel outside the figure must be pure solid white #FFFFFF, completely "

@@ -985,6 +985,16 @@ wss.on('connection', (ws) => {
           scoring: SCORING,
         });
         send(ws, EV.HOST_STATE, hostState());
+        // 補送進行中的尋寶。HOST_STATE 不含尋寶（見 hostState），而主辦端的
+        // 尋寶面板只由 TREASURE_* 事件驅動 —— 少了這裡，中途重整或斷線重連的
+        // 主辦端會停在「開始尋寶」那一頁，#treasure-live 永遠是 hidden，
+        // 「中止本輪」按鈕根本不在畫面上，本輪就再也停不掉了。
+        // 帶座標，理由同 HOST_START_TREASURE：主辦端是公開畫面，不在參與者手上。
+        if (treasure.isActive) {
+          send(ws, EV.TREASURE_START, {
+            round: treasure.publicView(), spot: treasure.spot(),
+          });
+        }
         console.log(`[host] 主辦端已連線　共 ${hosts.size} 台`);
         break;
       }

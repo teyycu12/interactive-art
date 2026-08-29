@@ -8,20 +8,28 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { STAGE } from '/shared/protocol.js';
 
 // ===== 房間尺寸 (3D 世界單位) =====
 const RW = 17, RD = 13, WALL_H = 4.6;
 const HALF_W = RW / 2, HALF_D = RD / 2;
 
-// 模型 URL (Poly Pizza 低多邊形質感模型)
+// 模型路徑（Poly Pizza 低多邊形質感模型，已下載至本機）
+//
+// ⚠ 絕對不要改回 CDN URL。展場網路不通時，六個模型會全部走 loadProp() 的
+// 程序化後備，畫面與本機調校結果完全不同 —— 而且要先等滿 6 秒 timeout。
+// 這是「本機永遠測不出來」的那類故障（見 CLAUDE.md 鐵則 2）。
+//
+// key 必須涵蓋 shared/scene.js 的 PROPS.type 全集：
+// speaker / table / sofa / lowtable / plant。少一個就靜默 fallback 成盆栽。
 const PROP_URLS = {
-  couch: 'https://static.poly.pizza/7ac6188b-72be-4c82-81c8-85deab020a1c.glb',
-  shelf: 'https://static.poly.pizza/673e29d8-beff-45ff-94d9-2104d01baece.glb',
-  plant: 'https://static.poly.pizza/1683c0b1-4dd9-4d45-910e-cf3e46f163f5.glb',
-  lowtable: 'https://static.poly.pizza/2a849bd9-b82d-4e5d-8fab-df03b4017b29.glb',
-  speaker: 'https://static.poly.pizza/673e29d8-beff-45ff-94d9-2104d01baece.glb',
-  table: 'https://static.poly.pizza/2a849bd9-b82d-4e5d-8fab-df03b4017b29.glb',
+  sofa: '/assets/models/couch.glb',
+  shelf: '/assets/models/shelf.glb',
+  plant: '/assets/models/plant.glb',
+  lowtable: '/assets/models/lowtable.glb',
+  speaker: '/assets/models/shelf.glb',
+  table: '/assets/models/lowtable.glb',
 };
 
 // 光線與氛圍預設
@@ -123,6 +131,27 @@ export class RoomScene {
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
 
+    // 接觸陰影（GTAO）。太陽光的 shadow map 只有 2048 撐整個 17x13 房間，
+    // 家具與牆腳、角色與地板交界處那圈細微暗部它解析不出來，物件因此看起來
+    // 是「浮在地上」而不是「放在地上」。GTAO 補的正是這一段。
+    //
+    // radius 的單位是世界單位（房間 17x13x4.6），0.5 約等於一個腳凳的寬度：
+    // 再大會讓整面牆糊掉一層灰，再小則看不出接觸感。
+    // 這是全場最貴的一個 pass，4K 大螢幕上若掉幀，setAmbientOcclusion(false)
+    // 可以單獨關掉它而不影響 Bloom 與 Vignette。
+    this.gtao = new GTAOPass(this.scene, this.camera, innerWidth, innerHeight);
+    this.gtao.output = GTAOPass.OUTPUT.Default;
+    this.gtao.blendIntensity = 0.62;
+    this.gtao.updateGtaoMaterial({
+      radius: 0.5,
+      distanceExponent: 1.6,
+      thickness: 0.6,
+      scale: 1.0,
+      samples: 12,
+    });
+    this.composer.addPass(this.gtao);
+    this.aoEnabled = true;
+
     this.bloom = new UnrealBloomPass(
       new THREE.Vector2(innerWidth, innerHeight),
       0.35,
@@ -142,6 +171,16 @@ export class RoomScene {
 
   setPostProcessing(on) {
     this.postEnabled = !!on && !!this.composer;
+  }
+
+  /**
+   * 單獨開關接觸陰影。GTAO 是整條後製鏈裡最貴的一個 pass，
+   * 現場若掉幀，先關這個 —— 保留 Bloom 與 Vignette 的氛圍，
+   * 比 setPostProcessing(false) 一次砍掉全部溫和得多。
+   */
+  setAmbientOcclusion(on) {
+    this.aoEnabled = !!on && !!this.gtao;
+    if (this.gtao) this.gtao.enabled = this.aoEnabled;
   }
 
   setupLights() {
@@ -606,8 +645,6 @@ export class RoomScene {
     this.scene.add(sconceGroup);
   }
 
-
-
   /**
    * GLTF 載入失敗時的程序化備援模型生成器 (Procedural Geometry Fallback)
    */
@@ -763,6 +800,9 @@ export class RoomScene {
     this.renderer.setSize(innerWidth, innerHeight);
     this.composer?.setSize(innerWidth, innerHeight);
     this.bloom?.setSize(innerWidth, innerHeight);
+    // 漏了這行的話，切換全螢幕或投影機改解析度之後，
+    // AO 會沿用舊尺寸的 G-buffer，暗部整個對不上物件邊緣。
+    this.gtao?.setSize(innerWidth, innerHeight);
   }
 
   render() {

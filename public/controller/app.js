@@ -25,6 +25,101 @@ import { AvatarRenderer } from './avatarRenderer.js';
 const $ = (sel) => document.querySelector(sel);
 
 // ─────────────────────────────────────────────────────────────
+// 覆蓋層的鍵盤行為
+// ─────────────────────────────────────────────────────────────
+/**
+ * 四個覆蓋層（配對面板、配對確認、退出確認、問答）在視覺上都是
+ * `position: fixed; inset: 0` 加一層遮罩，看起來蓋住了整個畫面 ——
+ * 但**擋不住鍵盤**。用藍牙鍵盤或行動輔助裝置時，Tab 會直接穿過遮罩
+ * 走到底下的搖桿與表情鍵上：焦點框出現在一塊看不見的區域裡，
+ * 使用者不知道自己選到了什麼，按下去卻真的會送出動作。
+ *
+ * `inert` 讓底下整棵樹同時退出焦點順序與輔助技術，一個屬性解決兩件事。
+ * 這裡對 #app 下 inert（覆蓋層都是 #app 的兄弟節點，不受影響）。
+ *
+ * 另外兩件事一併在這裡處理，避免四個地方各寫一份：
+ *   1. Esc 關閉 —— 對應 escape-routes；沒有它，鍵盤使用者進得去出不來。
+ *   2. 關閉後把焦點還給觸發的那顆按鈕 —— 否則焦點掉回 <body>，
+ *      下一次 Tab 得從整個頁面的最開頭重走一遍。
+ */
+const appRoot = $('#app');
+
+/** 目前開著的覆蓋層堆疊。問答可能疊在配對面板上，所以用堆疊而非單一變數。 */
+const overlayStack = [];
+
+function focusablesIn(el) {
+  return [...el.querySelectorAll(
+    'button:not([disabled]), input:not([disabled]), [href], select, textarea, [tabindex]:not([tabindex="-1"])',
+  )].filter((n) => n.offsetParent !== null);
+}
+
+/**
+ * @param {HTMLElement} el     覆蓋層本身
+ * @param {object}      opts
+ * @param {() => void}  opts.onEscape  Esc 或關閉時要跑的收尾（通常就是 closeXxx）
+ * @param {HTMLElement} opts.restoreTo 關閉後把焦點還給誰
+ */
+function pushOverlay(el, { onEscape, restoreTo } = {}) {
+  if (overlayStack.some((o) => o.el === el)) return;
+  overlayStack.push({ el, onEscape, restoreTo: restoreTo ?? document.activeElement });
+  appRoot.inert = true;
+  // 其他已開啟的覆蓋層也要退出焦點順序，否則 Tab 會走到被蓋住的那一層
+  for (const o of overlayStack) if (o.el !== el) o.el.inert = true;
+  el.inert = false;
+}
+
+function popOverlay(el) {
+  const i = overlayStack.findIndex((o) => o.el === el);
+  if (i === -1) return;
+  const [gone] = overlayStack.splice(i, 1);
+  el.inert = false;
+
+  const top = overlayStack[overlayStack.length - 1];
+  if (top) {
+    top.el.inert = false;
+  } else {
+    appRoot.inert = false;
+  }
+
+  // 焦點還給觸發者。它可能已經被隱藏（例如離開現場後整個 section 收起來），
+  // 這時候不要硬搶焦點，交給瀏覽器預設行為。
+  const back = gone.restoreTo;
+  if (back && back.isConnected && back.offsetParent !== null) back.focus();
+}
+
+// Esc 關閉最上層；Tab 在最上層內部循環（focus trap）
+document.addEventListener('keydown', (e) => {
+  const top = overlayStack[overlayStack.length - 1];
+  if (!top) return;
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    top.onEscape?.();
+    return;
+  }
+
+  if (e.key !== 'Tab') return;
+  const items = focusablesIn(top.el);
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  // inert 已擋掉往外走的路，但焦點若還在覆蓋層外（剛開啟的那一瞬間）
+  // 仍需把它拉回來，否則第一次 Tab 會沒有反應。
+  if (!top.el.contains(document.activeElement)) {
+    e.preventDefault();
+    first.focus();
+    return;
+  }
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
 // 觸覺回饋
 // ─────────────────────────────────────────────────────────────
 /**
@@ -696,7 +791,12 @@ async function submitScanImage(image) {
   pendingScanConfig = {
     source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors,
   };
-  if (body.fullPng) $('#scan-result').src = body.fullPng;
+  // previewPng 優先：確認頁把角色放進 74vh 的直式框，手機 dpr=3 時顯示高度
+  // 接近 2000 實際像素，而 fullPng 是為場上渲染縮過的貼圖（1024），
+  // 在這裡會被放大近兩倍。previewPng 是模型輸出的原始尺寸，專供這一頁。
+  // 舊版伺服器沒有這個欄位，因此保留 fullPng 作為後備。
+  const shot = body.previewPng || body.fullPng;
+  if (shot) $('#scan-result').src = shot;
   showScanPhase('done');
 }
 
@@ -750,10 +850,28 @@ function startScanProgress() {
     [68, '積木拼裝與上色中…'],
     [86, '即將完成，準備登場…'],
   ];
+  // 等待時的提示。每一則的通關路徑上都有「跟另一個人講話」這一步 ——
+  // 這件作品要的不是參與者操控角色，而是操控角色的人彼此開始交流
+  // （見 docs/notes/INTERACTION-DESIGN.md 的判準）。單純的小知識或
+  // 進度文案會讓人繼續低頭，那正是現場最不需要的東西。
+  const TIPS = [
+    '抬頭看看旁邊的人今天穿什麼顏色 —— 待會的任務用得上。',
+    '問問旁邊的人是第幾個進場的。',
+    '看看大螢幕，猜猜哪一個角色是你旁邊那個人。',
+    '待會可以找人交換編號配對，先想好要找誰。',
+    '問問身邊的人，他的角色被生成成什麼樣子。',
+  ];
+
   const bar = $('#scan-progress');
   const statusEl = $('#scan-status');
   const elapsedEl = $('#scan-elapsed');
+  const tipEl = $('#scan-tip');
+  const tipTextEl = $('#scan-tip-text');
   const t0 = Date.now();
+
+  // 從隨機一則開始，否則現場一整排手機會顯示同一句，看起來像罐頭
+  let tipIndex = Math.floor(Math.random() * TIPS.length);
+  let lastTipAt = 0;
 
   const tick = setInterval(() => {
     const sec = (Date.now() - t0) / 1000;
@@ -764,9 +882,23 @@ function startScanProgress() {
     elapsedEl.textContent = sec < 30
       ? `已等待 ${Math.floor(sec)} 秒　約需 25 秒`
       : `已等待 ${Math.floor(sec)} 秒　比平常久一些，請再等等`;
+
+    // 3 秒後才出現：太早跳出來會蓋過「正在分析服裝特徵」那句，
+    // 讓人以為系統要他做什麼才會繼續。之後每 6 秒換一則。
+    if (sec >= 3 && sec - lastTipAt >= (lastTipAt === 0 ? 0 : 6)) {
+      if (tipEl) tipEl.hidden = false;
+      if (tipTextEl) tipTextEl.textContent = TIPS[tipIndex % TIPS.length];
+      tipIndex += 1;
+      lastTipAt = sec;
+    }
   }, 250);
 
-  return () => { clearInterval(tick); bar.style.width = '100%'; };
+  return () => {
+    clearInterval(tick);
+    bar.style.width = '100%';
+    // 收起提示，否則它會殘留到「確認角色」那一頁
+    if (tipEl) tipEl.hidden = true;
+  };
 }
 
 // 確認、重拍、放棄
@@ -1154,11 +1286,14 @@ function openSheet() {
   pairInput.value = '';
   sheet.hidden = false;
   renderMission();
+  pushOverlay(sheet, { onEscape: closeSheet, restoreTo: banner });
   setTimeout(() => pairInput.focus(), 80);
 }
 function closeSheet() {
+  if (sheet.hidden) return;
   sheet.hidden = true;
   pairInput.blur();
+  popOverlay(sheet);
 }
 
 banner.addEventListener('click', openSheet);
@@ -1188,9 +1323,16 @@ function openConfirmPair(msg) {
   $('#pair-confirm-text').textContent = '請確認對方就站在你面前，再按下確認。';
   $('#pair-confirm-avatar').innerHTML = msg.avatar ? renderAvatarSVG(msg.avatar) : '';
   confirmPair.hidden = false;
+  // Esc 一律當成「不是這個人」：這是對方發起的，靜默關掉會讓對方一直等。
+  pushOverlay(confirmPair, {
+    onEscape: () => $('#btn-pair-decline').click(),
+  });
+  $('#btn-pair-accept').focus();
 }
 function closeConfirmPair() {
+  if (confirmPair.hidden) return;
   confirmPair.hidden = true;
+  popOverlay(confirmPair);
 }
 
 $('#btn-pair-accept').addEventListener('click', () => {
@@ -1208,8 +1350,18 @@ $('#btn-pair-decline').addEventListener('click', () => {
 let hasLeft = false;
 
 const confirmBox = $('#confirm-exit');
-const openConfirm = () => { confirmBox.hidden = false; };
-const closeConfirm = () => { confirmBox.hidden = true; };
+const openConfirm = () => {
+  confirmBox.hidden = false;
+  pushOverlay(confirmBox, { onEscape: closeConfirm, restoreTo: $('#btn-exit') });
+  // 預設焦點放在「取消」而非「確定離開」：這是破壞性操作，
+  // 不該讓一個 Enter 就把人送出場。
+  $('#btn-cancel-exit').focus();
+};
+const closeConfirm = () => {
+  if (confirmBox.hidden) return;
+  confirmBox.hidden = true;
+  popOverlay(confirmBox);
+};
 
 $('#btn-exit').addEventListener('click', openConfirm);
 $('#btn-cancel-exit').addEventListener('click', closeConfirm);
@@ -1491,6 +1643,9 @@ function popScore(delta) {
 
 function openQuiz() {
   quizPanel.hidden = false;
+  // 問答沒有 onEscape：它由伺服器控制開始與結束，使用者不能自己關掉。
+  // 但仍要 pushOverlay —— 否則 Tab 會穿過去按到底下的搖桿與表情鍵。
+  pushOverlay(quizPanel);
   // 進入問答時鬆開搖桿：角色交還給 Boids，不會停在最後的推桿方向上
   if (joyEngaged) {
     joyEngaged = false;
@@ -1499,6 +1654,7 @@ function openQuiz() {
 }
 
 function closeQuiz() {
+  if (!quizPanel.hidden) popOverlay(quizPanel);
   quizPanel.hidden = true;
   clearInterval(quizTimer);
   quizTimer = null;

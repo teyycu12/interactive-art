@@ -17,9 +17,11 @@
 
 from __future__ import annotations
 
+import faulthandler
 import os
 import re
 import sys
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -161,6 +163,25 @@ ASSET_DIR = os.path.join(REPO_ROOT, "public", "assets", "gen")
 # 每個 /generate 會同時用掉 4 個 slot（VLM 兩支 + CV 兩支），因此池子必須
 # 容得下數個並行請求 —— 只給 4 個的話，第二個人一按拍照就會排到 CV 逾時。
 _executor = ThreadPoolExecutor(max_workers=16)
+
+# 生圖呼叫的並行上限。
+#
+# 上面那個執行緒池管的是 CV 與 VLM 的重疊，**生圖那一次呼叫不經過它** ——
+# 在加上這道閘門之前，十個人同時按拍照就是十個生圖請求同時打向 Gemini。
+# 那正是最糟的情況：外部 API 一開始回 429，熔斷器只要連續三次失敗就會跳閘
+# 20 秒（見 circuit_breaker.py），於是**全場一起失敗**，而不是排隊慢一點。
+#
+# 這裡沿用 2D 備援版早就有的 GEN_MAX_CONCURRENT（backend/app.py），
+# 整合版先前漏掉了這道閘門。超出上限的請求會在這裡等，不會被拒絕 ——
+# 對參與者而言是「慢一點」，遠好過「大家一起看到生成失敗」。
+_gen_semaphore = threading.Semaphore(config.GEN_MAX_CONCURRENT)
+
+# MediaPipe 在 C++ 層 abort() 時（Check failed: 1 == ChannelSize()），
+# Python 不會拋例外、也不會印出任何 Python 行號 —— 只有一串 C++ 位址，
+# 完全指不到是哪一行程式碼觸發的。faulthandler 會在收到致命訊號時
+# 補印當下每個執行緒的 Python 堆疊，把「崩在 MediaPipe 裡」縮小到
+# 「崩在 cv_module.py 第幾行」。純診斷用，沒有執行期成本。
+faulthandler.enable()
 
 # 沿用既有的熔斷器：外部 API 連續失敗時直接快速失敗，
 # 不讓每個參與者都在現場等滿 120 秒的 timeout。
@@ -521,12 +542,17 @@ def _generate():
         # max_retries=0：熔斷器預設會自動重試一次，而這是整套系統唯一會花錢的
         # 呼叫 —— 失敗時多付一次錢，而且那次重試不帶任何修正指令，成功率與
         # 第一次相同。要不要重生由下方的驗證結果決定，不由熔斷器決定。
-        out = _imagegen_breaker.call(
-            _raise_on_failure, generate_full_character_png,
-            rgb_full, body_poly, face_data, outfit_data, True, regions, style_id, correction,
-            max_retries=0,
-            fallback={"ok": False, "error": "circuit_open"},
-        )
+        #
+        # with 而非 acquire/release：生圖會拋例外（熔斷器開啟、API 逾時），
+        # 手動釋放漏掉任何一條路徑，名額就會永久少一個，最後整個服務卡死 ——
+        # 而那個症狀是「現場愈跑愈慢，重啟就好」，最難查的一種。
+        with _gen_semaphore:
+            out = _imagegen_breaker.call(
+                _raise_on_failure, generate_full_character_png,
+                rgb_full, body_poly, face_data, outfit_data, True, regions, style_id, correction,
+                max_retries=0,
+                fallback={"ok": False, "error": "circuit_open"},
+            )
         if isinstance(out, dict) and out.get("body_png"):
             out = dict(out)
             out["body_png"] = add_transparent_margin(out["body_png"])
@@ -542,7 +568,13 @@ def _generate():
         )
 
     try:
-        max_retries = max(0, min(1, int(os.environ.get("GENERATION_MAX_RETRIES", "0"))))
+        # VISION_ 前綴：這條政策只屬於整合版。2D 備援版讀的是
+        # GENERATION_MAX_RETRIES，且它的測試把「失敗時只花一次生圖錢」
+        # 當成成本政策在守，兩者不該互相牽動。
+        max_retries = max(0, min(1, int(
+            os.environ.get("VISION_GENERATION_MAX_RETRIES")
+            or os.environ.get("GENERATION_MAX_RETRIES", "0")
+        )))
     except ValueError:
         max_retries = 0
 

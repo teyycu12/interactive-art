@@ -127,7 +127,18 @@ def correction_for_validation(validation: Dict[str, Any]) -> str:
     if "fragmented_foreground" in errors:
         # 措辭刻意不提任何風格：這段會被接到當次生成的 prompt 後面，
         # 而那份 prompt 可能是樂高，也可能是皮克斯。
-        instructions.append("Keep every limb physically attached to one coherent figure; no floating pieces.")
+        #
+        # 這個錯誤有兩種成因，修正指令必須同時涵蓋：
+        #   1. 角色本身破碎（浮空的手腳）
+        #   2. **模型交出了多視圖角色設定表** —— 正面大圖＋側面＋背面各自
+        #      是一個獨立連通區塊，最大那個因此佔不到 75%。實測抓到過
+        #      （2026-08-29）：圖其實畫得很好，只是畫了四個。
+        # 少了第二句，重試會再交出一張一模一樣的四視圖。
+        instructions.append(
+            "Keep every limb physically attached to one coherent figure; no floating pieces. "
+            "Draw EXACTLY ONE figure: no turnaround sheet, no side or back view panels, "
+            "no duplicate copies of the character anywhere in the image."
+        )
     return " ".join(instructions)
 
 
