@@ -629,6 +629,27 @@ await sleep(300);
   });
   check('藏寶座標不會外洩給手機', !phoneSawCoords);
 
+  // 主辦端中途重整／斷線重連，必須補送進行中的那一輪。
+  // HOST_STATE 不含尋寶，而主辦端的尋寶面板只由 TREASURE_* 事件驅動：
+  // 少了補送，重整後的畫面會停在「開始尋寶」，#treasure-live 仍是 hidden，
+  // 「中止本輪」按鈕根本不在畫面上 —— 本輪就再也停不掉了，
+  // 而現場只會看到「這個按鈕壞了」。
+  {
+    const rehost = new WebSocket(URL);
+    const reMsgs = [];
+    await new Promise((res) => rehost.on('open', res));
+    rehost.on('message', (d) => reMsgs.push(JSON.parse(d)));
+    rehost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+    await sleep(400);
+    const caught = reMsgs.find((m) => m.type === 'TREASURE_START');
+    check('主辦端重連後補送進行中的尋寶', !!caught,
+      caught ? `先知 ${caught.round?.prophetId}` : '沒收到 TREASURE_START');
+    check('補送給主辦端的尋寶帶座標（主辦端是公開畫面）',
+      Number.isFinite(caught?.spot?.x) && Number.isFinite(caught?.spot?.y));
+    rehost.close();
+    await sleep(150);
+  }
+
   // 把阿賓推到寶藏上：先知（小美）應收到冷熱，阿賓不該收到
   // ⚠ payload 形狀必須是 {vector:{x,y}}：伺服器讀的是
   //   `msg.vector ?? {x: msg.vx, y: msg.vy}`，寫成裸的 {x,y} 會兩邊都拿到

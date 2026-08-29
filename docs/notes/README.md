@@ -15,6 +15,7 @@
 | [SERVER-AND-TESTS.md](SERVER-AND-TESTS.md) | `server/` 結構、e2e 不穩定成因、`IDLE_MOTION`、人數上限、CDN |
 | [INTERACTION-DESIGN.md](INTERACTION-DESIGN.md) | 玩法判準、尋寶先知模式、COLOR_HUNT、分區感知 |
 | [LEGACY-2D.md](LEGACY-2D.md) | 2D 備援版：mediapipe 版本、eventlet/gevent、投影牆座標 |
+| [UI-STYLING.md](UI-STYLING.md) | 顏色 token 的填色／文字之分、觸控範圍與視覺尺寸分離 |
 | [LOCAL-PREVIEW.md](LOCAL-PREVIEW.md) | 本機開啟各頁面與依 PID 關閉服務 |
 
 這些條目多半是「不這樣做會出事，但不會報錯」的耦合 —— 幾乎每一條都附了

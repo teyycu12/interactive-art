@@ -9,11 +9,25 @@
 :root {
   --paper: #FAF8F5;
   --ink: #2F2A26;
-  --ink-soft: #7A716A;
+  /* 原為 #7A716A，對紙色剛好 4.50:1 —— 卡在 AA 及格線上、沒有任何餘裕。
+     它是 .lede / .hint 等 30 處次要文字的顏色，而校內實測的場地光線
+     比桌前亮得多；只要亮一點，這 30 處會同時變得難讀。
+     改為 5.07:1 買進餘裕（主辦端同一角色的 --ink-soft 是 5.38:1）。 */
+  --ink-soft: #726960;
   --line: #D8D0C6;
   --accent: #E76F51;
   --ok: #2A9D8F;
   --warn: #E9A23B;
+
+  /* 「可當文字用」的深色版本。
+     --accent 對紙色只有 2.9:1、--warn 只有 2.0:1、--ok 只有 3.1:1，
+     當成小字的顏色一律不合格（WCAG AA 要 4.5:1）。現場光線比書桌前亮得多，
+     連線狀態這種 11px 的字在戶外幾乎讀不出來。
+     大面積填色（按鈕底色、邊框、進度條）仍用原本的亮色，那些不受此限；
+     只有「拿來寫字」的地方改用 -ink 版本。 */
+  --accent-ink: #C4462A;  /* 4.65:1 */
+  --warn-ink:   #98600D;  /* 4.94:1 */
+  --ok-ink:     #1F7268;  /* 5.41:1 */
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -83,6 +97,17 @@ button {
 }
 button:active { transform: translateY(2px); }
 button:disabled { opacity: .35; border-style: dashed; }
+
+/* 鍵盤／外接裝置的焦點框。與主辦端控制台同一套樣式。
+   控制器雖以觸控為主，但仍有人用藍牙鍵盤或行動輔助裝置操作；
+   少了這條，Tab 過去時完全看不出焦點停在哪個鍵上。
+   只用 :focus-visible，觸控點擊不會殘留焦點框。 */
+button:focus-visible,
+input:focus-visible,
+[role="radio"]:focus-visible {
+  outline: 3px solid var(--accent-ink);
+  outline-offset: 2px;
+}
 
 .btn-primary { background: var(--ink); color: var(--paper); }
 .btn-ghost { border-style: dashed; border-color: var(--line); color: var(--ink-soft); }
@@ -156,11 +181,26 @@ button:disabled { opacity: .35; border-style: dashed; }
 
 /* 色票 */
 .swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+/* 色票視覺維持 38px（排成一列才不會換行），可觸範圍補到 44px。
+   ::after 不影響版面，因此不會擠掉旁邊的色票。 */
 .swatch {
   width: 38px; height: 38px; border-radius: 50%;
   border: 2.5px solid var(--line); padding: 0;
+  position: relative;
+}
+.swatch::after {
+  content: "";
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px; height: 44px;
+  border-radius: 50%;
 }
 .swatch[aria-pressed="true"] { border-color: var(--ink); transform: scale(1.12); }
+/* 選中時的 scale(1.12) 會連 ::after 一起放大到約 49px，與相鄰色票的
+   可觸範圍重疊（色票間距只有 46px）。這裡除以 1.12 抵銷回去，
+   讓可觸範圍維持 44px、彼此不相撞。 */
+.swatch[aria-pressed="true"]::after { scale: calc(1 / 1.12); }
 
 #name-input {
   font: inherit; font-weight: 700; font-size: 16px;
@@ -203,8 +243,10 @@ button:disabled { opacity: .35; border-style: dashed; }
   border-radius: 999px; border: 2px solid var(--line); color: var(--ink-soft);
   white-space: nowrap;
 }
-.pill.ok { border-color: var(--ok); color: var(--ok); }
-.pill.warn { border-color: var(--warn); color: var(--warn); }
+/* 邊框維持亮色（純裝飾，不受對比規範限制），文字改用深色版本：
+   這顆 pill 是 11px，而且承載「你還連著線嗎」這個現場沒有第二來源的訊息。 */
+.pill.ok { border-color: var(--ok); color: var(--ok-ink); }
+.pill.warn { border-color: var(--warn); color: var(--warn-ink); }
 
 /* 操控權提示：告訴使用者現在是不是自己在操控（文案見 app.js 的說明） */
 .agency {
@@ -213,7 +255,7 @@ button:disabled { opacity: .35; border-style: dashed; }
   border: 2px dashed var(--line); color: var(--ink-soft);
   transition: color .3s, border-color .3s;
 }
-.agency.active { color: var(--accent); border-color: var(--accent); border-style: solid; }
+.agency.active { color: var(--accent-ink); border-color: var(--accent); border-style: solid; }
 
 .agency-row { display: flex; gap: 8px; align-items: stretch; flex-shrink: 0; }
 .agency-row .agency { flex: 1; }
@@ -227,6 +269,16 @@ button:disabled { opacity: .35; border-style: dashed; }
   border-radius: 12px;
   background: var(--paper);
   color: var(--ink-soft);
+  position: relative;
+}
+/* 同 .btn-exit：外觀維持小顆，可觸範圍補到 44px */
+.btn-haptics::after {
+  content: "";
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: max(100%, 44px);
+  height: max(100%, 44px);
 }
 .btn-haptics[aria-pressed="true"] {
   border-style: solid; border-color: var(--ok); color: var(--ok);
@@ -239,11 +291,11 @@ button:disabled { opacity: .35; border-style: dashed; }
 }
 @keyframes haptics-nudge {
   0%, 100% { border-color: var(--line); color: var(--ink-soft); }
-  50%      { border-color: var(--accent); color: var(--accent); }
+  50%      { border-color: var(--accent); color: var(--accent-ink); }
 }
 /* 系統層級關閉動態效果時不播 —— 前庭功能敏感者會因閃動不適 */
 @media (prefers-reduced-motion: reduce) {
-  .btn-haptics.nudge { animation: none; border-color: var(--accent); color: var(--accent); }
+  .btn-haptics.nudge { animation: none; border-color: var(--accent); color: var(--accent-ink); }
 }
 
 /* ── 個人視角畫布 ─────────────────────────────────────────
@@ -304,6 +356,20 @@ button:disabled { opacity: .35; border-style: dashed; }
   border-radius: 10px;
   color: var(--ink-soft);
   flex: none;
+  /* 視覺上維持小顆（見上方註解），但實際可按範圍補到 44px。
+     兩者不必一致：把「看起來多大」與「按得到多大」分開，
+     既保留不搶眼的外觀，又不會讓手指較大或手抖的人按不到。
+     position 是 ::after 的定位基準。 */
+  position: relative;
+}
+.btn-exit::after {
+  content: "";
+  position: absolute;
+  /* 往四周各撐開到至少 44px 的可觸範圍 */
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: max(100%, 44px);
+  height: max(100%, 44px);
 }
 
 /* ── 極矮視窗的降級 ─────────────────────────────────────
@@ -351,7 +417,7 @@ button:disabled { opacity: .35; border-style: dashed; }
 .mb-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .mb-title { font-size: 15px; font-weight: 700; }
 .mb-prog {
-  font-size: 13px; font-weight: 700; color: var(--accent);
+  font-size: 13px; font-weight: 700; color: var(--accent-ink);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .mb-prog.done { color: var(--ok); }
@@ -386,6 +452,16 @@ button:disabled { opacity: .35; border-style: dashed; }
   width: 34px; height: 34px; padding: 0;
   border-radius: 50%; border-width: 2px; border-color: var(--line);
   font-size: 15px; color: var(--ink-soft); line-height: 1;
+}
+/* 關閉鍵視覺上是 34px 的小圓，可觸範圍補到 44px。
+   它是這張面板唯一的退出口，按不到等於被困住。 */
+.sheet-close::after {
+  content: "";
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px; height: 44px;
+  border-radius: 50%;
 }
 .sheet-inner h2 { margin: 0 0 4px; font-size: 19px; }
 .sheet-brief { margin: 0 0 16px; font-size: 13px; color: var(--ink-soft); }
@@ -461,7 +537,9 @@ button:disabled { opacity: .35; border-style: dashed; }
 .dialog-actions { display: flex; gap: 8px; }
 .dialog-actions button { flex: 1; }
 
-.btn-danger { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+/* 底色改用深色版本：原本紙色字壓在亮橘底上只有 2.9:1，
+   而這是「確定離開」——現場按錯沒有補救餘地的那一顆。 */
+.btn-danger { background: var(--accent-ink); border-color: var(--accent-ink); color: var(--paper); }
 
 /* ── 積分 ───────────────────────────────────────────────── */
 .score {
@@ -689,6 +767,20 @@ button:disabled { opacity: .35; border-style: dashed; }
   0%   { opacity: .92; }
   100% { opacity: 0; }
 }
+/* 全螢幕白閃是整個 App 裡對光敏感最不友善的一個效果，而它偏偏是唯一
+   沒被 reduced-motion 蓋到的。但**不能直接關掉** —— 它同時是「照片拍到了」
+   的唯一回饋（拍完就跳到生成中，沒有別的訊號）。這裡改成淡一階、慢一點，
+   保留「有拍到」的訊息，去掉突兀的強閃。 */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes shutter-flash {
+    0%   { opacity: .35; }
+    100% { opacity: 0; }
+  }
+  .scan-stage.shutter::after { animation-duration: .5s; }
+  /* 倒數的縮放跳動：改成不位移，數字仍每秒換一次 */
+  #countdown-display.tick { animation: none; }
+  .toast { animation: none; }
+}
 
 /* 名字：貫穿整條流程的識別 */
 .who-name {
@@ -779,6 +871,35 @@ button:disabled { opacity: .35; border-style: dashed; }
   border-radius: 99px;
   background: var(--ink);
   transition: width .4s linear;
+}
+
+/* 等待時的交流提示。
+   它不是裝飾 —— 這 25 秒是現場唯一「所有人同時閒著」的時刻，
+   而低頭等待與這件作品要的人際交流恰好相反。用實線框與較重的字
+   把它拉到與進度條同等的視覺份量，否則沒有人會讀它。 */
+.wait-tip {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 2px dashed var(--line);
+  border-radius: 14px;
+  background: rgba(231, 111, 81, .06);
+  text-align: left;
+  max-width: 22em;
+}
+.wait-tip[hidden] { display: none; }
+.wait-tip-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  color: var(--accent-ink);
+  margin-bottom: 4px;
+}
+.wait-tip-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
 }
 
 /* 直向手機：左右並排會讓兩邊都太窄，改成上下堆疊 */
