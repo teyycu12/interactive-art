@@ -1137,6 +1137,12 @@ function connect() {
       myId = msg.userId;
       // 伺服器指派的隊伍才算數：沒答題的人是被補位的，重連的人一律沿用原隊。
       // 以本地選擇為準會讓這兩種情況顯示成錯的隊伍。
+      // 分組題以伺服器為準。手機重新整理時 /api/grouping 可能還沒回來，
+      // 沿用內建預設題會算出錯的隊名 —— 同一隊在手機顯示「甜」而
+      // 大螢幕顯示「海邊」。這裡跟著 welcome 一起到，沒有時間差。
+      if (msg.groupingId && GROUPING_MAP[msg.groupingId]) {
+        groupingQuestion = GROUPING_MAP[msg.groupingId];
+      }
       if (msg.team) {
         myTeam = msg.team;
         renderMyTeam();

@@ -110,6 +110,27 @@ describe('隊伍跨重連存活', () => {
   });
 });
 
+describe('隊名的單一事實來源', () => {
+  test('隊名取自分組題的選項，順序對應 TEAM_IDS', () => {
+    for (const q of GROUPING_QUESTIONS) {
+      // options[0] → TEAMS.A、options[1] → TEAMS.B。順序即隊伍歸屬，
+      // 三端都照這個規則算隊名，錯位會讓手機與大螢幕顯示相反的隊。
+      assert.equal(q.options.length, TEAM_IDS.length);
+    }
+  });
+
+  test('不同的分組題會算出不同的隊名（因此題目必須跟著隊伍傳）', () => {
+    // 手機重新整理時若用內建預設題而非本場實際的題目，
+    // 同一隊會在手機顯示「甜」而大螢幕顯示「海邊」。
+    // CLIENT_WELCOME 因此要一併帶回 groupingId。
+    const nameOf = (q, team) => q.options[TEAM_IDS.indexOf(team)];
+    const a = GROUPING_MAP.douhua;
+    const b = GROUPING_MAP.holiday;
+    assert.notEqual(nameOf(a, 'A'), nameOf(b, 'A'),
+      '兩題對同一隊算出的隊名必須不同，否則這條測試證明不了什麼');
+  });
+});
+
 describe('名冊廣播', () => {
   test('roster 帶隊伍，但不得夾帶 rejoinToken', () => {
     const stage = new Stage();

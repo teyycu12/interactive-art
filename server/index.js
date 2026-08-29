@@ -451,6 +451,10 @@ function handleJoin(ws, msg) {
         name: existing.name,
         // 重連不重新分隊：隊伍是既成事實，且他的分數已經記在那一隊帳上
         team: existing.team,
+        // 隊名取自分組題的選項，因此題目要跟著隊伍一起回去 ——
+        // 少了它，重新整理的手機會用內建預設題算隊名，
+        // 於是同一隊在手機上顯示「甜」而大螢幕顯示「海邊」。
+        groupingId,
         stage: STAGE,
       });
       // 重連的人可能已經累積了社交連結（邊是既成事實，不隨斷線消失）
@@ -522,6 +526,7 @@ function handleJoin(ws, msg) {
     // 伺服器指派的隊伍。手機顯示的隊伍必須以這個為準而非自己送出的那個 ——
     // 沒答題（或送了非法值）的人是由 assignTeam 補位的，兩者可能不同。
     team: agent.team,
+    groupingId,
     stage: STAGE,
   });
 
