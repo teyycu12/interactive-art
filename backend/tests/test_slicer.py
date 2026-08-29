@@ -149,6 +149,36 @@ class TestSliceCharacter:
             assert out["textures"][part] == f"/assets/gen/{asset_id}/{part}.webp"
         assert set(out["fallbackColors"]) == {"skin", "hair", "torso", "legs"}
 
+    def test_preview_keeps_the_models_original_resolution(self, figure, tmp_path):
+        """預覽圖不得被縮到貼圖的尺寸。
+
+        手機端的「確認角色」頁把角色放進 74vh 的直式框，dpr=3 的手機上顯示
+        高度接近 2000 實際像素。貼圖是為場上渲染縮過的（NORMALIZED_HEIGHT），
+        拿它來顯示會被放大近兩倍而糊掉 —— 而那一眼正是這件作品的核心體驗。
+
+        兩者用途相反：貼圖要小（場上同時十個、要進名冊、吃現場無線網路），
+        預覽要清楚（一張、一次、本人在端詳自己）。這則測試守住「不要為了
+        省事把兩者合併成同一張」。
+        """
+        asset_id = "f" * 32
+        out = slice_character(to_b64(figure), str(tmp_path), asset_id)
+
+        assert out["previewPng"] == f"/assets/gen/{asset_id}/preview.webp"
+        preview_path = tmp_path / asset_id / "preview.webp"
+        assert preview_path.exists()
+
+        source = PILImage.open(io.BytesIO(base64.b64decode(to_b64(figure))))
+        preview = PILImage.open(preview_path)
+        assert preview.size == source.size, (
+            f"預覽圖應維持模型輸出的原始尺寸，實得 {preview.size} vs {source.size}"
+        )
+
+        # 預覽圖必須是「未經 normalize 的原樣」，而不是另一份被縮放過的複本。
+        # 不能斷言「比貼圖大」：模型偶爾會回很小的圖（實測有 232x432 的），
+        # 那時 normalize 會把貼圖**放大**到 1024，反而比原圖高 —— 但放大不會
+        # 增加細節，預覽仍該用原圖。真正要守的是「沒有被重新取樣」。
+        assert preview.size == source.size
+
     def test_writes_full_image_alongside_the_slices(self, figure, tmp_path):
         """整張圖是大螢幕與大合照共用的那一張，必須是完整的正規化結果。
 
