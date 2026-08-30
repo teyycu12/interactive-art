@@ -13,21 +13,28 @@
 |---|---|---|
 | 互動層 | `server/` — α 仲裁共治、任務、配對、問答、計分、社交圖譜 | `backend/app.py` |
 | 前端 | `public/` — 手機控制器 / 大螢幕 / 主辦端 | `frontend/` |
-| 啟動 | `npm start` + `python backend/service.py` | `bash start.sh` |
-| 測試 | 188 單元 + 87 端對端 + 170 Python | 同左（共用） |
+| 啟動 | `bash start.sh`（:3000 + :5055） | `bash start-2d.sh`（:5001 + :8080） |
+| 測試 | 369 Node + 128 端對端 + 482 Python | 同左（共用） |
+
+兩套系統的埠號刻意錯開，**可以同時啟動**。備援版是「3D 若來不及仍能完成
+實測」的保險，整套測試都還在跑，**請勿刪除** `backend/app.py` 與 `frontend/`。
 
 **參與者有兩條入場路徑**：拍照掃描生成角色，或模組捏臉。
 掃描失敗（相機權限被拒、非 HTTPS、生成服務未啟動）一律降級回捏臉，不會擋人進場。
 
 ```bash
-npm install && pip install -r requirements.txt
-npm start                     # 互動層，印出三個網址
-python backend/service.py     # 角色生成服務（127.0.0.1:5055）
+npm install && pip install -r requirements.txt requirements-dev.txt
+bash start.sh                 # 生成服務 :5055 + 互動層 :3000
+                              # 偵測到 certs/ 會自動走 HTTPS
 ```
 
+只啟動其中一半：`bash start.sh --vision`（僅生成服務）或
+`bash start.sh --node`（僅互動伺服器）。
+
 > **現場要用手機相機必須有 HTTPS** —— `getUserMedia` 在 `http://192.168.x.x` 上會被瀏覽器直接拒絕。
-> 執行 `bash scripts/make-cert.sh` 產生憑證後，以
-> `TLS_CERT=certs/cert.pem TLS_KEY=certs/key.pem npm start` 啟動。
+> 執行 `bash scripts/make-cert.sh` 產生憑證即可，**`start.sh` 會自動偵測
+> `certs/` 並切換到 HTTPS**，不需要手動設環境變數。找不到憑證時會印出警告
+> 並以 HTTP 啟動（此時手機無法用相機，掃描會退回捏臉）。
 
 本機頁面：
 
@@ -82,7 +89,7 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 | 功能 | 目前狀態 |
 |---|---|
 | 人體與全身站位偵測 | MediaPipe Pose／Segmentation；檢查肩、髖、膝、腳踝、腳跟與腳尖 |
-| 拍攝品質閘門 | 全身入框、visibility、連續五幀穩定度與倒數期間持續驗證 |
+| 拍攝品質閘門 | 全身入框、visibility、連續五幀穩定度、臉部清晰度與倒數期間持續驗證 |
 | 攝影機隱私 | 預設關閉；按「開啟攝影機」後才請求權限並建立 MediaStream |
 | 開發照片測試 | 可上傳本地照片，走與正式拍照相同的生成流程 |
 | 服裝色彩 | OpenCV 取得上身、下身及手臂色彩；CV 是色彩基準 |
@@ -92,7 +99,7 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 | 本機審查 | 規則 validator 檢查透明背景、構圖、碎裂、左右腿與鞋等結構問題 |
 | 生成歷史 | SQLite 保存每次 run／attempt、生成圖、耗時、token、成本與錯誤 |
 | 人工審查 | 通過判定、四項 1–5 分評分及文字備註 |
-| 角色風格架構 | 後端 generation registry＋前端 renderer registry；目前只註冊 LEGO |
+| 角色風格架構 | 後端 generation registry＋前端 renderer registry；已註冊樂高與皮克斯兩種風格 |
 | 群體互動 | Flask-SocketIO 傳遞角色狀態，Boids 控制投影角色移動 |
 
 ## 使用介面
@@ -102,11 +109,11 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 - 正式生成時顯示階段式進度條。百分比代表流程里程碑，不是模型內部的精確剩餘時間。
 - 「生成歷史／成本」可檢視每次生圖、API request、耗時、token、費用與人工評分。
 
-本機頁面：
+本機頁面（2D 備援版，由 `bash start-2d.sh` 啟動）：
 
-- 主操作頁：<http://127.0.0.1:8000/index.html>
-- 投影頁：<http://127.0.0.1:8000/projection.html>
-- 生成歷史與成本：<http://127.0.0.1:8000/dev.html>
+- 主操作頁：<http://127.0.0.1:8080/index.html>
+- 投影頁：<http://127.0.0.1:8080/projection.html>
+- 生成歷史與成本：<http://127.0.0.1:8080/dev.html>
 - 後端健康檢查：<http://127.0.0.1:5001/health>
 
 ## 生成模式
@@ -114,9 +121,21 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 ### 唯一路線：`full_character`
 
 - AI 一次產生完整角色（頭、髮、臉、身體、腿、鞋），輸出即最終畫面。
-- 送三張圖給模型：訪客照片（WHO）、CV 特寫拼版（WHO 細節）、程式繪製的姿勢參考（幾何）。
+- 送**四張圖**給模型：訪客照片（WHO）、CV 特寫拼版（WHO 細節）、程式繪製的姿勢參考
+  （幾何）、該風格的參考圖集拼版（工藝）。編號由實際送出的清單推導，
+  prompt 不會指到沒送出的圖。
 - 結果經 `avatar_quality.py` 檢查透明背景、構圖、碎裂、左右腿與鞋；失敗回傳明確原因。
 - 以 2D sprite 進入 Boids 投影牆。
+
+> [!IMPORTANT]
+> **參考圖的視覺訊號會壓過 prompt 的文字。** 2026-08-30 實測：prompt 明文禁止
+> 影子（`NO shadow, contact shadow or reflection`），但參考圖集六張裡有五張
+> 腳下帶著地面投影，模型就照著畫 —— 而去背的 flood-fill 只吃純白、走不進
+> 灰階，那片影子會一路留到手機的確認畫面上。
+>
+> **換自己的參考圖集時，圖本身必須先洗乾淨**（純白背景、無地面投影），
+> 不能只靠 prompt 講。`backend/clean_reference_bg.py` 可代勞，
+> 洗圖時踩過的坑記在 [docs/notes/GENERATION.md](./docs/notes/GENERATION.md)。
 
 **生成風格**：目前安裝兩種風格，參與者在拍照頁自行選擇（選單由 `/api/styles`
 餵資料，沒選就用 `CHARACTER_STYLE` 的活動預設）：
@@ -126,8 +145,8 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 | `lego` | 樂高 | `2026q3_owner_curated` |
 | `pixar` | 皮克斯 | `2026q3_pixar_figma` |
 
-**風格參考圖**：除了上述三張，模型還會收到一張由該風格的參考圖集拼成的風格參考表
-（`STYLE_REFERENCE_MODE=sheet`）。設為 `off` 可退回三張圖的送法做對照實驗。
+**風格參考圖**：上述第四張由該風格的參考圖集拼成（`STYLE_REFERENCE_MODE=sheet`）。
+設為 `off` 可退回三張圖的送法做對照實驗。
 
 > [!WARNING]
 > 參考圖集**綁在風格上**（`style_registry.GenerationStyle.reference_set`），
@@ -190,8 +209,8 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 
 1. 將 validation code、中文原因與重拍建議送回前端。
 2. 前端回到上傳／拍攝頁面。
-2. 不自動重試，也不回退模式一。
-3. 失敗生成圖仍保存於開發歷史，供開發者分析模型為何失敗。
+3. 不自動重試，也不回退模式一。
+4. 失敗生成圖仍保存於開發歷史，供開發者分析模型為何失敗。
 
 ### 2. 人工審查與多人盲評
 
@@ -228,9 +247,9 @@ M3–M7 暫不新增業務功能，只維持 metadata 傳遞、Boids 與 rendere
 2. 匯入經同意的低解析度真人參考縮圖；縮圖會移除 EXIF 並存於 gitignored 本機目錄。
 3. 匯入 Firefly／Scenario／Colab 外部結果及人工回報的耗時、成本與參數。
 4. 建立並鎖定盲評批次；每位評分者的項目與候選組順序固定亂序。
-4. 完成單人服裝／人物精緻度與10人群體物種一致性評分。
-5. 至少5位評分者全部完成後，管理者結束批次並查看 variant、成本、P50／P95及品質分數。
-6. 匯出 CSV／JSON；評測結束可刪除本批次所有真人縮圖而保留生成與評分資料。
+5. 完成單人服裝／人物精緻度與10人群體物種一致性評分。
+6. 至少5位評分者全部完成後，管理者結束批次並查看 variant、成本、P50／P95及品質分數。
+7. 匯出 CSV／JSON；評測結束可刪除本批次所有真人縮圖而保留生成與評分資料。
 
 最終評估不只看成功率，而是同時比較：
 
@@ -286,9 +305,20 @@ SQLite 每次 attempt 可記錄：
 
 | Profile | 預設判定 | 顯示倍率 | 模式一軀幹 Y | 模式一腿部 Y |
 |---|---:|---:|---:|---:|
-| `short` | `< 0.72` | 0.90 | 0.96 | 0.90 |
-| `medium` | `0.72–0.84` | 1.00 | 1.00 | 1.00 |
-| `tall` | `> 0.84` | 1.10 | 1.02 | 1.12 |
+| `short` | `< 0.95` | 0.90 | 0.96 | 0.90 |
+| `medium` | `0.95–1.05` | 1.00 | 1.00 | 1.00 |
+| `tall` | `> 1.05` | 1.10 | 1.02 | 1.12 |
+
+門檻看起來接近 1.0 是對的：拍攝引導框放大後，中等身高的人約佔畫面 90%，
+而 `height_ratio` 是對著那條 90% 的校準跨距量的，所以置中的中等身高接近
+1.0 而不是 0.8（見 `backend/height_profiles.py` 的註解）。
+
+> [!WARNING]
+> **`.env.example` 裡的 `HEIGHT_SHORT_MAX_RATIO=0.72` / `HEIGHT_TALL_MIN_RATIO=0.84`
+> 是引導框放大前的舊值，與程式預設（0.95／1.05）不一致。** 照著
+> `.env.example` 複製一份 `.env` 就會套用舊門檻，結果是幾乎所有人都被判成
+> `tall` —— 而這不會報錯，只會讓角色比例集體偏高。要嘛刪掉 `.env` 裡這兩行
+> 改用程式預設，要嘛依現場校正後填入新值。
 
 正式展示前需依現場相機位置、焦距、站立距離與地面線重新校正門檻。
 
@@ -327,7 +357,8 @@ PersonaFlow/
 │   ├── reference_bleed.py      # 參考圖滲漏偵測
 │   ├── identity_fidelity.py    # 個體特徵保真度量測
 │   ├── avatar_quality.py       # 本機生成圖 validator
-│   ├── capture_quality.py      # 拍攝站位與穩定度規則
+│   ├── clean_reference_bg.py   # 把風格參考圖的背景與地面投影壓成純白
+│   ├── capture_quality.py      # 拍攝站位、穩定度與臉部清晰度規則
 │   ├── detail_quality.py       # 最終畫面細節指標
 │   ├── generation_history.py   # SQLite run／attempt／人工審查
 │   ├── blind_review.py         # 外部結果匯入與多人匿名盲評
@@ -386,49 +417,29 @@ PersonaFlow/
 └── requirements-dev.txt
 ```
 
-## 快速啟動
+## 快速啟動（2D 備援版）
+
+> 主線（整合版）的啟動見本文件開頭的〈整合現況〉。這一節是備援版。
 
 以下指令皆從專案根目錄執行。
 
 ### 1. 安裝依賴與環境設定
 
-```powershell
-pip install -r requirements.txt
-Copy-Item .env.example backend\.env
+```bash
+pip install -r requirements.txt requirements-dev.txt
+cp .env.example .env          # 填入你的 API key
 ```
 
-在 `backend/.env` 填入 API key 與模型設定。**不要提交 `.env`。**
+**不要提交 `.env`。** 根目錄與 `backend/.env` 兩處都會被讀到（`load_dotenv()`
+以 `backend/app.py` 為起點往上尋找），兩處都有時**根目錄版本優先**。
 
-放在專案根目錄的 `.env` 同樣有效：`app.py` 會先讀根目錄那份，再由
-`load_dotenv()` 以 `backend/app.py` 為起點往上尋找，因此 `backend/.env`
-也會被載入。兩處都有時，先載入的根目錄版本優先。
-
-### 2. 啟動後端
-
-```powershell
-python backend/app.py
-```
-
-後端位於 `http://127.0.0.1:5001`。
-
-### 3. 啟動前端
-
-```powershell
-python -m http.server 8000 --directory frontend
-```
-
-開啟主操作頁：
-
-```powershell
-Start-Process 'http://127.0.0.1:8000/index.html'
-```
-
-### 一鍵啟動（macOS／Linux）
+### 2. 一鍵啟動
 
 ```bash
-cp .env.example .env          # 填入你的 API key
-bash start.sh                 # 同時啟動後端與前端，並顯示 LAN IP
+bash start-2d.sh              # 後端 :5001 + 前端靜態伺服器 :8080
 ```
+
+只啟動其中一半：`bash start-2d.sh --backend` 或 `bash start-2d.sh --frontend`。
 
 啟動後終端會顯示 LAN IP，現場手機／平板可直接用該 IP 連入互動端。
 
@@ -450,8 +461,9 @@ bash start.sh                 # 同時啟動後端與前端，並顯示 LAN IP
 | `GEMINI_API_KEY` | 空 | 可選語意分析 |
 | `VLM_MODEL` | `gemini-3.6-flash` | 服裝／臉部語意辨識模型；Google 讓舊 id 退役時要改這裡 |
 | `CHARACTER_STYLE` | `lego` | 活動層級預設風格（`lego`／`pixar`）；參與者可在拍照頁改選 |
-| `HEIGHT_SHORT_MAX_RATIO` | `0.72` | short／medium 分界 |
-| `HEIGHT_TALL_MIN_RATIO` | `0.84` | medium／tall 分界 |
+| `HEIGHT_SHORT_MAX_RATIO` | `0.95` | short／medium 分界（**`.env.example` 仍寫 0.72，見下方註**） |
+| `HEIGHT_TALL_MIN_RATIO` | `1.05` | medium／tall 分界（**`.env.example` 仍寫 0.84**） |
+| `STYLE_REFERENCE_MODE` | `sheet` | 設 `off` 可退回不送風格參考圖的送法做對照實驗 |
 | `DEV_HISTORY_ENABLED` | `1` | 啟用 SQLite 生成歷史 |
 | `DEV_HISTORY_SAVE_OUTPUTS` | `1` | 保存每次 AI attempt 的生成 PNG |
 | `METRICS_ENABLED` | `1` | 啟用匿名 JSONL metrics |
@@ -473,8 +485,11 @@ bash start.sh                 # 同時啟動後端與前端，並顯示 LAN IP
 
 ## 測試
 
-```powershell
-python -m unittest discover -s backend\tests -v
+```bash
+pytest backend/                # Python 482
+npm test                       # 整合版 Node 369 + 5
+npm run test:e2e               # 端對端 128
+node --test frontend/tests/    # 2D 前端 4
 ```
 
 目前自動測試涵蓋：
@@ -492,7 +507,9 @@ python -m unittest discover -s backend\tests -v
 - 事件 log 落地、併發寫入與隱私遮除。
 - Boids 分房隔離、swarm 快照還原與大合照合成。
 
-目前共有 299 項後端測試與 4 項前端測試。這些測試涵蓋程式契約、資料介面與錯誤阻擋；**不代表角色外觀已通過人工視覺驗收。**
+目前共有 482 項 Python 測試、369+5 項整合版 Node 測試、128 項端對端測試與
+4 項 2D 前端測試。這些測試涵蓋程式契約、資料介面與錯誤阻擋；
+**不代表角色外觀已通過人工視覺驗收。**
 
 ## 已知限制與下一步
 
@@ -501,6 +518,11 @@ python -m unittest discover -s backend\tests -v
 - **幾何一致性失去免費保證**：移除固定 3D 網格後，「兩隻手、兩條腿、比例一致」要靠 prompt 與 `avatar_quality.py` 的結構檢查去爭取；多肢問題會回來。
 - **個體特徵部分流失**：服裝顏色走 CV 量測，但膚色髮色仍被 VLM 量化成 6–8 個桶，抹平個體差異。
 - **漂移數字尚未累積**：`style_probe.py` 已把 `fingerprint_spread` 接上真實輸出，但要有足夠批量的生成結果才能回答「這批角色有多不一致」。
+- **畫質天花板在解析度，不在 prompt**：手機直拍經過裁切與正方形補白後，
+  進模型的臉只剩約 85 像素。已把相機請求提高到 1440×2560、上傳長邊提高到
+  2048，但**正方形補白仍浪費約 76% 的畫布**（瘦長的人補成正方形）。
+  改送 9:16 直式輸入可讓有效像素提升 3–4 倍，尚未做 —— 它會改變模型的構圖
+  行為，而 `slicer.CUTS` 依賴生成圖比例穩定，動之前必須配 `validate_cuts` 一起驗。
 - **效能瓶頸**：50／100人 FPS 尚未完成正式量測。
 - 拍攝品質閘門與身高門檻仍需固定攝影站實測校正。
 - 本機 validator 能判斷格式與部分結構，不能可靠判斷是否像本人或是否達到目標參考圖。
