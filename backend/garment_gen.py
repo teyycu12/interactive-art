@@ -474,27 +474,25 @@ def _remove_white_background(png_b64: str, tolerance: int = 18, shield_mask: Opt
         transparent = arr[:, :, 3] <= 5
         exterior_candidate = near_white | transparent
 
-        # BFS from the border so logos / interior white stay opaque.
-        from collections import deque
-        visited = np.zeros((h, w), dtype=bool)
-        q: deque = deque()
-        for x in range(w):
-            for y in (0, h - 1):
-                if exterior_candidate[y, x] and not visited[y, x]:
-                    visited[y, x] = True
-                    q.append((y, x))
-        for y in range(h):
-            for x in (0, w - 1):
-                if exterior_candidate[y, x] and not visited[y, x]:
-                    visited[y, x] = True
-                    q.append((y, x))
-        while q:
-            y, x = q.popleft()
-            for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                ny, nx = y + dy, x + dx
-                if 0 <= ny < h and 0 <= nx < w and not visited[ny, nx] and exterior_candidate[ny, nx]:
-                    visited[ny, nx] = True
-                    q.append((ny, nx))
+        # Keep only the exterior components that touch the border, so logos /
+        # interior white stay opaque.  This is a connected-component labelling,
+        # not a hand-rolled BFS: the pure-Python queue below visited every
+        # background pixel one at a time, which on the images this function
+        # actually receives (a figure on a white 1024x1024 canvas, where the
+        # fill spans most of the frame) cost ~0.5s per character -- paid on
+        # every generation, on the path a guest is standing there waiting for.
+        # cv2 is already a dependency and ``_drop_detached_islands`` below uses
+        # the same primitive.  4-connectivity and the border seeds reproduce
+        # the old traversal exactly; verified pixel-identical on both generated
+        # canvases and the sample photos.
+        labels_count, labels = cv2.connectedComponents(
+            np.ascontiguousarray(exterior_candidate.astype(np.uint8)), connectivity=4,
+        )
+        border_labels = np.unique(np.concatenate([
+            labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1],
+        ]))
+        border_labels = border_labels[border_labels != 0]  # 0 is the non-candidate area
+        visited = np.isin(labels, border_labels) & exterior_candidate
         removed = visited & near_white
         arr[removed, 3] = 0  # punch transparency
 
@@ -796,6 +794,13 @@ _PIXAR_NEGATIVE = (
     "and NO shadow, contact shadow or reflection cast onto the background - "
     "every pixel outside the figure must be pure solid white #FFFFFF, completely "
     "uniform. Shading ON the figure itself is required; see the art style rules. "
+    # 「地面不存在」必須與「背景是白的」分開講。只說後者時，模型可以自洽地
+    # 理解成「有一個白色地板，影子落在白地板上，所以影子不算 background」——
+    # 生出來的圖腳下就帶著一片灰色投影，而 _remove_white_background 的
+    # flood-fill 走不進灰階，那片影子會原封不動留到手機的確認畫面上。
+    "The figure FLOATS against emptiness with NO ground plane whatsoever: "
+    "NO floor, NO horizon line, NO gradient, NO vignette, NO tonal falloff. "
+    "The pure white #FFFFFF extends unbroken to all four edges of the canvas. "
     "NO plaid/tartan/checkered squares unless the photo clearly shows them, "
     "NO patchwork, NO sewn-on badges, NO pocket stickers, NO logos. "
     "NEVER omit shoes — both feet must always wear visible shoes. "

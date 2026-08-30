@@ -806,7 +806,10 @@ export class RoomScene {
   }
 
   render() {
-    const delta = this.clock.getDelta();
+    // getElapsedTime() 內部就會呼叫 getDelta()（見 three 的 Clock），
+    // 因此這裡不需要、也不該另外取一次 delta —— 取了不用只會讓人以為
+    // 這個迴圈是 delta-based 的。動畫一律吃 elapsed（絕對時間），
+    // 掉幀時相位不會跟著漂。
     const elapsed = this.clock.getElapsedTime();
 
     this.controls.update();

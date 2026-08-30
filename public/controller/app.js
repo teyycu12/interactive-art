@@ -441,6 +441,15 @@ function showScanPhase(phase) {
 const PREVIEW_INTERVAL_MS = 250;
 /** 引導用的長邊。CV 端還會再縮到 360，送更大只是浪費上行頻寬 */
 const PREVIEW_MAX_EDGE = 360;
+/**
+ * 送去生成的長邊。
+ *
+ * 2048 是為了餵飽生圖模型（見 cropToPortraitJpeg 的註解）；
+ * CAPTURE_FALLBACK_EDGE 是場館網路不通時的退路 —— FIELD-OPS 已記錄過
+ * 展場網路是已知風險，而「照片太大送不出去」對參與者的體感等同於系統壞了。
+ */
+const CAPTURE_MAX_EDGE = 2048;
+const CAPTURE_FALLBACK_EDGE = 1280;
 /** 連續幾張空影格才提示 —— 剛開鏡頭時空一兩張是正常的 */
 const BLANK_FRAME_WARN = 12;
 
@@ -648,7 +657,10 @@ async function openCamera() {
   showScanPhase('aim');
   try {
     scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 720 }, height: { ideal: 1280 } },
+      // ideal 而非 exact：拿不到就退到次好的，舊機不會因此開不了相機。
+      // 要得比從前高，是因為送進生圖模型的臉只有 ~85px（見 GENERATION.md
+      // 「進模型的臉只有 85 像素」），而請求 720×1280 等於在最源頭就把細節丟掉。
+      video: { facingMode: 'environment', width: { ideal: 1440 }, height: { ideal: 2560 } },
       audio: false,
     });
     $('#scan-video').srcObject = scanStream;
@@ -715,7 +727,8 @@ $('#upload-input')?.addEventListener('change', async (e) => {
   // 讓串流繼續跑只是白耗電。
   stopScanStream();
   const image = cropToPortraitJpeg(img, img.naturalWidth, img.naturalHeight);
-  await submitScanImage(image);
+  await submitScanImage(image, () =>
+    cropToPortraitJpeg(img, img.naturalWidth, img.naturalHeight, CAPTURE_FALLBACK_EDGE, 0.85));
 });
 
 /** 讀取本機圖片檔成 <img>。用完必須釋放 objectURL，否則整張原檔會留在記憶體裡。 */
@@ -782,9 +795,13 @@ $('#btn-capture').addEventListener('click', async () => {
   stage.classList.add('shutter');
 
   const image = cropToPortraitJpeg(video, video.videoWidth, video.videoHeight);
+  // 縮圖版必須在關掉串流「之前」就編好：stopScanStream() 之後 <video> 不再
+  // 有畫面，退路那一刻再去讀就只會拿到空白影格。
+  const smaller = cropToPortraitJpeg(video, video.videoWidth, video.videoHeight,
+                                     CAPTURE_FALLBACK_EDGE, 0.85);
 
   stopScanStream();
-  await submitScanImage(image);
+  await submitScanImage(image, () => smaller);
 });
 
 /**
@@ -793,7 +810,7 @@ $('#btn-capture').addEventListener('click', async () => {
  * 相機與相簿上傳共用這一份：兩者送進 /api/generate 的格式必須一致，
  * 否則後端 slicer 的切片比例會對不上其中一邊（見 CLAUDE.md 的跨語言耦合）。
  */
-function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85) {
+function cropToPortraitJpeg(source, sw0, sh0, maxEdge = CAPTURE_MAX_EDGE, quality = 0.92) {
   // 裁切成 9:16 長方細長型：聚焦在人物，捨棄無用的左右背景，減少 API 負擔與上傳成本
   const TARGET_RATIO = 9 / 16;
   let sx = 0, sy = 0, sw = sw0, sh = sh0;
@@ -806,9 +823,13 @@ function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85) {
     sy = (sh0 - sh) / 2;
   }
 
-  // 長邊限制在 maxEdge（拍攝 1280），再大只是讓上傳變慢，生圖模型看到的
-  // 解析度並不會因此提升。上傳的相簿原檔可能是好幾千萬畫素，這一步同時
-  // 把它壓回伺服器收得下的大小。站位引導用小很多的尺寸，見 previewTick()。
+  // 長邊限制在 maxEdge。這裡從 1280 提高到 2048，原本那句「再大只是讓上傳
+  // 變慢，生圖模型看到的解析度並不會因此提升」在正方形裁切引入後已不成立：
+  // garment_gen._crop_square_padded() 會把約 1658px 的來源降採樣到 1024，
+  // 來源越大這一步的品質越好。實測 1440×2560 的直拍在 2048/0.92 下約 133KB
+  // base64，遠低於 httplayer 的 MAX_PHOTO_BYTES（12MB），空間充足。
+  // 上傳的相簿原檔可能是好幾千萬畫素，這一步同時把它壓回伺服器收得下的
+  // 大小。站位引導用小很多的尺寸，見 previewTick()。
   const scale = Math.min(1, maxEdge / Math.max(sw, sh));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(sw * scale);
@@ -818,8 +839,14 @@ function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85) {
   return canvas.toDataURL('image/jpeg', quality);
 }
 
-/** 送出照片並走完生成流程。相機與上傳共用。 */
-async function submitScanImage(image) {
+/**
+ * 送出照片並走完生成流程。相機與上傳共用。
+ *
+ * shrink：把同一張照片重編成較小尺寸的函式。照片提高到 2048 之後，
+ * 場館網路不通或伺服器嫌檔案太大時，先自動用縮圖重試一次再談失敗 ——
+ * 這條路徑上的失敗代價是參與者白等一輪，不值得為了畫質賭上去。
+ */
+async function submitScanImage(image, shrink = null) {
   // 凍結送出的那張照片留在取景框裡 —— 等待的 25 秒有東西可看，
   // 也讓人知道系統正在處理的是哪一張。
   $('#scan-video').hidden = true;
@@ -830,18 +857,33 @@ async function submitScanImage(image) {
 
   const stopProgress = startScanProgress();
 
-  let body;
-  try {
+  const post = async (payload) => {
     const res = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // sessionId：取景期間跨影格量到的身高比快門那一瞬間的單張估計可信，
       // 後端會優先採用它。相簿上傳沒有取景階段，因此是 null。
       // styleId：選單沒載入時是 null，後端會退回活動層級的預設風格。
-      body: JSON.stringify({ image, sessionId: previewSessionId, styleId: selectedStyleId }),
+      body: JSON.stringify({ image: payload, sessionId: previewSessionId, styleId: selectedStyleId }),
     });
-    body = await res.json();
+    return res.json();
+  };
+
+  let body;
+  try {
+    body = await post(image);
   } catch {
+    body = null;
+  }
+  // 連不上或伺服器嫌太大 —— 兩者都可能只是這張照片變大造成的，用縮圖再試一次。
+  if (shrink && (body === null || body?.error === 'photo_too_large')) {
+    try {
+      body = await post(shrink());
+    } catch {
+      body = null;
+    }
+  }
+  if (body === null) {
     stopProgress();
     showScanFailure('生成服務連不上。');
     return;

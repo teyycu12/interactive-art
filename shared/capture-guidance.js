@@ -54,6 +54,7 @@ export function captureIndicators(features) {
     { key: 'pose', label: '姿勢', ok: checks.pose ?? rawReady },
     { key: 'feet', label: '雙腳', ok: checks.feet ?? rawReady },
     { key: 'framing', label: '構圖', ok: checks.framing ?? rawReady },
+    { key: 'clarity', label: '清晰', ok: features?.capture_quality?.sharpness_ok ?? true },
     { key: 'station', label: '站位', ok: heightStationPassed(features) },
     { key: 'height', label: '身高', ok: !!features?.height_measurement_ready },
     {
@@ -83,6 +84,9 @@ export function captureGuidanceText(features, readyText = '✓ 全身已入鏡')
     return `全身已入鏡，請保持不動 (${features?.stability_count || 0}/${features?.stability_required || 3})`;
   }
   if (reason === 'move_closer') return '人物佔畫面太小，請向前一步';
+  // 站位都對了、只是手震或失焦。講「請站穩」而不是「照片模糊」——
+  // 前者說得出下一步該做什麼，後者只是把結果重述一次。
+  if (reason === 'too_blurry') return '畫面有點晃，請站穩不動再拍一次';
   if (reason === 'align_height_baseline') {
     const offset = Number(features?.foot_baseline_offset ?? quality?.foot_baseline_offset);
     const detail = Number.isFinite(offset) ? `（目前相差 ${(offset * 100).toFixed(1)}%）` : '';

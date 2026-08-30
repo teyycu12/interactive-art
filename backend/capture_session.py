@@ -114,9 +114,21 @@ def update(live: Dict[str, Any], features: Dict[str, Any],
     features["stability_required"] = STABLE_FRAMES
     features["landmark_displacement"] = round(displacement, 5) if displacement is not None else None
     features["stability_average"] = round(average, 5) if average is not None else None
-    features["capture_ready"] = raw_ready and stable_count >= STABLE_FRAMES and height_ready
+    # 清晰度只在「其他都站好了」之後才擋人。模糊與姿勢不同：它靠站穩重拍就能
+    # 解決，太早提示只會蓋掉「請露出雙腳」那類更該先處理的訊息。
+    # sharpness 量不到時 sharpness_ok 預設為 True —— 量不到就擋人，
+    # 等於把降級路徑變成死路（見 CLAUDE.md「掃描失敗一律降級，不擋人進場」）。
+    sharp_ok = True
+    if isinstance(quality, dict):
+        sharp_ok = bool(quality.get("sharpness_ok", True))
+
+    features["capture_ready"] = (
+        raw_ready and stable_count >= STABLE_FRAMES and height_ready and sharp_ok
+    )
     if features["capture_ready"]:
         features["guidance_reason"] = "ready"
+    elif raw_ready and stable_count >= STABLE_FRAMES and height_ready and not sharp_ok:
+        features["guidance_reason"] = "too_blurry"
     elif raw_ready:
         features["guidance_reason"] = "hold_still"
     return features

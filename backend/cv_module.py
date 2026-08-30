@@ -18,9 +18,13 @@ import cv2
 import numpy as np
 
 try:
-    from backend.capture_quality import assess_capture_quality, height_metadata  # type: ignore
+    from backend.capture_quality import (  # type: ignore
+        assess_capture_quality, face_sharpness, height_metadata, sharpness_verdict,
+    )
 except Exception:
-    from capture_quality import assess_capture_quality, height_metadata  # type: ignore
+    from capture_quality import (  # type: ignore
+        assess_capture_quality, face_sharpness, height_metadata, sharpness_verdict,
+    )
 
 try:
     from mediapipe import Image, ImageFormat
@@ -622,6 +626,10 @@ def get_clothing_features(
     }
 
     capture_quality = assess_capture_quality(lm, person_bbox=person_bbox)
+    # 只量測、不裁決。清晰度要在「其他條件都過了」之後才有意義，而那個判定
+    # 在 capture_session.update() —— 這裡的 guidance_reason 最多只到
+    # hold_still，還沒輪到 ready。
+    capture_quality.update(sharpness_verdict(face_sharpness(resized, regions.get("face"))))
     left_foot_y = max(float(lank[1]), float(lheel[1]), float(lfoot[1]))
     right_foot_y = max(float(rank[1]), float(rheel[1]), float(rfoot[1]))
     height_info = height_metadata(person_bbox, foot_y=(left_foot_y + right_foot_y) / 2.0)

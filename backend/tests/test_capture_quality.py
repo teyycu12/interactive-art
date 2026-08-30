@@ -1,8 +1,15 @@
+import glob
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from backend.capture_quality import assess_capture_quality, height_metadata, mean_landmark_displacement
+import cv2
+
+from backend.capture_quality import (
+    SHARPNESS_MIN, assess_capture_quality, face_sharpness, height_metadata,
+    mean_landmark_displacement, sharpness_verdict,
+)
 from backend.height_profiles import classify_height, get_height_profile
 
 
@@ -125,3 +132,46 @@ class CaptureQualityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFaceSharpness(unittest.TestCase):
+    """清晰度量測。門檻的意義完全取決於正規化，兩者要一起驗。"""
+
+    @staticmethod
+    def _photo():
+        paths = sorted(glob.glob(str(Path(__file__).resolve().parents[1] / "photos" / "*.png")))
+        if not paths:
+            raise unittest.SkipTest("沒有樣本照片可用")
+        return cv2.imread(paths[0])
+
+    REGION = {"x1": 0.30, "y1": 0.05, "x2": 0.70, "y2": 0.30}
+
+    def test_sharp_photo_scores_far_above_the_threshold(self):
+        score = face_sharpness(self._photo(), self.REGION)
+        self.assertIsNotNone(score)
+        self.assertGreater(score, SHARPNESS_MIN * 3)
+
+    def test_heavy_blur_falls_below_the_threshold(self):
+        blurred = cv2.GaussianBlur(self._photo(), (9, 9), 0)
+        score = face_sharpness(blurred, self.REGION)
+        self.assertIsNotNone(score)
+        self.assertLess(score, SHARPNESS_MIN)
+
+    def test_score_is_normalised_against_crop_size(self):
+        """不正規化的話，同一張臉在不同解析度下差一個數量級，門檻換支手機就失效。"""
+        photo = self._photo()
+        big = face_sharpness(photo, self.REGION)
+        small = face_sharpness(cv2.resize(photo, (photo.shape[1] // 3, photo.shape[0] // 3)), self.REGION)
+        self.assertIsNotNone(big)
+        self.assertIsNotNone(small)
+        self.assertTrue(0.5 < small / big < 2.0, f"{small} vs {big}")
+
+    def test_unmeasurable_input_returns_none_rather_than_failing(self):
+        self.assertIsNone(face_sharpness(None, self.REGION))
+        self.assertIsNone(face_sharpness(self._photo(), None))
+
+    def test_verdict_treats_unmeasured_as_passing(self):
+        """量不到就擋人，等於把降級路徑變成死路。"""
+        self.assertTrue(sharpness_verdict(None)["sharpness_ok"])
+        self.assertFalse(sharpness_verdict(SHARPNESS_MIN - 1)["sharpness_ok"])
+        self.assertTrue(sharpness_verdict(SHARPNESS_MIN + 1)["sharpness_ok"])

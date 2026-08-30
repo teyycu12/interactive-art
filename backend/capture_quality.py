@@ -265,3 +265,59 @@ def height_metadata(person_bbox: Optional[Dict[str, float]], foot_y: Optional[fl
         "measured_foot_y": round(measured_foot_y, 4) if measured_foot_y is not None else None,
         "foot_baseline_offset": round(baseline_offset, 4) if baseline_offset is not None else None,
     }
+
+
+# ── 清晰度 ────────────────────────────────────────────────────────────────
+#
+# 拍攝檢查原本只驗「姿勢與框位」，完全沒有驗清晰度：一張手震的照片會通過
+# 每一項檢查，然後生出一個模糊的角色 —— 參與者等了 25 秒、也付了一次生圖
+# 費用，才看到結果不能用。在拍攝當下擋下來，比任何 prompt 調整都有效。
+#
+# 量測放在臉部而不是整張圖：背景雜亂會把整張圖的變異數推高，把手震蓋過去，
+# 而臉正是模糊最傷的地方（見 GENERATION.md「進模型的臉只有 85 像素」）。
+
+# Laplacian 變異數會隨取樣尺寸大幅變動（同一張臉在 288px 與 60px 下相差
+# 一個數量級），所以先正規化到固定邊長再算，否則門檻換一支手機就失效。
+SHARPNESS_NORM_PX = 192
+# 實測值：清晰約 700，輕微模糊（高斯 k=3）約 225，嚴重模糊（k=9）低於 30。
+# 門檻取 60 —— 明顯低於任何可用的照片，只擋真正糊掉的那些。
+SHARPNESS_MIN = 60.0
+
+
+def face_sharpness(bgr: Any, face_region: Optional[Dict[str, float]]) -> Optional[float]:
+    """臉部區域的 Laplacian 變異數，正規化到固定尺寸。
+
+    回傳 None 代表「量不到」（沒有臉框、裁切為空、OpenCV 不可用），
+    呼叫端必須把它當成「未量測」而不是「不合格」—— 量不到就擋人，
+    等於把降級路徑變成死路。
+    """
+    if bgr is None or not face_region:
+        return None
+    try:
+        import cv2 as _cv2
+        import numpy as _np
+
+        height, width = bgr.shape[:2]
+        x1 = max(0, min(width - 1, int(float(face_region.get("x1", 0.0)) * width)))
+        y1 = max(0, min(height - 1, int(float(face_region.get("y1", 0.0)) * height)))
+        x2 = max(x1 + 1, min(width, int(float(face_region.get("x2", 1.0)) * width)))
+        y2 = max(y1 + 1, min(height, int(float(face_region.get("y2", 1.0)) * height)))
+        crop = bgr[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        norm = _cv2.resize(crop, (SHARPNESS_NORM_PX, SHARPNESS_NORM_PX), interpolation=_cv2.INTER_AREA)
+        grey = _cv2.cvtColor(norm, _cv2.COLOR_BGR2GRAY) if norm.ndim == 3 else norm
+        return float(_np.asarray(_cv2.Laplacian(grey, _cv2.CV_64F)).var())
+    except Exception:
+        return None
+
+
+def sharpness_verdict(score: Optional[float], minimum: float = SHARPNESS_MIN) -> Dict[str, Any]:
+    """把清晰度分數翻成可以直接併進 capture_quality 的欄位。"""
+    if score is None:
+        return {"sharpness": None, "sharpness_ok": True}
+    return {
+        "sharpness": round(score, 1),
+        "sharpness_ok": score >= minimum,
+        "sharpness_min": minimum,
+    }

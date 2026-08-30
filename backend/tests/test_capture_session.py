@@ -175,3 +175,52 @@ class TestSessionStore:
         for _ in range(40):
             store.put(store.new_id(), new_session())
         assert len(store) <= 8
+
+
+class TestSharpnessGate:
+    """模糊只在「其他都站好了」之後才擋人。
+
+    這個順序是刻意的：模糊靠站穩重拍就能解決，太早提示會蓋掉
+    「請露出雙腳」那類更該先處理的訊息。
+    """
+
+    def _settle(self, sharp_ok=None):
+        live = new_session()
+        quality = {"capture_checks": {}}
+        if sharp_ok is not None:
+            quality["sharpness_ok"] = sharp_ok
+        features = None
+        for _ in range(8):
+            f = frame(height_ratio=0.50)
+            f["height_station_valid"] = True
+            f["capture_quality"] = dict(quality)
+            features = update(live, f, 0.0, classify_height=lambda r: "mid")
+        return features
+
+    def test_sharp_capture_is_ready(self):
+        features = self._settle(sharp_ok=True)
+        assert features["capture_ready"] is True
+        assert features["guidance_reason"] == "ready"
+
+    def test_blurry_capture_is_blocked_with_actionable_guidance(self):
+        """擋下來的理由要說得出下一步，否則參與者只會反覆按同一個鍵。"""
+        features = self._settle(sharp_ok=False)
+        assert features["capture_ready"] is False
+        assert features["guidance_reason"] == "too_blurry"
+
+    def test_unmeasured_sharpness_never_blocks(self):
+        """量不到就擋人，等於把降級路徑變成死路（CLAUDE.md：一律降級不擋人）。"""
+        features = self._settle(sharp_ok=None)
+        assert features["capture_ready"] is True
+        assert features["guidance_reason"] == "ready"
+
+    def test_blur_does_not_preempt_a_pose_problem(self):
+        """站姿還沒過的時候，訊息要留給站姿，不能被模糊蓋掉。"""
+        live = new_session()
+        f = frame(ready=False, height_ratio=0.50)
+        f["capture_quality"] = {"capture_checks": {}, "sharpness_ok": False}
+        features = update(live, f, 0.0, classify_height=lambda r: "mid")
+        assert features["capture_ready"] is False
+        # raw_ready 未過時 update() 不覆寫 guidance_reason，交給上游那份
+        # （cv_module 的 pose_incomplete / show_feet 等）——重點是別變成 too_blurry。
+        assert features.get("guidance_reason") != "too_blurry"
