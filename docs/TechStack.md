@@ -1,5 +1,11 @@
 # 數位轉譯角色空間互動系統 - 技術架構文件 (TechStack)
 
+> [!WARNING]
+> **本文成稿於 2D 備援版仍存在的時期。** `backend/app.py`、`frontend/`、
+> `swarm_logic.py` 等已於 2026-09-10 整套移除，文中指向它們的檔案路徑、
+> 行號連結與架構圖層都不再對應現行程式碼。現行架構見
+> [CLAUDE.md](../CLAUDE.md) 與 [docs/notes/STRUCTURE.md](notes/STRUCTURE.md)。
+
 ## 1. 技術架構圖層
 系統採用四層式架構設計：
 1. **感知層 (Perception)**: Python (MediaPipe/OpenCV)

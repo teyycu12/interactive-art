@@ -6,8 +6,7 @@
 ```
 /PersonaFlow
 ├── /backend
-│   ├── app.py                    # 2D 備援版 Flask／Socket.io、生成併發閘門與開發 API
-│   ├── service.py                # ★ 整合版角色資產生成 HTTP 服務（只綁 127.0.0.1:5055）
+│   ├── service.py                # ★ 角色資產生成 HTTP 服務（只綁 127.0.0.1:5055）
 │   ├── slicer.py                 # ★ 生成圖正規化 + 切成 head/torso/legs 三張貼圖
 │   ├── validate_cuts.py          # ★ 切片比例穩定度驗證工具
 │   ├── config.py                 # 集中式環境設定（型別轉換與驗證，單一 config 物件）
@@ -28,27 +27,19 @@
 │   ├── capture_session.py        # ★ 跨影格的可拍攝判定（站位引導的時序邏輯）
 │   ├── detail_quality.py         # 最終畫面細節指標
 │   ├── height_profiles.py        # short／medium／tall 身高校正
-│   ├── swarm_logic.py            # Boids 群聚演算法（2D 備援版用；整合版走 server/boids.js）
-│   ├── swarm_snapshot.py         # swarm 狀態持久化，重啟自動還原
 │   ├── photo_composer.py         # 大合照合成（LEGO 排版、QR Code、中文字型後備鏈）
-│   ├── bot_simulator.py          # 壓測用虛擬角色注入／移除
 │   ├── circuit_breaker.py        # 外部 API 熔斷器與退避重試
 │   ├── generation_history.py     # SQLite 生成紀錄、Token、成本與快速審查
-│   ├── blind_review.py           # 外部結果匯入、原照縮圖與多人匿名盲評
 │   ├── metrics_logger.py         # 匿名流程指標與輪替紀錄
 │   ├── event_logger.py           # 結構化事件 log 落地（JSON lines，隱私遮除影像）
 │   ├── analyze_log.py            # 效能指標分析（延遲／失敗率）
 │   ├── report_html.py            # HTML 效能報告產生器
-│   ├── stress_test.py            # 承載量壓測工具
-│   ├── bench_generate.py         # 生成延遲基準線量測
-│   ├── e2e_smoke.py              # 端到端煙霧測試（對真的跑起來的後端走完整流程）
 │   ├── pytest.ini                # 測試設定（testpaths／pythonpath）
 │   ├── /models                   # MediaPipe／分割模型資產
-│   ├── /tests                    # pytest：CV、生成、規格、歷史、盲評與 Socket handler
+│   ├── /tests                    # pytest：CV、生成、規格、歷史與風格 registry
 │   └── /logs                     # 執行期資料；gitignored，不提交版本庫
 │       ├── generation_history.sqlite3
 │       ├── /generated            # AI attempt 與最終角色快照
-│       └── /review_sources       # 經同意、去 EXIF 的評測縮圖，可批次刪除
 ├── /server                       # ★ 整合版互動層（Node.js）
 │   ├── index.js                  # Gateway：WebSocket 生命週期、30Hz 主迴圈、TLS 啟動
 │   ├── httplayer.js              # ★ HTTP 層：靜態資源與生成服務代理（與場域狀態無關）
@@ -67,26 +58,13 @@
 │   ├── colorFamily.js            # ★ 顏色分族（COLOR_HUNT 任務，三端共用）
 │   ├── heat.js                   # ★ 尋寶冷熱等級與判定半徑（三端共用）
 │   └── scene.js                  # 場景障礙物佈局
-├── /public                       # ★ 整合版前端
+├── /public                       # ★ 前端
 │   ├── controller/               # 手機端：拍照生成／捏臉（備援）、搖桿、任務
 │   ├── screen/                   # 大螢幕
 │   │   └── 3d/RoomScene.js       # three.js 房間場景
 │   ├── host/                     # 主辦端控制台
 │   └── assets/gen/               # 生成貼圖落地處（gitignored，每場重新產生）
-├── /frontend                     # 2D 備援版前端
-│   ├── index.html                # 拍攝與生成主操作頁
-│   ├── sketch.js                 # p5.js 畫面、狀態與拍攝流程（只放渲染）
-│   ├── character.js              # class Character（角色資料模型）與組件繪製
-│   ├── socket.js                 # Socket.io 前後端事件橋接（自動偵測 LAN）
-│   ├── projection.html           # 2D sprite 群聚投影牆（PixiJS，自有格柵實作）
-│   ├── dev.html                  # 生成歷史、成本、外部匯入與盲評操作台
-│   ├── package.json              # 只做一件事：把此目錄標回 CommonJS（見 SERVER-AND-TESTS.md）
-│   ├── /themes
-│   │   ├── lego.js               # LEGO 主題渲染
-│   │   └── registry.js           # 前端主題註冊表
-│   ├── /tests                    # Node 內建測試執行器（harness.js 提供 p5 樁）
-│   └── wedding_bg.png            # 投影背景素材
-├── /test                         # ★ 整合版 Node 單元測試（node --test）
+├── /test                         # ★ Node 單元測試（node --test）
 ├── /samples                      # validate_cuts.py 的樣本照片（不是測試套件，見其 README）
 ├── /scripts
 │   ├── e2e.mjs                   # ★ 端對端測試（會自行啟動伺服器）
@@ -94,7 +72,7 @@
 │   ├── scene-preview.mjs         # ★ 場景離線預覽
 │   └── ...                       # 參考圖集與髮色取樣的離線檢查工具
 ├── /docs
-│   ├── INTERFACES.md             # Socket.io 事件與 payload 介面規格
+│   ├── INTERFACES.md             # 已移除的 2D 版 Socket.io 介面規格（僅存歷史）
 │   ├── STYLE_BASE.md             # 基底風格標準與量測方法
 │   ├── STYLE_PROBE_FOLLOWUPS.md  # 已知但刻意延後的量測與管線細節
 │   ├── TECHNICAL_ARCHITECTURE.md # 技術架構文件
@@ -104,9 +82,9 @@
 │   ├── TechStack.md              # 技術選型
 │   ├── /m3                       # M3 交接說明與效能報告
 │   └── /style_reference          # 風格參考圖集（含圖檔，見 PROVENANCE.md）
-├── /.github/workflows/ci.yml     # CI：前端 Node 測試＋整合版 npm test＋後端 pytest
-├── package.json                  # ★ 整合版 Node 相依與指令
-├── start.sh                      # 2D 備援版一鍵啟動腳本（macOS／Linux）
+├── /.github/workflows/ci.yml     # CI：npm test＋端對端＋後端 pytest
+├── package.json                  # ★ Node 相依與指令
+├── start.sh                      # 一鍵啟動腳本（生成服務 :5055 ＋ 互動層 :3000）
 ├── CLAUDE.md                     # 本檔：專案結構、規範與啟動方式
 ├── README.md                     # 安裝、設定、流程與使用說明
 ├── .env.example                  # 環境變數範本

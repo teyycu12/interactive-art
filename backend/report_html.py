@@ -304,7 +304,7 @@ _TEMPLATE = r"""<title>PersonaFlow · M3 效能量測報告</title>
   <footer>
     由 <code>backend/report_html.py</code> 從 <code>backend/logs/events-*.jsonl</code> 產生。
     重跑：<code>.venv/bin/python backend/report_html.py --glob -o docs/m3/perf_report.html</code>。
-    生成延遲/失敗率若顯示「待實測」，跑 <code>bench_generate.py</code> 產生真數據後重跑本報告即可補上。
+    生成延遲/失敗率若顯示「待實測」，需先累積真實生成紀錄後重跑本報告即可補上。
   </footer>
 </div>
 

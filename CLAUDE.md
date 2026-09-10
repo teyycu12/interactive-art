@@ -6,16 +6,18 @@
 
 **校內實測期限：2026/9/30**
 
-## 兩套系統並存，不要混淆
+## 系統組成
 
-| | 整合版（主線） | 2D 備援（保留，不要刪） |
-|---|---|---|
-| 互動層 | `server/`（Node.js + ws） | `backend/app.py`（Flask + Socket.io） |
-| 前端 | `public/`（controller / screen / host） | `frontend/`（p5.js + PixiJS） |
-| 群聚 | `server/` 的 M2 α 仲裁 + Boids | `backend/swarm_logic.py` |
-| 啟動 | `bash start.sh` | `bash start-2d.sh` |
+| 層 | 位置 |
+|---|---|
+| 互動層 | `server/`（Node.js + ws）——α 仲裁共治、任務、配對、問答、計分、社交圖譜 |
+| 前端 | `public/`（controller / screen / host） |
+| 生成服務 | `backend/service.py`（Flask，只綁 127.0.0.1:5055） |
+| 啟動 | `bash start.sh` |
 
-備援版是「3D 若來不及仍能完成實測」的保險，整套測試都還在跑，**請勿刪除**。
+2D 備援版（`backend/app.py`、`frontend/`、`swarm_logic.py`、`start-2d.sh`）已於
+2026-09-10 整套移除，只保留在 git 歷史裡。生成管線（CV／VLM／生圖／切片）不受影響，
+它們由 `backend/service.py` 使用。
 
 ## 技術架構
 
@@ -32,8 +34,8 @@
 ```bash
 npm install && pip install -r requirements.txt requirements-dev.txt
 bash start.sh          # 生成服務 :5055 + 互動層 :3000（偵測到 certs/ 自動走 HTTPS）
-npm test               # Node 330+5    npm run test:e2e   # 端對端 126
-pytest backend/        # Python 472    node --test frontend/tests/   # 2D 前端 4
+npm test               # Node 339      npm run test:e2e   # 端對端 128
+pytest backend/        # Python 423
 ```
 
 完整指令（壓測機器人、切片驗證、憑證產生、關閉服務）見
@@ -44,7 +46,6 @@ pytest backend/        # Python 472    node --test frontend/tests/   # 2D 前端
 
 - **Python** snake_case，回傳統一 JSON；**JavaScript** 類別用 PascalCase
 - **Socket 事件**動詞_名詞（`update_positions`、`new_character`）
-- **不要**在 `sketch.js` 寫業務邏輯，只放渲染
 
 ## 動手之前：先讀對應的那一份
 
@@ -60,7 +61,6 @@ pytest backend/        # Python 472    node --test frontend/tests/   # 2D 前端
 | `server/`、測試、`IDLE_MOTION`、人數上限 | [SERVER-AND-TESTS.md](docs/notes/SERVER-AND-TESTS.md) |
 | 尋寶、COLOR_HUNT、分區、任何新玩法 | [INTERACTION-DESIGN.md](docs/notes/INTERACTION-DESIGN.md) |
 | 顏色、對比、按鈕尺寸、`style.css` | [UI-STYLING.md](docs/notes/UI-STYLING.md) |
-| `backend/app.py`、`frontend/`、mediapipe | [LEGACY-2D.md](docs/notes/LEGACY-2D.md) |
 
 其中三條最常被違反、後果也最貴：
 

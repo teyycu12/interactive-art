@@ -171,8 +171,7 @@ _executor = ThreadPoolExecutor(max_workers=16)
 # 那正是最糟的情況：外部 API 一開始回 429，熔斷器只要連續三次失敗就會跳閘
 # 20 秒（見 circuit_breaker.py），於是**全場一起失敗**，而不是排隊慢一點。
 #
-# 這裡沿用 2D 備援版早就有的 GEN_MAX_CONCURRENT（backend/app.py），
-# 整合版先前漏掉了這道閘門。超出上限的請求會在這裡等，不會被拒絕 ——
+# 上限由 GEN_MAX_CONCURRENT 控制。超出上限的請求會在這裡等，不會被拒絕 ——
 # 對參與者而言是「慢一點」，遠好過「大家一起看到生成失敗」。
 _gen_semaphore = threading.Semaphore(config.GEN_MAX_CONCURRENT)
 

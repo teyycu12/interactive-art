@@ -4,15 +4,9 @@
  * 這些是純函式，輸入是 backend 的 features（Socket.io 的 clothing_features 或
  * HTTP 的 /api/preview，兩者同形狀），輸出是文字與布林。
  *
- * 為什麼放在 shared/：2D 備援版（frontend/sketch.js）與整合版控制器
- * （public/controller/app.js）走不同的傳輸方式，但引導的判準必須一致 ——
- * 兩份各自演化的話，同一個站姿在兩個入口會得到不同的指示，而且不會有任何
- * 錯誤訊息。
- *
- * ⚠ frontend/sketch.js 目前仍是自己那份副本：那個目錄是 CommonJS 全域腳本
- *   （見 frontend/package.json），沒辦法直接 import 這裡的 ESM。
- *   test/capture-guidance.test.mjs 有一條測試逐項比對兩邊的文案，
- *   任一邊改了而另一邊沒跟上就會失敗。
+ * 為什麼放在 shared/：判準必須有單一真相源。手機控制器
+ * （public/controller/app.js）與生成服務的站位判定各自演化的話，同一個站姿
+ * 會得到不同的指示，而且不會有任何錯誤訊息。
  */
 
 /**

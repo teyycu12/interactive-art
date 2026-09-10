@@ -1,4 +1,12 @@
-# PersonaFlow 模組間介面規格（M3 維護）
+# PersonaFlow 模組間介面規格（歷史文件）
+
+> [!WARNING]
+> **這份規格描述的是已移除的 2D 備援版（`backend/app.py` + `frontend/`）。**
+> 該版本已於 2026-09-10 整套刪除，本文件所列的 Socket.io 事件與 payload
+> **不再對應任何執行中的程式碼**，只保留作為研究與變更歷史的紀錄。
+>
+> 現行系統的事件規格見 `shared/protocol.js`（單一真相源）與
+> [docs/TECH-PersonaFlow2.md](TECH-PersonaFlow2.md)。
 
 > 本文件依 **實際程式碼**（`backend/app.py`）逐項核對後撰寫，取代技術架構文件 v1.1 第 5.2 節中
 > 那些用冒號分隔、且程式碼裡不存在的假想事件名。分工開發時**以本文件為介面基準**，
