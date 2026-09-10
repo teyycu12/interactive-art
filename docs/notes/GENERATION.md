@@ -27,7 +27,7 @@ prompt 模板、negative、姿勢參考圖（`pose_builder`）、策展參考圖
 ### VLM 預設關閉，而且模型名不可寫死
 
 服裝／臉部的 Gemini 呼叫由 `FULL_MODE_VLM_ENABLED` 控制，**預設關閉**，
-`service.py`（整合版）與 `app.py`（2D 備援）都讀同一個 `config` 欄位。
+`service.py` 讀 `config` 的同一個欄位。
 
 關閉是因為生圖模型本來就收到原始照片，這兩次呼叫是重複的視覺分析；
 而 Gemini 免費方案是**每個模型每天 20 次請求**，一位參與者吃掉 2 次 ——

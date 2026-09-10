@@ -1,5 +1,11 @@
 # 待精修細節
 
+> [!WARNING]
+> **本文成稿於 2D 備援版仍存在的時期。** `backend/app.py`、`frontend/`、
+> `swarm_logic.py` 等已於 2026-09-10 整套移除，文中指向它們的檔案路徑、
+> 行號連結與架構圖層都不再對應現行程式碼。現行架構見
+> [CLAUDE.md](../CLAUDE.md) 與 [docs/notes/STRUCTURE.md](notes/STRUCTURE.md)。
+
 背景：[`backend/style_probe.py`](../backend/style_probe.py) 把 [`backend/style_fingerprint.py`](../backend/style_fingerprint.py)
 的 `fingerprint_spread` 接到實際生成的 `full_character` 角色圖上，用來量測一批角色之間的
 畫風/物種漂移（commit `8391e79`）。這份文件從那裡的兩個量測細節問題開始，後來擴充成

@@ -42,9 +42,6 @@ jobs:
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         pip install -r requirements-dev.txt
 
-    # 前端沒有建置流程，也沒有 npm 相依 —— 直接用 Node 內建的測試執行器。
-    # 涵蓋的是 themes/lego.js 的算繪契約：full_character 走單張 AI sprite，
-    # 且格柵管線不得被接回（原本的格柵記憶化測試已隨管線移除，見該檔案開頭）。
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
@@ -65,21 +62,13 @@ jobs:
     - name: Run end-to-end tests
       run: npm run test:e2e
 
-    # 2D 備援版前端。這些腳本是 CommonJS，而根目錄的 package.json 宣告了
-    # "type": "module" —— frontend/package.json 把模組型別重新限定回該子樹，
-    # 否則此步驟會整批以 ReferenceError: require is not defined 失敗。
-    # 涵蓋的是 draw() 迴圈裡的格柵記憶化：單次 pipeline 約 2.2ms，若快取失效，
-    # 30 個角色的每幀成本會達 65ms（約 15fps），遠低於 60fps 目標。
-    - name: Run 2D fallback frontend tests
-      run: node --test frontend/tests/
-
     - name: Run Pytest Suite
       run: |
         cd backend
         pytest tests/ -v --junitxml=test-results.xml
 
     # 多個測試在缺少 Flask / Pillow 時會 skip 而非失敗（例如 photo_composer
-    # 的合成測試、socketio handler 測試）。若相依安裝出問題，CI 會顯示綠燈
+    # 的合成測試）。若相依安裝出問題，CI 會顯示綠燈
     # 但其實什麼都沒測到 —— 綠燈卻沒測到比紅燈更危險。
     # requirements.txt 已包含這些套件，因此在 CI 裡出現 skip 一律視為失敗。
     #

@@ -119,19 +119,6 @@
 `ZONE_SELF`（事件）—— 重連的人已經錯過了那則事件，只有狀態拿得到。
 這與尋寶的 `sendTreasureCatchUp()` 是同一類補送問題。
 
-#### 2D 備援版的主題查不到要退回 lego
-
-`character.js` 的 `drawSelf` 原本直接用 `this.styleId` 查主題，查不到時
-`theme` 是 undefined，於是往下掉進 anime 分支 —— 那不是「沒有主題」該有
-的樣子，而且不會有任何錯誤訊息。
-
-後端的 `CHARACTER_STYLE` 現在可以是 `pixar`，但 2D 備援版只註冊了
-`lego`（`themes/lego.js`），因此這條路徑真的走得到。
-`projection.html` 的 `_projectionRenderer` 早就有同樣的退回，那邊是對的。
-
-（這也讓 issue #7「anime 是不可達的死碼」不再成立：改成主題註冊表之後，
-它其實是「查不到主題時的後備渲染」。要不要留是另一個決定。）
-
 #### CSS 類名撞名：主辦端的 .swatch 已經有人在用
 
 `.swatch` 同時被三個地方使用：名冊縮圖（`avatarThumb`）、生成歷史縮圖

@@ -13,7 +13,7 @@
 - **Wander（漫遊微力）**：隨機微力產生自然有機移動
 - **Greeting Hold（打招呼持續）**：兩角色距離 < 80px 觸發 GREETING，持續約 1.5 秒並減速
 
-實作位置：`backend/swarm_logic.py`，每 tick 輸出所有角色的新座標，透過 Socket.io 推送至前端。
+實作位置：`server/index.js` 的 30Hz 主迴圈，每 tick 輸出所有角色的新座標，透過 ws 推送至前端。
 
 ---
 
@@ -24,10 +24,10 @@
    - 用 OpenCV 提取主色調（K-Means 或直方圖）
    - 輸出：`{ "hex": "#RRGGBB", "rgb": [R, G, B] }`
 
-2. **[M2] 角色動態換色** (`character.js`)
-   - 接收後端色碼，即時更新 p5.js 角色填色
+2. **[M2] 角色動態換色** (`shared/avatars.js`)
+   - 接收後端色碼，即時更新角色填色
 
-3. **[M3] 單角色狀態機** (`character.js` + `sketch.js`)
+3. **[M3] 單角色狀態機** (`server/index.js`)
    - 狀態：`ROAMING`（漫遊）↔ `GREETING`（打招呼）
    - 觸發條件：兩角色距離 < 閾值時切換為 GREETING
 

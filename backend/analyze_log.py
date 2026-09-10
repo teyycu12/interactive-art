@@ -131,7 +131,7 @@ def main():
 
     events = _load(paths)
     if not events:
-        print("⚠️ 沒有讀到任何事件。先啟動後端並產生互動（或跑 stress_test.py）。")
+        print("⚠️ 沒有讀到任何事件。先啟動服務並產生互動（或跑 npm run bots）。")
         sys.exit(1)
     analyze(events)
 
