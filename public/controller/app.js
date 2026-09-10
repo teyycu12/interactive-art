@@ -561,6 +561,15 @@ $('#btn-scan').addEventListener('click', async () => {
   await openCamera();
 });
 
+/**
+ * 送出裁切的目標比例。
+ *
+ * 取景框（style.css 的 .scan-stage）也用同一個比例，且影像以 object-fit:cover
+ * 填滿它 —— cover 的裁切方式與下方 cropToPortraitJpeg 一致，因此框裡看到的
+ * 就是會送出的。改動任一邊都要同時改另一邊。
+ */
+const SUBMIT_RATIO = 9 / 16;
+
 /** 開啟相機並回到取景階段。重拍會再次呼叫，因此不能寫在事件處理器裡。 */
 async function openCamera() {
   stopScanStream();
@@ -573,8 +582,13 @@ async function openCamera() {
   $('.scan-stage')?.classList.remove('is-empty', 'shutter', 'is-result');
   showScanPhase('aim');
   try {
+    // 兩軸都要 1280 而不是指定 720×1280：後者等於向瀏覽器要一個 9:16 的
+    // 直式串流，但筆電鏡頭是橫式且感光元件不會轉向，瀏覽器只能從中央裁掉
+    // 大半的左右視野再放大 —— 而那正是要把一個人塞進畫面所需要的視野。
+    // 兩軸同值讀作「給我最接近這個大小的原生模式」，不暗示任何方向，
+    // 筆電拿到完整的 16:9、手機拿到完整的直式，兩邊都是最大視野。
     scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 720 }, height: { ideal: 1280 } },
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 1280 } },
       audio: false,
     });
     $('#scan-video').srcObject = scanStream;
@@ -716,12 +730,16 @@ $('#btn-capture').addEventListener('click', async () => {
 /**
  * 把來源（<video> 或 <img>）裁成 9:16 並編成 JPEG data URL。
  *
- * 相機與相簿上傳共用這一份：兩者送進 /api/generate 的格式必須一致，
- * 否則後端 slicer 的切片比例會對不上其中一邊（見 CLAUDE.md 的跨語言耦合）。
+ * 相機與相簿上傳共用這一份，站位引導的 previewTick() 也走同一套裁切 ——
+ * 三者必須一致，否則 CV 判定的取景與最後送去生成的不是同一塊畫面。
+ *
+ * 注意：這個比例**不是**後端要求的。slicer.py 處理的是生成出來的去背 PNG
+ * （依 alpha 邊界正規化後才套 CUTS），從來沒看過這張輸入照片。裁成 9:16 的
+ * 理由只有「聚焦人物、少傳無用背景」，而且它砍的是左右、完整保留上下，
+ * 所以不會讓全身入不了鏡。取景框上的裁切範圍框畫的就是這一塊。
  */
 function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85) {
-  // 裁切成 9:16 長方細長型：聚焦在人物，捨棄無用的左右背景，減少 API 負擔與上傳成本
-  const TARGET_RATIO = 9 / 16;
+  const TARGET_RATIO = SUBMIT_RATIO;
   let sx = 0, sy = 0, sw = sw0, sh = sh0;
 
   if (sw0 / sh0 > TARGET_RATIO) {
