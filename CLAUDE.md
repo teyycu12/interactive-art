@@ -75,5 +75,6 @@ pytest backend/        # Python 423
 **掃描失敗一律降級，不擋人進場**：相機權限被拒、非安全情境、生成失敗、
 生成服務未啟動 —— 全部退回捏臉。捏臉是刻意保留的備援路徑，**不要移除**。
 
-其他文件：[docs/INTERFACES.md](docs/INTERFACES.md)（事件與 payload 規格）、
+其他文件：[docs/SCENE-CONTRACT.md](docs/SCENE-CONTRACT.md)（外部場景接入角色的約束）、
+[docs/INTERFACES.md](docs/INTERFACES.md)（事件與 payload 規格）、
 [docs/PRD.md](docs/PRD.md)、[docs/TECHNICAL_ARCHITECTURE.md](docs/TECHNICAL_ARCHITECTURE.md)。
