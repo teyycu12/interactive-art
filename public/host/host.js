@@ -10,6 +10,7 @@ import { EV, MISSION_TYPES, QUIZ, QUIZ_CHOICES, QUIZ_PHASE } from '/shared/proto
 import { renderAvatarSVG, CV_FULL_PART } from '/shared/avatars.js';
 import { COLOR_FAMILIES } from '/shared/colorFamily.js';
 import { HEAT_LEVELS } from '/shared/heat.js';
+import { THEMES } from '/shared/themes.js';
 
 const $ = (s) => document.querySelector(s);
 const SS_KEY = 'personaflow.hostKey';
@@ -55,6 +56,7 @@ function handle(msg, key) {
       }
       if (msg.scoring) { scoring = msg.scoring; renderScoringRule(); }
       buildMissionTypes();
+      buildThemes();
       $('#auth').hidden = true;
       $('#console').hidden = false;
       setConn('已連線', false);
@@ -70,6 +72,10 @@ function handle(msg, key) {
 
     case EV.HOST_STATE:
       renderState(msg);
+      break;
+
+    case EV.STAGE_THEME:
+      renderTheme(msg.theme);
       break;
 
     case EV.MISSION_ANNOUNCE:
@@ -200,6 +206,7 @@ function showAuthError(text) {
 
 /** 各面板的錯誤欄位。lastAction 決定訊息落在哪一格 */
 const ERR_SLOT = {
+  theme: '#theme-err',
   quiz: '#quiz-err',
   treasure: '#treasure-err',
   mission: '#mission-err',
@@ -248,6 +255,40 @@ try {
 
 /** 目前選定的顏色。COLOR_HUNT 以外的任務型別不會用到 */
 let pickedColor = COLOR_FAMILIES[0].id;
+
+// ─────────────────────────────────────────────────────────────
+// 場景主題
+// ─────────────────────────────────────────────────────────────
+// 目前主題只由 STAGE_THEME 決定（伺服器在 HOST_AUTH 時補送），
+// 按下去不先樂觀地切換外觀：伺服器拒絕時畫面才不會停在一個沒生效的選項上。
+function buildThemes() {
+  const list = $('#theme-list');
+  list.replaceChildren();
+  for (const t of THEMES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'theme-card';
+    b.dataset.theme = t.id;
+    b.setAttribute('aria-pressed', 'false');
+    const name = document.createElement('b'); name.textContent = t.label;
+    const occasion = document.createElement('span'); occasion.className = 'theme-occasion'; occasion.textContent = t.occasion;
+    const brief = document.createElement('span'); brief.className = 'theme-brief'; brief.textContent = t.brief;
+    const mark = document.createElement('span'); mark.className = 'theme-current'; mark.textContent = '目前顯示';
+    b.append(name, occasion, brief, mark);
+    b.addEventListener('click', () => {
+      if (b.getAttribute('aria-pressed') === 'true') return;
+      lastAction = 'theme';
+      ws?.send(JSON.stringify({ type: EV.HOST_SET_THEME, theme: t.id }));
+    });
+    list.append(b);
+  }
+}
+
+function renderTheme(id) {
+  for (const b of document.querySelectorAll('.theme-card')) {
+    b.setAttribute('aria-pressed', String(b.dataset.theme === id));
+  }
+}
 
 function buildMissionTypes() {
   const sel = $('#mission-type');

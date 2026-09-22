@@ -12,10 +12,11 @@ import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protoco
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
 import { TREASURE_RADIUS } from '/shared/heat.js';
-import { RoomScene, populateProps } from './3d/RoomScene.js';
+import { createScene, pinnedSceneId } from './scenes/registry.js';
+import { DEFAULT_THEME, isThemeId } from '/shared/themes.js';
 import { drawCharacter, drawNameplate, drawEmote, drawOffline } from '/shared/character.js';
 
-let roomScene = null;
+let activeScene = null;
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
@@ -32,10 +33,10 @@ addEventListener('keydown', (e) => {
     debug = !debug;
     document.getElementById('hud').hidden = !debug;
   }
-  if (e.key === '1') roomScene?.applyLight('day');
-  if (e.key === '2') roomScene?.applyLight('evening');
-  if (e.key === '3') roomScene?.applyLight('night');
-  if (e.key === 'r' || e.key === 'R') roomScene?.resetCamera();
+  if (e.key === '1') activeScene?.applyLight('day');
+  if (e.key === '2') activeScene?.applyLight('evening');
+  if (e.key === '3') activeScene?.applyLight('night');
+  if (e.key === 'r' || e.key === 'R') activeScene?.resetCamera();
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -63,9 +64,39 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 
-// 初始化 3D 背景
-roomScene = new RoomScene(document.getElementById('bg3d'));
-populateProps(roomScene, PROPS);
+// ─────────────────────────────────────────────────────────────
+// 場景主題
+// ─────────────────────────────────────────────────────────────
+// 主題由主辦端選擇、伺服器以 STAGE_THEME 廣播；網址帶 ?scene= 時釘住不跟隨（開發預覽用）。
+// 開機先用上次的主題，避免投影機重開時先閃一下預設場景、等伺服器回覆才換掉。
+// 角色管線不等待場景載入：activeScene 為 null 期間 toScreen 退回 2D 等比縮放。
+const sceneHost = document.getElementById('bg3d');
+const THEME_KEY = 'pf.screen.theme';
+let sceneId = null;
+let sceneToken = 0;
+
+async function switchScene(id) {
+  if (!isThemeId(id) || id === sceneId) return;
+  sceneId = id;
+  const token = ++sceneToken;
+  const prev = activeScene;
+  activeScene = null;
+  if (prev?.dispose) prev.dispose(); else if (prev) sceneHost.replaceChildren();
+  const next = await createScene(sceneHost, PROPS, id);
+  // 載入期間又切了一次：丟掉這個過期的場景，不然兩張畫布會疊在一起
+  if (token !== sceneToken) { next.dispose?.(); return; }
+  activeScene = next;
+}
+
+function followTheme(id) {
+  if (pinnedSceneId() || !isThemeId(id)) return;
+  try { localStorage.setItem(THEME_KEY, id); } catch { /* 無痕模式等情況，不影響切換 */ }
+  switchScene(id);
+}
+
+let savedTheme = null;
+try { savedTheme = localStorage.getItem(THEME_KEY); } catch { /* 略 */ }
+switchScene(pinnedSceneId() ?? (isThemeId(savedTheme) ? savedTheme : DEFAULT_THEME));
 
 // ─────────────────────────────────────────────────────────────
 // 連線狀態
@@ -167,6 +198,10 @@ function connect() {
     try { msg = JSON.parse(e.data); } catch { return; }
 
     switch (msg.type) {
+      case EV.STAGE_THEME:
+        followTheme(msg.theme);
+        break;
+
       case EV.STAGE_ROSTER: {
         const seen = new Set();
         // 首次收到名冊時不算「新加入」—— 大螢幕中途重開時場上可能已有十個人，
@@ -346,7 +381,8 @@ function toast(text) {
 
 /** 邏輯座標 → 螢幕座標 (3D 空間投影) */
 const toScreen = (v) => {
-  return roomScene ? roomScene.projectToScreen(v.x, v.y) : { x: 0, y: 0 };
+  return activeScene ? activeScene.projectToScreen(v.x, v.y)
+    : { x: offsetX + v.x * scale, y: offsetY + v.y * scale };
 };
 
 // 角色在 3D 世界裡的身高（房間牆高 9，成人約佔五分之一多一點）
@@ -356,11 +392,11 @@ const CHARACTER_WORLD_HEIGHT = 2.1;
  * 角色在該座標處應有的螢幕高度。
  *
  * 走 3D 投影而非固定值：同一個人走到房間深處就該變小，走近就該變大。
- * roomScene 還沒建好時退回原本的等比縮放，畫面不會空掉。
+ * activeScene 還沒建好時退回原本的等比縮放，畫面不會空掉。
  */
 function characterHeightAt(v) {
-  if (!roomScene || !v) return CHARACTER_HEIGHT * scale;
-  const px = roomScene.scaleAt(v.x, v.y, CHARACTER_WORLD_HEIGHT);
+  if (!activeScene || !v) return CHARACTER_HEIGHT * scale;
+  const px = activeScene.scaleAt(v.x, v.y, CHARACTER_WORLD_HEIGHT);
   return px > 1 ? px : CHARACTER_HEIGHT * scale;
 }
 
@@ -487,7 +523,7 @@ function drawDebugOverlay(a, pos) {
  * 不重畫就可能讀到上一幀甚至空白（配合 preserveDrawingBuffer）。
  */
 function captureStageFrame() {
-  if (roomScene) roomScene.render();
+  if (activeScene) activeScene.render();
 
   const out = document.createElement('canvas');
   out.width = canvas.width;
@@ -496,13 +532,21 @@ function captureStageFrame() {
 
   // 3D 房間在底層。WebGL 畫布的像素尺寸與 2D 畫布未必相同
   // （setPixelRatio 上限 1.5，2D 用完整 dpr），因此明確拉伸到同一尺寸。
-  const gl = roomScene?.renderer?.domElement;
+  const gl = activeScene?.canvas ?? activeScene?.renderer?.domElement;
   if (gl) octx.drawImage(gl, 0, 0, out.width, out.height);
   // 角色與名牌在上層
   octx.drawImage(canvas, 0, 0);
 
   return out.toDataURL('image/png');
 }
+
+// Local export uses the exact same scene + character compositor as SCREEN_CAPTURE_REQ.
+addEventListener('scene-capture', () => {
+  const link = document.createElement('a');
+  link.download = 'personaflow-scene.png';
+  link.href = captureStageFrame();
+  link.click();
+});
 
 /**
  * 寶箱。畫在角色下方（先繪製），避免蓋住站上去的人。
@@ -519,8 +563,8 @@ function drawTreasure(now) {
   // 半徑必須跟著透視縮放，與角色走同一條路徑（characterHeightAt）——
   // 直接用 2D 的 scale 會讓寶箱在房間深處畫得跟最前方一樣大，
   // 那就是「貼紙浮在畫面上」而不是放在地板上。
-  const r = roomScene
-    ? (roomScene.scaleAt(treasureRound.x, treasureRound.y, TREASURE_WORLD_HEIGHT) || TREASURE_RADIUS * scale)
+  const r = activeScene
+    ? (activeScene.scaleAt(treasureRound.x, treasureRound.y, TREASURE_WORLD_HEIGHT) || TREASURE_RADIUS * scale)
     : TREASURE_RADIUS * scale;
   // 呼吸脈動：靜止的圖示在滿是走動角色的畫面上會被忽略
   const beat = 1 + Math.sin(now / 380) * 0.08;
@@ -546,9 +590,10 @@ function drawTreasure(now) {
 function render(now) {
   const time = now / 1000;
 
-  // 3D 畫布在底層自行 render，我們只需清空 2D Canvas
+  // 場景與透明角色圖層在同一個動畫影格內繪製
   ctx.clearRect(0, 0, innerWidth, innerHeight);
-  if (roomScene) roomScene.render();
+  activeScene?.updateAgents?.(latest);
+  if (activeScene) activeScene.render(now);
 
   if (debug) {
     ctx.strokeStyle = 'rgba(233,196,106,.9)';

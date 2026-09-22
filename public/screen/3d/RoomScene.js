@@ -124,7 +124,17 @@ export class RoomScene {
     this.resetCamera();
     this.setupComposer();
     this._resize();
-    window.addEventListener('resize', () => this._resize());
+    this._onResize = () => this._resize();
+    window.addEventListener('resize', this._onResize);
+  }
+
+  /** 主題切換時由大螢幕呼叫：放掉 WebGL 資源與 DOM，否則每切一次就多一個 GPU context。 */
+  dispose() {
+    window.removeEventListener('resize', this._onResize);
+    this.controls?.dispose?.();
+    this.composer?.dispose?.();
+    this.renderer.dispose();
+    this.renderer.domElement.remove();
   }
 
   setupComposer() {

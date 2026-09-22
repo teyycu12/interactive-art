@@ -106,7 +106,9 @@ screen.on('message', (d) => {
   if (m.type === 'QUIZ_REVEAL') screenReveal = m;
   if (m.type === 'QUIZ_ENDED') screenQuiz = null;
   if (m.type === 'SCORE_BOARD') scoreBoard = m;
+  if (m.type === 'STAGE_THEME') screenThemes.push(m.theme);
 });
+let screenThemes = [];
 let screenQuiz = null;
 let screenReveal = null;
 let scoreBoard = null;
@@ -114,6 +116,7 @@ const live = () => syncs.at(-1)?.agents ?? [];
 
 await sleep(400);
 check('大螢幕收到 STAGE_META', meta?.stage?.width === 1920);
+check('大螢幕連線時收到目前的場景主題', screenThemes[0] === 'kitchen', `收到 ${JSON.stringify(screenThemes)}`);
 
 // ── 資料驗證 ──────────────────────────────────────────────
 const bad = new WebSocket(URL);
@@ -405,6 +408,36 @@ await sleep(400);
 check('正確密鑰通過認證', hostOk);
 check('未認證連線無法發布任務', missionStates.length === 0, `收到 ${missionStates.length} 則`);
 
+// ── 場景主題 ──────────────────────────────────────────────
+// 主辦端依場合切換大螢幕背景。主題選單只由 STAGE_THEME 驅動，
+// 所以認證時就要補送（同尋寶面板的前例），否則重整後不知道目前選的是哪個。
+{
+  const themeMsgs = [];
+  host.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'STAGE_THEME') themeMsgs.push(m.theme); });
+  const rehost = new WebSocket(URL);
+  const reThemes = [];
+  rehost.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'STAGE_THEME') reThemes.push(m.theme); });
+  await new Promise((res) => rehost.on('open', res));
+  rehost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(300);
+  check('主辦端認證時補送目前的場景主題', reThemes[0] === 'kitchen', JSON.stringify(reThemes));
+  rehost.close();
+
+  badHost.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'office' }));
+  await sleep(200);
+  check('未認證連線無法切換場景主題', !screenThemes.includes('office'), JSON.stringify(screenThemes));
+
+  const rejectsBefore = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: '../../etc/passwd' }));
+  await sleep(200);
+  check('不存在的主題被拒絕', hostRejects.length === rejectsBefore + 1 && !screenThemes.includes('../../etc/passwd'));
+
+  host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'office' }));
+  await sleep(300);
+  check('切換主題後大螢幕收到 STAGE_THEME', screenThemes.at(-1) === 'office', JSON.stringify(screenThemes));
+  check('切換主題後主辦端也收到 STAGE_THEME（多台主辦端的選單要同步）', themeMsgs.at(-1) === 'office');
+}
+
 // ── 兩位參與者進場 ────────────────────────────────────────
 function joinPhone(name) {
   const ws = new WebSocket(URL);
@@ -501,12 +534,14 @@ check('題目帶有剩餘時間而非絕對時戳',
   amy.quiz?.remainingMs > 0 && amy.quiz?.remainingMs <= 10000, `${amy.quiz?.remainingMs}ms`);
 
 // 出題期間不能再出下一題
+// 以「出題前的拒絕數」為基準，不寫死 1 —— 前面的測試（如場景主題）也會合法地收到拒絕
+const rejectsBeforeQuiz = hostRejects.length;
 host.send(JSON.stringify({
   type: 'HOST_START_QUIZ', question: '插隊的題目', options: ['一', '二'],
   correctIndex: 0, durationMs: 10000,
 }));
 await sleep(300);
-check('同時只允許一題', hostRejects.length === 1, hostRejects.at(-1)?.reason);
+check('同時只允許一題', hostRejects.length === rejectsBeforeQuiz + 1, hostRejects.at(-1)?.reason);
 
 amy.ws.send(JSON.stringify({ type: 'QUIZ_ANSWER', choice: 3 }));
 ben.ws.send(JSON.stringify({ type: 'QUIZ_ANSWER', choice: 0 }));
@@ -792,6 +827,17 @@ check('重開後通行密鑰不變，主辦端不必重讀新號碼',
   keyAfterRestart === HOST_KEY, `${HOST_KEY} → ${keyAfterRestart}`);
 check('重開後終端機顯示已接續上次的活動資料',
   serverLog.join('').includes('已接續上次的活動資料'));
+
+// 活動中途重開，投影畫面不能自己跳回預設主題
+{
+  const reScreen = new WebSocket(URL);
+  let reTheme = null;
+  reScreen.on('open', () => reScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
+  reScreen.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'STAGE_THEME') reTheme = m.theme; });
+  await sleep(400);
+  check('重開後場景主題維持主辦端上次的選擇', reTheme === 'office', `收到 ${reTheme}`);
+  reScreen.close();
+}
 
 const back = new WebSocket(URL);
 let backWelcome = null;
