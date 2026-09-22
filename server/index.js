@@ -29,6 +29,7 @@ import {
 } from '../shared/protocol.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
 import { avatarMatchesFamily } from '../shared/colorFamily.js';
+import { DEFAULT_THEME, isThemeId, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
   PERSISTENCE, TREASURE,
@@ -84,6 +85,12 @@ if (snapshot) {
   directory.hydrate(snapshot.directory);
 }
 
+/**
+ * 大螢幕目前的場景主題。落地進快照：伺服器在活動中途重開時，
+ * 投影畫面不能自己跳回預設主題，主辦端也不會記得要再選一次。
+ */
+let stageTheme = isThemeId(snapshot?.theme) ? snapshot.theme : DEFAULT_THEME;
+
 /** 快照內容。集中在一處，新增要落地的東西時只改這裡與還原段。 */
 const snapshotData = () => ({
   version: 1,
@@ -94,6 +101,7 @@ const snapshotData = () => ({
   missions: missions.export(),
   quiz: quiz.export(),
   directory: directory.export(),
+  theme: stageTheme,
 });
 
 /** 狀態有變動，等下一次自動存檔 */
@@ -784,6 +792,17 @@ function handleHostMessage(ws, msg) {
       break;
     }
 
+    case EV.HOST_SET_THEME: {
+      if (!isThemeId(msg.theme)) { send(ws, EV.HOST_REJECT, { reason: '沒有這個場景主題' }); return; }
+      if (msg.theme === stageTheme) return;
+      stageTheme = msg.theme;
+      console.log(`[theme] 切換為「${THEME_MAP[stageTheme].label}」`);
+      markDirty();
+      // 只送公開畫面：手機端不顯示場景，送了也只是多一則沒人收的訊息
+      blast([...screens, ...hosts], EV.STAGE_THEME, { theme: stageTheme });
+      break;
+    }
+
     case EV.HOST_CLOSE_MISSION: {
       const closed = missions.close();
       if (!closed) return;
@@ -896,6 +915,8 @@ wss.on('connection', (ws) => {
         ws.role = 'screen';
         screens.add(ws);
         send(ws, EV.STAGE_META, { stage: STAGE, fps: SYNC_FPS });
+        // 投影機中途重開或新接一台螢幕，都要知道現在該顯示哪個主題
+        send(ws, EV.STAGE_THEME, { theme: stageTheme });
         send(ws, EV.STAGE_ROSTER, { agents: stage.roster() });
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
         // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
@@ -985,6 +1006,8 @@ wss.on('connection', (ws) => {
           scoring: SCORING,
         });
         send(ws, EV.HOST_STATE, hostState());
+        // 主題選單只由 STAGE_THEME 驅動，重整後的主辦端要靠這則才知道目前選的是哪個
+        send(ws, EV.STAGE_THEME, { theme: stageTheme });
         // 補送進行中的尋寶。HOST_STATE 不含尋寶（見 hostState），而主辦端的
         // 尋寶面板只由 TREASURE_* 事件驅動 —— 少了這裡，中途重整或斷線重連的
         // 主辦端會停在「開始尋寶」那一頁，#treasure-live 永遠是 hidden，
@@ -1008,6 +1031,7 @@ wss.on('connection', (ws) => {
       case EV.HOST_END_QUIZ:
       case EV.HOST_KICK:
       case EV.HOST_TAKE_PHOTO:
+      case EV.HOST_SET_THEME:
         // 未通過認證的連線一律忽略，不回應也不透露任何狀態
         if (ws.role !== 'host') return;
         handleHostMessage(ws, msg);

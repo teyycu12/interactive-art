@@ -81,6 +81,10 @@ export const EV = {
   TREASURE_HEAT: 'TREASURE_HEAT',             // Server → Prophet：冷熱提示（僅送先知）
   TREASURE_FOUND: 'TREASURE_FOUND',           // Server → All：找到了，公布座標
   TREASURE_ENDED: 'TREASURE_ENDED',           // Server → All：本輪中止
+
+  // ── 場景主題（shared/themes.js）──────────────────────
+  HOST_SET_THEME: 'HOST_SET_THEME',           // Host → Server：切換大螢幕的場景主題
+  STAGE_THEME: 'STAGE_THEME',                 // Server → Screen/Host：目前主題（連線時補送、切換時廣播）
 };
 
 /**

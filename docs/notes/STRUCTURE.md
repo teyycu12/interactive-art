@@ -57,11 +57,13 @@
 │   ├── capture-guidance.js       # 站位引導文案與指示燈判定
 │   ├── colorFamily.js            # ★ 顏色分族（COLOR_HUNT 任務，三端共用）
 │   ├── heat.js                   # ★ 尋寶冷熱等級與判定半徑（三端共用）
+│   ├── themes.js                 # ★ 場景主題目錄與號碼地點（1號桌…），三端共用
 │   └── scene.js                  # 場景障礙物佈局
 ├── /public                       # ★ 前端
 │   ├── controller/               # 手機端：拍照生成／捏臉（備援）、搖桿、任務
 │   ├── screen/                   # 大螢幕
-│   │   └── 3d/RoomScene.js       # three.js 房間場景
+│   │   ├── scenes/               # ★ 2D 像素主題（廚房、辦公室）與主題註冊表，見其 README
+│   │   └── 3d/RoomScene.js       # three.js 房間場景（主題 room）
 │   ├── host/                     # 主辦端控制台
 │   └── assets/gen/               # 生成貼圖落地處（gitignored，每場重新產生）
 ├── /test                         # ★ Node 單元測試（node --test）

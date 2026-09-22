@@ -407,3 +407,22 @@ td.act { text-align: right; }
 }
 .photo-actions #photo-qr { width: 64px; height: 64px; border-radius: 6px; }
 .photo-actions .btn-ghost { flex: 1; text-align: center; text-decoration: none; }
+
+/* ── 場景主題選單 ───────────────────────────────────────────
+   .theme-card 而非 .card：通用類名在這份樣式檔裡容易撞名（見 .swatch 的前例）。
+   文字一律用 --ink / --ink-soft / --teal-ink，亮色 --teal 只做邊框與填色。 */
+.theme-list { display: grid; gap: 8px; }
+.theme-card {
+  display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: baseline;
+  min-height: 44px; padding: 10px 12px; text-align: left;
+  background: var(--surface); color: var(--ink);
+  border: 1.5px solid var(--line); border-radius: 10px; cursor: pointer; font: inherit;
+}
+.theme-card:hover { border-color: var(--ink-soft); }
+.theme-card b { font-size: 15px; }
+.theme-occasion { font-size: 12px; font-weight: 700; color: var(--teal-ink); justify-self: end; }
+.theme-brief { grid-column: 1 / -1; font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+.theme-current { display: none; grid-column: 1 / -1; font-size: 12px; font-weight: 700; color: var(--teal-ink); }
+.theme-card[aria-pressed="true"] { border-color: var(--teal); background: #EAF4F2; cursor: default; }
+.theme-card[aria-pressed="true"] .theme-current { display: block; }
+.theme-card[aria-pressed="true"] .theme-current::before { content: "✓ "; }
