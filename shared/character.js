@@ -6,9 +6,11 @@
  * 就成了第二份事實來源 —— 改了一邊另一邊不會報錯，只會默默走出不同步頻，
  * 與 slicer.py / avatars.js 的切片比例是同一類跨檔案耦合。兩端一律 import 此檔。
  *
- * 「無逐格動畫成本」是這套作法的重點：角色只有一張靜態 SVG，
- * 走路、擺動、轉向全部由變換矩陣即時算出，
- * 因此新增一種髮型不需要重畫任何一格動畫。
+ * 兩種畫法：
+ *   - 掃描生成的角色只有一張正面貼圖，走路、擺動、左右翻面全部由變換矩陣
+ *     即時算出（drawCharacter 的主體）。
+ *   - 捏臉角色是像素圖，四個方向各有三格步態，改用換格（drawPixelCharacter）。
+ *     畫格由 shared/pixelAvatar.js 程序產生，新增一種髮型同樣不必手繪任何一格。
  *
  * 與技術文件的一處刻意差異：文件的公式以 frameCount 為自變數
  * （例如 ω = 0.2 rad/frame）。改用畫面幀數會讓動畫速度隨螢幕更新率改變 ——
@@ -17,6 +19,7 @@
  */
 
 import { WALK_THRESHOLD } from '/shared/protocol.js';
+import { dirFromHeading, PIXEL_W, PIXEL_H, PIXEL_POSES } from '/shared/pixelAvatar.js';
 
 const INK = '#2F2A26';
 
@@ -57,6 +60,7 @@ function cadence(speed, maxSpeed) {
  * @param {object} opts
  */
 export function drawCharacter(ctx, agent, pos, sprite, opts) {
+  if (sprite?.pixelFrames) { drawPixelCharacter(ctx, agent, pos, sprite, opts); return; }
   const { time, maxSpeed, height = 150 } = opts;
   const speed = Math.hypot(agent.vx, agent.vy);
 
@@ -118,6 +122,87 @@ export function drawCharacter(ctx, agent, pos, sprite, opts) {
   ctx.restore();
 }
 
+/** 兩步一個週期，切成四段：跨左腳 → 併攏 → 跨右腳 → 併攏 */
+const WALK_CYCLE = [1, 0, 2, 0];
+
+/**
+ * 一步的長度，以「角色身高」為單位。
+ *
+ * 像素角色的步伐由**移動距離**推進，不是時間：角色每前進 STEP_BODIES 個身高
+ * 就換一隻腳。以時間推進的話，步頻與實際位移對不上 —— 慢速時腳踏得比地面
+ * 移動快、快速時又跟不上，看起來就是在地板上滑行（「用飄的」）。
+ * Q 版角色腿短，0.42 個身高約等於最高速每秒 3.8 步。
+ */
+export const STEP_BODIES = 0.42;
+
+/** 目前是第幾步。手機 POV 用它觸發腳步震動，與畫面的換腳同一把尺。 */
+export const stepIndex = (travel) => Math.floor(travel / STEP_BODIES);
+
+/** 低於這個速度就站定（場域單位／秒）。比 WALK_THRESHOLD 低，減速的最後幾步仍會踏出來。 */
+const STAND_SPEED = WALK_THRESHOLD * 0.3;
+
+/**
+ * 像素角色（捏臉）。與上面的向量／貼圖畫法有三處刻意不同：
+ *
+ *   1. 不旋轉、不鏡像 —— 旋轉會把方塊畫歪；左右由 left / right 兩組畫格負責，
+ *      背面與正面也各有一組，鏡像只會把它們弄亂。
+ *   2. 走路用換格而非擺動，換格依移動距離推進（見 STEP_BODIES）。
+ *      距離預設由 pos 的逐幀位移算出；手機 POV 的角色固定在畫面上、是世界在動，
+ *      因此改由呼叫端傳入 opts.travel。
+ *   3. 一格像素對齊成整數個裝置像素，並關掉影像平滑。非整數倍放大會讓有的格子
+ *      寬 3px、有的 4px，整個角色看起來會抖。
+ *
+ * 朝向優先用伺服器的 heading：它已處理「靜止時維持原朝向」與合照時轉向鏡頭，
+ * 大螢幕與手機因此看到同一個方向。沒有 heading 時（手機剛進場、還沒收到同步）
+ * 才用速度推算。四方向的遲滯狀態存在 sprite 上 —— 每個角色各有自己的 sprite。
+ */
+function drawPixelCharacter(ctx, agent, pos, sprite, opts) {
+  const { height = 150 } = opts;
+  const speed = Math.hypot(agent.vx, agent.vy);
+
+  let heading = agent.heading;
+  if (!Number.isFinite(heading) && speed > GAIT_FADE_SPEED) heading = Math.atan2(agent.vy, agent.vx);
+  const dir = dirFromHeading(heading, sprite.pixelDir ?? null);
+  sprite.pixelDir = dir;
+
+  let travel = opts.travel;
+  if (travel === undefined) {
+    const last = sprite.pixelLastPos;
+    let moved = last ? Math.hypot(pos.x - last.x, pos.y - last.y) / height : 0;
+    if (moved > 1) moved = 0;          // 瞬移（重連、切換場景）不算走路
+    sprite.pixelTravel = (sprite.pixelTravel ?? 0) + moved;
+    sprite.pixelLastPos = { x: pos.x, y: pos.y };
+    travel = sprite.pixelTravel;
+  }
+  const walking = speed > STAND_SPEED;
+  const frame = walking ? WALK_CYCLE[Math.floor(travel / (STEP_BODIES / 2)) % 4] : 0;
+  // 揮手與乾杯：角色本身舉手做動作，兩格交替（揮手快、碰杯慢一點）
+  const pose = PIXEL_POSES[agent.emote];
+  const img = pose && sprite.pixelPoses
+    ? sprite.pixelPoses[dir][pose][Math.floor((opts.time ?? 0) * (pose === 'wave' ? 6 : 3.5)) % 2]
+    : sprite.pixelFrames[dir][frame];
+
+  const m = ctx.getTransform?.();
+  const s = (m && Math.hypot(m.a, m.b)) || 1;
+  const px = Math.max(1, Math.round((height / PIXEL_H) * s)) / s;
+  const w = px * PIXEL_W;
+  const h = px * PIXEL_H;
+  // 併攏的那一格身體抬高一格像素，走起來才有上下的節奏
+  const lift = walking && frame === 0 ? px : 0;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(pos.x, pos.y - px, w * 0.3, h * 0.045, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(47, 42, 38, 0.18)';
+  ctx.fill();
+
+  const x = Math.round((pos.x - w / 2) * s) / s;
+  const y = Math.round((pos.y - h - lift) * s) / s;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(img, x, y, w, h);
+  ctx.restore();
+}
+
 /**
  * 名牌。與角色分開繪製，因此不受彈跳與擺動影響 ——
  * 跟著角色一起晃動的文字會非常難讀。
@@ -131,7 +216,8 @@ export function drawNameplate(ctx, pos, name, { fontSize = 17 } = {}) {
   const padX = 9;
   const w = ctx.measureText(name).width + padX * 2;
   const h = fontSize + 9;
-  const y = pos.y + 12;
+  // 緊貼腳底：隔太遠時，人多的地方會看不出哪個名字屬於哪個角色
+  const y = pos.y + 3;
 
   // 米白底襯，確保名字在任何分區色塊上都讀得清楚
   ctx.fillStyle = 'rgba(250, 248, 245, .84)';
@@ -143,6 +229,12 @@ export function drawNameplate(ctx, pos, name, { fontSize = 17 } = {}) {
   ctx.fillText(name, pos.x, y + 4);
   ctx.restore();
 }
+
+/**
+ * 這個角色的動作是否由角色本身演出（像素角色的揮手、乾杯）。
+ * 是的話就不再畫頭上的圖示 —— 兩個同時出現反而分散視線。
+ */
+export const emoteIsPosed = (sprite, emote) => !!(sprite?.pixelPoses && PIXEL_POSES[emote]);
 
 /** 頭頂的社交動作氣泡 */
 export function drawEmote(ctx, pos, glyph, { height = 150 } = {}) {

@@ -2,22 +2,40 @@
  * M1 手機控制器樣式
  *
  * 全部使用純 CSS / DOM，無 WebGL、無外部字型下載（§6 風險 3：低階裝置支援）。
+ *
+ * 視覺語彙跟著大螢幕的像素場景走（public/screen/scenes/）：奶油紙底、
+ * 廚房牆面的鼠尾草綠、木地板與陶土色、小圓角與無模糊的硬陰影。
+ * 硬陰影（0 模糊）在低階裝置上幾乎不花成本，與上面的限制不衝突。
  * 版面以 dvh 與 flex 撐滿單一視窗且禁止捲動 —— 控制器是「握在手上的實體按鍵」，
  * 任何捲動都會在使用者推搖桿時誤觸頁面滾動。
  */
 
 :root {
-  --paper: #FAF8F5;
-  --ink: #2F2A26;
+  --paper: #F7F1E3;   /* 場景的流理台／奶油紙色 */
+  --ink: #3A2E27;     /* 11.65:1 */
   /* 原為 #7A716A，對紙色剛好 4.50:1 —— 卡在 AA 及格線上、沒有任何餘裕。
      它是 .lede / .hint 等 30 處次要文字的顏色，而校內實測的場地光線
      比桌前亮得多；只要亮一點，這 30 處會同時變得難讀。
      改為 5.07:1 買進餘裕（主辦端同一角色的 --ink-soft 是 5.38:1）。 */
-  --ink-soft: #726960;
-  --line: #D8D0C6;
-  --accent: #E76F51;
-  --ok: #2A9D8F;
-  --warn: #E9A23B;
+  --ink-soft: #6B5A4E; /* 5.83:1（換底色後重新挑過，仍保留餘裕） */
+  --line: #D9CBAF;
+  --accent: #D9744A;   /* 陶土橘：場景的磚地與地毯 */
+  --ok: #6E9B84;       /* 鼠尾草綠：場景的櫥櫃與盆栽 */
+  --warn: #E7B54A;
+
+  /* 場景色。只做填色與邊框，不拿來寫小字。 */
+  --wall: #3F5A55;       /* 廚房牆面。紙色字壓在上面 6.65:1，可當主按鈕底 */
+  --wall-tint: #E3EADF;  /* 場景標題牌的淡綠 */
+  --wood: #C9A07A;
+  --tag: #F2CF6B;        /* 大螢幕「1號桌」那種黃色小牌，ink 字 8.7:1 */
+  --sunk: #EDE3CE;       /* 凹陷／選中底色 */
+  --ink-faint: #6B5A4E;  /* .aim-lights 引用了但原本從未定義 —— 對齊 --ink-soft */
+
+  /* 像素風的形狀：小圓角 + 無模糊硬陰影 */
+  --r: 8px;
+  --r-sm: 6px;
+  --drop: 0 4px 0 var(--ink);
+  --drop-sm: 0 3px 0 var(--ink);
 
   /* 「可當文字用」的深色版本。
      --accent 對紙色只有 2.9:1、--warn 只有 2.0:1、--ok 只有 3.1:1，
@@ -25,9 +43,9 @@
      連線狀態這種 11px 的字在戶外幾乎讀不出來。
      大面積填色（按鈕底色、邊框、進度條）仍用原本的亮色，那些不受此限；
      只有「拿來寫字」的地方改用 -ink 版本。 */
-  --accent-ink: #C4462A;  /* 4.65:1 */
-  --warn-ink:   #98600D;  /* 4.94:1 */
-  --ok-ink:     #1F7268;  /* 5.41:1 */
+  --accent-ink: #A8472A;  /* 5.18:1 */
+  --warn-ink:   #855508;  /* 5.65:1 */
+  --ok-ink:     #3D6158;  /* 6.12:1 */
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -43,9 +61,10 @@ body {
   background: var(--paper);
   color: var(--ink);
   font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
-  /* 手帳網格微點底紋 */
-  background-image: radial-gradient(var(--line) 1px, transparent 1px);
-  background-size: 22px 22px;
+  /* 廚房磁磚：低對比的棋盤格，呼應大螢幕的地磚區。
+     刻意壓淡 —— 它是背景，不能跟文字搶。 */
+  background-image: repeating-conic-gradient(rgba(122, 76, 49, .045) 0 25%, transparent 0 50%);
+  background-size: 28px 28px;
   touch-action: manipulation;
   user-select: none;
 }
@@ -81,7 +100,7 @@ section[hidden] { display: none !important; }
 .card {
   background: var(--paper);
   border: 2px dashed var(--line);
-  border-radius: 16px;
+  border-radius: var(--r);
 }
 
 button {
@@ -89,14 +108,17 @@ button {
   color: var(--ink);
   background: var(--paper);
   border: 2.5px solid var(--ink);
-  border-radius: 14px;
+  border-radius: var(--r);
   padding: 12px 20px;
   font-weight: 700;
+  letter-spacing: .04em;
   cursor: pointer;
-  transition: transform .08s ease;
+  box-shadow: var(--drop);
+  transition: transform .06s ease, box-shadow .06s ease;
 }
-button:active { transform: translateY(2px); }
-button:disabled { opacity: .35; border-style: dashed; }
+/* 像素按鍵：按下時整顆壓進陰影裡 */
+button:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--ink); }
+button:disabled { opacity: .35; border-style: dashed; box-shadow: none; transform: none; }
 
 /* 鍵盤／外接裝置的焦點框。與主辦端控制台同一套樣式。
    控制器雖以觸控為主，但仍有人用藍牙鍵盤或行動輔助裝置操作；
@@ -109,8 +131,12 @@ input:focus-visible,
   outline-offset: 2px;
 }
 
-.btn-primary { background: var(--ink); color: var(--paper); }
-.btn-ghost { border-style: dashed; border-color: var(--line); color: var(--ink-soft); }
+.btn-primary { background: var(--wall); color: var(--paper); }
+.btn-ghost {
+  border-style: dashed; border-color: var(--wood); color: var(--ink-soft);
+  box-shadow: none;
+}
+.btn-ghost:active { box-shadow: none; }
 
 /* ── 進場與離場：置中的單一訊息畫面 ─────────────────────── */
 .centered {
@@ -123,7 +149,21 @@ input:focus-visible,
   gap: 10px;
   min-height: 0;
 }
-.centered h1 { font-size: 26px; margin: 0; letter-spacing: .03em; }
+/* 大螢幕左上角那塊標題牌：淡綠底、小圓角，下方一行英文小字（.eyebrow） */
+.centered h1 {
+  font-size: 26px; margin: 0; letter-spacing: .12em;
+  background: var(--wall-tint);
+  padding: 10px 20px 8px;
+  border-radius: var(--r-sm);
+  border: 2.5px solid var(--ink);
+  box-shadow: var(--drop);
+}
+.eyebrow {
+  margin: 4px 0 0;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px; font-weight: 700; letter-spacing: .22em;
+  color: var(--ink-soft);
+}
 .centered .lede { font-size: 15px; color: var(--ink-soft); margin: 0; max-width: 22em; }
 .centered .hint { font-size: 12px; color: var(--ink-soft); margin: 0; }
 .centered svg { height: min(24dvh, 180px); width: auto; }
@@ -140,7 +180,7 @@ input:focus-visible,
   flex: 1; height: 5px; border-radius: 3px;
   background: var(--line); transition: background .2s;
 }
-.steps i.on { background: var(--ink); }
+.steps i.on { background: var(--wall); }
 
 .preview {
   display: grid; place-items: center;
@@ -167,15 +207,17 @@ input:focus-visible,
 .opt {
   padding: 4px 4px 6px;
   border: 2px dashed var(--line);
-  border-radius: 14px;
+  border-radius: var(--r);
   background: var(--paper);
+  box-shadow: none;
   display: flex; flex-direction: column; align-items: center; gap: 2px;
 }
 .opt svg { width: 100%; height: 62px; }
 .opt span { font-size: 11px; color: var(--ink-soft); font-weight: 600; }
 .opt[aria-pressed="true"] {
   border: 2.5px solid var(--ink);
-  background: #F1ECE4;
+  background: var(--sunk);
+  box-shadow: var(--drop-sm);
 }
 .opt[aria-pressed="true"] span { color: var(--ink); }
 
@@ -187,6 +229,7 @@ input:focus-visible,
   width: 38px; height: 38px; border-radius: 50%;
   border: 2.5px solid var(--line); padding: 0;
   position: relative;
+  box-shadow: none;
 }
 .swatch::after {
   content: "";
@@ -205,10 +248,11 @@ input:focus-visible,
 #name-input {
   font: inherit; font-weight: 700; font-size: 16px;
   width: 100%; padding: 12px 14px;
-  border: 2.5px solid var(--ink); border-radius: 14px;
-  background: var(--paper); color: var(--ink);
+  border: 2.5px solid var(--ink); border-radius: var(--r);
+  background: #FFFCF5; color: var(--ink);
+  box-shadow: inset 0 3px 0 rgba(58, 46, 39, .08);
 }
-#name-input::placeholder { color: var(--line); font-weight: 500; }
+#name-input::placeholder { color: #B5A68F; font-weight: 500; }
 
 /* ── 控制器 ─────────────────────────────────────────────── */
 /* 狀態列。
@@ -238,24 +282,36 @@ input:focus-visible,
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* 連線狀態做成大螢幕分區牌（「● 食材小站 PANTRY」）的樣子：深底、紙色字、
+   前面一顆狀態燈。這顆 pill 是 11px，而且承載「你還連著線嗎」這個現場沒有
+   第二來源的訊息 —— 紙色字壓在深底上約 11:1，比原本淺底深字更經得起強光。
+   狀態同時由燈號與文字表達，不只靠顏色。 */
 .pill {
-  font-size: 11px; font-weight: 700; padding: 5px 11px;
-  border-radius: 999px; border: 2px solid var(--line); color: var(--ink-soft);
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; padding: 5px 11px 5px 9px;
+  border-radius: 999px; border: 2px solid var(--ink);
+  background: #2E3238; color: var(--paper);
   white-space: nowrap;
 }
-/* 邊框維持亮色（純裝飾，不受對比規範限制），文字改用深色版本：
-   這顆 pill 是 11px，而且承載「你還連著線嗎」這個現場沒有第二來源的訊息。 */
-.pill.ok { border-color: var(--ok); color: var(--ok-ink); }
-.pill.warn { border-color: var(--warn); color: var(--warn-ink); }
+.pill::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: #9A9186;
+}
+.pill.ok::before { background: #7FCB95; }
+.pill.warn::before { background: var(--warn); }
 
 /* 操控權提示：告訴使用者現在是不是自己在操控（文案見 app.js 的說明） */
 .agency {
   text-align: center; font-size: 12px; font-weight: 700;
-  padding: 8px; border-radius: 12px;
-  border: 2px dashed var(--line); color: var(--ink-soft);
+  padding: 8px; border-radius: var(--r);
+  border: 2px dashed var(--wood); color: var(--ink-soft);
+  background: rgba(247, 241, 227, .9);
   transition: color .3s, border-color .3s;
 }
-.agency.active { color: var(--accent-ink); border-color: var(--accent); border-style: solid; }
+.agency.active {
+  color: var(--accent-ink); border-color: var(--accent); border-style: solid;
+  background: #FBEBDD;
+}
 
 .agency-row { display: flex; gap: 8px; align-items: stretch; flex-shrink: 0; }
 .agency-row .agency { flex: 1; }
@@ -265,10 +321,11 @@ input:focus-visible,
   flex: none;
   padding: 8px 12px;
   font-size: 12px; font-weight: 700;
-  border: 2px dashed var(--line);
-  border-radius: 12px;
+  border: 2px dashed var(--wood);
+  border-radius: var(--r);
   background: var(--paper);
   color: var(--ink-soft);
+  box-shadow: none;
   position: relative;
 }
 /* 同 .btn-exit：外觀維持小顆，可觸範圍補到 44px */
@@ -281,7 +338,7 @@ input:focus-visible,
   height: max(100%, 44px);
 }
 .btn-haptics[aria-pressed="true"] {
-  border-style: solid; border-color: var(--ok); color: var(--ok);
+  border-style: solid; border-color: var(--ok); color: var(--ok-ink);
 }
 
 /* 首次進場的一次性提示。用邊框顏色搏動而非位移 ——
@@ -322,17 +379,40 @@ input:focus-visible,
 #joystick-zone {
   flex: 1;
   position: relative;
-  border: 2px dashed var(--line);
-  border-radius: 20px;
+  /* 大螢幕「烘焙分享」區那塊虛線框地毯 */
+  border: 2.5px dashed rgba(122, 76, 49, .45);
+  border-radius: var(--r);
   display: grid; place-items: center;
   min-height: 0;
   touch-action: none; /* 必要：否則 iOS 會把推桿手勢解讀為頁面捲動 */
 }
+/* 提示貼在搖桿正上方（搖桿位置見 app.js 的 joystickPosition），
+   不再放在區域正中 —— 那裡現在站著自己的角色。
+   底下是場景畫面，改用實心小牌而非文字光暈，深色牆面上也讀得清楚。 */
 #joystick-zone .hint {
-  font-size: 13px; color: var(--ink-soft); font-weight: 700; pointer-events: none;
-  /* 底下是網格畫布，純色文字會與線條交疊；加一圈米白襯底維持可讀性 */
-  text-shadow: 0 0 4px var(--paper), 0 0 8px var(--paper);
+  position: absolute;
+  left: 50%; bottom: 158px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 12px; color: var(--ink); font-weight: 700; pointer-events: none;
+  background: rgba(247, 241, 227, .92);
+  border: 2px solid var(--ink);
+  border-radius: var(--r-sm);
+  padding: 3px 9px;
 }
+
+/* 畫布現在是場景畫面，搖桿區的虛線框只剩「這一塊可以推」的提示，壓淡 */
+#controller #joystick-zone { border-color: rgba(247, 241, 227, .35); }
+
+/* 疊在場景上的狀態列要有底板：名字與編號是深色字，廚房的牆面也是深色 */
+#controller .bar {
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: var(--r);
+  box-shadow: var(--drop-sm);
+  padding: 4px 10px;
+}
+
 
 /* 表情鍵列。與 .bar 同理只鎖 shrink，不用 flex: none（理由見上）。
    按鍵被壓扁會直接影響點擊命中率，所以不讓它被擠，
@@ -341,7 +421,7 @@ input:focus-visible,
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
   flex-shrink: 0;
 }
-#emotes button { padding: 14px 4px; font-size: 13px; line-height: 1.5; }
+#emotes button { padding: 12px 4px 14px; font-size: 13px; line-height: 1.5; background: #FFFCF5; }
 #emotes button em { display: block; font-size: 22px; font-style: normal; }
 
 /* 離開鍵刻意做小並置於頂端角落。放在底部與搖桿、動作鍵相鄰會提高誤觸風險，
@@ -352,9 +432,10 @@ input:focus-visible,
   font-weight: 600;
   border-width: 2px;
   border-style: dashed;
-  border-color: var(--line);
-  border-radius: 10px;
+  border-color: var(--wood);
+  border-radius: var(--r-sm);
   color: var(--ink-soft);
+  box-shadow: none;
   flex: none;
   /* 視覺上維持小顆（見上方註解），但實際可按範圍補到 44px。
      兩者不必一致：把「看起來多大」與「按得到多大」分開，
@@ -407,11 +488,13 @@ input:focus-visible,
   width: 100%;
   flex-shrink: 0;
   text-align: left;
-  padding: 11px 14px;
-  border: 2.5px solid var(--accent);
-  border-radius: 14px;
-  background: #FDF0EC;
+  padding: 11px 14px 11px 20px;
+  border: 2.5px solid var(--ink);
+  border-radius: var(--r);
+  background: #FBEBDD;
   color: var(--ink);
+  /* 左側一條陶土色，像場景裡地毯的邊 */
+  box-shadow: inset 6px 0 0 var(--accent), var(--drop);
 }
 .mission-banner[hidden] { display: none; }
 .mb-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
@@ -420,7 +503,7 @@ input:focus-visible,
   font-size: 13px; font-weight: 700; color: var(--accent-ink);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.mb-prog.done { color: var(--ok); }
+.mb-prog.done { color: var(--ok-ink); }
 .mb-code { font-size: 12px; font-weight: 500; color: var(--ink-soft); }
 .mb-code b {
   font-family: ui-monospace, Consolas, monospace;
@@ -442,7 +525,7 @@ input:focus-visible,
   width: 100%;
   background: var(--paper);
   border-top: 3px solid var(--ink);
-  border-radius: 22px 22px 0 0;
+  border-radius: 12px 12px 0 0;
   padding: 22px 20px calc(22px + env(safe-area-inset-bottom));
   max-height: 92dvh;
   overflow-y: auto;
@@ -450,8 +533,9 @@ input:focus-visible,
 .sheet-close {
   position: absolute; top: 14px; right: 14px;
   width: 34px; height: 34px; padding: 0;
-  border-radius: 50%; border-width: 2px; border-color: var(--line);
+  border-radius: 50%; border-width: 2px; border-color: var(--wood);
   font-size: 15px; color: var(--ink-soft); line-height: 1;
+  box-shadow: none;
 }
 /* 關閉鍵視覺上是 34px 的小圓，可觸範圍補到 44px。
    它是這張面板唯一的退出口，按不到等於被困住。 */
@@ -467,9 +551,11 @@ input:focus-visible,
 .sheet-brief { margin: 0 0 16px; font-size: 13px; color: var(--ink-soft); }
 
 .mycode {
-  background: var(--ink);
+  background: var(--wall);
   color: var(--paper);
-  border-radius: 14px;
+  border: 2.5px solid var(--ink);
+  box-shadow: var(--drop);
+  border-radius: var(--r);
   padding: 14px;
   text-align: center;
   margin-bottom: 16px;
@@ -491,17 +577,18 @@ input:focus-visible,
   font-size: 32px; font-weight: 700;
   letter-spacing: .22em; text-indent: .22em; text-align: center;
   width: 100%; padding: 12px;
-  border: 2.5px solid var(--ink); border-radius: 14px;
-  background: var(--paper); color: var(--ink);
+  border: 2.5px solid var(--ink); border-radius: var(--r);
+  background: #FFFCF5; color: var(--ink);
+  box-shadow: inset 0 3px 0 rgba(58, 46, 39, .08);
 }
 #pair-input::placeholder { color: var(--line); }
 
 .sheet-msg {
   margin: 0 0 12px; font-size: 13px; font-weight: 600;
-  padding: 9px 12px; border-radius: 10px;
-  background: #FDF0EC; color: #B44A2F;
+  padding: 9px 12px; border-radius: var(--r-sm);
+  background: #FBEBDD; color: var(--accent-ink);
 }
-.sheet-msg.ok { background: #E8F4F2; color: var(--ok); }
+.sheet-msg.ok { background: var(--wall-tint); color: var(--ok-ink); }
 .sheet-msg[hidden] { display: none; }
 .sheet-prog {
   margin: 12px 0 0; text-align: center;
@@ -527,7 +614,8 @@ input:focus-visible,
 .dialog {
   background: var(--paper);
   border: 2.5px solid var(--ink);
-  border-radius: 18px;
+  border-radius: var(--r);
+  box-shadow: 0 6px 0 var(--ink);
   padding: 22px;
   max-width: 340px;
   width: 100%;
@@ -548,9 +636,11 @@ input:focus-visible,
   font-variant-numeric: tabular-nums;
   font-size: 17px; font-weight: 700;
   color: var(--ink);
-  background: var(--paper);
+  /* 大螢幕「1號桌」的黃色小牌 */
+  background: var(--tag);
   border: 2px solid var(--ink);
-  border-radius: 999px;
+  border-radius: var(--r-sm);
+  box-shadow: 0 2px 0 var(--ink);
   padding: 2px 10px;
 }
 .score small { font-size: 10px; font-weight: 700; margin-left: 2px; opacity: .6; }
@@ -558,10 +648,12 @@ input:focus-visible,
 /* 得分浮標。刻意蓋在最上層並穿透點擊，任何畫面下加分都看得到 */
 .score-pop {
   position: fixed; top: 54px; right: 16px; z-index: 120;
-  background: var(--ok); color: #fff;
+  background: var(--tag); color: var(--ink);
+  border: 2.5px solid var(--ink);
+  box-shadow: var(--drop-sm);
   font-family: ui-monospace, Consolas, monospace;
   font-size: 20px; font-weight: 700;
-  border-radius: 999px; padding: 6px 16px;
+  border-radius: var(--r-sm); padding: 6px 16px;
   pointer-events: none;
   animation: score-rise 1.6s ease-out forwards;
 }
@@ -577,8 +669,8 @@ input:focus-visible,
 .quiz {
   position: fixed; inset: 0; z-index: 95;
   background: var(--paper);
-  background-image: radial-gradient(var(--line) 1px, transparent 1px);
-  background-size: 22px 22px;
+  background-image: repeating-conic-gradient(rgba(122, 76, 49, .045) 0 25%, transparent 0 50%);
+  background-size: 28px 28px;
   display: flex; flex-direction: column;
 }
 .quiz[hidden] { display: none; }
@@ -600,7 +692,7 @@ input:focus-visible,
   font-size: 26px; font-weight: 700;
   color: var(--ink);
 }
-.quiz-timer.urgent { color: var(--accent); }
+.quiz-timer.urgent { color: var(--accent-ink); }
 
 .quiz-q {
   margin: 0;
@@ -619,7 +711,7 @@ input:focus-visible,
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 6px;
   border: 3px solid var(--ink);
-  border-radius: 18px;
+  border-radius: var(--r);
   padding: 10px;
   font: inherit; font-weight: 700; font-size: 16px;
   color: #fff;
@@ -645,7 +737,9 @@ input:focus-visible,
 .quiz-result {
   text-align: center;
   border: 3px solid var(--ink);
-  border-radius: 18px;
+  border-radius: var(--r);
+  background: var(--paper);
+  box-shadow: var(--drop);
   padding: 14px;
 }
 .quiz-result[hidden] { display: none; }
@@ -653,7 +747,7 @@ input:focus-visible,
 .quiz-result span {
   display: block; margin-top: 2px;
   font-family: ui-monospace, Consolas, monospace;
-  font-size: 18px; font-weight: 700; color: var(--ok);
+  font-size: 18px; font-weight: 700; color: var(--ok-ink);
 }
 .quiz-result small { display: block; margin-top: 6px; font-size: 12px; color: var(--ink-soft); }
 .quiz-result.miss b { color: var(--ink-soft); }
@@ -692,7 +786,9 @@ input:focus-visible,
   /* 高度取「可用高度」與「上限」的較小者：不設上限時，超高的視窗會把
      取景框拉成一條細長的柱子，人在裡面反而更小。 */
   height: min(100%, 74vh);
-  border-radius: 14px;
+  border-radius: var(--r);
+  border: 2.5px solid var(--ink);
+  box-shadow: var(--drop);
   overflow: hidden;
   /* 取景時用深色：相機畫面 letterbox 的留白不會搶走注意力。
      成果階段改用白底（.is-result）—— 生成出來的角色是透明背景，
@@ -728,7 +824,6 @@ input:focus-visible,
 /* 成果展示：白底襯托透明背景的角色 */
 .scan-stage.is-result {
   background: #FFFFFF;
-  border: 1px solid var(--line);
 }
 
 .scan-stage video[hidden],
@@ -849,15 +944,18 @@ input:focus-visible,
   font: inherit; font-size: 14px; font-weight: 700;
   color: var(--ink-soft);
   background: var(--paper);
-  border: 2px dashed var(--line);
-  border-radius: 14px;
+  border: 2px dashed var(--wood);
+  border-radius: var(--r);
+  box-shadow: none;
   cursor: pointer;
   transition: border-color .15s, color .15s;
 }
 .style-opt.is-on {
   color: var(--ink);
+  background: var(--sunk);
   border-style: solid;
   border-color: var(--ink);
+  box-shadow: var(--drop-sm);
 }
 
 .tips {
@@ -876,9 +974,9 @@ input:focus-visible,
 .note {
   margin: 0;
   padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(47, 42, 38, .05);
-  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  background: var(--sunk);
+  border: 1px dashed var(--wood);
   font-size: 13px;
   line-height: 1.6;
   color: var(--ink-soft);
@@ -888,7 +986,8 @@ input:focus-visible,
 .progress-bar {
   height: 8px;
   border-radius: 99px;
-  background: rgba(47, 42, 38, .12);
+  background: var(--sunk);
+  border: 2px solid var(--ink);
   overflow: hidden;
 }
 .progress-bar > i {
@@ -896,7 +995,7 @@ input:focus-visible,
   height: 100%;
   width: 0;
   border-radius: 99px;
-  background: var(--ink);
+  background: var(--ok);
   transition: width .4s linear;
 }
 
@@ -907,9 +1006,9 @@ input:focus-visible,
 .wait-tip {
   margin-top: 18px;
   padding: 12px 14px;
-  border: 2px dashed var(--line);
-  border-radius: 14px;
-  background: rgba(231, 111, 81, .06);
+  border: 2px dashed var(--accent);
+  border-radius: var(--r);
+  background: #FBEBDD;
   text-align: left;
   max-width: 22em;
 }
@@ -985,13 +1084,14 @@ input:focus-visible,
   transform: translateX(-50%);
   max-width: 90vw;
   width: max-content;
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--paper);
+  color: var(--ink);
   padding: 12px 18px;
-  border-radius: 12px;
+  border: 2.5px solid var(--ink);
+  border-radius: var(--r);
   font-size: 14px;
   font-weight: 600;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--drop);
   z-index: 9999;
   text-align: center;
   pointer-events: none;
@@ -1012,15 +1112,16 @@ input:focus-visible,
   width: 100%;
   flex-shrink: 0;
   padding: 8px 12px;
-  border: 1px dashed var(--line);
-  border-radius: 12px;
-  background: rgba(42, 140, 128, .07);
+  border: 2px solid var(--ink);
+  border-radius: var(--r);
+  background: var(--wall-tint);
+  box-shadow: var(--drop-sm);
   font-size: 13px;
   color: var(--ink-soft);
   text-align: left;
 }
 .links-strip[hidden] { display: none; }
-.ls-label b { color: #2A8C80; font-size: 15px; }
+.ls-label b { color: var(--ok-ink); font-size: 15px; }
 .ls-faces { display: flex; }
 .ls-face {
   width: 30px;
@@ -1045,6 +1146,8 @@ input:focus-visible,
   object-position: top center;
   transform: scale(1.9);
   transform-origin: top center;
+  /* 捏臉角色是 20×27 的像素圖，放大時要保持方塊邊緣，不能被模糊成一團 */
+  image-rendering: pixelated;
 }
 
 
@@ -1067,7 +1170,7 @@ input:focus-visible,
   border: 1px solid var(--line);
 }
 .aim-lights li.ok {
-  background: #2f9e5f; color: #fff; border-color: #2f9e5f;
+  background: var(--wall-tint); color: var(--ok-ink); border-color: var(--ok);
 }
 
 /* 六項全通過時輔助線轉綠：參與者的視線在取景框上，餘光就能判斷，
@@ -1078,7 +1181,7 @@ input:focus-visible,
   display: block;
   margin: 0 0 14px;
   padding: 11px 14px;
-  border-radius: 12px;
+  border-radius: var(--r-sm);
   border-left: 6px solid var(--chip, #888);
   background: color-mix(in srgb, var(--chip, #888) 14%, transparent);
   font-size: 16px;
@@ -1090,14 +1193,15 @@ input:focus-visible,
 .treasure {
   margin: 0 0 12px;
   padding: 12px 14px;
-  border-radius: 14px;
-  background: var(--sunk, rgba(0, 0, 0, .05));
-  border: 2px solid transparent;
+  border-radius: var(--r);
+  background: var(--sunk);
+  border: 2px solid var(--ink);
+  box-shadow: var(--drop-sm);
 }
 /* 先知的框刻意醒目：他要一眼知道「我這局有特殊身分」 */
 .treasure.is-prophet {
-  border-color: #E9C46A;
-  background: rgba(233, 196, 106, .12);
+  background: #FBEFC6;
+  box-shadow: inset 6px 0 0 var(--tag), var(--drop-sm);
 }
 .tr-row {
   display: flex;
@@ -1134,4 +1238,71 @@ input:focus-visible,
   border: 1.5px solid var(--zone, #888);
   font-size: 13px;
   font-weight: 700;
+}
+/* 上面的 display 會蓋過 [hidden] 的 UA 樣式 —— 少了這條，
+   不在任何分區時狀態列下方會留一條空的框 */
+.zone-chip[hidden] { display: none; }
+
+/* ── 橫式：16:9 的畫框，所有控制都收在虛線框內 ─────────────
+   畫面固定成 16:9、置中，外面留深色邊（與大螢幕像素場景的邊框同色）。
+   搖桿區撐滿整個畫框、當作外框；其餘元件疊在它上面：
+   狀態列與提示在上、表情鍵在右側一欄、搖桿在左下角（左手拇指），
+   角色站在畫框正中 —— 兩隻手都不會蓋到自己的臉。
+   條件與 app.js 的 landscapeQuery 必須一致：搖桿的位置由它決定。 */
+@media (orientation: landscape) {
+  body:has(#controller:not([hidden])) { background: #383c43; }
+
+  #controller {
+    flex: none;
+    margin: auto;
+    width: min(100%, calc(100dvh * 16 / 9));
+    aspect-ratio: 16 / 9;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: var(--r);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) clamp(96px, 15%, 164px);
+    /* 狀態列、任務、分區、尋寶、社交、操控提示，最後一列是空白（搖桿與角色所在） */
+    grid-template-rows: repeat(6, auto) minmax(0, 1fr);
+    column-gap: 10px;
+    row-gap: 0;
+    padding: 18px calc(18px + env(safe-area-inset-right)) 18px calc(18px + env(safe-area-inset-left));
+  }
+
+  /* 搖桿區在最底層（畫布之上），其餘控制疊在它上面才按得到 */
+  #controller > #joystick-zone {
+    grid-column: 1 / -1;
+    grid-row: 1 / -1;
+    margin: -9px;
+    z-index: 1;
+  }
+  #controller > *:not(#pov-canvas):not(#joystick-zone) { z-index: 2; }
+
+  #controller > .bar { grid-column: 1 / -1; grid-row: 1; margin-bottom: 6px; min-height: 0; }
+  #controller > #mission-banner,
+  #controller > #zone-chip,
+  #controller > #treasure-box,
+  #controller > #links-strip,
+  #controller > .agency-row { grid-column: 1; margin-bottom: 6px; }
+  #controller > #mission-banner { grid-row: 2; }
+  #controller > #zone-chip { grid-row: 3; justify-self: start; }
+  #controller > #treasure-box { grid-row: 4; }
+  #controller > #links-strip { grid-row: 5; }
+  #controller > .agency-row { grid-row: 6; }
+
+  #emotes {
+    grid-column: 2;
+    grid-row: 2 / 8;
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(0, auto);
+    align-content: end;
+    gap: 8px;
+  }
+  #emotes button { padding: 6px 4px 8px; }
+
+  /* 狀態列在畫框內，高度要讓給場景 */
+  .bar svg { height: 34px; }
+  .agency { padding: 6px; }
+
+  #joystick-zone .hint { left: 96px; bottom: 170px; }
 }

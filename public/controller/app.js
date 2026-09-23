@@ -992,6 +992,10 @@ showScreen('entry');
 let ws = null;
 let reconnectDelay = 500;
 let joystick = null;
+/** 目前的場景主題（EV.STAGE_THEME）。可能比 POV 畫布更早送達，先記下來。 */
+let stageTheme = null;
+/** 最近一次的手機名冊。進場時名冊常比畫布先到，畫布建立後要補套。 */
+let rosterAgents = [];
 
 function setStatus(text, cls = '') {
   const el = $('#status');
@@ -1063,8 +1067,13 @@ function connect() {
       serverMode = msg.self?.mode ?? null;
       lastSyncSeenAt = Date.now();
     } else if (msg.type === EV.CLIENT_ROSTER) {
-      // id → 名字。只在成員變動時送，供 POV 畫布標示鄰居是誰。
-      renderer?.setNames(msg.agents ?? []);
+      // id → 名字與外觀。只在成員變動時送，供 POV 畫布畫出鄰居、標示是誰。
+      rosterAgents = msg.agents ?? [];
+      renderer?.setNames(rosterAgents);
+    } else if (msg.type === EV.STAGE_THEME) {
+      // 個人視角畫的是大螢幕同一個場景的局部，主題要跟著主辦端切換
+      stageTheme = msg.theme;
+      renderer?.setTheme(stageTheme);
     } else if (msg.type === EV.CLIENT_REJECT) {
       setStatus('資料有誤', 'warn');
       showToast(`登入失敗：${msg.reason}`);
@@ -1453,16 +1462,39 @@ function initRenderer() {
   renderer = new AvatarRenderer(canvas, config);
   // 腳步震動：由步態相位驅動，與畫面上的落腳完全同步（見 avatarRenderer._detectFootstep）
   renderer.onFootstep(() => vibrate(15));
+  // 角色站在搖桿區的中央；主題可能在畫布建立前就已送達
+  renderer.setAnchorElement($('#joystick-zone'));
+  if (stageTheme) renderer.setTheme(stageTheme);
+  if (rosterAgents.length) renderer.setNames(rosterAgents);
   renderer.start();
 }
+
+/**
+ * 搖桿擺在哪裡。原本在搖桿區正中央，而角色也站在那裡 —— 推桿的手指與搖桿
+ * 底座正好蓋住自己的臉。改成放在角色下方（直式）或左下角（橫式，右手留給
+ * 右側那一欄的表情鍵），兩者都離開角色的上半身。
+ */
+const landscapeQuery = matchMedia('(orientation: landscape)');
+function joystickPosition() {
+  return landscapeQuery.matches
+    ? { left: '96px', top: 'calc(100% - 96px)' }
+    : { left: '50%', top: 'calc(100% - 84px)' };
+}
+// 轉向時重建：nipplejs 的 static 位置在建立時就固定了
+landscapeQuery.addEventListener('change', () => {
+  if (!joystick) return;
+  joystick.destroy();
+  joystick = null;
+  initJoystick();
+});
 
 function initJoystick() {
   if (joystick) return;
   joystick = nipplejs.create({
     zone: $('#joystick-zone'),
     mode: 'static',
-    position: { left: '50%', top: '50%' },
-    color: '#2F2A26',
+    position: joystickPosition(),
+    color: '#3A2E27',
     size: 130,
     restJoystick: true,
   });
@@ -1705,7 +1737,7 @@ function renderQuizOptions({ locked = false, revealed = null } = {}) {
     if (revealed !== null) {
       btn.disabled = true;
       btn.classList.add(i === revealed ? 'right' : 'wrong');
-      if (i === revealed) btn.style.borderColor = '#2F2A26';
+      if (i === revealed) btn.style.borderColor = '#3A2E27';
     } else if (locked) {
       btn.disabled = true;
     } else {

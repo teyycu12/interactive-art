@@ -214,7 +214,9 @@ scaleAt(logicX, logicY, worldHeight)
 - **必須**讓步態觀感與 `shared/character.js` 一致：速度低於
   `WALK_THRESHOLD`（18）時步態連續淡出至靜止，**不可**以 `state` 布林硬切；
   步頻依 `MAX_SPEED`（190）縮放。
-- 朝向使用 `heading`（完整角度）；2D 圖層使用 `facing`（±1 鏡像）。
+- 朝向使用 `heading`（完整角度）。2D 圖層中，捏臉的像素角色依 `heading` 取
+  上下左右四方向之一（`shared/pixelAvatar.js` 的 `dirFromHeading`，帶遲滯）；
+  掃描生成的角色只有正面貼圖，仍用 `facing`（±1 鏡像）。
 - 名牌、表情、離線標記仍**必須**出現，內容與 2D 版一致。
 
 > 違反時：步態硬切會讓角色停下瞬間抽一下；自訂步頻會讓「手機上的我」

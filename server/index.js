@@ -263,6 +263,9 @@ function sendToAgent(agentId, type, payload) {
  */
 function sendClientRoster(ws) {
   send(ws, EV.CLIENT_ROSTER, { agents: stage.nameRoster() });
+  // 場景主題與名冊同一時機補送：進場與重連都走這裡，
+  // 手機的個人視角才知道要畫廚房還是辦公室
+  send(ws, EV.STAGE_THEME, { theme: stageTheme });
 }
 
 function blast(targets, type, payload) {
@@ -798,8 +801,8 @@ function handleHostMessage(ws, msg) {
       stageTheme = msg.theme;
       console.log(`[theme] 切換為「${THEME_MAP[stageTheme].label}」`);
       markDirty();
-      // 只送公開畫面：手機端不顯示場景，送了也只是多一則沒人收的訊息
-      blast([...screens, ...hosts], EV.STAGE_THEME, { theme: stageTheme });
+      // 手機也要：個人視角畫的是同一個場景的局部，主題不同步就會一邊廚房一邊辦公室
+      blast([...screens, ...hosts, ...controllers.values()], EV.STAGE_THEME, { theme: stageTheme });
       break;
     }
 
@@ -1152,9 +1155,7 @@ const loop = startTicker({
     // `screens.size === 0` 早退之後 —— 沒有大螢幕連線時它會一直是 true，
     // 於是每一幀都重新舉旗，名冊變成 30Hz 廣播（實測 2 秒送了 60 次）。
     // 因此改為比對「上次送出的名冊內容」，與大螢幕的清除時機完全脫鉤。
-    const rosterSig = stage.agents.size
-      ? `${stage.agents.size}:${[...stage.agents.values()].map((a) => `${a.id}~${a.name}`).join('|')}`
-      : '';
+    const rosterSig = stage.clientRosterSignature();
     if (rosterSig !== lastClientRosterSig) clientRosterDirty = true;
     if (controllers.size && clientRosterDirty) {
       clientRosterDirty = false;

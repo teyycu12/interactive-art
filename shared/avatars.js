@@ -5,207 +5,47 @@
  * 每個模組是一個 token（如 head_curly_02），Avatar Config JSON 只傳 token，
  * 不傳圖像資料 —— 這是手機端能在 1 秒內載入、且伺服器能做嚴格驗證的前提。
  *
- * 座標系：viewBox 0 0 200 260
- *   - 頭部橢圓中心 (100, 78)，rx 37 / ry 41
- *   - 肩線 y ≈ 136，軀幹延伸至 y = 260（半身像）
- *
- * ⚠ 本檔的 SVG 為風格對齊的手繪佔位素材。WP-A 若要換成官方 Open Peeps
- *   向量資產，只需替換各 part 的 svg 字串，組裝與驗證邏輯無須更動。
+ * 畫法在 shared/pixelAvatar.js：像素 Q 版角色、四個方向、三格步態，
+ * 與大螢幕的像素場景同一套畫風。本檔只管目錄、調色盤與驗證 ——
+ * token 與白名單是協定的一部分，換畫風不能動到它們。
  */
 
-const INK = '{{ink}}';
-
-/* ── 手臂共用路徑 ─────────────────────────────────────────────
-   手臂以「粗墨線打底 + 細填色線覆蓋」的方式繪製，
-   兩者寬度差即形成 3.5px 的手繪外框，省去逐一描邊路徑。 */
-const ARM_L = 'M72 150 Q52 168 50 200';
-const ARM_R = 'M128 150 Q148 168 150 200';
-const HANDS = `
-  <circle cx="50" cy="205" r="9" fill="{{skin}}" stroke="${INK}" stroke-width="3"/>
-  <circle cx="150" cy="205" r="9" fill="{{skin}}" stroke="${INK}" stroke-width="3"/>`;
-
-/** 長袖：整條手臂為衣服顏色 */
-function armsLong(color) {
-  return `
-  <path d="${ARM_L}" fill="none" stroke="${INK}" stroke-width="25" stroke-linecap="round"/>
-  <path d="${ARM_R}" fill="none" stroke="${INK}" stroke-width="25" stroke-linecap="round"/>
-  <path d="${ARM_L}" fill="none" stroke="${color}" stroke-width="18" stroke-linecap="round"/>
-  <path d="${ARM_R}" fill="none" stroke="${color}" stroke-width="18" stroke-linecap="round"/>
-  ${HANDS}`;
-}
-
-/** 短袖：裸露膚色手臂，肩頭覆蓋一小段衣袖 */
-function armsShort() {
-  return armsLong('{{skin}}') + `
-  <path d="M72 150 Q60 158 55 173" fill="none" stroke="${INK}" stroke-width="26" stroke-linecap="round"/>
-  <path d="M128 150 Q140 158 145 173" fill="none" stroke="${INK}" stroke-width="26" stroke-linecap="round"/>
-  <path d="M72 150 Q60 158 55 173" fill="none" stroke="{{accent}}" stroke-width="19" stroke-linecap="round"/>
-  <path d="M128 150 Q140 158 145 173" fill="none" stroke="{{accent}}" stroke-width="19" stroke-linecap="round"/>`;
-}
-
-/** 無袖：純膚色手臂 */
-const armsBare = () => armsLong('{{skin}}');
-
-/** 標準軀幹輪廓 */
-const TORSO = 'M64 260 L64 176 Q64 142 100 136 Q136 142 136 176 L136 260 Z';
+import { pixelGrid, pixelPalette, gridToSVG, PIXEL_W, PIXEL_H } from './pixelAvatar.js';
 
 // ─────────────────────────────────────────────────────────────
-// 頭部 / 髮型模組
+// 頭部 / 髮型模組（hair 為該髮型的預設髮色；毛帽則是帽子顏色）
 // ─────────────────────────────────────────────────────────────
 export const HEADS = [
-  {
-    id: 'head_short_01', label: '俐落短髮', hair: '#3A2E27',
-    svg: `<path d="M63 76 Q60 38 100 36 Q140 38 137 76 Q132 52 100 50 Q68 52 63 76 Z"
-            fill="{{hair}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>`,
-  },
-  {
-    id: 'head_curly_02', label: '蓬鬆捲髮', hair: '#4A2C1A',
-    // 以數個交疊圓形堆出捲度，外露的交界線在手繪風格中正好讀作捲曲
-    svg: `<g fill="{{hair}}" stroke="${INK}" stroke-width="3">
-            <circle cx="70" cy="62" r="14"/><circle cx="86" cy="46" r="15"/>
-            <circle cx="108" cy="43" r="15"/><circle cx="127" cy="55" r="14"/>
-            <circle cx="134" cy="72" r="12"/><circle cx="65" cy="78" r="12"/>
-          </g>`,
-  },
-  {
-    id: 'head_bun_03', label: '丸子頭', hair: '#2B2B33',
-    svg: `<circle cx="100" cy="28" r="16" fill="{{hair}}" stroke="${INK}" stroke-width="3.5"/>
-          <path d="M63 74 Q62 40 100 38 Q138 40 137 74 Q130 54 100 52 Q70 54 63 74 Z"
-            fill="{{hair}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>`,
-  },
-  {
-    id: 'head_long_04', label: '及肩長髮', hair: '#5B3A29',
-    svg: `<path d="M60 70 Q58 34 100 34 Q142 34 140 70 L140 142 Q131 149 127 139
-                   L127 84 Q119 60 100 58 Q81 60 73 84 L73 139 Q69 149 60 142 Z"
-            fill="{{hair}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>`,
-  },
-  {
-    id: 'head_cap_05', label: '毛帽', hair: '#457B9D',
-    svg: `<path d="M62 70 Q60 30 100 30 Q140 30 138 70 Z"
-            fill="{{hair}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
-          <rect x="57" y="64" width="86" height="15" rx="7.5"
-            fill="{{hair}}" stroke="${INK}" stroke-width="3.5"/>`,
-  },
-  {
-    id: 'head_bald_06', label: '光頭', hair: '#3A2E27',
-    svg: `<path d="M76 52 Q86 42 100 44" fill="none" stroke="${INK}"
-            stroke-width="3" stroke-linecap="round" opacity="0.3"/>`,
-  },
+  { id: 'head_short_01', label: '俐落短髮', hair: '#3A2E27' },
+  { id: 'head_curly_02', label: '蓬鬆捲髮', hair: '#4A2C1A' },
+  { id: 'head_bun_03', label: '丸子頭', hair: '#2B2B33' },
+  { id: 'head_long_04', label: '及肩長髮', hair: '#5B3A29' },
+  { id: 'head_cap_05', label: '毛帽', hair: '#457B9D' },
+  { id: 'head_bald_06', label: '光頭', hair: '#3A2E27' },
 ];
 
 // ─────────────────────────────────────────────────────────────
 // 臉部 / 表情模組
 // ─────────────────────────────────────────────────────────────
 export const FACES = [
-  {
-    id: 'face_smile_01', label: '微笑',
-    svg: `<circle cx="85" cy="78" r="4.5" fill="${INK}"/>
-          <circle cx="115" cy="78" r="4.5" fill="${INK}"/>
-          <path d="M88 96 Q100 106 112 96" fill="none" stroke="${INK}"
-            stroke-width="3.5" stroke-linecap="round"/>`,
-  },
-  {
-    id: 'face_smile_glasses', label: '眼鏡微笑',
-    svg: `<circle cx="85" cy="78" r="4" fill="${INK}"/>
-          <circle cx="115" cy="78" r="4" fill="${INK}"/>
-          <circle cx="85" cy="78" r="12" fill="none" stroke="${INK}" stroke-width="3"/>
-          <circle cx="115" cy="78" r="12" fill="none" stroke="${INK}" stroke-width="3"/>
-          <path d="M97 78 L103 78" stroke="${INK}" stroke-width="3" stroke-linecap="round"/>
-          <path d="M88 98 Q100 107 112 98" fill="none" stroke="${INK}"
-            stroke-width="3.5" stroke-linecap="round"/>`,
-  },
-  {
-    id: 'face_wink_02', label: '眨眼',
-    svg: `<circle cx="85" cy="78" r="4.5" fill="${INK}"/>
-          <path d="M108 80 Q115 72 122 80" fill="none" stroke="${INK}"
-            stroke-width="3.5" stroke-linecap="round"/>
-          <path d="M88 96 Q100 106 112 96" fill="none" stroke="${INK}"
-            stroke-width="3.5" stroke-linecap="round"/>`,
-  },
-  {
-    id: 'face_calm_03', label: '恬靜',
-    svg: `<path d="M78 80 Q85 72 92 80" fill="none" stroke="${INK}"
-            stroke-width="3.5" stroke-linecap="round"/>
-          <path d="M108 80 Q115 72 122 80" fill="none" stroke="${INK}"
-            stroke-width="3.5" stroke-linecap="round"/>
-          <path d="M93 98 L107 98" stroke="${INK}" stroke-width="3.5" stroke-linecap="round"/>`,
-  },
-  {
-    id: 'face_grin_04', label: '大笑',
-    svg: `<circle cx="85" cy="76" r="4.5" fill="${INK}"/>
-          <circle cx="115" cy="76" r="4.5" fill="${INK}"/>
-          <path d="M84 94 Q100 112 116 94 Z" fill="${INK}" stroke="${INK}"
-            stroke-width="3.5" stroke-linejoin="round"/>`,
-  },
-  {
-    id: 'face_shades_05', label: '墨鏡',
-    svg: `<path d="M68 71 L132 71" stroke="${INK}" stroke-width="3" stroke-linecap="round"/>
-          <rect x="70" y="70" width="26" height="18" rx="7" fill="${INK}"/>
-          <rect x="104" y="70" width="26" height="18" rx="7" fill="${INK}"/>
-          <path d="M96 76 L104 76" stroke="${INK}" stroke-width="3.5" stroke-linecap="round"/>
-          <path d="M90 100 Q100 106 110 100" fill="none" stroke="${INK}"
-            stroke-width="3.5" stroke-linecap="round"/>`,
-  },
+  { id: 'face_smile_01', label: '微笑' },
+  { id: 'face_smile_glasses', label: '眼鏡微笑' },
+  { id: 'face_wink_02', label: '眨眼' },
+  { id: 'face_calm_03', label: '恬靜' },
+  { id: 'face_grin_04', label: '大笑' },
+  { id: 'face_shades_05', label: '墨鏡' },
 ];
 
 // ─────────────────────────────────────────────────────────────
 // 身體 / 服裝模組（accentColor 作為主要填色）
 // ─────────────────────────────────────────────────────────────
 export const BODIES = [
-  {
-    id: 'body_tee_01', label: '素T',
-    svg: armsShort() + `
-      <path d="${TORSO}" fill="{{accent}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
-      <path d="M88 138 Q100 149 112 138" fill="none" stroke="${INK}"
-        stroke-width="3.5" stroke-linecap="round"/>`,
-  },
-  {
-    id: 'body_hoodie_01', label: '連帽衫',
-    svg: armsLong('{{accent}}') + `
-      <path d="${TORSO}" fill="{{accent}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
-      <path d="M75 145 Q100 127 125 145 Q118 164 100 166 Q82 164 75 145 Z"
-        fill="{{accent}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
-      <path d="M90 162 L88 186" stroke="${INK}" stroke-width="3" stroke-linecap="round"/>
-      <path d="M110 162 L112 186" stroke="${INK}" stroke-width="3" stroke-linecap="round"/>
-      <path d="M79 208 L121 208 L125 238 L75 238 Z" fill="none" stroke="${INK}"
-        stroke-width="3.5" stroke-linejoin="round"/>`,
-  },
-  {
-    id: 'body_shirt_02', label: '襯衫',
-    svg: armsLong('{{accent}}') + `
-      <path d="${TORSO}" fill="{{accent}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
-      <path d="M86 137 L100 158 L114 137" fill="none" stroke="${INK}"
-        stroke-width="3.5" stroke-linejoin="round"/>
-      <path d="M100 162 L100 250" stroke="${INK}" stroke-width="3" stroke-dasharray="1 14"
-        stroke-linecap="round"/>`,
-  },
-  {
-    id: 'body_dress_03', label: '洋裝',
-    svg: armsBare() + `
-      <path d="M52 260 Q60 200 66 176 Q66 142 100 136 Q134 142 134 176
-               Q140 200 148 260 Z"
-        fill="{{accent}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
-      <path d="M86 137 Q100 150 114 137" fill="none" stroke="${INK}"
-        stroke-width="3.5" stroke-linecap="round"/>
-      <path d="M64 214 Q100 226 136 214" fill="none" stroke="${INK}"
-        stroke-width="3" stroke-linecap="round" opacity="0.5"/>`,
-  },
-  {
-    id: 'body_jacket_04', label: '外套',
-    svg: armsLong('{{accent}}') + `
-      <path d="${TORSO}" fill="#FAF8F5" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
-      <path d="M64 260 L64 176 Q64 142 100 136 L92 260 Z"
-        fill="{{accent}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
-      <path d="M136 260 L136 176 Q136 142 100 136 L108 260 Z"
-        fill="{{accent}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>`,
-  },
-  {
-    id: 'body_tank_05', label: '背心',
-    svg: armsBare() + `
-      <path d="${TORSO}" fill="{{accent}}" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
-      <path d="M82 139 Q100 168 118 139" fill="{{skin}}" stroke="${INK}"
-        stroke-width="3.5" stroke-linejoin="round"/>`,
-  },
+  { id: 'body_tee_01', label: '素T' },
+  { id: 'body_hoodie_01', label: '連帽衫' },
+  { id: 'body_shirt_02', label: '襯衫' },
+  { id: 'body_dress_03', label: '洋裝' },
+  { id: 'body_jacket_04', label: '外套' },
+  { id: 'body_tank_05', label: '背心' },
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -216,9 +56,6 @@ export const ACCENT_COLORS = [
   '#E76F51', '#2A9D8F', '#E9C46A', '#457B9D',
   '#B56576', '#6D6875', '#84A98C', '#F4845F',
 ];
-
-/** 手繪風格的墨線顏色，全系統統一 */
-export const INK_COLOR = '#2F2A26';
 
 // ─────────────────────────────────────────────────────────────
 // 查詢與驗證
@@ -379,40 +216,54 @@ export function randomAvatarConfig() {
 }
 
 /**
- * 依 Avatar Config 組裝完整 SVG。
+ * 像素角色需要的「部位 token + 調色盤」。
  *
- * 圖層順序（由後至前）：脖子 → 身體 → 頭型底 → 髮型 → 臉部
- * 身體必須在脖子之後，衣領才能自然蓋住脖子根部。
+ * CV 角色沒有 token 與調色盤欄位：改用生成服務取樣回來的顏色套在預設身形上
+ * （連下身顏色也用取樣的），呼叫端要的是「一眼認得出是誰」的小圖。
+ * 若不接這個分支，這些欄位會是 undefined 並被插值成 fill="undefined"。
  */
-export function renderAvatarSVG(cfg, { width = 200, height = 260 } = {}) {
+export function avatarPixelSpec(cfg) {
+  if (cfg?.source === 'CV') {
+    const c = cfg.fallbackColors;
+    return {
+      parts: { head: HEADS[0].id, face: FACES[0].id, body: BODIES[0].id },
+      pal: pixelPalette({ skin: c.skin, hair: c.hair, accent: c.torso, pants: c.legs }),
+    };
+  }
   const head = HEAD_MAP[cfg.head] ?? HEADS[0];
-  const face = FACE_MAP[cfg.face] ?? FACES[0];
-  const body = BODY_MAP[cfg.body] ?? BODIES[0];
+  return {
+    parts: {
+      head: head.id,
+      face: (FACE_MAP[cfg.face] ?? FACES[0]).id,
+      body: (BODY_MAP[cfg.body] ?? BODIES[0]).id,
+    },
+    pal: pixelPalette({ skin: cfg.skinTone, hair: head.hair, accent: cfg.accentColor }),
+  };
+}
 
-  // CV 角色沒有 token 與調色盤欄位。這裡改用生成服務取樣回來的顏色，
-  // 套在預設身形上 —— 呼叫端（配對確認、離場畫面、控制器縮圖）要的是
-  // 「一眼認得出是誰」的小圖，取樣色已足夠；貼圖本人由大螢幕負責呈現。
-  // 若不接這個分支，這些欄位會是 undefined 並被插值成 fill="undefined"。
-  const isCV = cfg.source === 'CV';
-  const skin = isCV ? cfg.fallbackColors.skin : cfg.skinTone;
-  const accent = isCV ? cfg.fallbackColors.torso : cfg.accentColor;
-  const hair = isCV ? cfg.fallbackColors.hair : head.hair;
+/**
+ * 給手機名冊用的精簡外觀：捏臉原樣（本來就只有 token 與白名單色），
+ * CV 只留取樣色、丟掉貼圖網址。手機據此把鄰居畫成像素角色。
+ */
+export function avatarLook(cfg) {
+  if (!cfg) return null;
+  if (cfg.source === 'CV') return { source: 'CV', fallbackColors: cfg.fallbackColors };
+  return cfg;
+}
 
-  const fill = (svg) => svg
-    .replaceAll('{{ink}}', INK_COLOR)
-    .replaceAll('{{skin}}', skin)
-    .replaceAll('{{accent}}', accent)
-    .replaceAll('{{hair}}', hair);
+/** 單一方向、單一步態格的像素格子（見 shared/pixelAvatar.js） */
+export function avatarGrid(cfg, dir = 'down', frame = 0, pose = null) {
+  const { parts, pal } = avatarPixelSpec(cfg);
+  return pixelGrid(parts, pal, dir, frame, pose);
+}
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 260"
-    width="${width}" height="${height}" fill="none" stroke-linecap="round">
-    <path d="M86 100 L86 124 Q100 134 114 124 L114 100 Z"
-      fill="${skin}" stroke="${INK_COLOR}" stroke-width="3.5" stroke-linejoin="round"/>
-    ${fill(body.svg)}
-    <ellipse cx="62" cy="86" rx="9" ry="11" fill="${skin}" stroke="${INK_COLOR}" stroke-width="3"/>
-    <ellipse cx="138" cy="86" rx="9" ry="11" fill="${skin}" stroke="${INK_COLOR}" stroke-width="3"/>
-    <ellipse cx="100" cy="78" rx="37" ry="41" fill="${skin}" stroke="${INK_COLOR}" stroke-width="3.5"/>
-    ${fill(head.svg)}
-    ${fill(face.svg)}
-  </svg>`;
+/** 像素角色的寬高比（寬 / 高）。版面與大螢幕的繪製尺寸都以它為準。 */
+export const AVATAR_ASPECT = PIXEL_W / PIXEL_H;
+
+/**
+ * 依 Avatar Config 輸出正面站立的像素 SVG（捏臉預覽、縮圖、主辦端名單）。
+ * 大螢幕與手機 POV 不走這裡，而是由 avatarSprite.js 直接把格子畫進 canvas。
+ */
+export function renderAvatarSVG(cfg, { width = 200, height = 270 } = {}) {
+  return gridToSVG(avatarGrid(cfg, 'down', 0), { width, height });
 }

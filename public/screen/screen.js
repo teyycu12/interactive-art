@@ -14,7 +14,9 @@ import { OBSTACLES, PROPS } from '/shared/scene.js';
 import { TREASURE_RADIUS } from '/shared/heat.js';
 import { createScene, pinnedSceneId } from './scenes/registry.js';
 import { DEFAULT_THEME, isThemeId } from '/shared/themes.js';
-import { drawCharacter, drawNameplate, drawEmote, drawOffline } from '/shared/character.js';
+import {
+  drawCharacter, drawNameplate, drawEmote, drawOffline, emoteIsPosed,
+} from '/shared/character.js';
 
 let activeScene = null;
 
@@ -690,7 +692,7 @@ function render(now) {
     drawCharacter(ctx, a, pos, entry?.img, { time, maxSpeed: MAX_SPEED, height });
     // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
     drawNameplate(ctx, pos, entry?.name ?? a.id, { fontSize: Math.max(10, height * 0.12) });
-    if (a.emote) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
+    if (a.emote && !emoteIsPosed(entry?.img, a.emote)) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }
 

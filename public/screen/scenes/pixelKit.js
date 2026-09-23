@@ -8,6 +8,14 @@ export const FLOOR_X = 160, FLOOR_Y = 270;
 
 export const INK = '#302a2d';
 
+/**
+ * 角色身高換算：scaleAt(x, y, h) = h × CHARACTER_SCALE × zoom。
+ * 原本是 57，角色只和盆栽差不多高，與流理台、冰箱比起來像小人國；
+ * 76 讓 Q 版角色約到流理台的高度。手機 POV（controller/sceneBackdrop.js）
+ * 也用這個值，兩邊的角色與道具比例才一致。
+ */
+export const CHARACTER_SCALE = 76;
+
 export function brush(c) {
   const rect = (x,y,w,h,color) => { c.fillStyle=color; c.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h)); };
   const box = (x,y,w,h,color) => { rect(x-2,y-2,w+4,h+4,INK); rect(x,y,w,h,color); };

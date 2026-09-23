@@ -17,12 +17,8 @@ import assert from 'node:assert/strict';
 
 import { Stage } from '../server/state.js';
 
-/** 對應 server/index.js 主迴圈裡的名冊指紋計算 */
-function rosterSignature(stage) {
-  return stage.agents.size
-    ? `${stage.agents.size}:${[...stage.agents.values()].map((a) => `${a.id}~${a.name}`).join('|')}`
-    : '';
-}
+/** 主迴圈用的名冊指紋（server/index.js 直接呼叫同一個方法） */
+const rosterSignature = (stage) => stage.clientRosterSignature();
 
 /** 重現主迴圈：跑 n 個 tick，回傳實際送出的次數 */
 function runTicks(stage, ticks, { hasScreen }) {
@@ -106,10 +102,30 @@ describe('CLIENT_ROSTER 重送節流', () => {
       'nameRoster 應能隨時取得完整名冊供補送');
   });
 
-  test('nameRoster 只帶 id 與名字，不含捏臉外觀', () => {
+  test('nameRoster 帶 id、名字與精簡外觀（手機把鄰居畫成像素角色）', () => {
     const stage = new Stage();
     stage.addAgent({ name: '阿明', avatar: AVATAR });
     const r = stage.nameRoster();
-    assert.deepEqual(Object.keys(r[0]).sort(), ['id', 'name']);
+    assert.deepEqual(Object.keys(r[0]).sort(), ['id', 'look', 'name']);
+    assert.deepEqual(r[0].look, AVATAR);
+  });
+
+  test('CV 角色的外觀不帶貼圖網址', () => {
+    const stage = new Stage();
+    const fallbackColors = { skin: '#F4C08A', hair: '#4A2C1A', torso: '#8FA05E', legs: '#B7A98A' };
+    stage.addAgent({ name: '小華', avatar: {
+      source: 'CV', fallbackColors,
+      textures: { head: '/assets/gen/x/head.webp', torso: '/assets/gen/x/torso.webp', legs: '/assets/gen/x/legs.webp' },
+    } });
+    const [{ look }] = stage.nameRoster();
+    assert.deepEqual(look, { source: 'CV', fallbackColors });
+  });
+
+  test('重新捏臉會改變指紋，名冊才會重送', () => {
+    const stage = new Stage();
+    const a = stage.addAgent({ name: '阿明', avatar: AVATAR });
+    const before = rosterSignature(stage);
+    a.avatar = { ...AVATAR, accentColor: '#2A9D8F' };
+    assert.notEqual(rosterSignature(stage), before);
   });
 });

@@ -12,7 +12,7 @@ test('projection maps feet into the stage in CSS pixels with proportional height
   const scene=fixture();
   assert.deepEqual(scene.projectToScreen(0,0),{x:199,y:155});
   assert.deepEqual(scene.projectToScreen(1920,1080),{x:1159,y:695});
-  assert.equal(scene.scaleAt(960,540,2.1),59.85);
+  assert.ok(Math.abs(scene.scaleAt(960,540,2.1) - 2.1 * 76 * scene.zoom) < 1e-9);
   assert.equal(scene.scaleAt(NaN,540,2.1),0);
 });
 test('proximity triggers on entry, never changes participant state, allows re-entry', () => {

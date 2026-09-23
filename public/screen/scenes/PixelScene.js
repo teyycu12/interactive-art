@@ -1,6 +1,6 @@
 import { ZONES } from '/shared/scene.js';
 import { THEME_MAP } from '/shared/themes.js';
-import { ROOM_W as W, ROOM_H as H, ROOM_PAD, FLOOR_X, FLOOR_Y, spotBadge } from './pixelKit.js';
+import { ROOM_W as W, ROOM_H as H, ROOM_PAD, FLOOR_X, FLOOR_Y, CHARACTER_SCALE, spotBadge } from './pixelKit.js';
 
 const GX = ROOM_PAD + FLOOR_X, GY = FLOOR_Y;
 
@@ -31,7 +31,7 @@ export class PixelScene {
     this.resize();
   }
   projectToScreen(x, y) { return { x: this.ox + (GX + x) * this.zoom, y: this.oy + (GY + y) * this.zoom }; }
-  scaleAt(x, y, height) { return Number.isFinite(x + y + height) ? height * 57 * this.zoom : 0; }
+  scaleAt(x, y, height) { return Number.isFinite(x + y + height) ? height * CHARACTER_SCALE * this.zoom : 0; }
   resetCamera() { this.resize(); }
   applyLight(name) { if (['day', 'evening', 'night'].includes(name)) this.light = name; }
   resize() {

@@ -3,14 +3,15 @@
  *
  * 兩種來源：
  *   掃描生成（source: 'CV'）  三張貼圖依 CV_CUTS 的比例疊回一張畫布
- *   模組捏臉（備援路徑）      直接把 SVG 交給 Image 解碼
+ *   模組捏臉（備援路徑）      像素角色，四方向 × 三格步態（shared/pixelAvatar.js）
  *
  * 與 shared/character.js 同理放在 shared/：手機畫的角色若與大螢幕不是
  * 同一份組裝邏輯，比例或替身顏色一旦漂移，兩邊都不會報錯 ——
  * 只會出現「手機上的我」和「大螢幕上的我」長得不一樣。
  */
 
-import { renderAvatarSVG, CV_CUTS, CV_PARTS, CV_FULL_PART } from './avatars.js';
+import { avatarGrid, CV_CUTS, CV_PARTS, CV_FULL_PART } from './avatars.js';
+import { PIXEL_W, PIXEL_H, PIXEL_DIRS, PIXEL_FRAMES, PIXEL_POSES } from './pixelAvatar.js';
 
 // 角色畫布的解析度。
 //
@@ -27,8 +28,8 @@ import { renderAvatarSVG, CV_CUTS, CV_PARTS, CV_FULL_PART } from './avatars.js';
 //
 // 寬度維持 200:260 的比例（788:1024），畫布比例一變，drawFull 的
 // 「底部對齊」與 composite 的三段疊圖都會跟著偏。
-// 捏臉路徑不受影響：renderAvatarSVG 以 width/height 為參數、viewBox 固定，
-// 放大是向量重繪。
+// 捏臉路徑不受影響：像素角色以原尺寸（20×27）保存，放大時由 drawCharacter
+// 關掉影像平滑、以整數倍像素繪製。
 export const AVATAR_W = 788;
 export const AVATAR_H = 1024;
 
@@ -144,11 +145,52 @@ export function cvAvatarImage(avatar, { enhance = false } = {}) {
   return canvas;
 }
 
+/**
+ * 捏臉角色：四個方向 × 三格步態，每格一張原尺寸（PIXEL_W × PIXEL_H）的小 canvas。
+ *
+ * 回傳的是「正面站立」那一格，其餘掛在 pixelFrames 上 —— 這樣直接放進 DOM
+ * 的呼叫端（手機的社交連結頭像）拿到的仍是一張正常的圖，而 drawCharacter
+ * 看到 pixelFrames 就改走像素畫法（依朝向選方向、依步態換格）。
+ *
+ * 不經過 SVG → Image 解碼：12 格同步畫完，角色進場的第一幀就有圖。
+ */
+export function pixelAvatarImage(avatar) {
+  const paint = (grid) => {
+    const c = document.createElement('canvas');
+    c.width = PIXEL_W;
+    c.height = PIXEL_H;
+    const ctx = c.getContext('2d');
+    for (let y = 0; y < PIXEL_H; y++) {
+      for (let x = 0; x < PIXEL_W; x++) {
+        const color = grid[y][x];
+        if (!color) continue;
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+    c.complete = true;
+    c.naturalWidth = PIXEL_W;
+    return c;
+  };
+  const frames = {};
+  // 動作畫格（揮手、乾杯）：每個方向每種動作兩格，交替播放
+  const poses = {};
+  for (const dir of PIXEL_DIRS) {
+    frames[dir] = [];
+    for (let f = 0; f < PIXEL_FRAMES; f++) frames[dir].push(paint(avatarGrid(avatar, dir, f)));
+    poses[dir] = {};
+    for (const kind of Object.values(PIXEL_POSES)) {
+      poses[dir][kind] = [1, 2].map((step) => paint(avatarGrid(avatar, dir, 0, `${kind}${step}`)));
+    }
+  }
+  const sprite = frames.down[0];
+  sprite.pixelFrames = frames;
+  sprite.pixelPoses = poses;
+  return sprite;
+}
+
 /** 依來源選用組裝方式。回傳物件皆帶有 complete / naturalWidth，可直接交給 drawCharacter。 */
 export function avatarImage(avatar, opts) {
   if (avatar?.source === 'CV') return cvAvatarImage(avatar, opts);
-  const svg = renderAvatarSVG(avatar, { width: AVATAR_W, height: AVATAR_H });
-  const img = new Image();
-  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  return img;
+  return pixelAvatarImage(avatar);
 }
