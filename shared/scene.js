@@ -42,6 +42,15 @@ export const ZONES = [
  * r 為碰撞半徑，通常略大於視覺尺寸，讓角色不會擦著邊緣走。
  */
 export const PROPS = [
+  // Kitchen additions use existing prop types so the alternate room also renders them.
+  { id: 'k_cart', type: 'table', x: 760, y: 160, r: 48 },
+  { id: 'k_island', type: 'table', x: 980, y: 160, r: 62 },
+  { id: 'k_dining', type: 'lowtable', x: 1160, y: 1010, r: 70 },
+  { id: 'k_stool_l', type: 'lowtable', x: 1040, y: 990, r: 28 },
+  { id: 'k_stool_r', type: 'lowtable', x: 1300, y: 990, r: 28 },
+  { id: 'k_pantry', type: 'table', x: 1520, y: 240, r: 60 },
+  { id: 'k_dishes', type: 'table', x: 1710, y: 240, r: 50 },
+  { id: 'k_market', type: 'table', x: 560, y: 960, r: 54 },
   // 舞台兩側的音箱
   { id: 'spk_l', type: 'speaker', x: 600, y: 210, r: 46, ry: Math.PI / 4 },
   { id: 'spk_r', type: 'speaker', x: 1320, y: 210, r: 46, ry: -Math.PI / 4 },

@@ -90,7 +90,7 @@ with mock.patch.dict(os.environ, {"GENERATION_MODE": ""}, clear=True):
 `backend/tests/test_config.py`，拿掉任一支就會漏掉一半。
 
 **順帶**：`GENERATION_MODE` 的預設值必須是還在線上的模式。
-`body_sprite` 與 `brick_ai_texture` 已退役，`app.py` 會在付費呼叫前
+`body_sprite` 與 `brick_ai_texture` 已退役，生成服務會在付費呼叫前
 直接以 `mode_retired` 拒絕 —— 預設值落在那上面，等於沒設這個環境變數的人
 一啟動就全部生成失敗，而錯誤訊息只會說「此生成模式已退役」。
 
@@ -112,16 +112,6 @@ WebSocket 生命週期與 30Hz 主迴圈。靜態服務與代理那 540 行與�
 它原本跟 `requestScreenCapture()` 放在檔案後段，而 `const` 沒有變數提升 ——
 放在後面的話啟動當下就 ReferenceError，且因為是模組載入期，
 整個伺服器根本起不來。
-
-### frontend/ 必須維持 CommonJS
-
-根目錄的 `package.json` 帶著 `"type": "module"`（PF2 全套是 ESM）。
-Node 會據此把**所有**子目錄的 `.js` 當成 ES module —— 但 `frontend/` 是
-2D 備援版的瀏覽器腳本與 `require()` 寫成的測試，整合當下就整批壞掉
-（`ReferenceError: require is not defined`，CI 的 `node --test frontend/tests/` 失敗）。
-
-`frontend/package.json` 只做一件事：把模組型別重新限定成 `commonjs`。
-**不要刪除它**，也不要在 `frontend/` 底下改用 `import`／`export`。
 
 ### 閒置時角色靜止（IDLE_MOTION，預設 'still'）
 

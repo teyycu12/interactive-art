@@ -11,8 +11,8 @@ python backend/validate_cuts.py --sprites samples/sprites/ --sheet report.png
 
 | 路徑 | 內容 | 指令 |
 |---|---|---|
-| `test/` | 整合版 Node 單元測試 | `npm test` |
+| `test/` | Node 單元測試 | `npm test` |
 | `backend/tests/` | Python | `pytest backend/` |
-| `frontend/tests/` | 2D 備援版前端 | `node --test frontend/tests/` |
+| `scripts/e2e.mjs` | 端對端 | `npm run test:e2e` |
 
 這個目錄原本叫 `tests/`，與上表第一項只差一個字母，改名即為此。

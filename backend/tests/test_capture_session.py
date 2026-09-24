@@ -6,9 +6,6 @@
 
 import re
 import time
-from pathlib import Path
-
-import pytest
 
 from backend import capture_session
 from backend.capture_session import SessionStore, new_session, update
@@ -21,31 +18,6 @@ def frame(*, ready=True, height_ratio=None, valid=None, **extra):
         f["height_measurement_valid"] = valid if valid is not None else True
     f.update(extra)
     return f
-
-
-class TestThresholdsMatchAppPy:
-    """app.py 仍有自己一份實作 —— 門檻漂移不會有任何錯誤訊息。
-
-    兩邊各自演化的話，同一個站姿在 2D 備援版與整合版控制器會得到不同的判定，
-    表現出來只是「兩個入口拍出來的角色品質不一樣」，沒有人會聯想到門檻。
-    """
-
-    def test_defaults_are_identical(self):
-        # 路徑相對於本檔而非工作目錄：CI 是 `cd backend && pytest tests/`，
-        # 本機習慣從根目錄跑 `pytest backend/` —— 寫死 "backend/app.py"
-        # 只在後者成立，前者會以 FileNotFoundError 失敗。
-        app_py = Path(__file__).resolve().parents[1] / "app.py"
-        src = app_py.read_text(encoding="utf-8")
-        for name, ours in (
-            ("CAPTURE_STABLE_FRAMES", capture_session.STABLE_FRAMES),
-            ("CAPTURE_MOTION_MAX", capture_session.MOTION_MAX),
-            ("HEIGHT_STABLE_FRAMES", capture_session.HEIGHT_STABLE_FRAMES),
-            ("HEIGHT_RATIO_SPAN_MAX", capture_session.HEIGHT_RATIO_SPAN_MAX),
-        ):
-            m = re.search(rf'getenv\("{name}", "([0-9.]+)"\)', src)
-            assert m, f"app.py 找不到 {name}，實作可能已改名"
-            assert float(m.group(1)) == pytest.approx(float(ours)), \
-                f"{name} 在 app.py 與 capture_session 不一致"
 
 
 class TestStability:

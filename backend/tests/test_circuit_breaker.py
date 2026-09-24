@@ -1,7 +1,7 @@
 import time
 import unittest
-from backend.app import _raise_on_vlm_failure
 from backend.circuit_breaker import CircuitBreaker, CircuitBreakerOpenException
+from service import _raise_on_failure
 
 
 class TestCircuitBreaker(unittest.TestCase):
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class TestRaiseOnVLMFailure(unittest.TestCase):
+class TestRaiseOnFailure(unittest.TestCase):
     """{ok: False} 必須被熔斷器算成失敗。
 
     circuit_breaker.call 只在 func 拋例外時 record_failure()，正常回傳一律
@@ -83,17 +83,17 @@ class TestRaiseOnVLMFailure(unittest.TestCase):
 
     def test_passes_through_success(self):
         ok = {"ok": True, "outfit": {"inner": "hoodie"}}
-        self.assertEqual(_raise_on_vlm_failure(lambda _: ok, "img"), ok)
+        self.assertEqual(_raise_on_failure(lambda _: ok, "img"), ok)
 
     def test_converts_ok_false_to_exception(self):
         with self.assertRaises(RuntimeError):
-            _raise_on_vlm_failure(lambda _: {"ok": False, "error": "quota"}, "img")
+            _raise_on_failure(lambda _: {"ok": False, "error": "quota"}, "img")
 
     def test_breaker_opens_after_repeated_ok_false(self):
         failing = lambda _: {"ok": False, "error": "quota"}
         fallback = {"ok": False, "error": "circuit_open"}
         for _ in range(2):
-            self.breaker.call(_raise_on_vlm_failure, failing, "img",
+            self.breaker.call(_raise_on_failure, failing, "img",
                               max_retries=0, fallback=fallback)
         self.assertEqual(self.breaker.state, CircuitBreaker.STATE_OPEN,
                          "連續失敗後熔斷器必須跳開，否則整段保護是死的")

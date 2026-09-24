@@ -669,7 +669,7 @@ def get_detail_benchmark(db_path: Optional[Path] = None) -> Dict[str, Any]:
         "minimum_paired_samples": 5,
         "target_ratio": 0.95,
         "target_met": len(paired_ratios) >= 5 and paired_ratio is not None and paired_ratio >= 0.95,
-        "note": "細節分只衡量清晰度與局部紋理；人物相似度仍需同照片盲評。",
+        "note": "細節分只衡量清晰度與局部紋理；人物相似度仍需人工比對同一張照片。",
     }
 
 

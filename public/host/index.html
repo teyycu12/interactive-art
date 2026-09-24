@@ -53,6 +53,14 @@
       <div class="team-score" id="team-score"></div>
     </div>
 
+    <!-- 場景主題：切換大螢幕的背景，依活動場合挑選 -->
+    <div class="panel">
+      <h2>場景主題</h2>
+      <p class="hint">依活動場合切換大螢幕的背景。角色、分數與進行中的任務都不受影響。</p>
+      <div class="theme-list" id="theme-list" role="group" aria-label="場景主題"></div>
+      <p class="err" id="theme-err" hidden></p>
+    </div>
+
     <!-- 任務控制 -->
     <div class="panel">
       <h2>任務</h2>
@@ -90,6 +98,43 @@
       </div>
 
       <p class="err" id="mission-err" hidden></p>
+    </div>
+
+    <!-- 轉場問卷：沒有正解的題目，答案留成參與者身上的標籤 -->
+    <div class="panel">
+      <h2>轉場問卷</h2>
+
+      <div id="survey-idle">
+        <p class="hint">切換場景的空檔問一題。沒有正解、不計分，答案會留成參與者身上的標籤，
+          之後的任務可以用「答某個選項的人」當條件。</p>
+        <label class="field">
+          <span>題目</span>
+          <select id="survey-pick"></select>
+        </label>
+        <p class="brief" id="survey-preview"></p>
+        <label class="field">
+          <span>作答時間</span>
+          <select id="survey-duration">
+            <option value="15000">15 秒</option>
+            <option value="20000" selected>20 秒</option>
+            <option value="30000">30 秒</option>
+            <option value="45000">45 秒</option>
+          </select>
+        </label>
+        <button class="btn-primary" id="btn-survey-start">出題</button>
+      </div>
+
+      <div id="survey-live" hidden>
+        <div class="live-head">
+          <b id="survey-live-q">—</b>
+          <span class="tag" id="survey-countdown">—</span>
+        </div>
+        <ul class="survey-bars" id="survey-bars"></ul>
+        <p class="hint" id="survey-live-foot">—</p>
+        <button class="btn-danger" id="btn-survey-close">收題</button>
+      </div>
+
+      <p class="err" id="survey-err" hidden></p>
     </div>
 
     <!-- 尋寶（先知模式）-->
@@ -184,7 +229,7 @@
       <div class="table-wrap">
         <table id="people">
           <thead>
-            <tr><th></th><th>名稱</th><th>積分</th><th>任務</th><th>連結</th><th>操控</th><th></th></tr>
+            <tr><th></th><th>名稱</th><th>標籤</th><th>積分</th><th>任務</th><th>連結</th><th>操控</th><th></th></tr>
           </thead>
           <tbody id="people-body"></tbody>
         </table>
@@ -196,10 +241,10 @@
     <div class="panel">
       <div class="panel-head">
         <h2>生成歷史 <span class="count" id="history-count">0</span></h2>
-        <button class="btn-link" id="btn-history-toggle" aria-expanded="false">展開列表</button>
+        <button class="btn-link" id="btn-history-toggle" aria-expanded="true">收合列表</button>
       </div>
       <p class="hint tiny" id="history-summary">讀取中…</p>
-      <div class="table-wrap is-collapsed" id="history-wrap">
+      <div class="table-wrap" id="history-wrap">
         <table id="history-table">
           <thead>
             <tr><th></th><th></th><th>時間</th><th>狀態</th><th>模型</th><th>Tokens</th><th>花費</th><th>耗時</th></tr>

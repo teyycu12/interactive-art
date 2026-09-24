@@ -1,5 +1,10 @@
 # M3 交接說明（通訊與集中式狀態管理）
 
+> [!WARNING]
+> **歷史文件。** 本文所述的 `backend/app.py`、`swarm_logic.py`、`stress_test.py`、
+> `bench_generate.py`、`e2e_smoke.py` 與 `frontend/` 已於 2026-09-10 隨 2D 備援版
+> 整套移除，文中的指令與檔案路徑都不再存在。保留作為 M3 的變更與量測紀錄。
+
 > **更新：2026-08-22** — `app.py` M3 埋點已全數合入 main（含 M1/M2 影像解碼改動），
 > swarm_logic 已增強（邊界轉向、打招呼持續、有機漫遊），測試與啟動工具已補齊。
 > 原始 diff 檔 `app.py.M3-applied.diff` 已歸檔（僅留作變更歷史參考）。

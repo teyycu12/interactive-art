@@ -1,0 +1,14 @@
+.scene-ui { position: absolute; inset: 0; pointer-events: none; color: #51443e; }
+.scene-ui header { position: absolute; top: 22px; left: 32px; }
+.scene-ui h1 { font-size: 25px; letter-spacing: .12em; margin: 0; }
+.scene-ui header p { margin: 7px 0; font-size: 10px; letter-spacing: .14em; }
+.scene-ui nav { position: absolute; top: 26px; right: 28px; display: flex; gap: 6px; pointer-events: auto; }
+.scene-ui nav button { padding: 8px 13px; border: 1px solid #93a68b; border-radius: 5px; background: #f6f0df; color: #51443e; cursor: pointer; font: inherit; font-size: 12px; }
+.scene-ui button:hover { background-color: #fff8dc; }
+.scene-ui button:focus-visible { outline: 3px solid #9b542f; outline-offset: 3px; }
+.scene-status { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 9px 18px; margin: 0; border-radius: 5px; background: #f6f0df; font-size: 13px; max-width: 80vw; text-align: center; }
+.scene-object { position: absolute; transform: translate(-50%, -50%); padding: 0; border: 0; background: transparent; pointer-events: auto; cursor: pointer; }
+.scene-object:hover, .scene-object:focus-visible { background: #fff1bc33 !important; outline: 2px dashed #9b542f; outline-offset: 3px; }
+.mission, .quiz, .ranks, .offline, .toasts, .hud, .hint-key { z-index: 3; }
+@media(max-width: 700px) { .scene-ui header { top: 12px; left: 14px; } .scene-ui h1 { font-size: 19px; } .scene-ui header p { display: none; } .scene-ui nav { top: 45px; right: 12px; } .scene-ui nav button { padding: 5px 8px; } .scene-status { bottom: 30px; width: max-content; font-size: 11px; } }
+.scene-ui header { background: #dce5d6ed; padding: 7px 13px; border-radius: 5px; top: 12px; left: 20px; }

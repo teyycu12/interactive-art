@@ -171,8 +171,7 @@ _executor = ThreadPoolExecutor(max_workers=16)
 # 那正是最糟的情況：外部 API 一開始回 429，熔斷器只要連續三次失敗就會跳閘
 # 20 秒（見 circuit_breaker.py），於是**全場一起失敗**，而不是排隊慢一點。
 #
-# 這裡沿用 2D 備援版早就有的 GEN_MAX_CONCURRENT（backend/app.py），
-# 整合版先前漏掉了這道閘門。超出上限的請求會在這裡等，不會被拒絕 ——
+# 上限由 GEN_MAX_CONCURRENT 控制。超出上限的請求會在這裡等，不會被拒絕 ——
 # 對參與者而言是「慢一點」，遠好過「大家一起看到生成失敗」。
 _gen_semaphore = threading.Semaphore(config.GEN_MAX_CONCURRENT)
 
@@ -245,6 +244,15 @@ def health():
     style_refs = style_reference_report()
     degraded = list(_DEGRADED)
     for style_id, style_ref in style_refs.items():
+        if style_ref.get("pending"):
+            # 尚未上線的風格本來就還沒有圖。報出來是為了讓佈署的人知道
+            # 「它存在、還差什麼」，不是當成故障 —— 它不在手機端選單上，
+            # 參與者選不到，所以不會有人拿到沒有 sheet 撐著的角色。
+            degraded.append(
+                f"style_reference（'{style_id}' 尚未上線：參考圖集 "
+                f"'{style_ref.get('set_id')}' 還沒備齊，該風格不會出現在選單上）"
+            )
+            continue
         if not style_ref.get("available"):
             degraded.append(
                 f"style_reference（'{style_id}' 的風格參考圖集 "

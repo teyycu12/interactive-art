@@ -11,9 +11,6 @@
  * ⚠ 這是開發／調校工具，不是展場的一部分。現場請勿使用 ——
  *   機器人會佔用 MAX_AGENTS 的名額，把真的想進場的人擋在外面。
  *
- * 與 backend/bot_simulator.py 的差別：那支是 2D 備援版（Flask/Socket.io）
- * 用的，走的是完全不同的協定。兩者不可互換。
- *
  * 用法：
  *   node scripts/bots.mjs                 # 預設 5 隻，連 localhost:3000
  *   node scripts/bots.mjs --count 9       # 湊滿 10 人（自己佔 1 個）
@@ -187,7 +184,7 @@ await sleep(800);
 const joined = bots.filter((b) => b.id).length;
 console.log(`\n  ${joined}/${COUNT} 隻已進場`);
 if (joined < COUNT) {
-  console.log('  ⚠ 有機器人沒進場，多半是達到 MAX_AGENTS 上限（預設 10）');
+  console.log('  ⚠ 有機器人沒進場，多半是達到 MAX_AGENTS 上限（預設 30）');
 }
 console.log('\n  Ctrl-C 結束並讓它們離場\n');
 

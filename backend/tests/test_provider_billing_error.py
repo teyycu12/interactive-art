@@ -12,7 +12,6 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from backend.app import _generation_failure_details
 from backend.garment_gen import _call_image_chat_multi, _provider_message
 
 
@@ -67,30 +66,6 @@ class CallClassificationTests(unittest.TestCase):
                 mock.patch("backend.garment_gen.traceback.print_exc") as printed:
             _call_image_chat_multi(["data:image/png;base64,AA"], "prompt", with_metadata=True)
         printed.assert_not_called()
-
-
-class FailureGuidanceTests(unittest.TestCase):
-    def _details(self):
-        return _generation_failure_details({"ok": False, "error": "insufficient_credits"}, {})
-
-    def test_billing_is_its_own_kind_so_the_ui_can_stop_saying_temporary(self):
-        self.assertEqual(self._details()["kind"], "billing")
-        self.assertEqual(self._details()["status"], "service_error")
-
-    def test_guidance_names_the_remedy_and_rules_out_retrying(self):
-        guidance = self._details()["guidance"]
-        self.assertIn("加值", guidance)
-        self.assertIn("重試也不會成功", guidance)
-
-    def test_guidance_does_not_blame_the_photo(self):
-        # The operator's first instinct on a failure is to retake; for a 402 that
-        # wastes their time and, once credits are back, their money.
-        self.assertNotIn("重新拍攝", self._details()["guidance"])
-
-    def test_an_unrelated_service_failure_still_reads_as_retryable(self):
-        other = _generation_failure_details({"ok": False, "error": "APIConnectionError"}, {})
-        self.assertEqual(other["kind"], "service")
-        self.assertIn("重試", other["guidance"])
 
 
 if __name__ == "__main__":

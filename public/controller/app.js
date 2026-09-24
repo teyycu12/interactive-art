@@ -644,6 +644,15 @@ $('#btn-scan').addEventListener('click', async () => {
   await openCamera();
 });
 
+/**
+ * 送出裁切的目標比例。
+ *
+ * 取景框（style.css 的 .scan-stage）也用同一個比例，且影像以 object-fit:cover
+ * 填滿它 —— cover 的裁切方式與下方 cropToPortraitJpeg 一致，因此框裡看到的
+ * 就是會送出的。改動任一邊都要同時改另一邊。
+ */
+const SUBMIT_RATIO = 9 / 16;
+
 /** 開啟相機並回到取景階段。重拍會再次呼叫，因此不能寫在事件處理器裡。 */
 async function openCamera() {
   stopScanStream();
@@ -656,11 +665,21 @@ async function openCamera() {
   $('.scan-stage')?.classList.remove('is-empty', 'shutter', 'is-result');
   showScanPhase('aim');
   try {
+    // 兩軸都要 1280 而不是指定 720×1280：後者等於向瀏覽器要一個 9:16 的
+    // 直式串流，但筆電鏡頭是橫式且感光元件不會轉向，瀏覽器只能從中央裁掉
+    // 大半的左右視野再放大 —— 而那正是要把一個人塞進畫面所需要的視野。
+    // 兩軸同值讀作「給我最接近這個大小的原生模式」，不暗示任何方向，
+    // 筆電拿到完整的 16:9、手機拿到完整的直式，兩邊都是最大視野。
     scanStream = await navigator.mediaDevices.getUserMedia({
       // ideal 而非 exact：拿不到就退到次好的，舊機不會因此開不了相機。
+      // 兩軸都要 2560 而不是指定 1440×2560：後者等於向瀏覽器要一個 9:16 的
+      // 直式串流，但筆電鏡頭是橫式且感光元件不會轉向，瀏覽器只能從中央裁掉
+      // 大半的左右視野再放大 —— 而那正是要把一個人塞進畫面所需要的視野。
+      // 兩軸同值讀作「給我最接近這個大小的原生模式」，不暗示任何方向，
+      // 筆電拿到完整的 16:9、手機拿到完整的直式，兩邊都是最大視野。
       // 要得比從前高，是因為送進生圖模型的臉只有 ~85px（見 GENERATION.md
-      // 「進模型的臉只有 85 像素」），而請求 720×1280 等於在最源頭就把細節丟掉。
-      video: { facingMode: 'environment', width: { ideal: 1440 }, height: { ideal: 2560 } },
+      // 「進模型的臉只有 85 像素」），而請求低解析度等於在最源頭就把細節丟掉。
+      video: { facingMode: 'environment', width: { ideal: 2560 }, height: { ideal: 2560 } },
       audio: false,
     });
     $('#scan-video').srcObject = scanStream;
@@ -807,12 +826,17 @@ $('#btn-capture').addEventListener('click', async () => {
 /**
  * 把來源（<video> 或 <img>）裁成 9:16 並編成 JPEG data URL。
  *
- * 相機與相簿上傳共用這一份：兩者送進 /api/generate 的格式必須一致，
- * 否則後端 slicer 的切片比例會對不上其中一邊（見 CLAUDE.md 的跨語言耦合）。
+ * 相機與相簿上傳共用這一份，站位引導的 previewTick() 也走同一套裁切 ——
+ * 三者必須一致，否則 CV 判定的取景與最後送去生成的不是同一塊畫面。
+ *
+ * 注意：這個比例**不是**後端要求的。slicer.py 處理的是生成出來的去背 PNG
+ * （依 alpha 邊界正規化後才套 CUTS），從來沒看過這張輸入照片。裁成 9:16 的
+ * 理由只有「聚焦人物、少傳無用背景」，而且它砍的是左右、完整保留上下，
+ * 所以不會讓全身入不了鏡。取景框上的裁切範圍框畫的就是這一塊。
  */
 function cropToPortraitJpeg(source, sw0, sh0, maxEdge = CAPTURE_MAX_EDGE, quality = 0.92) {
-  // 裁切成 9:16 長方細長型：聚焦在人物，捨棄無用的左右背景，減少 API 負擔與上傳成本
-  const TARGET_RATIO = 9 / 16;
+  // 裁切成 SUBMIT_RATIO 長方細長型：聚焦在人物，捨棄無用的左右背景，減少 API 負擔與上傳成本
+  const TARGET_RATIO = SUBMIT_RATIO;
   let sx = 0, sy = 0, sw = sw0, sh = sh0;
 
   if (sw0 / sh0 > TARGET_RATIO) {
@@ -1802,6 +1826,8 @@ const quizPanel = $('#quiz-panel');
 
 /** @type {object|null} 目前題目（伺服器視圖，不含正解） */
 let quiz = null;
+/** 目前面板上是哪一種題目：'QUIZ'（有正解、計分）或 'SURVEY'（問卷，可改答案） */
+let askKind = 'QUIZ';
 /** 自己這題選了哪一個，null 代表尚未作答 */
 let myChoice = null;
 let quizTimer = null;
@@ -1881,9 +1907,17 @@ function renderQuizOptions({ locked = false, revealed = null } = {}) {
         // 先在本地鎖定，不等伺服器回應 —— 現場網路有延遲，
         // 按下去沒有立即反應會讓人以為沒按到而狂點
         myChoice = i;
-        renderQuizOptions({ locked: true });
-        showQuizMsg('已送出，等待公布答案…');
-        sendMsg(EV.QUIZ_ANSWER, { choice: i });
+        if (askKind === 'SURVEY') {
+          // 問卷沒有正解也沒有速度分，因此**允許改**：按錯卻不能改，
+          // 那個人身上的標籤就會一直是錯的，而標籤正是問卷的產物。
+          renderQuizOptions();
+          showQuizMsg('已記錄，想改隨時可以再選。');
+          sendMsg(EV.SURVEY_ANSWER, { choice: i });
+        } else {
+          renderQuizOptions({ locked: true });
+          showQuizMsg('已送出，等待公布答案…');
+          sendMsg(EV.QUIZ_ANSWER, { choice: i });
+        }
       });
     }
 
@@ -1915,10 +1949,16 @@ function startQuizCountdown() {
   quizTimer = setInterval(tick, 100);
 }
 
-function showQuestion(q) {
-  quiz = q;
+function showQuestion(q, kind = 'QUIZ') {
+  // 問答的 options 是字串，問卷的是 {label, value, spot} 物件。
+  // 這裡統一攤成字串再交給共用的選項渲染 —— 少了這一步，
+  // 問卷的四個選項會全部顯示成 [object Object]，而且不會有任何錯誤。
+  quiz = kind === 'SURVEY'
+    ? { ...q, options: q.options.map((o) => (typeof o === 'string' ? o : o.label)) }
+    : q;
+  askKind = kind;
   myChoice = null;
-  $('#quiz-no').textContent = `第 ${q.index} 題`;
+  $('#quiz-no').textContent = kind === 'SURVEY' ? `問卷 ${q.index}` : `第 ${q.index} 題`;
   $('#quiz-q').textContent = q.question;
   $('#quiz-result-card').hidden = true;
   $('#btn-quiz-hide').hidden = true;
@@ -1964,8 +2004,49 @@ const QUIZ_MESSAGES = {
   [QUIZ_ERRORS.BAD_CHOICE]: '選項不正確，請重新選擇。',
 };
 
+/**
+ * 問卷收題。
+ *
+ * 刻意不在手機上顯示全場分佈 —— 那是大螢幕的工作（見規劃：手機是私人資訊、
+ * 大螢幕是公共資訊）。手機只留下「你自己選了什麼」。
+ */
+function showSurveyClosed(result) {
+  if (!quiz || quiz.id !== result.id) return;
+  clearInterval(quizTimer);
+  quizTimer = null;
+  $('#quiz-timer').textContent = '—';
+  $('#quiz-timer').classList.remove('urgent');
+  renderQuizOptions({ locked: true });
+  showQuizMsg(myChoice === null ? '這題沒作答。' : '已記錄，看大螢幕。');
+  $('#btn-quiz-hide').hidden = false;
+}
+
 function handleQuizMessage(msg) {
   switch (msg.type) {
+    case EV.SURVEY_QUESTION:
+      showQuestion(msg.survey, 'SURVEY');
+      return true;
+
+    case EV.SURVEY_ACK:
+      if (msg.ok) {
+        // 伺服器回傳的標籤文字才是權威值（例如「負責煮」），
+        // 而且重連補送時這是唯一能還原「我剛才選了什麼」的來源
+        myChoice = msg.choice;
+        renderQuizOptions();
+        // 只說「記錄了什麼」。選項對應的地點寫在大螢幕上，那是公共資訊，
+        // 手機再寫一次只會把這行擠成兩行，反而蓋住下面的選項。
+        showQuizMsg(`已記錄：${msg.label}　想改隨時可以再選`);
+      } else {
+        myChoice = null;
+        renderQuizOptions();
+        showQuizMsg(msg.reason === 'CLOSED' ? '時間到了，這題已經截止。' : '這次作答沒有被接受。');
+      }
+      return true;
+
+    case EV.SURVEY_CLOSED:
+      showSurveyClosed(msg.result);
+      return true;
+
     case EV.QUIZ_QUESTION:
       showQuestion(msg.quiz);
       return true;

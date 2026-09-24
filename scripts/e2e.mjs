@@ -106,7 +106,15 @@ screen.on('message', (d) => {
   if (m.type === 'QUIZ_REVEAL') screenReveal = m;
   if (m.type === 'QUIZ_ENDED') screenQuiz = null;
   if (m.type === 'SCORE_BOARD') scoreBoard = m;
+  if (m.type === 'STAGE_THEME') screenThemes.push(m.theme);
+  if (m.type === 'SURVEY_QUESTION') screenSurvey = m.survey;
+  if (m.type === 'SURVEY_STATE') screenSurveyState = m.state;
+  if (m.type === 'SURVEY_CLOSED') screenSurveyClosed = m.result;
 });
+let screenThemes = [];
+let screenSurvey = null;
+let screenSurveyState = null;
+let screenSurveyClosed = null;
 let screenQuiz = null;
 let screenReveal = null;
 let scoreBoard = null;
@@ -114,6 +122,7 @@ const live = () => syncs.at(-1)?.agents ?? [];
 
 await sleep(400);
 check('大螢幕收到 STAGE_META', meta?.stage?.width === 1920);
+check('大螢幕連線時收到目前的場景主題', screenThemes[0] === 'kitchen', `收到 ${JSON.stringify(screenThemes)}`);
 
 // ── 資料驗證 ──────────────────────────────────────────────
 const bad = new WebSocket(URL);
@@ -405,6 +414,50 @@ await sleep(400);
 check('正確密鑰通過認證', hostOk);
 check('未認證連線無法發布任務', missionStates.length === 0, `收到 ${missionStates.length} 則`);
 
+// ── 場景主題 ──────────────────────────────────────────────
+// 主辦端依場合切換大螢幕背景。主題選單只由 STAGE_THEME 驅動，
+// 所以認證時就要補送（同尋寶面板的前例），否則重整後不知道目前選的是哪個。
+{
+  const themeMsgs = [];
+  host.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'STAGE_THEME') themeMsgs.push(m.theme); });
+  const rehost = new WebSocket(URL);
+  const reThemes = [];
+  rehost.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'STAGE_THEME') reThemes.push(m.theme); });
+  await new Promise((res) => rehost.on('open', res));
+  rehost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(300);
+  check('主辦端認證時補送目前的場景主題', reThemes[0] === 'kitchen', JSON.stringify(reThemes));
+  rehost.close();
+
+  badHost.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'office' }));
+  await sleep(200);
+  check('未認證連線無法切換場景主題', !screenThemes.includes('office'), JSON.stringify(screenThemes));
+
+  const rejectsBefore = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: '../../etc/passwd' }));
+  await sleep(200);
+  check('不存在的主題被拒絕', hostRejects.length === rejectsBefore + 1 && !screenThemes.includes('../../etc/passwd'));
+
+  host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'office' }));
+  await sleep(300);
+  check('切換主題後大螢幕收到 STAGE_THEME', screenThemes.at(-1) === 'office', JSON.stringify(screenThemes));
+  check('切換主題後主辦端也收到 STAGE_THEME（多台主辦端的選單要同步）', themeMsgs.at(-1) === 'office');
+}
+
+// ── 轉場問卷 ──────────────────────────────────────────────
+// 沒有正解的題目。答案留成參與者身上的標籤，供後續任務當條件使用。
+// 這一段在參與者進場前先驗「未認證不得出題」，其餘在兩人進場後補。
+{
+  badHost.send(JSON.stringify({ type: 'HOST_START_SURVEY', bankId: 'chrono' }));
+  await sleep(200);
+  check('未認證連線無法出問卷', screenSurvey === null);
+
+  const rejectsBefore = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_START_SURVEY', bankId: '不存在的題目' }));
+  await sleep(200);
+  check('題庫裡沒有的題目被拒絕', hostRejects.length === rejectsBefore + 1, hostRejects.at(-1)?.reason);
+}
+
 // ── 兩位參與者進場 ────────────────────────────────────────
 function joinPhone(name) {
   const ws = new WebSocket(URL);
@@ -412,6 +465,7 @@ function joinPhone(name) {
     ws, name, welcome: null, code: null, mission: null, results: [], confirmReq: null,
     quiz: null, acks: [], quizResult: null, scores: [],
     treasureStart: null, heats: [], treasureFound: null, raw: [],
+    survey: null, surveyAcks: [], surveyClosed: null,
   };
   ws.on('open', () => ws.send(JSON.stringify({ type: 'CLIENT_JOIN', name, avatar: AVATAR })));
   ws.on('message', (d) => {
@@ -428,6 +482,9 @@ function joinPhone(name) {
     if (m.type === 'TREASURE_START') box.treasureStart = m;
     if (m.type === 'TREASURE_HEAT') box.heats.push(m);
     if (m.type === 'TREASURE_FOUND') box.treasureFound = m;
+    if (m.type === 'SURVEY_QUESTION') box.survey = m.survey;
+    if (m.type === 'SURVEY_ACK') box.surveyAcks.push(m);
+    if (m.type === 'SURVEY_CLOSED') box.surveyClosed = m.result;
     // 保留原始字串，供「座標絕不外洩到手機」的檢查
     if (m.type?.startsWith('TREASURE')) box.raw.push(d.toString());
   });
@@ -501,12 +558,14 @@ check('題目帶有剩餘時間而非絕對時戳',
   amy.quiz?.remainingMs > 0 && amy.quiz?.remainingMs <= 10000, `${amy.quiz?.remainingMs}ms`);
 
 // 出題期間不能再出下一題
+// 以「出題前的拒絕數」為基準，不寫死 1 —— 前面的測試（如場景主題）也會合法地收到拒絕
+const rejectsBeforeQuiz = hostRejects.length;
 host.send(JSON.stringify({
   type: 'HOST_START_QUIZ', question: '插隊的題目', options: ['一', '二'],
   correctIndex: 0, durationMs: 10000,
 }));
 await sleep(300);
-check('同時只允許一題', hostRejects.length === 1, hostRejects.at(-1)?.reason);
+check('同時只允許一題', hostRejects.length === rejectsBeforeQuiz + 1, hostRejects.at(-1)?.reason);
 
 amy.ws.send(JSON.stringify({ type: 'QUIZ_ANSWER', choice: 3 }));
 ben.ws.send(JSON.stringify({ type: 'QUIZ_ANSWER', choice: 0 }));
@@ -565,6 +624,48 @@ check('時間到自動公布正解', amy.quizResult?.correctIndex === 0 && amy.q
   `answered=${amy.quizResult?.answered}`);
 host.send(JSON.stringify({ type: 'HOST_END_QUIZ' }));
 await sleep(300);
+
+// 問卷的完整流程：出題 → 手機作答 → 改答案 → 收題 → 標籤留在身上
+{
+  host.send(JSON.stringify({ type: 'HOST_START_SURVEY', bankId: 'kitchen_role', durationMs: 8000 }));
+  await sleep(350);
+  check('手機收到問卷題目', amy.survey?.key === 'kitchen_role', amy.survey?.question);
+  check('大螢幕收到問卷題目', screenSurvey?.id === amy.survey?.id);
+  check('問卷選項帶地點，供之後的集合任務使用',
+    screenSurvey?.options?.[0]?.spot === 'tbl_3', JSON.stringify(screenSurvey?.options?.[0]));
+
+  amy.ws.send(JSON.stringify({ type: 'SURVEY_ANSWER', choice: 0 }));
+  ben.ws.send(JSON.stringify({ type: 'SURVEY_ANSWER', choice: 2 }));
+  await sleep(400);
+  check('作答後手機收到自己的標籤文字', amy.surveyAcks.at(-1)?.label === '負責煮', JSON.stringify(amy.surveyAcks.at(-1)));
+  check('大螢幕收到即時分佈', screenSurveyState?.totalAnswers === 2, JSON.stringify(screenSurveyState?.counts));
+
+  // 問卷沒有速度分，改答案不影響任何人 —— 按錯卻不能改，標籤就會一直是錯的
+  amy.ws.send(JSON.stringify({ type: 'SURVEY_ANSWER', choice: 1 }));
+  await sleep(400);
+  check('問卷可以改答案', amy.surveyAcks.at(-1)?.label === '負責洗');
+  check('改答案不會多算一票', screenSurveyState?.totalAnswers === 2, JSON.stringify(screenSurveyState?.counts));
+
+  // 主辦端重整：問卷面板只由 SURVEY_* 事件驅動，認證時要補送題目與分佈
+  const rehost = new WebSocket(URL);
+  const reMsgs = [];
+  await new Promise((res) => rehost.on('open', res));
+  rehost.on('message', (d) => reMsgs.push(JSON.parse(d)));
+  rehost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(400);
+  check('主辦端重連後補送進行中的問卷',
+    reMsgs.some((m) => m.type === 'SURVEY_QUESTION') && reMsgs.some((m) => m.type === 'SURVEY_STATE'));
+  rehost.close();
+
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_SURVEY' }));
+  await sleep(350);
+  check('收題後全場收到最終分佈', amy.surveyClosed?.totalAnswers === 2 && screenSurveyClosed !== null);
+
+  // 標籤留在身上，才可能有「答某個選項的人到某張桌子集合」這種任務
+  const tagged = hostStates.at(-1)?.agents?.find((a) => a.name === '小美');
+  check('收題後標籤留在參與者身上', tagged?.traits?.kitchen_role?.value === 'wash',
+    JSON.stringify(tagged?.traits));
+}
 
 // ── 尋寶（先知模式）────────────────────────────────────────
 //
@@ -792,6 +893,17 @@ check('重開後通行密鑰不變，主辦端不必重讀新號碼',
   keyAfterRestart === HOST_KEY, `${HOST_KEY} → ${keyAfterRestart}`);
 check('重開後終端機顯示已接續上次的活動資料',
   serverLog.join('').includes('已接續上次的活動資料'));
+
+// 活動中途重開，投影畫面不能自己跳回預設主題
+{
+  const reScreen = new WebSocket(URL);
+  let reTheme = null;
+  reScreen.on('open', () => reScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
+  reScreen.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'STAGE_THEME') reTheme = m.theme; });
+  await sleep(400);
+  check('重開後場景主題維持主辦端上次的選擇', reTheme === 'office', `收到 ${reTheme}`);
+  reScreen.close();
+}
 
 const back = new WebSocket(URL);
 let backWelcome = null;
