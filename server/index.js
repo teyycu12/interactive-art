@@ -43,6 +43,7 @@ import { TreasureHunt } from './treasure.js';
 import { SocialGraph } from './socialgraph.js';
 import { PairingSession } from './pairing.js';
 import { QuizSession } from './quiz.js';
+import { SurveySession } from './survey.js';
 import { ScoreBoard } from './scores.js';
 import { SnapshotStore, Directory } from './persistence.js';
 import { createHttpLayer } from './httplayer.js';
@@ -58,6 +59,8 @@ const treasure = new TreasureHunt();
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
 const quiz = new QuizSession();
+/** 轉場問卷：沒有正解的題目，答案留成參與者身上的標籤 */
+const survey = new SurveySession();
 const scores = new ScoreBoard();
 
 // ─────────────────────────────────────────────────────────────
@@ -82,6 +85,7 @@ if (snapshot) {
   graph.hydrate(snapshot.graph);
   missions.hydrate(snapshot.missions);
   quiz.hydrate(snapshot.quiz);
+  survey.hydrate(snapshot.survey);
   directory.hydrate(snapshot.directory);
 }
 
@@ -100,6 +104,7 @@ const snapshotData = () => ({
   graph: graph.export(),
   missions: missions.export(),
   quiz: quiz.export(),
+  survey: survey.export(),
   directory: directory.export(),
   theme: stageTheme,
 });
@@ -296,10 +301,13 @@ function hostState() {
       connections: graph.degree(a.id),
       activeMs: Math.round(a.activeMs),
       score: scores.totalOf(a.id),
+      // 問卷標籤：主辦端要看得出「這個人答了什麼」，才能判斷任務條件湊不湊得出來
+      traits: survey.traitsOf(a.id),
     })),
     mission: missions.state(stage.agents.size),
     graphEdges: graph.size,
     quiz: quiz.publicView(),
+    survey: survey.publicView(),
     quizReveal: quiz.revealView(),
     leaderboard: scores.leaderboard(SCORING.leaderboardSize, nameOf, isPresent),
   };
@@ -365,6 +373,24 @@ const clamp01 = (n) => Math.max(0, Math.min(1, n));
  *
  * ⚠ 送的是 publicView（不含座標）—— 補送給手機的東西一樣不能夾帶答案。
  */
+/**
+ * 補送進行中的問卷給單一連線。
+ *
+ * 與尋寶同一類補送問題，而且**中途進場與斷線重連走的是不同分支**
+ * （重連那段會提前 return），兩邊都要呼叫 —— 少了任一邊，那支手機
+ * 在整題結束前都不會知道現在有一題可以答。
+ */
+function sendSurveyCatchUp(ws, agentId) {
+  if (!survey.isActive) return;
+  send(ws, EV.SURVEY_QUESTION, { survey: survey.publicView() });
+  // 已經答過的人（重連回來）要看到自己選過什麼，而不是一個可以重按的空白題
+  const mine = survey.current.answers.get(agentId);
+  if (mine) {
+    const option = survey.current.options[mine.choice];
+    send(ws, EV.SURVEY_ACK, { ok: true, choice: mine.choice, label: option.label, spot: option.spot });
+  }
+}
+
 function sendTreasureCatchUp(ws, agentId) {
   if (!treasure.isActive) return;
   send(ws, EV.TREASURE_START, { round: treasure.publicView() });
@@ -400,6 +426,7 @@ function handleJoin(ws, msg) {
       // 少了這裡，瞬斷重連的先知會在剩下的整輪裡看著一片空白，
       // 而他正是所有人都在等著聽他喊話的那一個。
       sendTreasureCatchUp(ws, existing.id);
+      sendSurveyCatchUp(ws, existing.id);
       return;
     }
     ws.agentId = null; // 角色已被回收，往下走正常入場流程
@@ -476,6 +503,7 @@ function handleJoin(ws, msg) {
   // 盯著一片空白的畫面。⚠ 送的是 publicView（不含座標）——
   // 補送給手機的東西一樣不能夾帶答案。
   sendTreasureCatchUp(ws, agent.id);
+  sendSurveyCatchUp(ws, agent.id);
   send(ws, EV.SCORE_SELF, {
     score: scores.totalOf(agent.id),
     delta: 0,
@@ -503,6 +531,9 @@ function detachAgent(agentId, { forget = false } = {}) {
   pairing.release(agentId);
   if (forget) {
     directory.forget(agentId);
+    // 問卷標籤是「這個人是誰」，主動離場或被請出場時要一起忘掉；
+    // 單純斷線則保留 —— 那個人多半還會用原憑證接回同一個角色。
+    survey.forget(agentId);
     markDirty();
   }
 }
@@ -720,6 +751,32 @@ function endQuiz() {
 
 /** 作答人數變動後才廣播，節流由主迴圈負責 */
 let quizTallyDirty = false;
+/** 問卷分佈變動後才廣播，同上 */
+let surveyDirty = false;
+
+/**
+ * 收掉問卷並公布最終分佈。
+ *
+ * 標籤在作答當下就寫進去了，這裡不再改動任何人的資料 ——
+ * 收題只是把題目從畫面上拿掉，並讓大螢幕停在最終分佈上。
+ */
+function closeSurvey(now = Date.now()) {
+  const result = survey.close(now);
+  if (!result) return;
+  blastAll(EV.SURVEY_CLOSED, { result });
+  markDirty();
+  pushHostState();
+  console.log(`[survey] 收題「${result.question}」　${result.totalAnswers} 人作答`);
+}
+
+function handleSurveyAnswer(ws, msg) {
+  const r = survey.answer(ws.agentId, msg.choice);
+  if (!r.ok) { send(ws, EV.SURVEY_ACK, { ok: false, reason: r.reason }); return; }
+  // 回傳選到的標籤文字：手機上要顯示「你是：負責煮」，而那段文字只有伺服器有
+  send(ws, EV.SURVEY_ACK, { ok: true, choice: r.choice, label: r.option.label, spot: r.option.spot });
+  surveyDirty = true;
+  markDirty();
+}
 
 function handleQuizAnswer(ws, msg) {
   const result = quiz.answer(ws.agentId, msg.choice);
@@ -791,6 +848,26 @@ function handleHostMessage(ws, msg) {
       pushHostState();
       break;
     }
+
+    case EV.HOST_START_SURVEY: {
+      const result = survey.start({
+        bankId: msg.bankId ?? null,
+        key: msg.key, question: msg.question, options: msg.options, durationMs: msg.durationMs,
+      });
+      if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
+      const view = survey.publicView();
+      console.log(`[survey] 出題「${view.question}」　標籤 ${view.key}`);
+      markDirty();
+      // 手機要作答、大螢幕與主辦端要顯示題目，三端都送同一份（問卷沒有正解，不必藏）
+      blastAll(EV.SURVEY_QUESTION, { survey: view });
+      blast([...screens, ...hosts], EV.SURVEY_STATE, { state: survey.distribution() });
+      pushHostState();
+      break;
+    }
+
+    case EV.HOST_CLOSE_SURVEY:
+      closeSurvey();
+      break;
 
     case EV.HOST_SET_THEME: {
       if (!isThemeId(msg.theme)) { send(ws, EV.HOST_REJECT, { reason: '沒有這個場景主題' }); return; }
@@ -918,6 +995,11 @@ wss.on('connection', (ws) => {
         // 投影機中途重開或新接一台螢幕，都要知道現在該顯示哪個主題
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
         send(ws, EV.STAGE_ROSTER, { agents: stage.roster() });
+        // 進行中的問卷：投影機中途重開時要接回目前的題目與分佈
+        if (survey.isActive) {
+          send(ws, EV.SURVEY_QUESTION, { survey: survey.publicView() });
+          send(ws, EV.SURVEY_STATE, { state: survey.distribution() });
+        }
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
         // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
         send(ws, EV.STAGE_LINKS, { edges: graphEdges() });
@@ -984,6 +1066,11 @@ wss.on('connection', (ws) => {
         handleQuizAnswer(ws, msg);
         break;
 
+      case EV.SURVEY_ANSWER:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleSurveyAnswer(ws, msg);
+        break;
+
       case EV.HOST_AUTH: {
         // 與 SCREEN_HELLO 同一個理由：已綁定角色的連線改註冊為主辦端後，
         // 關閉時只會走 hosts 的清理分支，agent 的 disconnectedAt 永遠是 null，
@@ -1013,6 +1100,12 @@ wss.on('connection', (ws) => {
         // 主辦端會停在「開始尋寶」那一頁，#treasure-live 永遠是 hidden，
         // 「中止本輪」按鈕根本不在畫面上，本輪就再也停不掉了。
         // 帶座標，理由同 HOST_START_TREASURE：主辦端是公開畫面，不在參與者手上。
+        // 問卷面板的分佈只由 SURVEY_STATE 驅動，HOST_STATE 只帶題目本身 ——
+        // 少了這裡，重整後的主辦端會看到題目卻看不到已經有幾個人答了。
+        if (survey.isActive) {
+          send(ws, EV.SURVEY_QUESTION, { survey: survey.publicView() });
+          send(ws, EV.SURVEY_STATE, { state: survey.distribution() });
+        }
         if (treasure.isActive) {
           send(ws, EV.TREASURE_START, {
             round: treasure.publicView(), spot: treasure.spot(),
@@ -1032,6 +1125,8 @@ wss.on('connection', (ws) => {
       case EV.HOST_KICK:
       case EV.HOST_TAKE_PHOTO:
       case EV.HOST_SET_THEME:
+      case EV.HOST_START_SURVEY:
+      case EV.HOST_CLOSE_SURVEY:
         // 未通過認證的連線一律忽略，不回應也不透露任何狀態
         if (ws.role !== 'host') return;
         handleHostMessage(ws, msg);
@@ -1071,6 +1166,7 @@ const heartbeat = setInterval(() => {
 // 排程器對齊絕對截止時間，消除 setInterval 在 Windows 上的累積漂移
 // （實測有效頻率由 27.3 Hz 修正為 30.0 Hz，詳見 scheduler.js）
 let lastTallyAt = 0;
+let lastSurveyAt = 0;
 let lastScoreAt = 0;
 /** CLIENT_SYNC 的節流基準。主迴圈是 30Hz，個人視角只需 15Hz。 */
 let lastClientSyncAt = 0;
@@ -1126,6 +1222,15 @@ const loop = startTicker({
     const now = Date.now();
     if (quiz.shouldAutoReveal(now)) revealQuiz(now);
     else if (quiz.shouldAutoEnd(now)) endQuiz();
+
+    // 問卷的時間到同樣由主迴圈推進，理由與問答相同：setTimeout 在事件迴圈
+    // 被拖慢時會延後觸發，而這裡的時間到必須與大螢幕上的倒數一致。
+    if (survey.shouldAutoClose(now)) closeSurvey(now);
+    else if (surveyDirty && now - lastSurveyAt >= 250) {
+      lastSurveyAt = now;
+      surveyDirty = false;
+      blast([...screens, ...hosts], EV.SURVEY_STATE, { state: survey.distribution(now) });
+    }
 
     // 作答人數：只送給大螢幕與主辦端。參與者不需要知道，
     // 而倒數期間送給所有人等於每次有人按就廣播三十份。

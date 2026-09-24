@@ -11,6 +11,8 @@ import { renderAvatarSVG, CV_FULL_PART } from '/shared/avatars.js';
 import { COLOR_FAMILIES } from '/shared/colorFamily.js';
 import { HEAT_LEVELS } from '/shared/heat.js';
 import { THEMES } from '/shared/themes.js';
+import { surveysForTheme, SURVEY_BANK_MAP } from '/shared/surveys.js';
+import { propLabel } from '/screen/scenes/registry.js';
 
 const $ = (s) => document.querySelector(s);
 const SS_KEY = 'personaflow.hostKey';
@@ -57,6 +59,7 @@ function handle(msg, key) {
       if (msg.scoring) { scoring = msg.scoring; renderScoringRule(); }
       buildMissionTypes();
       buildThemes();
+      buildSurveyPicker();
       $('#auth').hidden = true;
       $('#console').hidden = false;
       setConn('已連線', false);
@@ -76,6 +79,21 @@ function handle(msg, key) {
 
     case EV.STAGE_THEME:
       renderTheme(msg.theme);
+      break;
+
+    case EV.SURVEY_QUESTION:
+      renderSurveyLive({ ...msg.survey, counts: new Array(msg.survey.options.length).fill(0), totalAnswers: msg.survey.answered ?? 0 });
+      break;
+
+    case EV.SURVEY_STATE:
+      if (msg.state) renderSurveyLive(msg.state);
+      break;
+
+    case EV.SURVEY_CLOSED:
+      // 收題後把最終分佈留在面板上，按「出題」才換下一題 ——
+      // 主辦端常常要照著分佈決定下一個任務的條件
+      renderSurveyLive({ ...msg.result, closed: true });
+      setTimeout(() => { if (survey?.closed) renderSurveyLive(null); }, 20000);
       break;
 
     case EV.MISSION_ANNOUNCE:
@@ -207,6 +225,7 @@ function showAuthError(text) {
 /** 各面板的錯誤欄位。lastAction 決定訊息落在哪一格 */
 const ERR_SLOT = {
   theme: '#theme-err',
+  survey: '#survey-err',
   quiz: '#quiz-err',
   treasure: '#treasure-err',
   mission: '#mission-err',
@@ -284,11 +303,117 @@ function buildThemes() {
   }
 }
 
+let currentTheme = null;
+
 function renderTheme(id) {
+  currentTheme = id;
   for (const b of document.querySelectorAll('.theme-card')) {
     b.setAttribute('aria-pressed', String(b.dataset.theme === id));
   }
+  // 場景專屬的問卷題（廚房分工、團隊角色）要跟著主題換，
+  // 否則在辦公室裡會看到「你在廚房負責什麼」排在第一個
+  buildSurveyPicker();
 }
+
+// ─────────────────────────────────────────────────────────────
+// 轉場問卷
+// ─────────────────────────────────────────────────────────────
+let survey = null;
+let surveyTimer = null;
+/** 主辦端是否自己挑過題目。沒挑過時，切換場景要跟著把該場景的題目擺到第一個。 */
+let surveyPicked = false;
+
+function buildSurveyPicker() {
+  const sel = $('#survey-pick');
+  if (!sel) return;
+  // 只在主辦端自己挑過題目時才保留選擇：沒挑過就跟著場景走，
+  // 否則切到廚房之後，第一個選項仍是上一個場景留下的通用題
+  const keep = surveyPicked ? sel.value : null;
+  sel.replaceChildren();
+  for (const q of surveysForTheme(currentTheme)) {
+    const o = document.createElement('option');
+    o.value = q.id;
+    o.textContent = q.theme ? `${q.question}（本場景）` : q.question;
+    sel.append(o);
+  }
+  if (keep && SURVEY_BANK_MAP[keep]) sel.value = keep;
+  renderSurveyPreview();
+}
+
+function renderSurveyPreview() {
+  const q = SURVEY_BANK_MAP[$('#survey-pick').value];
+  // 先讓主辦端看到選項與對應地點：綁了道具的選項，之後可以直接叫那群人去那裡集合
+  $('#survey-preview').textContent = q
+    ? q.options.map((o) => (o.spot ? `${o.label}→${propLabel(currentTheme, o.spot)}` : o.label)).join('　·　')
+    : '';
+}
+
+function renderSurveyLive(state) {
+  survey = state;
+  const live = !!state;
+  $('#survey-idle').hidden = live;
+  $('#survey-live').hidden = !live;
+  clearInterval(surveyTimer);
+  surveyTimer = null;
+  if (!live) return;
+
+  $('#survey-live-q').textContent = state.question;
+  const bars = $('#survey-bars');
+  bars.replaceChildren();
+  const total = Math.max(1, state.totalAnswers ?? 0);
+  state.options.forEach((opt, i) => {
+    const li = document.createElement('li');
+    const lab = document.createElement('span');
+    lab.className = 'lab';
+    lab.textContent = opt.label;
+    if (opt.spot) {
+      const sp = document.createElement('span');
+      sp.className = 'spot';
+      sp.textContent = `　→ ${propLabel(currentTheme, opt.spot)}`;
+      lab.append(sp);
+    }
+    const n = document.createElement('span');
+    n.className = 'n';
+    n.textContent = `${state.counts?.[i] ?? 0} 人`;
+    const track = document.createElement('span');
+    track.className = 'track';
+    const fill = document.createElement('i');
+    fill.style.width = `${Math.round(((state.counts?.[i] ?? 0) / total) * 100)}%`;
+    track.append(fill);
+    li.append(lab, n, track);
+    bars.append(li);
+  });
+  $('#survey-live-foot').textContent = `已作答 ${state.totalAnswers ?? 0} 人　標籤 ${state.key}`;
+
+  if (state.closed) {
+    $('#survey-countdown').textContent = '已收題';
+    return;
+  }
+  const deadline = Date.now() + (state.remainingMs ?? 0);
+  const tick = () => {
+    const left = Math.max(0, deadline - Date.now());
+    $('#survey-countdown').textContent = left > 0 ? `${(left / 1000).toFixed(0)} 秒` : '時間到';
+    if (left <= 0) { clearInterval(surveyTimer); surveyTimer = null; }
+  };
+  tick();
+  surveyTimer = setInterval(tick, 500);
+}
+
+$('#survey-pick').addEventListener('change', () => { surveyPicked = true; renderSurveyPreview(); });
+
+$('#btn-survey-start').addEventListener('click', () => {
+  lastAction = 'survey';
+  ws?.send(JSON.stringify({
+    type: EV.HOST_START_SURVEY,
+    bankId: $('#survey-pick').value,
+    durationMs: Number($('#survey-duration').value),
+  }));
+});
+
+$('#btn-survey-close').addEventListener('click', () => {
+  lastAction = 'survey';
+  ws?.send(JSON.stringify({ type: EV.HOST_CLOSE_SURVEY }));
+});
 
 function buildMissionTypes() {
   const sel = $('#mission-type');
@@ -531,7 +656,19 @@ function renderState(state) {
     });
     act.append(kick);
 
-    tr.append(face, name, score, prog, conn, active, act);
+    // 問卷標籤：主辦端要能一眼看出「答某個選項的人湊不湊得出一隊」
+    const tags = document.createElement('td');
+    const tagWrap = document.createElement('div');
+    tagWrap.className = 'tags';
+    for (const t of Object.values(a.traits ?? {})) {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip';
+      chip.textContent = t.label;   // 標籤文字來自題庫或主辦端輸入，一律 textContent
+      tagWrap.append(chip);
+    }
+    tags.append(tagWrap);
+
+    tr.append(face, name, tags, score, prog, conn, active, act);
     body.append(tr);
   }
 
