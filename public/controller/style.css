@@ -166,7 +166,10 @@ input:focus-visible,
 }
 .centered .lede { font-size: 15px; color: var(--ink-soft); margin: 0; max-width: 22em; }
 .centered .hint { font-size: 12px; color: var(--ink-soft); margin: 0; }
-.centered svg { height: min(24dvh, 180px); width: auto; }
+.centered svg, .centered canvas.portrait { height: min(24dvh, 180px); width: auto; }
+/* 像素肖像：放大時保持方塊邊緣 */
+canvas.portrait { image-rendering: pixelated; display: block; }
+.scan-stage.is-pixel img { image-rendering: pixelated; }
 #entry #name-input { max-width: 320px; margin-top: 6px; }
 
 /* ── 捏臉流程 ───────────────────────────────────────────── */
@@ -300,7 +303,7 @@ input:focus-visible,
   flex-shrink: 0;
   min-height: 46px;
 }
-.bar svg { height: 42px; width: auto; }
+.bar svg, .bar canvas.portrait { height: 42px; width: auto; }
 .bar #mini-avatar { flex: none; display: flex; align-items: center; }
 /* 名字是唯一可以被犧牲的元素：其餘（積分、連線狀態、離開鍵）都是
    固定寬度的功能性元件，min-width: 0 讓過長的名字在這裡截斷，
@@ -628,7 +631,7 @@ input:focus-visible,
   font-size: 13px; font-weight: 700; color: var(--ink-soft);
 }
 
-#pair-confirm-avatar svg { height: 128px; width: auto; display: block; margin: 0 auto 6px; }
+#pair-confirm-avatar svg, #pair-confirm-avatar canvas { height: 128px; width: auto; display: block; margin: 0 auto 6px; }
 #pair-confirm .dialog { text-align: center; }
 #pair-confirm .dialog-actions { text-align: left; }
 

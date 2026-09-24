@@ -19,7 +19,7 @@ import {
 import { COLOR_FAMILY_MAP } from '/shared/colorFamily.js';
 import { HEAT_MAP } from '/shared/heat.js';
 import { ZONE_MAP } from '/shared/scene.js';
-import { avatarImage } from '/shared/avatarSprite.js';
+import { avatarImage, avatarPortrait } from '/shared/avatarSprite.js';
 import { AvatarRenderer } from './avatarRenderer.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -250,6 +250,22 @@ function showStep(n) {
   setStepBar('#builder-steps', n);
   $('#btn-prev').textContent = n === 1 ? '改名字' : '上一步';
   $('#btn-next').textContent = n === 3 ? '完成，進入現場' : '下一步';
+}
+
+/**
+ * 角色肖像放進容器：與場上同一格像素畫格（shared/avatarSprite.js 的 avatarPortrait）。
+ * 拍照角色不能用 renderAvatarSVG —— 那只會畫出取樣色的通用角色，
+ * 左上角的「自己」就會跟大螢幕上的自己長得不一樣。
+ */
+function showPortrait(el, avatar) {
+  if (!el) return;
+  el.replaceChildren();
+  if (!avatar) return;
+  avatarPortrait(avatar).then((c) => {
+    c.className = 'portrait';
+    c.setAttribute('aria-hidden', 'true');
+    el.replaceChildren(c);
+  });
 }
 
 /** 三段進度條（捏臉與拍照共用同一個元件） */
@@ -595,7 +611,7 @@ async function openCamera() {
   $('#btn-capture').disabled = false;
   $('#btn-capture').textContent = '拍照';
   // 上一次若是相機失敗，取景框被藏起來了，重試時要收回來
-  $('.scan-stage')?.classList.remove('is-empty', 'shutter', 'is-result');
+  $('.scan-stage')?.classList.remove('is-empty', 'shutter', 'is-result', 'is-pixel');
   showScanPhase('aim');
   try {
     // 兩軸都要 1280 而不是指定 720×1280：後者等於向瀏覽器要一個 9:16 的
@@ -826,6 +842,7 @@ async function submitScanImage(image) {
   // 「數位轉譯成什麼樣子」正是這件作品的核心體驗，跳過等於白等 25 秒。
   pendingScanConfig = {
     source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors,
+    ...(body.pixelParts && { pixelParts: body.pixelParts }),
   };
   // previewPng 優先：確認頁把角色放進 74vh 的直式框，手機 dpr=3 時顯示高度
   // 接近 2000 實際像素，而 fullPng 是為場上渲染縮過的貼圖（1024），
@@ -833,6 +850,14 @@ async function submitScanImage(image) {
   // 舊版伺服器沒有這個欄位，因此保留 fullPng 作為後備。
   const shot = body.previewPng || body.fullPng;
   if (shot) $('#scan-result').src = shot;
+  // 接著換成場上實際的樣子（兩頭身的像素角色）：確認的應該是等一下
+  // 出現在大螢幕上的那個角色，而不是轉換前的原圖
+  const confirming = pendingScanConfig;
+  avatarPortrait(confirming).then((c) => {
+    if (pendingScanConfig !== confirming) return;   // 期間已經重拍
+    $('#scan-result').src = c.toDataURL();
+    $('.scan-stage')?.classList.add('is-pixel');
+  });
   showScanPhase('done');
 }
 
@@ -1366,7 +1391,7 @@ const confirmPair = $('#pair-confirm');
 function openConfirmPair(msg) {
   $('#pair-confirm-title').textContent = `${msg.name} 想和你配對`;
   $('#pair-confirm-text').textContent = '請確認對方就站在你面前，再按下確認。';
-  $('#pair-confirm-avatar').innerHTML = msg.avatar ? renderAvatarSVG(msg.avatar) : '';
+  showPortrait($('#pair-confirm-avatar'), msg.avatar);
   confirmPair.hidden = false;
   // Esc 一律當成「不是這個人」：這是對方發起的，靜默關掉會讓對方一直等。
   pushOverlay(confirmPair, {
@@ -1443,7 +1468,7 @@ $('#btn-confirm-exit').addEventListener('click', () => {
     localStorage.removeItem(LS.rejoinToken);
   } catch { /* 略 */ }
 
-  $('#farewell-avatar').innerHTML = renderAvatarSVG(config);
+  showPortrait($('#farewell-avatar'), config);
   showScreen('farewell');
 });
 
@@ -1659,7 +1684,7 @@ document.addEventListener('visibilitychange', () => {
 function enterStage() {
   showScreen('controller');
   requestWakeLock();
-  $('#mini-avatar').innerHTML = renderAvatarSVG(config);
+  showPortrait($('#mini-avatar'), config);
   $('#my-name').textContent = displayName;
   $('#my-id').textContent = '—';
   setStatus('連線中…');

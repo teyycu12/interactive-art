@@ -383,61 +383,147 @@ function backCells(cells, { spans, hair }) {
 }
 
 /**
- * 側面（面向左）：頭用背面的髮型輪廓稍微收窄，把正面左半張臉貼到頭的前緣，
- * 多一格鼻尖；身體收窄成側身的厚度。
+ * 側面（面向左）。
+ *
+ * 頭：背面的髮型輪廓稍微收窄，再在前緣「畫」一張側臉 —— 膚色的臉頰往下收成下巴、
+ * 一隻眼睛（取自正面左眼）、鼻尖、嘴。先前直接把半張正臉貼上去，實測
+ * 「側面很醜」：正臉的半邊帶著鬢髮與臉頰輪廓，貼到側面變成一塊缺口。
+ * 身體：只留軀幹與一隻手臂（近側），收成側身的厚度 —— 正面兩隻手都壓進去
+ * 會像一個扁盒子兩邊各黏一隻手。
  */
-function sideCells(cells, back, { spans, skin }) {
+function sideCells(cells, back, { spans, skin }, legCols) {
   const out = cells.map(() => Array(PIXEL_W).fill(null));
-  const squeeze = (src, y, k) => {
+  const squeeze = (src, y, k, x0 = 0, x1 = PIXEL_W - 1) => {
     for (let x = 0; x < PIXEL_W; x++) {
       const sx = Math.round(20 + (x + 0.5 - 20) / k - 0.5);
-      if (sx >= 0 && sx < PIXEL_W) out[y][x] = src[y][sx];
+      if (sx >= x0 && sx <= x1) out[y][x] = src[y][sx];
     }
   };
-  for (let y = 0; y < PIXEL_H; y++) squeeze(y <= GRID_CHIN ? back : cells, y, y <= GRID_CHIN ? 0.86 : 0.62);
+  // 身體：軀幹（兩腿之間那幾欄）收窄；手臂另外補一隻
+  const [la, lb] = legCols;
+  for (let y = 0; y < PIXEL_H; y++) {
+    if (y <= GRID_CHIN) squeeze(back, y, 0.86);
+    else squeeze(cells, y, 0.7, la, lb);
+  }
+  // 近側手臂：正面左手那一段（腿欄左邊的像素），搬到軀幹中間
+  for (let y = GRID_CHIN + 1; y < PIXEL_H; y++) {
+    const arm = [];
+    for (let x = 0; x < la; x++) if (cells[y][x]) arm.push(cells[y][x]);
+    if (!arm.length) continue;
+    const w = Math.min(3, arm.length);
+    for (let i = 0; i < w; i++) out[y][18 + i] = arm[arm.length - w + i];
+  }
 
-  const rows = [...spans.keys()];
-  if (rows.length >= 3) {
-    const mid = Math.round(rows.reduce((a, b) => a + b, 0) / rows.length);
-    for (const [y, [a, b]] of spans) {
-      let lead = out[y].findIndex(Boolean);
-      if (lead < 0) continue;
-      const half = Math.min(b, a + Math.ceil((b - a) / 2));
-      for (let x = a; x <= half; x++) {
-        const tx = lead + (x - a);
-        if (tx < PIXEL_W && cells[y][x]) out[y][tx] = cells[y][x];
-      }
+  // 真正的臉：膚色至少五格寬的那幾列（額頭從瀏海縫隙露出的一兩格不算）
+  const rows = [...spans.keys()].filter((y) => spans.get(y)[1] - spans.get(y)[0] >= 4).sort((a, b) => a - b);
+  if (rows.length < 4 || !skin) return out;
+  const top = rows[0], chin = rows[rows.length - 1];
+  const shadeC = (c, k) => c.map((v) => Math.round(v * k));
+
+  // 左眼：臉內側（離臉的左緣兩格以上）明顯比膚色暗的像素。
+  // 只看臉內側 —— 臉緣外的鬢髮也是暗的，算進來眼睛會被放到頭髮上
+  const eye = [];
+  for (const y of rows.slice(0, 9)) {
+    const [x0] = spans.get(y);
+    for (let x = x0 + 1; x < 20; x++) {
+      const c = cells[y][x];
+      if (!c) continue;
+      const lum = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+      const lumSkin = 0.3 * skin[0] + 0.59 * skin[1] + 0.11 * skin[2];
+      if (lum < lumSkin * 0.62) eye.push([x, y, c]);
     }
-    // 鼻尖：臉中段往前凸一格
-    const ny = Math.min(GRID_CHIN - 2, mid + 1);
-    const lead = out[ny].findIndex(Boolean);
-    if (lead > 0 && skin) out[ny][lead - 1] = skin;
   }
+  const eyeX0 = eye.length ? Math.min(...eye.map((e) => e[0])) : 0;
+  const eyeY0 = eye.length ? Math.min(...eye.map((e) => e[1])) : top + 2;
+  const eyeY1 = eye.length ? Math.max(...eye.map((e) => e[1])) : top + 5;
+
+  // 臉貼齊頭的前緣：側臉的輪廓就是角色的前緣
+  const lead = Math.min(...rows.map((y) => { const i = out[y].findIndex(Boolean); return i < 0 ? PIXEL_W : i; }));
+  const n = chin - top;
+  for (const y of rows) {
+    // 臉頰的弧：上緣 6 格、中段 7 格、往下巴收到 3 格
+    const k = y - top, fromChin = chin - y;
+    const w = fromChin <= 3 ? [3, 4, 5, 6][fromChin] : k < 1 ? 6 : 7;
+    for (let x = lead; x < lead + w; x++) {
+      // 後緣與下巴一格陰影，臉才有體積
+      out[y][x] = x === lead + w - 1 || fromChin === 0 ? shadeC(skin, 0.86) : skin;
+    }
+  }
+  // 眼睛：取正面左眼最靠外的三欄，放在臉的前段
+  if (eye.length) {
+    for (const [x, y, c] of eye) {
+      const tx = lead + 1 + (x - eyeX0);
+      if (tx <= lead + 3) out[y][tx] = c;
+    }
+  } else {
+    for (let y = top + 2; y <= Math.min(chin - 3, top + 4); y++) out[y][lead + 1] = [43, 31, 29];
+  }
+  // 瀏海蓋住額頭：臉最上面兩列換回頭髮色，第二列留參差的髮尾
+  const hairAt = (y) => out[y].find((c, x) => c && x > lead + 8) ?? [40, 30, 28];
+  for (let x = lead; x < lead + 7; x++) if (out[top][x]) out[top][x] = hairAt(top);
+  for (let x = lead + 1; x < lead + 7; x += 2) if (out[top + 1][x]) out[top + 1][x] = hairAt(top + 1);
+  // 鼻尖（往前凸一格）與嘴
+  const ny = Math.min(chin - 2, eyeY1 + 2);
+  if (lead > 0) out[ny][lead - 1] = skin;
+  if (chin - 1 > ny) out[chin - 1][lead] = shadeC(skin, 0.68);
+  // 耳朵：臉後緣、與眼睛同高
+  const ex = lead + 7;
+  for (let y = eyeY1; y <= Math.min(chin - 2, eyeY1 + 2); y++) if (out[y][ex]) out[y][ex] = y === eyeY1 + 1 ? shadeC(skin, 0.85) : skin;
+  void n; void eyeY0;
   return out;
 }
 
-/** 正面／背面的步態：腿部左右兩半各自上提一格，與捏臉的抬腳一致 */
-function liftStep(cells, legTop, frame) {
+/**
+ * 腿在哪幾欄：鞋底附近幾列的不透明範圍。
+ * 步態只能動這幾欄 —— 先前整個左半邊一起上提，腿欄外的手也跟著抬，
+ * 實測就是「同手同腳」。
+ */
+function legColumns(cells) {
+  let a = PIXEL_W, b = -1;
+  for (let y = GRID_SOLE - 4; y <= GRID_SOLE; y++) {
+    for (let x = 0; x < PIXEL_W; x++) if (cells[y]?.[x]) { a = Math.min(a, x); b = Math.max(b, x); }
+  }
+  return b < 0 ? [14, 25] : [a, b];
+}
+
+/** 把某個矩形範圍內的像素上移一格 */
+function liftBlock(out, src, x0, x1, y0, y1) {
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) out[y - 1][x] = src[y][x];
+    out[y1][x] = null;
+  }
+}
+
+/**
+ * 正面／背面的步態：一隻腳抬起一格，**另一側**的手同時擺起一格 ——
+ * 與捏臉角色的 armsFrontBack 一致，走路才是左腳配右手。
+ */
+function liftStep(cells, legTop, frame, legCols) {
   if (frame === 0) return cells;
   const out = cloneCells(cells);
-  const [x0, x1] = frame === 1 ? [0, 19] : [20, PIXEL_W - 1];
-  for (let y = legTop; y < PIXEL_H; y++) {
-    for (let x = x0; x <= x1; x++) out[y - 1][x] = y + 1 < PIXEL_H || cells[y][x] ? cells[y][x] : null;
-  }
-  for (let x = x0; x <= x1; x++) out[PIXEL_H - 1][x] = null;
+  const [la, lb] = legCols;
+  const mid = Math.round((la + lb) / 2);
+  const [fx0, fx1] = frame === 1 ? [la, mid - 1] : [mid, lb];
+  liftBlock(out, cells, fx0, fx1, legTop + 1, PIXEL_H - 1);
+  // 對側的手：腿欄之外、腰到手掌那一段
+  const [hx0, hx1] = frame === 1 ? [lb + 1, PIXEL_W - 1] : [0, la - 1];
+  if (hx0 <= hx1) liftBlock(out, cells, hx0, hx1, legTop - 6, legTop + 3);
   return out;
 }
 
-/** 側面的步態：兩隻腳前後張開（前半往前、後半往後各一格） */
-function strideStep(cells, legTop, frame) {
+/** 側面的步態：兩隻腳前後張開（只動腿欄，手不跟著動） */
+function strideStep(cells, legTop, frame, legCols) {
   if (frame === 0) return cells;
   const out = cloneCells(cells);
+  const [la, lb] = legCols;
+  const mid = Math.round((la + lb) / 2);
   const dir = frame === 1 ? 1 : -1;
-  for (let y = legTop + 1; y < PIXEL_H; y++) {
-    const row = Array(PIXEL_W).fill(null);
-    for (let x = 0; x < PIXEL_W; x++) {
+  for (let y = legTop + 2; y < PIXEL_H; y++) {
+    const row = out[y].slice();
+    for (let x = la - 2; x <= lb + 2; x++) if (x >= 0 && x < PIXEL_W) row[x] = null;
+    for (let x = la; x <= lb; x++) {
       if (!cells[y][x]) continue;
-      const tx = x + (x < 20 ? -dir : dir);
+      const tx = x + (x < mid ? -dir : dir);
       if (tx >= 0 && tx < PIXEL_W) row[tx] = cells[y][x];
     }
     out[y] = row;
@@ -476,15 +562,17 @@ function cvViews(front) {
   const fc = cvFrontCells(front);
   if (!fc) return null;
   const { cells, legTop } = fc;
+  const legCols = legColumns(cells);
   const face = faceSpans(cells);
   const back = backCells(cells, face);
-  const side = sideCells(cells, back, face);
-  const frames = (src, step, mirrored) => [0, 1, 2].map((f) => cellsToCanvas(step(src, legTop, f), mirrored));
+  const side = sideCells(cells, back, face, legCols);
+  const sideLegs = legColumns(side);
+  const frames = (src, step, mirrored, cols = legCols) => [0, 1, 2].map((f) => cellsToCanvas(step(src, legTop, f, cols), mirrored));
   return {
     down: frames(cells, liftStep),
     up: frames(back, liftStep),
-    left: frames(side, strideStep),
-    right: frames(side, strideStep, true),
+    left: frames(side, strideStep, false, sideLegs),
+    right: frames(side, strideStep, true, sideLegs),
   };
 }
 
@@ -495,7 +583,7 @@ function cvViews(front) {
  * 角色不會有空白期；載入後原地換掉。
  * 揮手、乾杯沒有專屬畫格（正面是生成的圖，畫不出舉手），沿用頭上的圖示。
  */
-function cvPixelSprite(avatar, opts) {
+function cvPixelSprite(avatar, opts = {}) {
   let frames = {};
   const paintGrid = (grid) => {
     const c = pixelCanvas();
@@ -515,11 +603,39 @@ function cvPixelSprite(avatar, opts) {
   }
   const front = cvAvatarImage(avatar, {
     ...opts,
-    onPaint: () => { frames = cvViews(front) ?? frames; },
+    onPaint: () => { frames = cvViews(front) ?? frames; opts.onReady?.(); },
   });
   // 用 getter：onPaint 換掉整組畫格，drawCharacter 每幀讀到的都是最新的
   Object.defineProperty(front, 'pixelFrames', { get: () => frames, configurable: true });
   return front;
+}
+
+/**
+ * 角色肖像：場上實際用的那一格像素畫格，放大成整數倍、不平滑。
+ *
+ * 手機左上角縮圖、拍照確認頁、配對確認、離場頁都用這個 —— 它們原本各自畫
+ * （捏臉 SVG、或生成的原圖），拍照角色在確認頁是三頭身的原圖，進場後卻是
+ * 兩頭身的像素角色，實測被指出「進場畫面跟實際在場景裡不一樣」。
+ *
+ * 拍照角色要等生成圖載入才畫得出正面；最多等 4 秒，逾時就用取樣色的像素角色。
+ *
+ * @returns {Promise<HTMLCanvasElement>}
+ */
+export function avatarPortrait(avatar, { dir = 'down', scale = 8 } = {}) {
+  return new Promise((resolve) => {
+    const done = (frames) => {
+      const c = document.createElement('canvas');
+      c.width = PIXEL_W * scale;
+      c.height = PIXEL_H * scale;
+      const g = c.getContext('2d');
+      g.imageSmoothingEnabled = false;
+      g.drawImage(frames[dir][0], 0, 0, c.width, c.height);
+      resolve(c);
+    };
+    if (avatar?.source !== 'CV') { done(pixelAvatarImage(avatar).pixelFrames); return; }
+    const sprite = cvPixelSprite(avatar, { onReady: () => done(sprite.pixelFrames) });
+    setTimeout(() => done(sprite.pixelFrames), 4000);
+  });
 }
 
 /** 依來源選用組裝方式。回傳物件皆帶有 complete / naturalWidth，可直接交給 drawCharacter。 */
