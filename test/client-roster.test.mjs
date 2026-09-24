@@ -110,15 +110,13 @@ describe('CLIENT_ROSTER 重送節流', () => {
     assert.deepEqual(r[0].look, AVATAR);
   });
 
-  test('CV 角色的外觀不帶貼圖網址', () => {
+  test('CV 角色的外觀帶貼圖網址：手機畫鄰居與大螢幕用同一張生成圖', () => {
     const stage = new Stage();
     const fallbackColors = { skin: '#F4C08A', hair: '#4A2C1A', torso: '#8FA05E', legs: '#B7A98A' };
-    stage.addAgent({ name: '小華', avatar: {
-      source: 'CV', fallbackColors,
-      textures: { head: '/assets/gen/x/head.webp', torso: '/assets/gen/x/torso.webp', legs: '/assets/gen/x/legs.webp' },
-    } });
+    const textures = { head: '/assets/gen/x/head.webp', torso: '/assets/gen/x/torso.webp', legs: '/assets/gen/x/legs.webp' };
+    stage.addAgent({ name: '小華', avatar: { source: 'CV', fallbackColors, textures } });
     const [{ look }] = stage.nameRoster();
-    assert.deepEqual(look, { source: 'CV', fallbackColors });
+    assert.deepEqual(look, { source: 'CV', textures, fallbackColors });
   });
 
   test('重新捏臉會改變指紋，名冊才會重送', () => {

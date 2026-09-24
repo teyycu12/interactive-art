@@ -286,10 +286,10 @@ function paintBody(p, c, body, dir, frame, pose = null) {
 /** 臉。側面時臉往前（左）偏一點，多一格鼻尖。 */
 function paintFaceBase(p, c, dir) {
   if (dir === 'left') {
-    p.oval(18.5, 16, 9.8, 10, c.skin, 'skin');
-    p.put(8, 18, c.skin, 'skin');
+    p.oval(18.5, 17, 9.8, 9.5, c.skin, 'skin');
+    p.put(8, 20, c.skin, 'skin');
   } else {
-    p.oval(20, 16, 10.5, 10, c.skin, 'skin');
+    p.oval(20, 17, 10.3, 9.5, c.skin, 'skin');
   }
 }
 
@@ -305,24 +305,41 @@ const mass = (p, c, dir, color = c.hair) => (dir === 'left'
   ? p.oval(21, 14, 13, 13, color, 'hair')
   : p.oval(20, 14, 13.5, 13, color, 'hair'));
 /** 頭頂：蓋住臉的上緣 */
-const dome = (p, c, dir, maxY = 11, color = c.hair) => (dir === 'left'
+const dome = (p, c, dir, maxY = 12, color = c.hair) => (dir === 'left'
   ? p.oval(21, 14, 13, 13, color, 'hair', (x, y) => y <= maxY)
   : p.oval(20, 14, 13.5, 13, color, 'hair', (x, y) => y <= maxY));
 /** 天使光圈：動畫頭髮的招牌高光 */
 const halo = (p, c, dir) => (dir === 'left'
-  ? p.dots([[12, 8], [13, 7], [14, 7], [15, 6], [16, 6], [17, 6]], c.hairHi)
-  : p.dots([[11, 9], [12, 8], [13, 7], [14, 7], [15, 6], [16, 6], [24, 6], [25, 7], [26, 7], [27, 8]], c.hairHi));
+  ? p.dots([[11, 8], [12, 7], [13, 6], [14, 6], [15, 5], [16, 5], [17, 5], [18, 5]], c.hairHi)
+  : p.dots([[10, 8], [11, 7], [12, 6], [13, 6], [14, 5], [15, 5], [16, 5],
+    [23, 5], [24, 5], [25, 5], [26, 6], [27, 6], [28, 7], [29, 8]], c.hairHi));
 /** 髮流：幾道暗線 */
 const strands = (p, c, pts) => p.dots(pts, c.hairSh);
 
 /**
- * 瀏海：每欄從 y 12 往下長 len 格。眼睛那幾欄刻意短，
- * 不能蓋住眼睛（x 13–16、23–26）—— 眼睛是動畫角色表情的全部。
+ * 瀏海：每欄從 y 13 往下長 len 格，厚厚蓋住額頭、髮尾參差地垂到眼睛上緣。
+ * 眼睛那幾欄（x 13–16、23–26）停在睫毛上方一格 —— 眼睛是動畫角色表情的全部，
+ * 兩眼之間與兩側的髮束可以更長。額頭露太多會像戴了一頂安全帽。
  */
-const BANGS = [8, 6, 4, 2, 1, 1, 1, 1, 3, 2, 1, 1, 2, 3, 1, 1, 1, 1, 2, 4, 6, 8];
-const bangs = (p, c, lens = BANGS) => lens.forEach((len, i) => p.rect(9 + i, 12, 9 + i, 11 + len, c.hair, 'hair'));
+const BANGS = [9, 7, 5, 3, 2, 2, 1, 2, 3, 3, 2, 1, 3, 3, 2, 1, 2, 2, 3, 5, 7, 9];
+const bangs = (p, c, lens = BANGS) => {
+  lens.forEach((len, i) => p.rect(9 + i, 13, 9 + i, 12 + len, c.hair, 'hair'));
+  // 髮束之間的暗線與幾道亮色髮光：瀏海才看得出是一束一束的
+  strands(p, c, [[12, 13], [12, 14], [17, 13], [17, 14], [22, 13], [22, 14], [27, 13], [27, 14]]);
+  p.dots([[14, 13], [19, 13], [20, 13], [25, 13]], c.hairHi);
+};
 /** 側面的瀏海（面向左，只有額頭前段） */
-const sideBangs = (p, c, lens = [6, 4, 3, 2, 1, 2, 3, 2]) => lens.forEach((len, i) => p.rect(9 + i, 12, 9 + i, 11 + len, c.hair, 'hair'));
+const sideBangs = (p, c, lens = [7, 5, 3, 2, 2, 3, 3, 2]) => lens.forEach((len, i) => p.rect(9 + i, 13, 9 + i, 12 + len, c.hair, 'hair'));
+/**
+ * 側面的後髮：從頭頂往後腦勺的弧線，前緣在耳前垂下一束鬢髮。
+ * 直接用一條垂直線切開臉與頭髮，看起來像半邊戴了安全帽。
+ */
+const sideHair = (p, c, lockBottom) => {
+  p.oval(25, 15, 11, 12, c.hair, 'hair', (x, y) => x >= 18 || y <= 14);
+  p.rect(17, 13, 19, lockBottom - 1, c.hair, 'hair');
+  p.rows([[lockBottom, 18, 19]], c.hair, 'hair');
+};
+
 /** 臉頰兩側垂下的鬢髮，末端收尖 */
 const locks = (p, c, bottom = 25, color = c.hair) => {
   p.symRect(6, 12, 9, bottom - 2, color, 'hair');
@@ -348,8 +365,7 @@ const HAIR_PIXELS = {
       halo(p, c, 'up');
     },
     left(p, c) {
-      dome(p, c, 'left'); sideBangs(p, c);
-      p.oval(24, 15, 10, 11, c.hair, 'hair', (x) => x >= 20);
+      dome(p, c, 'left'); sideBangs(p, c); sideHair(p, c, 23);
       strands(p, c, [[25, 9], [26, 10], [27, 16], [28, 17]]); halo(p, c, 'left');
     },
     ear: true,
@@ -404,8 +420,7 @@ const HAIR_PIXELS = {
       strands(p, c, [[16, 8], [17, 11], [23, 8], [22, 11], [20, 16]]); halo(p, c, 'up');
     },
     left(p, c) {
-      dome(p, c, 'left'); sideBangs(p, c, [4, 3, 2, 1, 1, 2, 2, 1]);
-      p.oval(24, 15, 10, 11, c.hair, 'hair', (x) => x >= 20);
+      dome(p, c, 'left'); sideBangs(p, c, [5, 4, 3, 2, 2, 2, 2, 2]); sideHair(p, c, 22);
       strands(p, c, [[24, 9], [26, 12], [27, 16]]); halo(p, c, 'left');
     },
     ear: true,
@@ -430,8 +445,7 @@ const HAIR_PIXELS = {
       halo(p, c, 'up');
     },
     left(p, c) {
-      dome(p, c, 'left'); sideBangs(p, c);
-      p.oval(24, 15, 10, 11, c.hair, 'hair', (x) => x >= 20);
+      dome(p, c, 'left'); sideBangs(p, c); sideHair(p, c, 30);
       strands(p, c, [[25, 20], [25, 21], [28, 28], [28, 29]]); halo(p, c, 'left');
     },
     ear: false,
@@ -478,24 +492,24 @@ const HAIR_PIXELS = {
  */
 function eye(p, c, x, outer, w = 4) {
   const r = x + w - 1;
-  p.rect(x, 13, r, 13, LASH, 'detail');
-  p.put(outer < 0 ? x - 1 : r + 1, 13, LASH, 'detail');
-  p.rect(x, 14, r, 14, PUPIL, 'detail');
-  p.rect(x, 15, r, 16, c.iris, 'detail');
-  p.rect(x + 1, 15, r - 1, 15, PUPIL, 'detail');
-  p.rect(x, 17, r, 18, c.irisHi, 'detail');
-  p.rect(x + 1, 19, r - (w > 3 ? 1 : 0), 19, c.irisHi, 'detail');
-  p.dots([[x, 14], [x, 15]], WHITE);
-  p.put(r, 18, WHITE, 'detail');
+  p.rect(x, 15, r, 15, LASH, 'detail');
+  p.put(outer < 0 ? x - 1 : r + 1, 15, LASH, 'detail');
+  p.rect(x, 16, r, 16, PUPIL, 'detail');
+  p.rect(x, 17, r, 18, c.iris, 'detail');
+  p.rect(x + 1, 17, r - 1, 17, PUPIL, 'detail');
+  p.rect(x, 19, r, 19, c.irisHi, 'detail');
+  p.rect(x + 1, 20, r - (w > 3 ? 1 : 0), 20, c.irisHi, 'detail');
+  p.dots([[x, 16], [x, 17]], WHITE);
+  p.put(r, 19, WHITE, 'detail');
 }
 /** 閉眼的弧線（笑眼、眨眼） */
 const closedEye = (p, x, up = true) => p.dots(up
-  ? [[x, 17], [x + 1, 16], [x + 2, 16], [x + 3, 17]]
-  : [[x, 16], [x + 1, 17], [x + 2, 17], [x + 3, 16]], LASH);
-const smile = (p) => p.dots([[18, 22], [19, 23], [20, 23], [21, 22]], MOUTH);
+  ? [[x, 19], [x + 1, 18], [x + 2, 18], [x + 3, 19]]
+  : [[x, 18], [x + 1, 19], [x + 2, 19], [x + 3, 18]], LASH);
+const smile = (p) => p.dots([[19, 23], [20, 23]], MOUTH);
 const blush = (p, c) => p.symRows([[21, 10, 11]], c.blush, 'detail');
 const sideEye = (p, c) => eye(p, c, 10, 1, 3);
-const sideMouth = (p) => p.dots([[9, 22], [10, 22]], MOUTH);
+const sideMouth = (p) => p.dots([[9, 23], [10, 23]], MOUTH);
 const sideBlush = (p, c) => p.dots([[13, 21], [14, 21]], c.blush);
 
 /** 表情。背面看不到臉，所以只有正面與側面（面向左）。 */
@@ -506,58 +520,68 @@ const FACE_PIXELS = {
   },
   face_smile_glasses: {
     down(p, c) {
-      for (const x0 of [12, 22]) p.rect(x0, 12, x0 + 5, 20, mix(c.skin, LENS, 0.4), 'detail');
+      for (const x0 of [12, 22]) p.rect(x0, 14, x0 + 5, 21, mix(c.skin, LENS, 0.4), 'detail');
       eye(p, c, 13, -1); eye(p, c, 23, 1);
       for (const x0 of [12, 22]) {
-        p.rect(x0, 12, x0 + 5, 12, FRAME, 'detail'); p.rect(x0, 20, x0 + 5, 20, FRAME, 'detail');
-        p.rect(x0, 13, x0, 19, FRAME, 'detail'); p.rect(x0 + 5, 13, x0 + 5, 19, FRAME, 'detail');
+        p.rect(x0, 14, x0 + 5, 14, FRAME, 'detail'); p.rect(x0, 21, x0 + 5, 21, FRAME, 'detail');
+        p.rect(x0, 15, x0, 20, FRAME, 'detail'); p.rect(x0 + 5, 15, x0 + 5, 20, FRAME, 'detail');
       }
-      p.rect(18, 15, 21, 15, FRAME, 'detail');
-      smile(p); p.symRows([[21, 10, 11]], c.blush, 'detail');
+      p.rect(18, 17, 21, 17, FRAME, 'detail');
+      smile(p); p.symRows([[22, 10, 11]], c.blush, 'detail');
     },
     left(p, c) {
-      p.rect(9, 12, 13, 20, mix(c.skin, LENS, 0.4), 'detail');
+      p.rect(9, 14, 13, 21, mix(c.skin, LENS, 0.4), 'detail');
       sideEye(p, c);
-      p.rect(9, 12, 13, 12, FRAME, 'detail'); p.rect(9, 20, 13, 20, FRAME, 'detail');
-      p.rect(9, 13, 9, 19, FRAME, 'detail'); p.rect(13, 13, 13, 19, FRAME, 'detail');
-      p.rect(14, 15, 21, 15, FRAME, 'detail');
-      sideMouth(p); p.dots([[14, 21], [15, 21]], c.blush);
+      p.rect(9, 14, 13, 14, FRAME, 'detail'); p.rect(9, 21, 13, 21, FRAME, 'detail');
+      p.rect(9, 15, 9, 20, FRAME, 'detail'); p.rect(13, 15, 13, 20, FRAME, 'detail');
+      p.rect(14, 17, 18, 17, FRAME, 'detail');
+      sideMouth(p); p.dots([[14, 22], [15, 22]], c.blush);
     },
   },
   face_wink_02: {
-    down(p, c) { eye(p, c, 13, -1); closedEye(p, 23); p.put(27, 16, LASH, 'detail'); smile(p); blush(p, c); },
+    down(p, c) { eye(p, c, 13, -1); closedEye(p, 23); p.put(27, 18, LASH, 'detail'); smile(p); blush(p, c); },
     left(p, c) { sideEye(p, c); sideMouth(p); sideBlush(p, c); },
   },
   face_calm_03: {
-    down(p, c) { closedEye(p, 13, false); closedEye(p, 23, false); p.dots([[19, 22], [20, 22]], MOUTH); blush(p, c); },
-    left(p, c) { p.dots([[10, 16], [11, 17], [12, 17], [13, 16]], LASH); p.put(10, 22, MOUTH, 'detail'); sideBlush(p, c); },
+    down(p, c) { closedEye(p, 13, false); closedEye(p, 23, false); p.dots([[19, 23], [20, 23]], MOUTH); blush(p, c); },
+    left(p, c) { p.dots([[10, 18], [11, 19], [12, 19], [13, 18]], LASH); p.put(10, 23, MOUTH, 'detail'); sideBlush(p, c); },
   },
   face_grin_04: {
     down(p, c) {
       eye(p, c, 13, -1); eye(p, c, 23, 1);
-      p.rect(17, 21, 22, 21, MOUTH, 'detail'); p.rect(18, 22, 21, 23, MOUTH, 'detail');
-      p.rect(18, 21, 21, 21, WHITE, 'detail'); p.rect(19, 23, 20, 23, '#E0837A', 'detail');
+      p.rect(18, 22, 21, 22, MOUTH, 'detail'); p.rect(18, 23, 21, 24, MOUTH, 'detail');
+      p.rect(18, 22, 21, 22, WHITE, 'detail'); p.rect(19, 24, 20, 24, '#E0837A', 'detail');
       blush(p, c);
     },
     left(p, c) {
       sideEye(p, c);
-      p.rect(8, 21, 11, 21, MOUTH, 'detail'); p.rect(8, 22, 10, 23, MOUTH, 'detail'); p.rect(9, 21, 10, 21, WHITE, 'detail');
+      p.rect(8, 22, 11, 22, MOUTH, 'detail'); p.rect(8, 23, 10, 24, MOUTH, 'detail'); p.rect(9, 22, 10, 22, WHITE, 'detail');
       sideBlush(p, c);
     },
   },
   face_shades_05: {
     down(p) {
-      for (const x0 of [12, 22]) { p.rect(x0, 14, x0 + 5, 18, PUPIL, 'detail'); p.rect(x0 + 1, 19, x0 + 4, 19, PUPIL, 'detail'); }
-      p.rect(18, 15, 21, 15, PUPIL, 'detail');
-      p.dots([[13, 15], [14, 15], [13, 16], [23, 15], [24, 15], [23, 16]], '#8FA3B0');
-      p.dots([[18, 22], [19, 23], [20, 23], [21, 22]], MOUTH);
+      for (const x0 of [12, 22]) { p.rect(x0, 16, x0 + 5, 20, PUPIL, 'detail'); p.rect(x0 + 1, 21, x0 + 4, 21, PUPIL, 'detail'); }
+      p.rect(18, 17, 21, 17, PUPIL, 'detail');
+      p.dots([[13, 17], [14, 17], [13, 18], [23, 17], [24, 17], [23, 18]], '#8FA3B0');
+      p.dots([[19, 23], [20, 23]], MOUTH);
     },
     left(p) {
-      p.rect(9, 14, 13, 18, PUPIL, 'detail'); p.rect(10, 19, 12, 19, PUPIL, 'detail'); p.rect(14, 15, 21, 15, PUPIL, 'detail');
-      p.dots([[10, 15], [11, 15], [10, 16]], '#8FA3B0'); sideMouth(p);
+      p.rect(9, 16, 13, 20, PUPIL, 'detail'); p.rect(10, 21, 12, 21, PUPIL, 'detail'); p.rect(14, 17, 18, 17, PUPIL, 'detail');
+      p.dots([[10, 17], [11, 17], [10, 18]], '#8FA3B0'); sideMouth(p);
     },
   },
 };
+
+/** 瀏海正下方那一格膚色壓暗：參考的動畫角色都有這道影子，少了它臉像貼上去的 */
+function bangShadow(p, c) {
+  for (let x = 8; x <= 31; x++) {
+    for (let y = 12; y <= 22; y++) {
+      const yy = y + DY;
+      if (p.part[yy][x] === 'hair' && p.part[yy + 1][x] === 'skin') { p.put(x, y + 1, c.skinSh, 'skinShade'); break; }
+    }
+  }
+}
 
 function paintHead(p, c, cfg, dir) {
   const hair = HAIR_PIXELS[cfg.head] ?? HAIR_PIXELS.head_short_01;
@@ -566,6 +590,7 @@ function paintHead(p, c, cfg, dir) {
   if (hair.ear && !side) ears(p, c, dir);
   paintFaceBase(p, c, dir);
   hair[side ? 'left' : dir](p, c);
+  if (dir !== 'up') bangShadow(p, c);
   // 五官畫在頭髮之後：瀏海不能蓋掉眼睛
   if (dir === 'down') face.down(p, c);
   if (side) face.left(p, c);

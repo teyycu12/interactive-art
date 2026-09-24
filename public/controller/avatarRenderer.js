@@ -22,7 +22,7 @@
 import {
   drawCharacter, drawNameplate, drawEmote, stepIndex, emoteIsPosed,
 } from '/shared/character.js';
-import { avatarImage, pixelAvatarImage } from '/shared/avatarSprite.js';
+import { avatarImage } from '/shared/avatarSprite.js';
 import {
   sceneBackdrop, ORIGIN_X, ORIGIN_Y, ROOM_W, ROOM_H, BODY_UNITS, OUTSIDE,
 } from './sceneBackdrop.js';
@@ -179,7 +179,7 @@ export class AvatarRenderer {
       if (!a.look) continue;
       const key = JSON.stringify(a.look);
       const prev = this.looks.get(a.id);
-      next.set(a.id, prev?.key === key ? prev : { key, sprite: pixelAvatarImage(a.look) });
+      next.set(a.id, prev?.key === key ? prev : { key, sprite: avatarImage(a.look) });
     }
     this.looks = next;
   }

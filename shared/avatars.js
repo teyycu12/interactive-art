@@ -261,13 +261,18 @@ export function avatarPixelSpec(cfg) {
 }
 
 /**
- * 給手機名冊用的精簡外觀：捏臉原樣（本來就只有 token 與白名單色），
- * CV 只留取樣色、丟掉貼圖網址。手機據此把鄰居畫成像素角色。
+ * 給手機名冊用的外觀：捏臉原樣（本來就只有 token 與白名單色）。
+ * CV 也帶貼圖網址 —— 手機畫鄰居要用同一張生成圖，否則大螢幕上是本人的樣子，
+ * 手機上卻是只有取樣色的假人（實測被指出「大畫面跟自己的畫面不一樣」）。
+ * 網址本來就是公開的靜態檔，大螢幕載的也是同一批。
  */
 export function avatarLook(cfg) {
   if (!cfg) return null;
   if (cfg.source === 'CV') {
-    return { source: 'CV', fallbackColors: cfg.fallbackColors, ...(cfg.pixelParts && { pixelParts: cfg.pixelParts }) };
+    return {
+      source: 'CV', textures: cfg.textures, fallbackColors: cfg.fallbackColors,
+      ...(cfg.pixelParts && { pixelParts: cfg.pixelParts }),
+    };
   }
   return cfg;
 }
