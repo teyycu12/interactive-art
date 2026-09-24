@@ -10,7 +10,10 @@ pulled the other way. These tests pin the agreement rather than the wording.
 
 import unittest
 
-from backend.garment_gen import _FULL_CHARACTER_PROMPT_TEMPLATE
+from backend.garment_gen import (
+    _FULL_CHARACTER_PROMPT_TEMPLATE,
+    _PIXAR_PROMPT_TEMPLATE,
+)
 from backend.style_base import get_style_base
 
 
@@ -76,6 +79,34 @@ class PromptStyleAgreementTests(unittest.TestCase):
 
     def test_print_is_kept_flat_so_it_does_not_double_the_lighting(self):
         self.assertIn("carry no light direction of their own", PROMPT)
+
+
+class PromptSelfConsistencyTests(unittest.TestCase):
+    """A prompt must not ask for what its own negative block forbids.
+
+    The positive opening line carries more weight than a negative list, so a
+    contradiction here is not a draw -- the opening line tends to win. This is
+    exactly how the four-view model sheet came back: the negative block had
+    banned it since 2026-08-29, but the Pixar template's opening line still
+    said "rendered as a full-body character turnaround", and "turnaround" is
+    the industry term for a multi-view sheet.
+    """
+
+    def test_no_template_asks_for_the_model_sheet_its_negative_block_bans(self):
+        for name, template in (
+            ("lego", _FULL_CHARACTER_PROMPT_TEMPLATE),
+            ("pixar", _PIXAR_PROMPT_TEMPLATE),
+        ):
+            text = template.lower()
+            with self.subTest(style=name):
+                self.assertIn("no turnaround sheet", text)
+                # The ban is the only place the word may appear.
+                self.assertEqual(
+                    text.count("turnaround"), 1,
+                    "'turnaround' appears outside the negative block, which asks "
+                    "for the multi-view sheet the same prompt forbids",
+                )
+                self.assertIn("exactly one single figure", text)
 
 
 if __name__ == "__main__":

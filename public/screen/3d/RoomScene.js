@@ -786,7 +786,17 @@ export class RoomScene {
   }
 
   resetCamera() {
-    const START_POS = new THREE.Vector3(HALF_W * 0.95, WALL_H * 1.85, HALF_D * 1.55);
+    // 相機拉近、壓低，讓房間吃滿畫面。
+    //
+    // 舊值（0.95 / 1.85 / 1.55 倍，距離 15.6）讓房間只佔畫面寬度的 85%，
+    // 四周全是空白。這裡整組乘 0.88 拉近到 13.75，房間寬度約佔 95% ——
+    // 留一點邊，但不會被裁到。
+    //
+    // 另外 PerspectiveCamera 的 fov 是「垂直」的：畫面愈寬，水平視野跟著
+    // 變大、垂直視野卻不變，而房間只有 WALL_H(4.6) 高，於是超寬比例下
+    // 上下留白會吃掉大半畫面。_frameFov() 依 aspect 補正 fov，讓「房間
+    // 寬度」而不是「房間高度」決定取景 —— 16:9 / 21:9 都落在 95~97%。
+    const START_POS = new THREE.Vector3(HALF_W * 0.84, WALL_H * 1.63, HALF_D * 1.36);
     const START_TARGET = new THREE.Vector3(0, WALL_H * 0.16, -RD * 0.06);
     this.camera.position.copy(START_POS);
     this.controls.target.copy(START_TARGET);
@@ -794,8 +804,18 @@ export class RoomScene {
     this.camera.updateMatrixWorld();
   }
 
+  /** 依畫面比例決定垂直 fov：畫面愈寬，垂直 fov 愈小，房間就撐得愈滿。
+   *  夾在 [26, 46] 之間 —— 太小會有望遠鏡般的透視壓縮，太大則邊角變形。 */
+  _frameFov() {
+    const aspect = Math.max(innerWidth / innerHeight, 0.5);
+    // 基準：16:9 時維持接近原本的 40 度手感。
+    const fov = 40 * (16 / 9) / aspect;
+    return Math.min(46, Math.max(26, fov));
+  }
+
   _resize() {
     this.camera.aspect = innerWidth / innerHeight;
+    this.camera.fov = this._frameFov();
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
     this.composer?.setSize(innerWidth, innerHeight);

@@ -134,6 +134,26 @@ garment_gen 把風格註冊進其中一份，service.py 從另一份查詢，查
 `2026q3_owner_curated/`（樂高）**沒有一起洗**：目前只用皮克斯，而且那組動了
 要一併處理 `PROVENANCE.md` 的浮水印判定與備份目錄語意，不順手。
 
+### 正面指令會蓋過負面表列：prompt 不能要求自己禁止的東西
+
+`_PIXAR_PROMPT_TEMPLATE` 開頭寫著 `rendered as a full-body character
+turnaround`，而同一份 prompt 的 `_PIXAR_NEGATIVE` 從 2026-08-29 起就明文禁
+`NO turnaround sheet / NO multiple views`。**turnaround 在角色設計的行話裡
+就是「正／側／背多視角設定表」** —— 等於開頭要一張四視圖、結尾再禁止它。
+
+這不是平手：**開頭那句正面指令的權重通常高過負面表列**，所以它會把已經修好
+的四視圖問題重新打開，而症狀跟當初一模一樣 —— `avatar_quality` 的
+`fragmented_foreground` 判失敗（最大連通區塊只剩約 50%，門檻 75%），
+使用者看到「這張照片沒能生成角色」，實際上圖生得很好，只是多了三個。
+
+已改成 `rendered as a single full-body front view`（要的本來就只是「全身入
+鏡」），並在 `test_prompt_style_agreement.py` 加了
+`PromptSelfConsistencyTests`：`turnaround` 在每份模板裡只准出現一次，
+就是負面表列裡那次。
+
+一般化的規則：**加正面描述詞之前，先 grep 負面表列有沒有禁它。** 兩套模板
+（樂高、皮克斯）各自帶一份 negative，很容易只顧著改一邊。
+
 ### 進模型的臉只有 85 像素 —— 畫質天花板在解析度，不在 prompt
 
 2026-08-30 量的帳（手機直拍 720×1280、人站滿引導框）：

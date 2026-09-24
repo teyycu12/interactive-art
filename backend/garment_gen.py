@@ -815,8 +815,13 @@ _PIXAR_NEGATIVE = (
 )
 
 _PIXAR_PROMPT_TEMPLATE = (
+    # 「turnaround」不能出現在這裡：它在角色設計的行話裡就是「同一角色的
+    # 正／側／背多視角設定表」，而下方 _PIXAR_NEGATIVE 花了一整段禁止的正是
+    # 那個東西（NO turnaround sheet／NO multiple views）。開頭一句正面指令的
+    # 權重通常高過負面表列，等於自己把 2026-08-29 修好的四視圖問題再打開。
+    # 這裡要的只是「全身入鏡」，直接說 full-body 就好。
     "Create a single stylized 3D animated-feature character based on the person in "
-    "this photograph, rendered as a full-body character turnaround.\n\n"
+    "this photograph, rendered as a single full-body front view.\n\n"
 
     "### DETECTED CHARACTER ATTRIBUTES:\n"
     "{attrs}\n\n"

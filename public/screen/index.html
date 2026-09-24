@@ -177,16 +177,21 @@
      放左下而非置頂置中：.mission 與 .quiz 都是 top:24px + left:50% 置中，
      對抗條原本壓在同一塊區域，且它在 DOM 裡排最後 ——
      任務公告與問答題目會被它整個蓋掉，而問答正是全場都在讀的東西。
-     左下只有 .offline（離線標記），往上讓開它的高度即可。 */
+     左下只有 .offline（離線標記），往上讓開它的高度即可。
+
+     bottom 的下限由 .offline 決定：它是 bottom:22px + 高約 46px
+     （15px 文字的行框 18 + padding 11*2 + border 3*2），也就是往上佔到
+     68px。74px 只留 6px 空隙 —— 再往下就會疊到斷線提示，而那是斷線時
+     唯一的回饋，不能被蓋掉。 */
   .versus {
-    position: fixed; bottom: 96px; left: 22px;
-    width: min(420px, 30vw);
+    position: fixed; bottom: 74px; left: 22px;
+    width: min(260px, 19vw);
   }
   .versus[hidden] { display: none; }
   .versus-bar {
     display: flex;
-    height: 22px;
-    border: 3px solid var(--ink);
+    height: 14px;
+    border: 2px solid var(--ink);
     border-radius: 999px;
     overflow: hidden;
     background: rgba(250, 248, 245, .94);
@@ -200,8 +205,8 @@
   .versus-b { flex: 1; }
   .versus-labels {
     display: flex; justify-content: space-between;
-    margin-top: 6px;
-    font-size: 17px; font-weight: 800;
+    margin-top: 5px;
+    font-size: 13px; font-weight: 800;
     font-variant-numeric: tabular-nums;
   }
 
