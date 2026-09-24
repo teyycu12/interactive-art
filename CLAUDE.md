@@ -34,8 +34,8 @@
 ```bash
 npm install && pip install -r requirements.txt requirements-dev.txt
 bash start.sh          # 生成服務 :5055 + 互動層 :3000（偵測到 certs/ 自動走 HTTPS）
-npm test               # Node 361      npm run test:e2e   # 端對端 147
-pytest backend/        # Python 423
+npm test               # Node 362      npm run test:e2e   # 端對端 147
+pytest backend/        # Python 429
 ```
 
 完整指令（壓測機器人、切片驗證、憑證產生、關閉服務）見

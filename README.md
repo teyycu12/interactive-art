@@ -135,8 +135,8 @@ bash start.sh                 # 生成服務 :5055 + 互動層 :3000
 
 > [!IMPORTANT]
 > **參考圖集自 2026-08-25 起隨 repo 一起發布**（先前因授權判定不進版控）。
-> 依據與殘留風險記在 `docs/style_reference/2026q3_owner_curated/PROVENANCE.md`；
-> 那組圖是 Elser AI 生成的 Output，本專案以學術、非商業用途納入版控，
+> 依據與殘留風險記在 `docs/style_reference/PROVENANCE.md`（三組風格共用一份，
+> 因為來源與條款判定相同）；那些圖是 Elser AI 生成的 Output，本專案以學術、非商業用途納入版控，
 > **不是可自由再利用的素材**——要在本專案以外使用請自行確認授權。
 >
 > 圖集若缺席（自行刪除、或 `STYLE_REFERENCE_MODE=off`），程式**不會報錯**，
@@ -146,7 +146,8 @@ bash start.sh                 # 生成服務 :5055 + 互動層 :3000
 > 以及生成服務 `/health` 的 `degraded` 會列出 `style_reference（…）`。
 >
 > 要換自己的圖集：在 `docs/style_reference/<你的 set_id>/` 放入 `full_body_*.png`
-> （或 `.webp`），照 `PROVENANCE.md` 的格式逐檔記錄來源與授權，再把
+> （或 `.webp`），在 `docs/style_reference/PROVENANCE.md` 逐檔記錄來源與授權
+> （檢查腳本找不到組內的 `PROVENANCE.md` 時會往上一層讀這份），再把
 > `backend/garment_gen.py` 底部該風格的 `register_style(...)` 的 `reference_set`
 > 指向它（**不要**改用 `STYLE_REFERENCE_SET`，那是全域覆寫，見上方警告）。
 > 放進去前可用
@@ -340,7 +341,7 @@ PersonaFlow/
 │   ├── TECH-PersonaFlow2.md    # 互動層技術說明
 │   ├── m3/                     # M3 交接文件與效能報告
 │   ├── notes/                  # 各主題的踩坑筆記（由 CLAUDE.md 拆出）
-│   └── style_reference/        # 風格參考圖集（含圖檔，見 PROVENANCE.md）
+│   └── style_reference/        # 風格參考圖集（含圖檔，來源與授權見 PROVENANCE.md）
 ├── .github/workflows/ci.yml    # CI：npm test＋端對端＋後端 pytest
 ├── package.json                # 整合版 Node 相依與指令
 ├── start.sh                    # 一鍵啟動（生成服務 :5055 ＋ 互動層 :3000）
@@ -437,7 +438,7 @@ python -m unittest discover -s backend\tests -v
 
 ## 已知限制與下一步
 
-- **物種一致性未解決（核心問題）**：生成已條件化於策展參考圖集，但成效尚未經真人視覺驗收。參考圖集本身另有兩項已記錄的缺陷（4/5 張雙腿併攏、髮色集中於單一色帶），見該目錄的 `PROVENANCE.md`。
+- **物種一致性未解決（核心問題）**：生成已條件化於策展參考圖集，但成效尚未經真人視覺驗收。參考圖集本身另有兩項已記錄的缺陷（4/5 張雙腿併攏、髮色集中於單一色帶），見 `docs/style_reference/PROVENANCE.md`。
 - **畫風已定案為光澤 3D 渲染感**（2026-08）：`garment_gen.py` 的 ART STYLE GUIDELINES 原本要求「扁平向量、無漸層、無陰影」，與 `style_base.py` 量到的 0.21–0.24 立體明暗互相矛盾；現已改寫成材質光澤排序、正面柔光與「印刷不帶光向」三條規則，並由 `test_prompt_style_agreement.py` 鎖住。**效果仍待真人生成驗證。**
 - **幾何一致性失去免費保證**：移除固定 3D 網格後，「兩隻手、兩條腿、比例一致」要靠 prompt 與 `avatar_quality.py` 的結構檢查去爭取；多肢問題會回來。
 - **個體特徵部分流失**：服裝顏色走 CV 量測，但膚色髮色仍被 VLM 量化成 6–8 個桶，抹平個體差異。
