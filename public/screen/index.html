@@ -165,6 +165,23 @@
   .q-opt.dim { opacity: .28; }
   .q-opt.right { border-color: var(--ink); }
 
+  /* ── 轉場問卷 ───────────────────────────────────────────
+     沿用問答的版型，換成綠框以示「這題沒有對錯」。
+     選項上的填滿長條是即時分佈 —— 全場看得到的公共資訊，
+     個人答了什麼只留在自己手機上。 */
+  .survey { border-color: #2A8C80; }
+  .q-opt { position: relative; overflow: hidden; }
+  .q-opt .fill {
+    position: absolute; inset: 0 auto 0 0; width: 0;
+    background: rgba(255, 255, 255, .26);
+    transition: width .35s ease;
+  }
+  .q-opt > .g, .q-opt > .t, .q-opt > .c, .q-opt > .spot { position: relative; }
+  .q-opt .spot {
+    flex: none; font-size: 15px; font-weight: 700; opacity: .9;
+    border: 2px solid rgba(255, 255, 255, .7); border-radius: 999px; padding: 2px 10px;
+  }
+
   .q-foot {
     margin-top: 16px; text-align: center;
     font-size: 18px; font-weight: 700; color: var(--soft);
@@ -241,6 +258,18 @@
   <div class="q-timebar" id="q-timebar"><i id="q-timefill"></i></div>
   <div class="q-opts" id="q-opts"></div>
   <div class="q-foot" id="q-foot">已作答 <b id="q-answered">0</b> 人</div>
+</div>
+
+<!-- 轉場問卷。沒有正解，因此畫面上只呈現分佈；個人答了什麼留在自己手機上。 -->
+<div class="quiz survey" id="survey" hidden>
+  <div class="q-head">
+    <span id="sv-no">問卷</span>
+    <span id="sv-state">作答中</span>
+  </div>
+  <p class="q-title" id="sv-title">—</p>
+  <div class="q-timebar" id="sv-timebar"><i id="sv-timefill"></i></div>
+  <div class="q-opts" id="sv-opts"></div>
+  <div class="q-foot" id="sv-foot">已作答 <b id="sv-answered">0</b> 人</div>
 </div>
 
 <div class="ranks" id="ranks" hidden>
