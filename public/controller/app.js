@@ -1634,6 +1634,8 @@ const quizPanel = $('#quiz-panel');
 
 /** @type {object|null} 目前題目（伺服器視圖，不含正解） */
 let quiz = null;
+/** 目前面板上是哪一種題目：'QUIZ'（有正解、計分）或 'SURVEY'（問卷，可改答案） */
+let askKind = 'QUIZ';
 /** 自己這題選了哪一個，null 代表尚未作答 */
 let myChoice = null;
 let quizTimer = null;
@@ -1713,9 +1715,17 @@ function renderQuizOptions({ locked = false, revealed = null } = {}) {
         // 先在本地鎖定，不等伺服器回應 —— 現場網路有延遲，
         // 按下去沒有立即反應會讓人以為沒按到而狂點
         myChoice = i;
-        renderQuizOptions({ locked: true });
-        showQuizMsg('已送出，等待公布答案…');
-        sendMsg(EV.QUIZ_ANSWER, { choice: i });
+        if (askKind === 'SURVEY') {
+          // 問卷沒有正解也沒有速度分，因此**允許改**：按錯卻不能改，
+          // 那個人身上的標籤就會一直是錯的，而標籤正是問卷的產物。
+          renderQuizOptions();
+          showQuizMsg('已記錄，想改隨時可以再選。');
+          sendMsg(EV.SURVEY_ANSWER, { choice: i });
+        } else {
+          renderQuizOptions({ locked: true });
+          showQuizMsg('已送出，等待公布答案…');
+          sendMsg(EV.QUIZ_ANSWER, { choice: i });
+        }
       });
     }
 
@@ -1747,10 +1757,16 @@ function startQuizCountdown() {
   quizTimer = setInterval(tick, 100);
 }
 
-function showQuestion(q) {
-  quiz = q;
+function showQuestion(q, kind = 'QUIZ') {
+  // 問答的 options 是字串，問卷的是 {label, value, spot} 物件。
+  // 這裡統一攤成字串再交給共用的選項渲染 —— 少了這一步，
+  // 問卷的四個選項會全部顯示成 [object Object]，而且不會有任何錯誤。
+  quiz = kind === 'SURVEY'
+    ? { ...q, options: q.options.map((o) => (typeof o === 'string' ? o : o.label)) }
+    : q;
+  askKind = kind;
   myChoice = null;
-  $('#quiz-no').textContent = `第 ${q.index} 題`;
+  $('#quiz-no').textContent = kind === 'SURVEY' ? `問卷 ${q.index}` : `第 ${q.index} 題`;
   $('#quiz-q').textContent = q.question;
   $('#quiz-result-card').hidden = true;
   $('#btn-quiz-hide').hidden = true;
@@ -1796,8 +1812,49 @@ const QUIZ_MESSAGES = {
   [QUIZ_ERRORS.BAD_CHOICE]: '選項不正確，請重新選擇。',
 };
 
+/**
+ * 問卷收題。
+ *
+ * 刻意不在手機上顯示全場分佈 —— 那是大螢幕的工作（見規劃：手機是私人資訊、
+ * 大螢幕是公共資訊）。手機只留下「你自己選了什麼」。
+ */
+function showSurveyClosed(result) {
+  if (!quiz || quiz.id !== result.id) return;
+  clearInterval(quizTimer);
+  quizTimer = null;
+  $('#quiz-timer').textContent = '—';
+  $('#quiz-timer').classList.remove('urgent');
+  renderQuizOptions({ locked: true });
+  showQuizMsg(myChoice === null ? '這題沒作答。' : '已記錄，看大螢幕。');
+  $('#btn-quiz-hide').hidden = false;
+}
+
 function handleQuizMessage(msg) {
   switch (msg.type) {
+    case EV.SURVEY_QUESTION:
+      showQuestion(msg.survey, 'SURVEY');
+      return true;
+
+    case EV.SURVEY_ACK:
+      if (msg.ok) {
+        // 伺服器回傳的標籤文字才是權威值（例如「負責煮」），
+        // 而且重連補送時這是唯一能還原「我剛才選了什麼」的來源
+        myChoice = msg.choice;
+        renderQuizOptions();
+        // 只說「記錄了什麼」。選項對應的地點寫在大螢幕上，那是公共資訊，
+        // 手機再寫一次只會把這行擠成兩行，反而蓋住下面的選項。
+        showQuizMsg(`已記錄：${msg.label}　想改隨時可以再選`);
+      } else {
+        myChoice = null;
+        renderQuizOptions();
+        showQuizMsg(msg.reason === 'CLOSED' ? '時間到了，這題已經截止。' : '這次作答沒有被接受。');
+      }
+      return true;
+
+    case EV.SURVEY_CLOSED:
+      showSurveyClosed(msg.result);
+      return true;
+
     case EV.QUIZ_QUESTION:
       showQuestion(msg.quiz);
       return true;

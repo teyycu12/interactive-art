@@ -300,6 +300,19 @@ function connect() {
         showQuestion(msg.quiz);
         break;
 
+      case EV.SURVEY_QUESTION:
+        showSurvey({ ...msg.survey, counts: new Array(msg.survey.options.length).fill(0), totalAnswers: msg.survey.answered ?? 0 },
+          { durationMs: msg.survey.durationMs });
+        break;
+
+      case EV.SURVEY_STATE:
+        if (msg.state) showSurvey(msg.state);
+        break;
+
+      case EV.SURVEY_CLOSED:
+        showSurvey(msg.result, { closed: true });
+        break;
+
       case EV.QUIZ_TALLY:
         document.getElementById('q-answered').textContent = msg.answered;
         break;
@@ -738,9 +751,15 @@ let quiz = null;
 let quizDeadline = 0;
 let quizRaf = null;
 
-/** 題目與任務橫幅都在畫面上緣，同時出現會疊在一起 */
+/**
+ * 題目、問卷與任務橫幅都固定在畫面上緣，同時出現會疊在一起。
+ * 優先序：問答 > 問卷 > 任務 —— 問答有倒數與計分，最不能被蓋住。
+ */
 function syncBanners() {
-  document.getElementById('mission').hidden = quiz !== null || missionShown === null;
+  const surveyEl = document.getElementById('survey');
+  surveyEl.hidden = surveyState === null || quiz !== null;
+  document.getElementById('mission').hidden =
+    quiz !== null || surveyState !== null || missionShown === null;
 }
 
 let missionShown = null;
@@ -773,6 +792,112 @@ function renderQuizOptions(revealed = null, counts = null) {
     }
     wrap.append(row);
   });
+}
+
+// ── 轉場問卷 ────────────────────────────────────────────────
+/** @type {object|null} 目前的問卷分佈（題目 + 即時票數） */
+let surveyState = null;
+let surveyDeadline = 0;
+let surveyRaf = null;
+let surveyHideTimer = null;
+
+/** 選項綁定的道具名稱。取自目前場景的道具清單，換主題時名稱會跟著換。 */
+function spotLabel(propId) {
+  if (!propId) return null;
+  const prop = PROPS.find((p) => p.id === propId);
+  const items = activeScene?.constructor?.ITEMS;
+  return items?.[propId]?.[1] ?? (prop ? propId : null);
+}
+
+function renderSurveyOptions(state) {
+  const wrap = document.getElementById('sv-opts');
+  wrap.replaceChildren();
+  const total = Math.max(1, state.totalAnswers);
+
+  state.options.forEach((opt, i) => {
+    const row = document.createElement('div');
+    row.className = 'q-opt';
+    row.style.background = QUIZ_CHOICES[i].color;
+
+    const fill = document.createElement('i');
+    fill.className = 'fill';
+    fill.style.width = `${Math.round((state.counts[i] / total) * 100)}%`;
+
+    const g = document.createElement('span');
+    g.className = 'g';
+    g.textContent = QUIZ_CHOICES[i].glyph;
+
+    const t = document.createElement('span');
+    t.className = 't';
+    t.textContent = opt.label;   // 題目與選項可能由主辦者輸入，一律 textContent
+
+    row.append(fill, g, t);
+
+    // 綁了道具的選項標出地點：之後的集合任務就是走這個道具，
+    // 先讓全場在答題時就看見「答這個會被叫去哪裡」
+    const where = spotLabel(opt.spot);
+    if (where) {
+      const s = document.createElement('span');
+      s.className = 'spot';
+      s.textContent = where;
+      row.append(s);
+    }
+
+    const c = document.createElement('span');
+    c.className = 'c';
+    c.textContent = `${state.counts[i]} 人`;
+    row.append(c);
+
+    wrap.append(row);
+  });
+}
+
+function animateSurveyBar() {
+  cancelAnimationFrame(surveyRaf);
+  const bar = document.getElementById('sv-timebar');
+  const fill = document.getElementById('sv-timefill');
+  const step = () => {
+    if (!surveyState) return;
+    const left = Math.max(0, surveyDeadline - Date.now());
+    const ratio = surveyState.durationMs > 0 ? left / surveyState.durationMs : 0;
+    fill.style.width = `${(ratio * 100).toFixed(1)}%`;
+    bar.classList.toggle('urgent', left < 5000);
+    if (left > 0) surveyRaf = requestAnimationFrame(step);
+  };
+  step();
+}
+
+function showSurvey(state, { closed = false, durationMs = null } = {}) {
+  clearTimeout(surveyHideTimer);
+  surveyState = { ...state, durationMs: durationMs ?? surveyState?.durationMs ?? state.durationMs ?? 0 };
+  if (!closed) {
+    surveyDeadline = Date.now() + (state.remainingMs ?? 0);
+    animateSurveyBar();
+  }
+  document.getElementById('sv-no').textContent = `問卷 ${state.index ?? ''}`.trim();
+  document.getElementById('sv-state').textContent = closed ? '結果' : '作答中';
+  document.getElementById('sv-title').textContent = state.question;
+  document.getElementById('sv-answered').textContent = state.totalAnswers ?? state.answered ?? 0;
+  renderSurveyOptions({
+    options: state.options,
+    counts: state.counts ?? new Array(state.options.length).fill(0),
+    totalAnswers: state.totalAnswers ?? 0,
+  });
+  syncBanners();
+  if (closed) {
+    cancelAnimationFrame(surveyRaf);
+    document.getElementById('sv-timefill').style.width = '0%';
+    // 收題後把分佈留在畫面上一段時間再收起 —— 那張長條圖就是這一題的成果，
+    // 立刻消失的話現場只會看到題目閃了一下
+    surveyHideTimer = setTimeout(hideSurvey, 15000);
+  }
+}
+
+function hideSurvey() {
+  clearTimeout(surveyHideTimer);
+  cancelAnimationFrame(surveyRaf);
+  surveyState = null;
+  syncBanners();
 }
 
 /** 倒數條用動畫影格更新，與角色渲染同一個時鐘，不另外開計時器 */

@@ -82,6 +82,15 @@ export const EV = {
   TREASURE_FOUND: 'TREASURE_FOUND',           // Server → All：找到了，公布座標
   TREASURE_ENDED: 'TREASURE_ENDED',           // Server → All：本輪中止
 
+  // ── 轉場問卷（沒有正解的題目，見 shared/surveys.js）──
+  HOST_START_SURVEY: 'HOST_START_SURVEY',     // Host → Server：出一題問卷
+  HOST_CLOSE_SURVEY: 'HOST_CLOSE_SURVEY',     // Host → Server：收掉本題
+  SURVEY_QUESTION: 'SURVEY_QUESTION',         // Server → All：題目與選項
+  SURVEY_ANSWER: 'SURVEY_ANSWER',             // Phone → Server：送出選擇（可改）
+  SURVEY_ACK: 'SURVEY_ACK',                   // Server → Phone：已記錄
+  SURVEY_STATE: 'SURVEY_STATE',               // Server → Screen/Host：即時分佈
+  SURVEY_CLOSED: 'SURVEY_CLOSED',             // Server → All：本題收掉，附最終分佈
+
   // ── 場景主題（shared/themes.js）──────────────────────
   HOST_SET_THEME: 'HOST_SET_THEME',           // Host → Server：切換大螢幕的場景主題
   STAGE_THEME: 'STAGE_THEME',                 // Server → Screen/Host：目前主題（連線時補送、切換時廣播）
