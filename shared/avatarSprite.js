@@ -383,97 +383,6 @@ function backCells(cells, { spans, hair }) {
 }
 
 /**
- * 側面（面向左）。
- *
- * 頭：背面的髮型輪廓稍微收窄，再在前緣「畫」一張側臉 —— 膚色的臉頰往下收成下巴、
- * 一隻眼睛（取自正面左眼）、鼻尖、嘴。先前直接把半張正臉貼上去，實測
- * 「側面很醜」：正臉的半邊帶著鬢髮與臉頰輪廓，貼到側面變成一塊缺口。
- * 身體：只留軀幹與一隻手臂（近側），收成側身的厚度 —— 正面兩隻手都壓進去
- * 會像一個扁盒子兩邊各黏一隻手。
- */
-function sideCells(cells, back, { spans, skin }, legCols) {
-  const out = cells.map(() => Array(PIXEL_W).fill(null));
-  const squeeze = (src, y, k, x0 = 0, x1 = PIXEL_W - 1) => {
-    for (let x = 0; x < PIXEL_W; x++) {
-      const sx = Math.round(20 + (x + 0.5 - 20) / k - 0.5);
-      if (sx >= x0 && sx <= x1) out[y][x] = src[y][sx];
-    }
-  };
-  // 身體：軀幹（兩腿之間那幾欄）收窄；手臂另外補一隻
-  const [la, lb] = legCols;
-  for (let y = 0; y < PIXEL_H; y++) {
-    if (y <= GRID_CHIN) squeeze(back, y, 0.86);
-    else squeeze(cells, y, 0.7, la, lb);
-  }
-  // 近側手臂：正面左手那一段（腿欄左邊的像素），搬到軀幹中間
-  for (let y = GRID_CHIN + 1; y < PIXEL_H; y++) {
-    const arm = [];
-    for (let x = 0; x < la; x++) if (cells[y][x]) arm.push(cells[y][x]);
-    if (!arm.length) continue;
-    const w = Math.min(3, arm.length);
-    for (let i = 0; i < w; i++) out[y][18 + i] = arm[arm.length - w + i];
-  }
-
-  // 真正的臉：膚色至少五格寬的那幾列（額頭從瀏海縫隙露出的一兩格不算）
-  const rows = [...spans.keys()].filter((y) => spans.get(y)[1] - spans.get(y)[0] >= 4).sort((a, b) => a - b);
-  if (rows.length < 4 || !skin) return out;
-  const top = rows[0], chin = rows[rows.length - 1];
-  const shadeC = (c, k) => c.map((v) => Math.round(v * k));
-
-  // 左眼：臉內側（離臉的左緣兩格以上）明顯比膚色暗的像素。
-  // 只看臉內側 —— 臉緣外的鬢髮也是暗的，算進來眼睛會被放到頭髮上
-  const eye = [];
-  for (const y of rows.slice(0, 9)) {
-    const [x0] = spans.get(y);
-    for (let x = x0 + 1; x < 20; x++) {
-      const c = cells[y][x];
-      if (!c) continue;
-      const lum = 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
-      const lumSkin = 0.3 * skin[0] + 0.59 * skin[1] + 0.11 * skin[2];
-      if (lum < lumSkin * 0.62) eye.push([x, y, c]);
-    }
-  }
-  const eyeX0 = eye.length ? Math.min(...eye.map((e) => e[0])) : 0;
-  const eyeY0 = eye.length ? Math.min(...eye.map((e) => e[1])) : top + 2;
-  const eyeY1 = eye.length ? Math.max(...eye.map((e) => e[1])) : top + 5;
-
-  // 臉貼齊頭的前緣：側臉的輪廓就是角色的前緣
-  const lead = Math.min(...rows.map((y) => { const i = out[y].findIndex(Boolean); return i < 0 ? PIXEL_W : i; }));
-  const n = chin - top;
-  for (const y of rows) {
-    // 臉頰的弧：上緣 6 格、中段 7 格、往下巴收到 3 格
-    const k = y - top, fromChin = chin - y;
-    const w = fromChin <= 3 ? [3, 4, 5, 6][fromChin] : k < 1 ? 6 : 7;
-    for (let x = lead; x < lead + w; x++) {
-      // 後緣與下巴一格陰影，臉才有體積
-      out[y][x] = x === lead + w - 1 || fromChin === 0 ? shadeC(skin, 0.86) : skin;
-    }
-  }
-  // 眼睛：取正面左眼最靠外的三欄，放在臉的前段
-  if (eye.length) {
-    for (const [x, y, c] of eye) {
-      const tx = lead + 1 + (x - eyeX0);
-      if (tx <= lead + 3) out[y][tx] = c;
-    }
-  } else {
-    for (let y = top + 2; y <= Math.min(chin - 3, top + 4); y++) out[y][lead + 1] = [43, 31, 29];
-  }
-  // 瀏海蓋住額頭：臉最上面兩列換回頭髮色，第二列留參差的髮尾
-  const hairAt = (y) => out[y].find((c, x) => c && x > lead + 8) ?? [40, 30, 28];
-  for (let x = lead; x < lead + 7; x++) if (out[top][x]) out[top][x] = hairAt(top);
-  for (let x = lead + 1; x < lead + 7; x += 2) if (out[top + 1][x]) out[top + 1][x] = hairAt(top + 1);
-  // 鼻尖（往前凸一格）與嘴
-  const ny = Math.min(chin - 2, eyeY1 + 2);
-  if (lead > 0) out[ny][lead - 1] = skin;
-  if (chin - 1 > ny) out[chin - 1][lead] = shadeC(skin, 0.68);
-  // 耳朵：臉後緣、與眼睛同高
-  const ex = lead + 7;
-  for (let y = eyeY1; y <= Math.min(chin - 2, eyeY1 + 2); y++) if (out[y][ex]) out[y][ex] = y === eyeY1 + 1 ? shadeC(skin, 0.85) : skin;
-  void n; void eyeY0;
-  return out;
-}
-
-/**
  * 腿在哪幾欄：鞋底附近幾列的不透明範圍。
  * 步態只能動這幾欄 —— 先前整個左半邊一起上提，腿欄外的手也跟著抬，
  * 實測就是「同手同腳」。
@@ -511,26 +420,6 @@ function liftStep(cells, legTop, frame, legCols) {
   return out;
 }
 
-/** 側面的步態：兩隻腳前後張開（只動腿欄，手不跟著動） */
-function strideStep(cells, legTop, frame, legCols) {
-  if (frame === 0) return cells;
-  const out = cloneCells(cells);
-  const [la, lb] = legCols;
-  const mid = Math.round((la + lb) / 2);
-  const dir = frame === 1 ? 1 : -1;
-  for (let y = legTop + 2; y < PIXEL_H; y++) {
-    const row = out[y].slice();
-    for (let x = la - 2; x <= lb + 2; x++) if (x >= 0 && x < PIXEL_W) row[x] = null;
-    for (let x = la; x <= lb; x++) {
-      if (!cells[y][x]) continue;
-      const tx = x + (x < mid ? -dir : dir);
-      if (tx >= 0 && tx < PIXEL_W) row[tx] = cells[y][x];
-    }
-    out[y] = row;
-  }
-  return out;
-}
-
 /** 補外框後畫成 canvas */
 function cellsToCanvas(cells, mirrored = false) {
   const c = pixelCanvas();
@@ -549,6 +438,78 @@ function cellsToCanvas(cells, mirrored = false) {
   return c;
 }
 
+const toHex = (c) => `#${c.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+
+/**
+ * 從縮好的正面讀出側面要用的外觀：四個顏色，加上長短髮與長短袖。
+ *
+ * 側面改用捏臉的像素畫法（每一格都設計過），只把顏色與髮型換成本人的。
+ * 先前兩版都試著從正面「推」出側臉 —— 只有一張正面照，側臉的五官只能硬拼，
+ * 實測兩次都被說醜。顏色取自縮好的格子本身，比生成服務的取樣色更貼近畫面。
+ */
+function sideLook(cells, { spans, skin, hair }, legCols, avatar) {
+  const pick = (x0, x1, y0, y1) => {
+    const out = [];
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (cells[y]?.[x]) out.push(cells[y][x]);
+    return medianColor(out);
+  };
+  const [la, lb] = legCols;
+  const torso = pick(17, 22, GRID_CHIN + 3, GRID_CHIN + 8);
+  const legs = pick(la + 1, lb - 1, GRID_SOLE - 9, GRID_SOLE - 5);
+  const fb = avatar.fallbackColors ?? {};
+  const colors = {
+    skin: skin ? toHex(skin) : fb.skin,
+    hair: hair ? toHex(hair) : fb.hair,
+    torso: torso ? toHex(torso) : fb.torso,
+    legs: legs ? toHex(legs) : fb.legs,
+  };
+
+  // 長髮：下巴上下幾列、臉的兩側還有頭髮。
+  // 顏色要接近頭髮、而且明顯不同於上衣 —— 深色上衣的衣領會被當成黑髮
+  // （實測把短髮判成長髮）
+  let longHair = 0;
+  if (hair) {
+    for (let y = GRID_CHIN - 3; y <= GRID_CHIN + 4; y++) {
+      const [fa, fb2] = spans.get(y) ?? [20, 19];
+      for (let x = 0; x < PIXEL_W; x++) {
+        if (x >= fa && x <= fb2) continue;
+        const c = cells[y]?.[x];
+        if (c && dist3(c, hair) < 40 && (!torso || dist3(c, torso) > 45)) longHair++;
+      }
+    }
+  }
+  // 短袖：上臂下半段（腿欄外側）是膚色
+  let bareArm = 0;
+  if (skin) {
+    for (let y = GRID_CHIN + 5; y <= GRID_CHIN + 9; y++) {
+      for (let x = 0; x < PIXEL_W; x++) {
+        if (x >= la && x <= lb) continue;
+        const c = cells[y]?.[x];
+        if (c && dist3(c, skin) < 50) bareArm++;
+      }
+    }
+  }
+  const guess = {
+    head: longHair >= 8 ? 'head_long_04' : 'head_short_01',
+    body: bareArm >= 2 ? 'body_tee_01' : 'body_shirt_02',
+  };
+  return { source: 'CV', fallbackColors: colors, pixelParts: { ...guess, ...avatar.pixelParts } };
+}
+
+/** 像素格子（顏色字串）畫成 canvas */
+function gridCanvas(grid) {
+  const c = pixelCanvas();
+  const g = c.getContext('2d');
+  for (let y = 0; y < PIXEL_H; y++) {
+    for (let x = 0; x < PIXEL_W; x++) {
+      if (!grid[y][x]) continue;
+      g.fillStyle = grid[y][x];
+      g.fillRect(x, y, 1, 1);
+    }
+  }
+  return c;
+}
+
 /**
  * 拍照角色的四個方向，全部從生成的正面推出來。
  *
@@ -558,21 +519,21 @@ function cellsToCanvas(cells, mirrored = false) {
  * 衣服花色全都不見了。改為從正面本身推：背面是同一個輪廓把臉換成頭髮，
  * 側面是背面的髮型收窄後貼上半張臉。
  */
-function cvViews(front) {
+function cvViews(front, avatar) {
   const fc = cvFrontCells(front);
   if (!fc) return null;
   const { cells, legTop } = fc;
   const legCols = legColumns(cells);
   const face = faceSpans(cells);
   const back = backCells(cells, face);
-  const side = sideCells(cells, back, face, legCols);
-  const sideLegs = legColumns(side);
+  const look = sideLook(cells, face, legCols, avatar);
+  const sideFrames = (dir) => [0, 1, 2].map((f) => gridCanvas(avatarGrid(look, dir, f)));
   const frames = (src, step, mirrored, cols = legCols) => [0, 1, 2].map((f) => cellsToCanvas(step(src, legTop, f, cols), mirrored));
   return {
     down: frames(cells, liftStep),
     up: frames(back, liftStep),
-    left: frames(side, strideStep, false, sideLegs),
-    right: frames(side, strideStep, true, sideLegs),
+    left: sideFrames('left'),
+    right: sideFrames('right'),
   };
 }
 
@@ -603,7 +564,7 @@ function cvPixelSprite(avatar, opts = {}) {
   }
   const front = cvAvatarImage(avatar, {
     ...opts,
-    onPaint: () => { frames = cvViews(front) ?? frames; opts.onReady?.(); },
+    onPaint: () => { frames = cvViews(front, avatar) ?? frames; opts.onReady?.(); },
   });
   // 用 getter：onPaint 換掉整組畫格，drawCharacter 每幀讀到的都是最新的
   Object.defineProperty(front, 'pixelFrames', { get: () => frames, configurable: true });
