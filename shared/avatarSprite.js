@@ -2,7 +2,8 @@
  * 角色圖像組裝 —— 大螢幕與手機端 POV 共用。
  *
  * 兩種來源：
- *   掃描生成（source: 'CV'）  三張貼圖依 CV_CUTS 的比例疊回一張畫布
+ *   掃描生成（source: 'CV'）  三張貼圖依 CV_CUTS 的比例疊回一張畫布；在場上時
+ *                             正面縮成像素格子，側面與背面用像素畫法補上
  *   模組捏臉（備援路徑）      像素角色，四方向 × 三格步態（shared/pixelAvatar.js）
  *
  * 與 shared/character.js 同理放在 shared/：手機畫的角色若與大螢幕不是
@@ -11,7 +12,7 @@
  */
 
 import { avatarGrid, CV_CUTS, CV_PARTS, CV_FULL_PART } from './avatars.js';
-import { PIXEL_W, PIXEL_H, PIXEL_DIRS, PIXEL_FRAMES, PIXEL_POSES } from './pixelAvatar.js';
+import { PIXEL_W, PIXEL_H, PIXEL_DIRS, PIXEL_FRAMES, PIXEL_POSES, OUTLINE } from './pixelAvatar.js';
 
 // 角色畫布的解析度。
 //
@@ -44,11 +45,12 @@ export const AVATAR_H = 1024;
  * 就會看著大螢幕找自己，不能讓角色有一段時間是空白的。
  *
  * @param {object} avatar  source: 'CV' 的外觀設定
- * @param {{enhance?: boolean}} opts
+ * @param {{enhance?: boolean, onPaint?: () => void}} opts
  *   enhance 為真時套用對比與飽和度增強。投影機的實際亮度遠低於製作時的
  *   螢幕，大螢幕需要這層補償；手機是直視發光面板，套下去只會過曝。
+ *   onPaint 在貼圖載入、畫布重畫之後呼叫（cvPixelSprite 用它重做正面畫格）。
  */
-export function cvAvatarImage(avatar, { enhance = false } = {}) {
+export function cvAvatarImage(avatar, { enhance = false, onPaint = null } = {}) {
   const canvas = document.createElement('canvas');
   canvas.width = AVATAR_W;
   canvas.height = AVATAR_H;
@@ -90,6 +92,7 @@ export function cvAvatarImage(avatar, { enhance = false } = {}) {
     if (enhance) ctx.filter = 'contrast(1.15) saturate(1.15) brightness(1.05)';
     ctx.drawImage(img, (AVATAR_W - w) / 2, AVATAR_H - h, w, h);
     ctx.filter = 'none';
+    onPaint?.();
   };
 
   const loaded = {};
@@ -118,6 +121,7 @@ export function cvAvatarImage(avatar, { enhance = false } = {}) {
       ctx.drawImage(img, 0, AVATAR_H * top, AVATAR_W, AVATAR_H * (bottom - top));
     }
     ctx.filter = 'none';
+    onPaint?.();
   };
 
   const loadParts = () => {
@@ -189,8 +193,188 @@ export function pixelAvatarImage(avatar) {
   return sprite;
 }
 
+/** 一格像素畫格：PIXEL_W × PIXEL_H 的小 canvas，帶 drawCharacter 需要的欄位 */
+function pixelCanvas() {
+  const c = document.createElement('canvas');
+  c.width = PIXEL_W;
+  c.height = PIXEL_H;
+  c.complete = true;
+  c.naturalWidth = PIXEL_W;
+  return c;
+}
+
+/**
+ * 捏臉像素角色的版面（格子列號，已含 pixelAvatar 的 DY）：頭髮頂端、下巴、鞋底。
+ * 生成的正面要擺進同一個版面，轉身時頭與腳才不會跳。
+ */
+const GRID_TOP = 6;
+const GRID_CHIN = 31;
+const GRID_SOLE = 52;
+/** 身體的橫向加寬倍率（見 cvFrontFrames） */
+const BODY_WIDEN = 1.45;
+
+/**
+ * 找出不透明像素的外接框（在縮小的副本上找，1024 高的原圖逐點掃太慢）。
+ * 回傳的函式可以只看某幾列 —— 頭部要用頭自己的寬度，不能用含手臂的全身寬。
+ */
+function opaqueScanner(src) {
+  const k = 4;
+  const w = Math.ceil(src.width / k), h = Math.ceil(src.height / k);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(src, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  const box = (fromY = 0, toY = src.height) => boxIn(d, w, h, k, fromY, toY);
+  /**
+   * 頭與身體的分界：肩膀開始變寬的那一列（往下幾列內寬度增加最多處）。
+   *
+   * 不能直接用 CV_CUTS.head 的 30%：那是 slicer 切貼圖用的固定比例，實測會
+   * 落在下巴上方，下巴就被分到身體那段一起縮小。也不能找「最窄的一列」：
+   * 長髮蓋住脖子時根本沒有那一列，實測會切在眼睛，整顆頭變成一朵香菇。
+   * 肩膀變寬則不管頭髮多長都在 —— 手臂從那裡往外張開。
+   */
+  const rowWidth = (y) => {
+    let x0 = -1, x1 = -1;
+    for (let x = 0; x < w; x++) {
+      if (d[(y * w + x) * 4 + 3] < 64) continue;
+      if (x0 < 0) x0 = x;
+      x1 = x;
+    }
+    return x0 < 0 ? 0 : x1 - x0 + 1;
+  };
+  const neck = (lo, hi) => {
+    const RISE = 3;
+    let best = null, bestRise = 0;
+    for (let y = Math.floor(lo / k); y + RISE < Math.min(h, Math.ceil(hi / k)); y++) {
+      const rise = rowWidth(y + RISE) - rowWidth(y);
+      if (rise > bestRise) { bestRise = rise; best = y; }
+    }
+    return best === null ? null : (best + 1) * k;
+  };
+  return { box, neck };
+}
+
+function boxIn(d, w, h, k, fromY, toY) {
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = Math.max(0, Math.floor(fromY / k)); y < Math.min(h, Math.ceil(toY / k)); y++) {
+    for (let x = 0; x < w; x++) {
+      if (d[(y * w + x) * 4 + 3] < 64) continue;
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) return null;
+  return { x: x0 * k, y: y0 * k, w: (x1 - x0 + 1) * k, h: (y1 - y0 + 1) * k };
+}
+
+/**
+ * 把生成的全身圖縮成像素格子（PIXEL_W × PIXEL_H），並做出三格步態。
+ *
+ * 縮到與捏臉角色同一個格子，拍照角色與捏臉角色在場上才是同一種畫風、
+ * 同樣的像素顆粒 —— 否則高解析度的正面一轉身就變成低解析度的側面。
+ *
+ *   1. Q 版化：生成圖大約是三頭身，側面與背面（像素畫法）是兩頭身。
+ *      頭部（CV_CUTS.head 那一段）放大、身體縮小，重新組成兩頭身，
+ *      頭頂、下巴、鞋底都對齊捏臉角色的版面 —— 不然一轉身頭就突然變大。
+ *      切在 CV_CUTS 上，跟 slicer 切貼圖是同一條線，一定落在脖子。
+ *   2. 取最近的像素而不是平均：生成圖本身就是像素畫，平均會把相鄰色塊混成一片糊
+ *   3. 半透明一律二值化，再補一圈與捏臉相同的外框
+ *   4. 步態：腿部左右兩半各自上提一格，與捏臉的抬腳一致
+ */
+function cvFrontFrames(front) {
+  const base = pixelCanvas();
+  const ctx = base.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = false;
+
+  const scan = opaqueScanner(front);
+  const box = scan.box();
+  if (!box) return null;
+  // 在 CV_CUTS.head 的切線附近找肩膀；找不到就退回那條切線
+  const cut = CV_CUTS.head[1];
+  const neck = scan.neck(box.y + box.h * (cut - 0.04), box.y + box.h * (cut + 0.14)) ?? box.y + box.h * cut;
+  const head = scan.box(box.y, neck) ?? box;
+  const headH = neck - box.y;
+  const bodyH = box.y + box.h - neck;
+  // 頭：頭頂到下巴佔 GRID_TOP–GRID_CHIN，用頭自己的寬度；不超出畫布（留一格給外框）
+  const sh = Math.min((GRID_CHIN - GRID_TOP) / headH, (PIXEL_W - 4) / head.w);
+  // 身體：下巴到鞋底。橫向多放大一些 —— 等比縮下來只剩十格寬，比捏臉角色的
+  // 身體（含手臂約十六格）細一圈，轉身時會看起來突然變胖
+  const sb = (GRID_SOLE - GRID_CHIN) / bodyH;
+  const bw = Math.min(box.w * sb * BODY_WIDEN, 22);
+  const hw = head.w * sh;
+  ctx.drawImage(front, box.x, neck, box.w, bodyH, Math.round((PIXEL_W - bw) / 2), GRID_CHIN, Math.round(bw), GRID_SOLE - GRID_CHIN);
+  // 頭畫在身體之後、往下多蓋一格，脖子接縫不會露出一條透明縫
+  ctx.drawImage(front, head.x, box.y, head.w, headH + 1 / sh,
+    Math.round((PIXEL_W - hw) / 2), Math.round(GRID_CHIN - headH * sh), Math.round(hw), Math.round(headH * sh) + 1);
+
+  const img = ctx.getImageData(0, 0, PIXEL_W, PIXEL_H);
+  const d = img.data;
+  const solid = (x, y) => x >= 0 && y >= 0 && x < PIXEL_W && y < PIXEL_H && d[(y * PIXEL_W + x) * 4 + 3] >= 128;
+  for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= 128 ? 255 : 0;
+  const [or, og, ob] = [1, 3, 5].map((k) => parseInt(OUTLINE.slice(k, k + 2), 16));
+  const edge = [];
+  for (let y = 0; y < PIXEL_H; y++) {
+    for (let x = 0; x < PIXEL_W; x++) {
+      if (!solid(x, y) && (solid(x - 1, y) || solid(x + 1, y) || solid(x, y - 1) || solid(x, y + 1))) edge.push((y * PIXEL_W + x) * 4);
+    }
+  }
+  for (const i of edge) { d[i] = or; d[i + 1] = og; d[i + 2] = ob; d[i + 3] = 255; }
+  ctx.putImageData(img, 0, 0);
+
+  const legTop = Math.round(GRID_CHIN + (box.y + box.h * CV_CUTS.legs[0] - neck) * sb);
+  const step = (side) => {
+    const c = pixelCanvas();
+    const g = c.getContext('2d');
+    g.drawImage(base, 0, 0);
+    const x0 = side === 1 ? 0 : PIXEL_W / 2;
+    g.clearRect(x0, legTop, PIXEL_W / 2, PIXEL_H - legTop);
+    g.drawImage(base, x0, legTop, PIXEL_W / 2, PIXEL_H - legTop, x0, legTop - 1, PIXEL_W / 2, PIXEL_H - legTop);
+    return c;
+  };
+  return [base, step(1), step(2)];
+}
+
+/**
+ * 拍照角色在場上的畫格：正面來自生成的圖，側面與背面用像素畫法。
+ *
+ * 生成服務只畫正面（一次畫多個視角會被品質檢查判為碎裂，見
+ * backend/garment_gen.py 的「EXACTLY ONE single figure」）。側面與背面改由
+ * pixelGrid 依取樣色與 pixelParts（髮型、服裝）畫出來 —— 不多花 API、不多等，
+ * 轉身、走路與捏臉角色完全一致。
+ *
+ * 生成的圖還沒載入前，正面先用同一套像素畫法頂著；載入後原地換成縮好的正面。
+ * 揮手、乾杯沒有專屬畫格（正面是生成的圖，畫不出舉手），沿用頭上的圖示。
+ */
+function cvPixelSprite(avatar, opts) {
+  const frames = {};
+  const paintGrid = (grid) => {
+    const c = pixelCanvas();
+    const g = c.getContext('2d');
+    for (let y = 0; y < PIXEL_H; y++) {
+      for (let x = 0; x < PIXEL_W; x++) {
+        if (!grid[y][x]) continue;
+        g.fillStyle = grid[y][x];
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+    return c;
+  };
+  for (const dir of PIXEL_DIRS) {
+    frames[dir] = [];
+    for (let f = 0; f < PIXEL_FRAMES; f++) frames[dir].push(paintGrid(avatarGrid(avatar, dir, f)));
+  }
+  const front = cvAvatarImage(avatar, {
+    ...opts,
+    onPaint: () => { frames.down = cvFrontFrames(front) ?? frames.down; },
+  });
+  // 用 getter：onPaint 換掉的是 frames.down，drawCharacter 每幀讀到的都是最新的
+  Object.defineProperty(front, 'pixelFrames', { get: () => frames, configurable: true });
+  return front;
+}
+
 /** 依來源選用組裝方式。回傳物件皆帶有 complete / naturalWidth，可直接交給 drawCharacter。 */
 export function avatarImage(avatar, opts) {
-  if (avatar?.source === 'CV') return cvAvatarImage(avatar, opts);
+  if (avatar?.source === 'CV') return cvPixelSprite(avatar, opts);
   return pixelAvatarImage(avatar);
 }

@@ -29,6 +29,7 @@ function makeCanvasStub() {
 }
 
 let AvatarRenderer;
+let STEP_BODIES;
 let rafCb = null;
 
 before(async () => {
@@ -45,6 +46,7 @@ before(async () => {
   globalThis.innerHeight = 700;
 
   ({ AvatarRenderer } = await import('../public/controller/avatarRenderer.js'));
+  ({ STEP_BODIES } = await import('../shared/character.js'));
 });
 
 const AVATAR = {
@@ -73,17 +75,17 @@ function makeRenderer() {
 }
 
 describe('POV 畫布：觸地偵測', () => {
-  test('推滿搖桿時的步頻與 character.js 的 |sin| 彈跳一致', () => {
+  test('推滿搖桿時，每走 STEP_BODIES 個身高震一次（與畫面的換腳同一把尺）', () => {
+    // 拍照角色與捏臉角色一樣是像素畫格，換腳依走過的距離推進（shared/character.js）。
+    // 震動若改回以時間計算，腳踏下去的那一格與震動會錯開。
     const { r, clock } = makeRenderer();
     r.setInput({ x: 1, y: 0 }, 1);
     const steps = run(r, clock, 180);   // 3 秒
-
-    // cadence = 0.55 + 0.45·1 = 1.0，ω = 12 rad/s
-    // 一個 sin 週期兩步 → 3s · 12/(2π) · 2 ≈ 11.5 步
-    // 這裡刻意用範圍而非精確值：起步的第一幀不計為觸地。
-    assert.ok(steps >= 10 && steps <= 12,
-      `3 秒全速應約 11 步（雙向過零），實得 ${steps}。` +
-      '若只有一半，表示過零偵測退回單向。');
+    const expected = Math.floor(r.travel / STEP_BODIES);
+    assert.ok(steps > 0, '全速走 3 秒卻一次都沒震');
+    // 起步的第一格不計為觸地，因此允許少一步
+    assert.ok(Math.abs(steps - expected) <= 1,
+      `走了 ${r.travel.toFixed(2)} 個身高，應約 ${expected} 步，實得 ${steps}。`);
     r.stop();
   });
 

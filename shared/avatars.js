@@ -169,8 +169,24 @@ function validateCVAvatar(cfg) {
     cleanColors[key] = hex;
   }
 
+  // 選填：髮型與服裝款式，讓側面與背面的像素角色接近本人（見 avatarPixelSpec）。
+  // 由生成服務分析照片後填入；token 一律比對捏臉的白名單，其餘值直接丟棄 ——
+  // 這兩個欄位只影響外觀，不值得為它擋掉一個已經生成好的角色。
+  const value = { source: 'CV', textures: cleanTextures, fallbackColors: cleanColors };
+  const pixelParts = cleanPixelParts(cfg.pixelParts);
+  if (pixelParts) value.pixelParts = pixelParts;
+
   // 同樣只取白名單欄位，丟棄客戶端夾帶的任何額外屬性
-  return { ok: true, value: { source: 'CV', textures: cleanTextures, fallbackColors: cleanColors } };
+  return { ok: true, value };
+}
+
+/** CV 角色的 pixelParts：只留白名單內的 head / body token，全都不合法就回傳 null */
+function cleanPixelParts(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  if (HEAD_MAP[raw.head]) out.head = raw.head;
+  if (BODY_MAP[raw.body]) out.body = raw.body;
+  return Object.keys(out).length ? out : null;
 }
 
 /**
@@ -218,15 +234,18 @@ export function randomAvatarConfig() {
 /**
  * 像素角色需要的「部位 token + 調色盤」。
  *
- * CV 角色沒有 token 與調色盤欄位：改用生成服務取樣回來的顏色套在預設身形上
- * （連下身顏色也用取樣的），呼叫端要的是「一眼認得出是誰」的小圖。
+ * CV 角色沒有調色盤欄位：改用生成服務取樣回來的顏色（連下身顏色也用取樣的）。
+ * 髮型與服裝用 pixelParts（生成服務分析照片後給的），沒有就用預設身形。
+ * 拍照角色的側面與背面就是這樣畫出來的 —— 正面用生成的圖，其餘三個方向
+ * 用同一套像素畫法（見 shared/avatarSprite.js 的 cvPixelSprite）。
  * 若不接這個分支，這些欄位會是 undefined 並被插值成 fill="undefined"。
  */
 export function avatarPixelSpec(cfg) {
   if (cfg?.source === 'CV') {
     const c = cfg.fallbackColors;
+    const hint = cleanPixelParts(cfg.pixelParts) ?? {};
     return {
-      parts: { head: HEADS[0].id, face: FACES[0].id, body: BODIES[0].id },
+      parts: { head: hint.head ?? HEADS[0].id, face: FACES[0].id, body: hint.body ?? BODIES[0].id },
       pal: pixelPalette({ skin: c.skin, hair: c.hair, accent: c.torso, pants: c.legs }),
     };
   }
@@ -247,7 +266,9 @@ export function avatarPixelSpec(cfg) {
  */
 export function avatarLook(cfg) {
   if (!cfg) return null;
-  if (cfg.source === 'CV') return { source: 'CV', fallbackColors: cfg.fallbackColors };
+  if (cfg.source === 'CV') {
+    return { source: 'CV', fallbackColors: cfg.fallbackColors, ...(cfg.pixelParts && { pixelParts: cfg.pixelParts }) };
+  }
   return cfg;
 }
 
