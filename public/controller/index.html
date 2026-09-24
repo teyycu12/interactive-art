@@ -43,6 +43,15 @@
     直向手機會改成上下堆疊（見 style.css 的 media query）。
   -->
   <section id="scan" hidden>
+    <!-- 與捏臉共用同一個標題列與三段進度：兩條路徑是同一件事的兩種做法，
+         參與者在兩者之間切換時不該覺得換了一個 App。 -->
+    <div class="flow-head">
+      <h1>拍照生成</h1>
+      <span class="sub" id="scan-step-label">1 / 3　拍照</span>
+    </div>
+    <div class="steps" id="scan-steps">
+      <i class="on"></i><i></i><i></i>
+    </div>
     <div class="scan-split">
 
       <!-- 左：取景 -->
@@ -90,7 +99,7 @@
             生成完成會先讓你看過，不滿意可以重來。
             不方便當場拍的話，也可以 <b>從相簿選一張全身照</b>。
           </p>
-          <div class="foot">
+          <div class="foot foot-main">
             <button class="btn-primary" id="btn-capture">拍照</button>
             <button class="btn-ghost" id="btn-upload">從相簿選</button>
           </div>
@@ -118,7 +127,7 @@
         <div class="scan-panel" data-phase="done" hidden>
           <h1>這是 <span class="who-name" id="done-name"></span>的角色</h1>
           <p class="lede">確認後就會出現在大螢幕上，不滿意可以重拍一次。</p>
-          <div class="foot">
+          <div class="foot foot-main">
             <button class="btn-primary" id="btn-accept">就是他，進場</button>
             <button class="btn-ghost" id="btn-retake">重拍一次</button>
           </div>
@@ -129,7 +138,7 @@
           <h1 id="fail-title">沒能生成角色</h1>
           <p class="lede" id="scan-error" role="status" aria-live="polite">再試一次通常就好了。</p>
           <p class="note" id="fail-hint" hidden></p>
-          <div class="foot">
+          <div class="foot foot-main">
             <button class="btn-primary" id="btn-retry">重拍一次</button>
             <button class="btn-ghost" id="btn-upload-alt">從相簿選</button>
           </div>
@@ -148,15 +157,18 @@
 
   <!-- ── 捏臉流程（3 步）────────────────────────────────── -->
   <section id="builder" hidden>
-    <div class="builder-head">
+    <div class="flow-head">
       <h1>捏一個你</h1>
       <span class="sub" id="step-label">1 / 3　髮型與膚色</span>
+      <!-- 反方向的切換：拍照頁有「改用捏臉」，這裡對應放「改用拍照」 -->
+      <button class="btn-link" id="btn-to-scan" type="button">改用拍照</button>
     </div>
-    <div class="steps">
+    <div class="steps" id="builder-steps">
       <i class="on"></i><i></i><i></i>
     </div>
 
-    <div class="preview" id="preview"></div>
+    <!-- 預覽與拍照頁的取景框是同一種「舞台」：地磚底、粗框、硬陰影 -->
+    <div class="preview stage-frame" id="preview"></div>
 
     <div class="step-body" data-step="1">
       <p class="step-title">髮型</p>

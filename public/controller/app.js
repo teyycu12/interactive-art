@@ -247,11 +247,16 @@ function showStep(n) {
   document.querySelectorAll('.step-body').forEach((el) => {
     el.hidden = Number(el.dataset.step) !== n;
   });
-  document.querySelectorAll('.steps i').forEach((el, i) => {
-    el.classList.toggle('on', i < n);
-  });
+  setStepBar('#builder-steps', n);
   $('#btn-prev').textContent = n === 1 ? '改名字' : '上一步';
   $('#btn-next').textContent = n === 3 ? '完成，進入現場' : '下一步';
+}
+
+/** 三段進度條（捏臉與拍照共用同一個元件） */
+function setStepBar(selector, n) {
+  document.querySelectorAll(`${selector} i`).forEach((el, i) => {
+    el.classList.toggle('on', i < n);
+  });
 }
 
 /** 只切換單一畫面，其餘全部隱藏 */
@@ -331,6 +336,13 @@ let pendingScanConfig = null;
  * 四個階段共用同一個左右分欄，只換右欄內容 —— 整塊重繪會讓畫面跳動，
  * 而左邊的取景框在拍照前後必須留在原位（拍完顯示成果圖，位置不變）。
  */
+const SCAN_STEPS = {
+  aim: [1, '拍照'],
+  working: [2, '生成中'],
+  failed: [2, '沒能生成'],
+  done: [3, '確認角色'],
+};
+
 function showScanPhase(phase) {
   for (const el of document.querySelectorAll('#scan .scan-panel')) {
     el.hidden = el.dataset.phase !== phase;
@@ -338,6 +350,10 @@ function showScanPhase(phase) {
   // 成果階段換白底。生成中顯示的是剛拍下的照片（深色框比較合適），
   // 只有最後展示角色時才轉白 —— 角色是透明背景，白底才襯得出來。
   $('.scan-stage')?.classList.toggle('is-result', phase === 'done');
+  // 與捏臉同一套三段進度：拍照 → 生成 → 確認。失敗停在第二段（卡在生成這一步）
+  const [stepNo, stepName] = SCAN_STEPS[phase] ?? SCAN_STEPS.aim;
+  $('#scan-step-label').textContent = `${stepNo} / 3　${stepName}`;
+  setStepBar('#scan-steps', stepNo);
 
   // 名字貫穿整條流程：使用者在上一頁輸入之後就再也沒看到它，
   // 但那正是等一下會出現在大螢幕角色頭上的名字。
@@ -610,6 +626,8 @@ async function openCamera() {
 }
 
 $('#btn-scan-back').addEventListener('click', () => fallbackToBuilder(null));
+// 捏臉頁的反向切換。名字在命名頁就存好了，直接走同一個入口
+$('#btn-to-scan').addEventListener('click', () => $('#btn-scan').click());
 
 /** 倒數中被按下取消時設為 true，讓倒數迴圈中止。
     宣告必須排在下方上傳處理器之前 —— let 不會提升，放在後面會落入
