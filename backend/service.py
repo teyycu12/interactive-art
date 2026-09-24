@@ -244,6 +244,15 @@ def health():
     style_refs = style_reference_report()
     degraded = list(_DEGRADED)
     for style_id, style_ref in style_refs.items():
+        if style_ref.get("pending"):
+            # 尚未上線的風格本來就還沒有圖。報出來是為了讓佈署的人知道
+            # 「它存在、還差什麼」，不是當成故障 —— 它不在手機端選單上，
+            # 參與者選不到，所以不會有人拿到沒有 sheet 撐著的角色。
+            degraded.append(
+                f"style_reference（'{style_id}' 尚未上線：參考圖集 "
+                f"'{style_ref.get('set_id')}' 還沒備齊，該風格不會出現在選單上）"
+            )
+            continue
         if not style_ref.get("available"):
             degraded.append(
                 f"style_reference（'{style_id}' 的風格參考圖集 "
