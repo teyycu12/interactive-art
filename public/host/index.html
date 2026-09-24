@@ -87,6 +87,43 @@
       <p class="err" id="mission-err" hidden></p>
     </div>
 
+    <!-- 轉場問卷：沒有正解的題目，答案留成參與者身上的標籤 -->
+    <div class="panel">
+      <h2>轉場問卷</h2>
+
+      <div id="survey-idle">
+        <p class="hint">切換場景的空檔問一題。沒有正解、不計分，答案會留成參與者身上的標籤，
+          之後的任務可以用「答某個選項的人」當條件。</p>
+        <label class="field">
+          <span>題目</span>
+          <select id="survey-pick"></select>
+        </label>
+        <p class="brief" id="survey-preview"></p>
+        <label class="field">
+          <span>作答時間</span>
+          <select id="survey-duration">
+            <option value="15000">15 秒</option>
+            <option value="20000" selected>20 秒</option>
+            <option value="30000">30 秒</option>
+            <option value="45000">45 秒</option>
+          </select>
+        </label>
+        <button class="btn-primary" id="btn-survey-start">出題</button>
+      </div>
+
+      <div id="survey-live" hidden>
+        <div class="live-head">
+          <b id="survey-live-q">—</b>
+          <span class="tag" id="survey-countdown">—</span>
+        </div>
+        <ul class="survey-bars" id="survey-bars"></ul>
+        <p class="hint" id="survey-live-foot">—</p>
+        <button class="btn-danger" id="btn-survey-close">收題</button>
+      </div>
+
+      <p class="err" id="survey-err" hidden></p>
+    </div>
+
     <!-- 尋寶（先知模式）-->
     <div class="panel">
       <h2>尋寶</h2>
@@ -179,7 +216,7 @@
       <div class="table-wrap">
         <table id="people">
           <thead>
-            <tr><th></th><th>名稱</th><th>積分</th><th>任務</th><th>連結</th><th>操控</th><th></th></tr>
+            <tr><th></th><th>名稱</th><th>標籤</th><th>積分</th><th>任務</th><th>連結</th><th>操控</th><th></th></tr>
           </thead>
           <tbody id="people-body"></tbody>
         </table>

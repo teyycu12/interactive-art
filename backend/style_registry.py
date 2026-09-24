@@ -38,6 +38,15 @@ class GenerationStyle:
     # 姿勢參考圖的產生器。樂高用梯形軀幹＋爪手的幾何，拿去餵皮克斯會把
     # 玩具比例一起帶進去，所以連它也必須隨風格換。
     pose_builder: Optional[Callable[[], Any]] = None
+    # 這個風格是否可以被選。
+    #
+    # 風格的程式碼（prompt／negative／姿勢／role 文字）可以先寫好接上線，
+    # 但策展參考圖集要另外備。中間這段期間**不能讓它出現在手機端選單上**：
+    # 沒有 sheet 的風格生出來的角色會各自漂移，而參與者只會看到「我選了像素，
+    # 生出來的不像像素」。ready=False 讓它留在註冊表裡（可被測試、可被
+    # /health 報出來），但 list_styles()／has_style()／resolve_style_id()
+    # 一律當它不存在。圖備齊之後把這一行拿掉就上線。
+    ready: bool = True
 
 
 _STYLES: Dict[str, GenerationStyle] = {}
@@ -49,26 +58,49 @@ def register_style(style: GenerationStyle) -> None:
     _STYLES[style.style_id] = style
 
 
+def _ready_ids() -> FrozenSet[str]:
+    """可以被選的風格 id。
+
+    尚未備妥參考圖的風格（``ready=False``）不算在內 —— 它已經接好線，
+    但選了它只會得到一個沒有 sheet 撐著的風格。
+    """
+    return frozenset(sid for sid, style in _STYLES.items() if style.ready)
+
+
 def has_style(style_id: Any) -> bool:
-    """這個 id 是否真的註冊過。
+    """這個 id 是否真的註冊過**而且可以選**。
 
     ``get_style`` 對未知 id 靜默退回樂高，那對生成路徑是正確的（現場不該因為
     一個字串錯掉就生不出角色），但對 API 邊界是錯的：手機端送錯風格會拿到
     樂高卻以為選到了別的。邊界要用這個先擋。
     """
-    return isinstance(style_id, str) and style_id.strip().lower() in _STYLES
+    return isinstance(style_id, str) and style_id.strip().lower() in _ready_ids()
 
 
 def list_styles() -> List[Dict[str, str]]:
-    """已註冊的風格，供 /health 與手機端選單使用。"""
-    return [
-        {
-            "id": style.style_id,
-            "displayName": style.display_name or style.style_id,
-            "referenceSet": style.reference_set,
-        }
-        for style in _STYLES.values()
-    ]
+    """可以被選的風格，供 /health 的 ``styles`` 與手機端選單使用。
+
+    不含 ``ready=False`` 的風格。要連未備妥的一起看（健康檢查、測試、
+    工具腳本）用 :func:`list_all_styles`。
+    """
+    return [_style_row(style) for style in _STYLES.values() if style.ready]
+
+
+def list_all_styles() -> List[Dict[str, Any]]:
+    """註冊表裡的全部風格，含尚未備妥的，並標明 ``ready``。
+
+    /health 用這一份：未備妥的風格若整個消失在健康檢查裡，
+    「還沒備圖」和「這個風格不存在」在現場長得一模一樣。
+    """
+    return [dict(_style_row(style), ready=style.ready) for style in _STYLES.values()]
+
+
+def _style_row(style: GenerationStyle) -> Dict[str, str]:
+    return {
+        "id": style.style_id,
+        "displayName": style.display_name or style.style_id,
+        "referenceSet": style.reference_set,
+    }
 
 
 def get_style(style_id: str) -> GenerationStyle:
@@ -81,7 +113,7 @@ def get_style(style_id: str) -> GenerationStyle:
 
 def get_event_style_id() -> str:
     requested = os.environ.get("CHARACTER_STYLE", DEFAULT_STYLE_ID).strip().lower()
-    return requested if requested in _STYLES else DEFAULT_STYLE_ID
+    return requested if requested in _ready_ids() else DEFAULT_STYLE_ID
 
 
 def resolve_style_id(requested: Any) -> str:
@@ -89,7 +121,7 @@ def resolve_style_id(requested: Any) -> str:
 
     參與者選的優先，選了沒註冊的（或什麼都沒選）就退回活動層級的預設。
     """
-    if isinstance(requested, str) and requested.strip().lower() in _STYLES:
+    if isinstance(requested, str) and requested.strip().lower() in _ready_ids():
         return requested.strip().lower()
     return get_event_style_id()
 

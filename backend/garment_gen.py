@@ -27,11 +27,11 @@ from PIL import Image as PILImage, ImageDraw
 
 try:
     from backend.style_registry import (  # type: ignore
-        GenerationStyle, get_style, list_styles, register_style,
+        GenerationStyle, get_style, list_all_styles, list_styles, register_style,
     )
 except Exception:
     from style_registry import (  # type: ignore
-        GenerationStyle, get_style, list_styles, register_style,
+        GenerationStyle, get_style, list_all_styles, list_styles, register_style,
     )
 
 try:
@@ -346,11 +346,18 @@ def style_reference_status(style_reference_set: str = "") -> Dict[str, Any]:
 
 
 def style_reference_report() -> Dict[str, Any]:
-    """每個已註冊風格各自的參考圖集狀態。"""
-    return {
-        style["id"]: style_reference_status(style["referenceSet"])
-        for style in list_styles()
-    }
+    """每個已註冊風格各自的參考圖集狀態，含尚未上線（``ready=False``）的。
+
+    走 ``list_all_styles()`` 而不是 ``list_styles()``：未備妥的風格若整個
+    不出現在健康檢查裡，「圖還沒備」與「這個風格根本沒註冊成功」會長得
+    一模一樣 —— 前者是進行中的工作，後者是事故，兩者要分得出來。
+    """
+    report: Dict[str, Any] = {}
+    for style in list_all_styles():
+        status = style_reference_status(style["referenceSet"])
+        status["pending"] = not style.get("ready", True)
+        report[style["id"]] = status
+    return report
 
 
 def _get_shield_mask(
@@ -1112,4 +1119,238 @@ register_style(GenerationStyle(
     reference_set="2026q3_pixar_figma",
     role_style_text=_ROLE_STYLE_PIXAR,
     pose_builder=_canonical_humanoid_pose,
+))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PIXEL-ART STYLE — square pixels on a fixed grid, not a smooth render
+#
+#  尚未上線（`ready=False`）：程式碼這一側已經接好，缺的是策展參考圖集。
+#  要提供什麼圖、規格為何，見 docs/style_reference/2026q3_pixel_curated/INTAKE.md。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 角色在像素網格上的高度（格）。
+#
+# 90 是**策展參考圖自己的格距**（原圖角色高約 713px、一格約 8px），不是挑出來的。
+# 先前設 64 是從投影機的可讀性反推的：大螢幕上角色只有 130~170 個裝置像素高，
+# 64 格時一格約 2~3 個裝置像素，最能看出「這是像素畫」。實際做出來被否決了 ——
+# 64 格把臉壓成馬賽克，而這件作品的核心是「參與者認得出那是自己」。
+#
+# 取 90 的代價要知道：投影機上一格只剩 1.5~1.9 個裝置像素，遠看會比 64 格柔，
+# 顆粒感主要靠手機確認頁（那裡角色有近 2000 個實際像素高）成立。
+#
+# 同一個數字必須同時出現在三個地方：這裡（prompt）、`_canonical_pixel_pose()`
+# （姿勢參考圖）、以及 INTAKE.md（策展圖規格）。對不上時模型會同時收到
+# 兩種格距，輸出的格子大小就會每張都不一樣。
+PIXEL_ART_GRID_HEIGHT = 90
+
+# 最深階的墨色下限。刻意與 public/screen/scenes/pixelKit.js 的 INK 同一支：
+# 角色會站在像素廚房／辦公室前面，兩邊的黑若不同調，角色會像貼上去的。
+#
+# 注意這**不是**「每個角色都要描一圈黑邊」。策展參考圖是無統一輪廓的畫法，
+# 邊緣由各材質自己的最暗階構成；prompt 若要求一圈墨線，就會與 sheet 直接
+# 衝突，而 sheet 在 prompt 裡是工藝的最高權威 —— 模型會自己選一邊。
+PIXEL_INK = "#302A2D"
+
+
+def _canonical_pixel_pose(size: int = 1024) -> PILImage.Image:
+    """Neutral reference geometry drawn ON the pixel grid, at the curated set's
+    own proportions.
+
+    The other two pose builders draw at full resolution; this one is drawn at
+    ``PIXEL_ART_GRID_HEIGHT`` and scaled up with NEAREST so every edge in the
+    reference lands exactly on a grid line.  Drawing it smooth would be the same
+    class of mistake as giving the Pixar pose a black contour: the pose image is
+    only supposed to carry stance and body-part count, but an anti-aliased edge
+    also carries "this species has soft edges" -- the one thing this style must
+    not have.
+
+    Proportions are measured from the curated sheet rather than chosen: head
+    (with hair) to the chin at 33% of total height, collar 37%, waist 62%, top
+    of the shoes 90% -- about **three heads tall**.  The first version of this
+    builder drew 4.4 heads, which disagreed with the sheet; the model resolved
+    that disagreement by ignoring both and producing a realistic 7-head figure.
+    Pose and proportion are the prompt's to decide, so they have to be stated
+    here as clearly as the sheet states its craft.
+    """
+    grid = PIXEL_ART_GRID_HEIGHT
+    img = PILImage.new("RGB", (grid, grid), "white")
+    d = ImageDraw.Draw(img)
+    ink = (48, 42, 45)
+    body = (188, 190, 196)
+    skin = (226, 194, 162)
+    hair = (74, 60, 58)
+    shoe = (78, 78, 84)
+
+    def block(x0, y0, x1, y1, fill):
+        """One outlined block: dark border, flat fill inside.  No gradients."""
+        d.rectangle((x0, y0, x1 - 1, y1 - 1), fill=ink)
+        if x1 - x0 > 2 and y1 - y0 > 2:
+            d.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=fill)
+
+    # Head fills the top third and is nearly as wide as the shoulders -- that
+    # width is what separates this proportion from a small head on a big body.
+    block(31, 1, 59, 31, skin)
+    d.rectangle((32, 2, 57, 9), fill=hair)
+    block(41, 28, 49, 35, skin)          # neck; the collar lands at 37%
+    block(33, 33, 57, 59, body)          # torso; the waist lands at 62%
+    block(27, 35, 34, 54, body)          # arms hang ~15 degrees out
+    block(56, 35, 63, 54, body)
+    block(26, 52, 34, 60, skin)          # hands as separate blocks at the wrists
+    block(56, 52, 64, 60, skin)
+    # Legs with a clear two-cell gap.  A one-cell gap survives on the grid but
+    # disappears the moment the sheet is downscaled into the send.
+    block(36, 58, 44, 82, body)
+    block(46, 58, 54, 82, body)
+    # Shoes wider than the leg above them, and separated from each other.
+    block(34, 81, 44, 90, shoe)
+    block(46, 81, 56, 90, shoe)
+
+    return img.resize((size, size), PILImage.NEAREST)
+
+
+_PIXEL_NEGATIVE = (
+    "Strictly NO text, NO labels, NO numbers, NO measurement marks, NO arrows, "
+    "NO design-sketch annotations, NO watermarks, NO signatures. "
+    # 這一段是這個風格的身分，不只是美術偏好。反鋸齒邊緣還會直接傷到下游：
+    # garment_gen 的去背與 slicer 的 alpha 邊界都假設邊緣是硬的。
+    "NO anti-aliasing, NO soft or feathered edges, NO semi-transparent edge "
+    "pixels, NO blur, NO glow, NO gradient fills, NO airbrush or smooth shading, "
+    "NO drop shadow. Every edge is a hard step between two flat colours, aligned "
+    "to the pixel grid. "
+    "NOT a 3D render, NOT a photograph, NOT a smooth vector illustration, NOT "
+    "anime cel shading, NOT a moulded plastic toy, NOT a LEGO minifigure. "
+    "NO fine dithering, NO 1-pixel checkerboard texture, NO noise, NO grain - "
+    "they shimmer and turn to mud once the figure is scaled down on the "
+    "projector. "
+    "The pixel grid must be UNIFORM: every cell the same size everywhere in the "
+    "image, never smaller cells on the face and larger ones on the body. "
+    "NO realistic adult body proportions, NO 6-head, 7-head or 8-head figure, "
+    "NO small head on a long body, NO slender elongated limbs, NO fashion-plate "
+    "proportions - the head fills the top third of the figure. "
+    "NO side view, NO three-quarter angle, NO sitting pose, NO action pose, "
+    "NO twisted torso. Stand strictly straight, facing the viewer. "
+    "EXACTLY ONE single figure in the entire image. NO turnaround sheet, "
+    "NO character model sheet, NO multiple views, NO side/back/rear panels, "
+    "NO duplicate or smaller copies of the figure anywhere in the frame. "
+    "ABSOLUTELY NO background: NO walls, NO floor, NO scenery, NO ground shadow, "
+    "NO contact shadow, NO reflection - every pixel outside the figure must be "
+    "pure solid white #FFFFFF, completely uniform. "
+    "NEVER omit shoes — both feet must always wear visible shoes. "
+    "The legs must NEVER merge into one solid column: keep a clear vertical gap "
+    "of white background between them, unless a one-piece garment covers them. "
+    "STRICT BODY-PART COUNT: EXACTLY one head, exactly two arms, "
+    "EXACTLY TWO hands total (one at the end of each arm, at the wrist), "
+    "exactly two legs, exactly two feet/shoes. "
+    "NO extra hands, NO duplicate hands, NO floating hands, "
+    "NO hands attached to the torso, hip, or legs, "
+    "NO extra arms, NO duplicate limbs anywhere."
+)
+
+_PIXEL_PROMPT_TEMPLATE = (
+    "Create a single pixel-art character sprite based on the person in this "
+    "photograph, drawn as a full-body standing sprite on a fixed pixel grid.\n\n"
+
+    "### DETECTED CHARACTER ATTRIBUTES:\n"
+    "{attrs}\n\n"
+
+    "### MANDATORY DESIGN RULES:\n"
+    "1. **Grid**: The whole figure is built from identical square cells on ONE "
+    "uniform grid. The figure is about " + str(PIXEL_ART_GRID_HEIGHT) + " cells "
+    "tall from the top of the hair to the sole of the shoe, so one cell is "
+    "roughly 1.1% of the figure's height. Every shape, every edge and every "
+    "colour change snaps to a cell boundary. Nothing is ever drawn smaller than "
+    "one whole cell.\n"
+    "2. **Proportions & Pose**: Strict front-facing view, perfectly centered and "
+    "symmetric. Neutral stance: arms relaxed about 15 degrees out from the sides, "
+    "hands visible as distinct blocks at the wrists, legs straight and parallel.\n"
+    "   **This is a deliberately cute, big-headed character, about THREE heads "
+    "tall.** The head INCLUDING the hair fills the whole TOP THIRD of the figure: "
+    "the chin sits at 33% of total height and the head is nearly as wide as the "
+    "shoulders. Below it, the collar sits near 37% of total height, the waist "
+    "near 62%, and the top of the shoes near 90%. The legs are short and the "
+    "limbs are chunky - this is NOT a realistic adult figure and NOT a slender "
+    "6-to-8-head sprite; a small head on a long body is the single most common "
+    "way to get this style wrong.\n"
+    "   When the lower body is trousered or bare, keep a CLEAR VISIBLE VERTICAL "
+    "GAP of at least two cells between the legs from hip to ankle; a one-piece "
+    "garment reaching below the hip closes that gap instead.\n"
+    "3. **Head & Face**: The head is about 30 cells tall, so the face carries "
+    "real detail: two large eyes each with a visible white and a dark iris, a "
+    "nose of one or two cells, a small mouth, and eyebrows when the person has "
+    "distinct ones. Keep every one of those marks made of whole cells - large "
+    "eyes drawn in clean blocks, never a soft or shaded eye. Hair is a flat "
+    "silhouette in the person's own hair colour with two or three steps of "
+    "shading inside it, never individual strands.\n"
+    "4. **Torso & Outerwear**: The figure wears the person's actual outfit. The "
+    "torso may carry SEVERAL pieces at once - an open jacket over a shirt, a "
+    "collar, a scarf - and each piece keeps its own colour and is separated from "
+    "the one beneath by a single darker cell line, never by a soft edge.\n"
+    "5. **Lower Body**: Follow what the person actually wears. Trousers or shorts "
+    "become two separate legs with a clear gap between them. A dress, skirt, robe "
+    "or long coat instead becomes ONE continuous block falling unbroken from the "
+    "waist to its hem with no vertical split, and the bare legs continue below "
+    "that hem in the person's own skin tone.\n"
+    "6. **Shoes & Footwear**: Mandatory distinct shoes on both feet, at least two "
+    "cells tall, one cell wider than the leg above them on each side, fully "
+    "visible and fully inside the frame.\n\n"
+
+    "### ART STYLE GUIDELINES - PIXEL ART SPRITE:\n"
+    "- This is a hand-placed pixel-art sprite as in a 16-bit game, NOT a "
+    "photograph run through a mosaic filter and NOT a smooth drawing scaled down. "
+    "Every cell is a deliberate choice: large flat areas of one colour, with "
+    "detail spent only where it identifies this particular person.\n"
+    "- **Palette**: strictly limited. Each material gets THREE to FIVE values - "
+    "a base, one or two shadow steps, one highlight step, and its own darkest "
+    "edge tone. Neighbouring garments must differ in value, not only in hue, or "
+    "they merge into a single shape at the size this sprite is actually "
+    "displayed.\n"
+    "- **Edges**: every part of the figure is bounded by a one-cell edge made of "
+    "THAT PART'S OWN darkest tone - dark denim around the jeans, dark brown "
+    "around brown hair, dark skin tone around a bare arm. Do NOT draw one "
+    "uniform black or ink-coloured contour around the whole figure. Whatever the "
+    "darkest tone on the figure is, keep it a warm dark grey around " + PIXEL_INK
+    + " rather than pure black, so the sprite sits in the same ink family as the "
+    "scene behind it. Interior boundaries between garment pieces use the upper "
+    "garment's own shadow step.\n"
+    "- **Shading**: one light source from the upper front. Shadow is a hard "
+    "cell-aligned band of the shadow step along the lower and outer side of each "
+    "form - never a gradient, never a soft falloff. At most one highlight step "
+    "per material.\n"
+    "- Prints, logos and stripes on a garment are drawn as whole cells in a flat "
+    "colour. Anything that cannot be said in two or three cells is left out "
+    "rather than smeared.\n"
+    "- Center the figure on a pure solid white background (#FFFFFF), with the "
+    "figure's cell grid aligned to the image edges. No text, no border lines.\n\n"
+    + _PIXEL_NEGATIVE
+)
+
+_ROLE_STYLE_PIXEL = (
+    "a style reference sheet of DIFFERENT characters drawn in the target style. "
+    "This sheet is the PRIMARY authority on how anything is built and finished, "
+    "**and on how tall the head is relative to the body** - copy that head-to-body "
+    "proportion exactly. Beyond proportion it decides: "
+    "how coarse the pixel grid is and that it stays uniform across the whole "
+    "figure, how few values each material is allowed, how the one-cell outline is "
+    "drawn and where it gives way to an interior shadow step, how shadow is "
+    "placed as a hard cell-aligned band rather than a gradient, how a face is "
+    "reduced to a handful of marks, how hair is one flat silhouette with a single "
+    "lighter step, how a hem, cuff or garment edge is stated with one darker "
+    "cell line, and how this species constructs a garment - a one-piece garment "
+    "as a single unbroken block with bare legs below its hem, one layer over "
+    "another separated by one cell. Where a design rule above and this sheet "
+    "disagree about grid size, palette discipline, outline or garment "
+    "construction, FOLLOW THE SHEET. Pose, body-part count and which garments the "
+    "figure wears are not the sheet's to decide."
+)
+
+
+register_style(GenerationStyle(
+    style_id="pixel",
+    display_name="像素",
+    full_prompt_template=_PIXEL_PROMPT_TEMPLATE,
+    supported_modes=frozenset({"full_character"}),
+    reference_set="2026q3_pixel_curated",
+    role_style_text=_ROLE_STYLE_PIXEL,
+    pose_builder=_canonical_pixel_pose,
 ))

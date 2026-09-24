@@ -301,6 +301,13 @@ def _check_provenance(directory: Path, filenames: List[str]) -> Tuple[List[str],
     """
     path = directory / "PROVENANCE.md"
     if not path.exists():
+        # The three curated sets share one source and one licence judgement, so the
+        # record lives at docs/style_reference/PROVENANCE.md rather than once per
+        # set.  Without this fallback, consolidating it would silently turn every
+        # set into "keeps no provenance", which this function is deliberately
+        # quiet about -- the per-file warnings below would simply stop appearing.
+        path = directory.parent / "PROVENANCE.md"
+    if not path.exists():
         return ([], [])
 
     text = path.read_text(encoding="utf-8", errors="replace")

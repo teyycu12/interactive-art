@@ -51,3 +51,13 @@ test('every non-plant prop has an explicit appearance in each pixel theme', () =
     assert.equal(scene.item({ id: 'future', type: 'unknown' }), Scene.FALLBACK);
   }
 });
+
+// 問卷選項可以綁道具，而大螢幕與主辦端都以道具名稱顯示集合地點。
+// 兩個道具同名時，「到工作桌集合」會指向兩張不同的桌子，而畫面上看不出差別。
+test('每個主題裡的道具名稱互不重複', () => {
+  for (const Scene of [KitchenScene, OfficeScene]) {
+    const labels = Object.values(Scene.ITEMS).map(([, label]) => label);
+    const dupes = labels.filter((l, i) => labels.indexOf(l) !== i);
+    assert.deepEqual([...new Set(dupes)], [], `${Scene.name} 有同名道具`);
+  }
+});
