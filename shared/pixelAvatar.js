@@ -263,8 +263,8 @@ function paintBody(p, c, body, dir, frame, pose = null) {
   else legsFrontBack(p, c, frame, bare);
 
   // 脖子與軀幹：肩膀一列稍窄，做出圓肩
-  const [x0, x1] = side ? [16, 23] : [14, 25];
-  p.rect(side ? 17 : 18, 27, side ? 19 : 21, 27, c.skin, 'neck');
+  const [x0, x1] = side ? [15, 24] : [14, 25];
+  p.rect(side ? 15 : 18, 27, side ? 18 : 21, 27, c.skin, 'neck');
   const bottom = bare ? 32 : 37;
   p.rect(x0 + 1, 28, x1 - 1, 28, c.acc, 'cloth');
   p.rect(x0, 29, x1, bottom, c.acc, 'cloth');
@@ -286,8 +286,8 @@ function paintBody(p, c, body, dir, frame, pose = null) {
 /** 臉。側面時臉往前（左）偏一點，多一格鼻尖。 */
 function paintFaceBase(p, c, dir) {
   if (dir === 'left') {
-    p.oval(18.5, 17, 9.8, 9.5, c.skin, 'skin');
-    p.put(8, 20, c.skin, 'skin');
+    p.oval(16, 17.5, 8.2, 9, c.skin, 'skin');
+    p.put(7, 19, c.skin, 'skin');
   } else {
     p.oval(20, 17, 10.3, 9.5, c.skin, 'skin');
   }
@@ -295,18 +295,19 @@ function paintFaceBase(p, c, dir) {
 
 /** 耳朵：短髮、光頭、毛帽時才看得到 */
 function ears(p, c, dir) {
-  if (dir === 'left') { p.oval(22.5, 17.5, 1.8, 2.3, c.skin, 'ear'); p.dots([[22, 17], [22, 18]], c.skinSh); return; }
+  if (dir === 'left') { p.oval(21, 18, 1.6, 2.3, c.skin, 'ear'); p.dots([[21, 17], [21, 18]], c.skinSh); return; }
   p.oval(9, 17.5, 1.6, 2.2, c.skin, 'ear');
   p.oval(31, 17.5, 1.6, 2.2, c.skin, 'ear');
 }
 
 /** 整顆頭的後髮量（蓬鬆的外輪廓），畫在臉後面 */
+const SIDE_SKULL = [20.5, 14.5, 11.8, 12.5];
 const mass = (p, c, dir, color = c.hair) => (dir === 'left'
-  ? p.oval(21, 14, 13, 13, color, 'hair')
+  ? p.oval(...SIDE_SKULL, color, 'hair', (x, y) => y <= 22 || x >= 21)
   : p.oval(20, 14, 13.5, 13, color, 'hair'));
 /** 頭頂：蓋住臉的上緣 */
 const dome = (p, c, dir, maxY = 12, color = c.hair) => (dir === 'left'
-  ? p.oval(21, 14, 13, 13, color, 'hair', (x, y) => y <= maxY)
+  ? p.oval(...SIDE_SKULL, color, 'hair', (x, y) => y <= maxY)
   : p.oval(20, 14, 13.5, 13, color, 'hair', (x, y) => y <= maxY));
 /** 天使光圈：動畫頭髮的招牌高光 */
 const halo = (p, c, dir) => (dir === 'left'
@@ -335,9 +336,10 @@ const sideBangs = (p, c, lens = [7, 5, 3, 2, 2, 3, 3, 2]) => lens.forEach((len, 
  * 直接用一條垂直線切開臉與頭髮，看起來像半邊戴了安全帽。
  */
 const sideHair = (p, c, lockBottom) => {
-  p.oval(25, 15, 11, 12, c.hair, 'hair', (x, y) => x >= 18 || y <= 14);
-  p.rect(17, 13, 19, lockBottom - 1, c.hair, 'hair');
-  p.rows([[lockBottom, 18, 19]], c.hair, 'hair');
+  // 耳朵以後都是頭髮，後腦勺沿著頭型收到頸背；耳前一小束鬢角
+  p.oval(...SIDE_SKULL, c.hair, 'hair', (x, y) => (x >= 20 && y <= 24) || y <= 12);
+  p.rect(18, 13, 19, lockBottom - 1, c.hair, 'hair');
+  p.rows([[lockBottom, 19, 19]], c.hair, 'hair');
 };
 
 /** 臉頰兩側垂下的鬢髮，末端收尖 */
@@ -365,7 +367,7 @@ const HAIR_PIXELS = {
       halo(p, c, 'up');
     },
     left(p, c) {
-      dome(p, c, 'left'); sideBangs(p, c); sideHair(p, c, 23);
+      dome(p, c, 'left'); sideBangs(p, c, [3, 2, 2, 2, 2, 1, 2, 2]); sideHair(p, c, 17);
       strands(p, c, [[25, 9], [26, 10], [27, 16], [28, 17]]); halo(p, c, 'left');
     },
     ear: true,
@@ -374,7 +376,7 @@ const HAIR_PIXELS = {
     back(p, c, dir) {
       mass(p, c, dir);
       const pts = dir === 'left'
-        ? [[12, 5, 3.4], [17, 3, 3.4], [23, 3, 3.4], [28, 5, 3.4], [32, 10, 3.2], [33, 16, 3], [31, 22, 3], [26, 26, 3]]
+        ? [[12, 5, 3.2], [17, 3, 3.2], [23, 3, 3.2], [28, 5, 3.2], [31, 10, 3], [32, 16, 2.8], [30, 21, 2.8]]
         : [[10, 6, 3.4], [15, 3, 3.4], [20, 2.4, 3.4], [25, 3, 3.4], [30, 6, 3.4],
           [7, 11, 3], [33, 11, 3], [6.5, 17, 3], [33.5, 17, 3], [8, 23, 3], [32, 23, 3]];
       for (const [x, y, r] of pts) p.oval(x, y, r, r, c.hair, 'hair');
@@ -420,7 +422,7 @@ const HAIR_PIXELS = {
       strands(p, c, [[16, 8], [17, 11], [23, 8], [22, 11], [20, 16]]); halo(p, c, 'up');
     },
     left(p, c) {
-      dome(p, c, 'left'); sideBangs(p, c, [5, 4, 3, 2, 2, 2, 2, 2]); sideHair(p, c, 22);
+      dome(p, c, 'left'); sideBangs(p, c, [2, 2, 2, 1, 1, 1, 2, 2]); sideHair(p, c, 16);
       strands(p, c, [[24, 9], [26, 12], [27, 16]]); halo(p, c, 'left');
     },
     ear: true,
@@ -429,7 +431,7 @@ const HAIR_PIXELS = {
     back(p, c, dir) {
       mass(p, c, dir);
       if (dir === 'left') {
-        p.rect(19, 14, 32, 38, c.hair, 'hair'); p.rows([[39, 20, 31], [40, 22, 30]], c.hair, 'hair');
+        p.rect(20, 14, 31, 37, c.hair, 'hair'); p.rows([[38, 21, 30], [39, 23, 29]], c.hair, 'hair');
       } else {
         p.rect(7, 14, 32, 38, c.hair, 'hair'); p.rows([[39, 8, 31], [40, 9, 13], [40, 26, 30]], c.hair, 'hair');
       }
@@ -445,7 +447,7 @@ const HAIR_PIXELS = {
       halo(p, c, 'up');
     },
     left(p, c) {
-      dome(p, c, 'left'); sideBangs(p, c); sideHair(p, c, 30);
+      dome(p, c, 'left'); sideBangs(p, c, [3, 2, 2, 2, 2, 2, 3, 3]); sideHair(p, c, 26);
       strands(p, c, [[25, 20], [25, 21], [28, 28], [28, 29]]); halo(p, c, 'left');
     },
     ear: false,
@@ -468,9 +470,9 @@ const HAIR_PIXELS = {
       p.oval(20, 0.5, 2.8, 2.2, mix(c.hair, '#FFFFFF', 0.35), 'pom');
     },
     left(p, c) {
-      p.oval(21, 11, 13, 11, c.hair, 'hair', (x, y) => y <= 9);
-      p.rect(8, 9, 33, 12, c.band, 'band');
-      for (let x = 9; x <= 32; x += 2) p.rect(x, 10, x, 12, shade(c.band, 0.86), 'detail');
+      p.oval(20.5, 11, 12.5, 11, c.hair, 'hair', (x, y) => y <= 9);
+      p.rect(8, 9, 32, 12, c.band, 'band');
+      for (let x = 9; x <= 31; x += 2) p.rect(x, 10, x, 12, shade(c.band, 0.86), 'detail');
       p.oval(22, 0.5, 2.8, 2.2, mix(c.hair, '#FFFFFF', 0.35), 'pom');
       p.dots([[13, 4], [14, 3], [15, 3]], c.hairHi);
     },
@@ -509,7 +511,7 @@ const closedEye = (p, x, up = true) => p.dots(up
 const smile = (p) => p.dots([[19, 23], [20, 23]], MOUTH);
 const blush = (p, c) => p.symRows([[21, 10, 11]], c.blush, 'detail');
 const sideEye = (p, c) => eye(p, c, 10, 1, 3);
-const sideMouth = (p) => p.dots([[9, 23], [10, 23]], MOUTH);
+const sideMouth = (p) => p.dots([[9, 23]], '#B0786A');
 const sideBlush = (p, c) => p.dots([[13, 21], [14, 21]], c.blush);
 
 /** 表情。背面看不到臉，所以只有正面與側面（面向左）。 */
