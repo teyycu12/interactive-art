@@ -5,6 +5,9 @@ import { SURVEY, SURVEY_BANK, SURVEY_BANK_MAP, surveysForTheme } from '../shared
 import { PROPS } from '../shared/scene.js';
 import { THEME_MAP } from '../shared/themes.js';
 
+/** 題目選項指向的道具座標，供到位測試用 */
+const propAt = (id) => PROPS.find((p) => p.id === id);
+
 const custom = {
   key: 'drink', question: '咖啡還是茶？',
   options: [{ value: 'coffee', label: '咖啡' }, { value: 'tea', label: '茶' }],
@@ -145,4 +148,84 @@ test('publicView 與 distribution 的形狀足夠三端顯示', () => {
   assert.ok(view.options.every((o) => 'label' in o && 'value' in o && 'spot' in o));
   const dist = s.distribution();
   assert.equal(dist.counts.length, view.options.length);
+});
+
+// ── 到場才算 ────────────────────────────────────────────────
+
+test('同一題的兩個集合點，圈圈不可以重疊', () => {
+  // 重疊的話，站在中間的人會同時落在兩個答案的範圍裡，兩群人也會黏成一團，
+  // 而「去跟答案一樣的人站在一起」正是這個玩法的全部意義。
+  for (const q of SURVEY_BANK) {
+    const spots = q.options.map((o) => o.spot).filter(Boolean).map(propAt);
+    for (let i = 0; i < spots.length; i++) {
+      for (let j = i + 1; j < spots.length; j++) {
+        const a = spots[i]; const b = spots[j];
+        const gap = Math.hypot(a.x - b.x, a.y - b.y) - (a.r + SURVEY.arriveRadius) - (b.r + SURVEY.arriveRadius);
+        assert.ok(gap > 0, `${q.id}：${a.id} 與 ${b.id} 的集合範圍重疊了 ${Math.round(-gap)}`);
+      }
+    }
+  }
+});
+
+test('選項沒有全部綁地點時，不能要求到場', () => {
+  const s = new SurveySession();
+  // chrono 是純手機題，硬要求到場的話，答題的人會永遠到不了位，
+  // 而畫面上只會看到到位數停在 0，看不出原因
+  s.start({ bankId: 'chrono', requireArrival: true });
+  assert.equal(s.current.requireArrival, false);
+  assert.equal(s.publicView().requireArrival, false);
+  s.close();
+  s.start({ bankId: 'kitchen_role' });
+  assert.equal(s.current.requireArrival, true, '選項都綁了地點時預設就要到場');
+});
+
+test('到位由伺服器的座標判定，走進走出都會回報', () => {
+  const s = new SurveySession();
+  s.start({ bankId: 'kitchen_role' });
+  s.answer('amy', 0);                       // 負責煮 → tbl_3
+  const spot = propAt('tbl_3');
+  const far = { x: spot.x + 900, y: spot.y };
+  let pos = far;
+
+  assert.deepEqual(s.syncArrivals(() => pos), [], '還沒走到就不算');
+  assert.equal(s.isArrived('amy'), false);
+
+  pos = { x: spot.x + spot.r + SURVEY.arriveRadius - 1, y: spot.y };
+  assert.deepEqual(s.syncArrivals(() => pos), ['amy'], '踏進圈子要回報一次');
+  assert.equal(s.isArrived('amy'), true);
+  assert.deepEqual(s.syncArrivals(() => pos), [], '沒變就不再回報');
+  assert.equal(s.distribution().arrived[0], 1);
+  assert.equal(s.distribution().totalArrived, 1);
+
+  pos = far;
+  assert.deepEqual(s.syncArrivals(() => pos), ['amy'], '走掉也要回報');
+  assert.equal(s.isArrived('amy'), false);
+  // arrivedAt 是「完成過」的證據，走開不該抹掉，否則先到先走的人結算時全不算
+  assert.ok(s.traitOf('amy', 'kitchen_role').arrivedAt > 0);
+});
+
+test('查不到座標的人維持原狀，不會被判成離開', () => {
+  const s = new SurveySession();
+  s.start({ bankId: 'kitchen_role' });
+  s.answer('amy', 0);
+  const spot = propAt('tbl_3');
+  s.syncArrivals(() => ({ x: spot.x, y: spot.y }));
+  assert.equal(s.isArrived('amy'), true);
+  // 離場那一瞬間若判成離開，大螢幕的到位數會閃一下，而現場會以為自己走錯了
+  assert.deepEqual(s.syncArrivals(() => null), []);
+  assert.equal(s.isArrived('amy'), true);
+});
+
+test('改答案會把到位狀態歸零', () => {
+  const s = new SurveySession();
+  s.start({ bankId: 'kitchen_role' });
+  s.answer('amy', 0);
+  const cook = propAt('tbl_3');
+  s.syncArrivals(() => ({ x: cook.x, y: cook.y }));
+  assert.equal(s.isArrived('amy'), true);
+  // 人還站在原地，但答案改成別的地點 —— 不歸零的話他會以「已到位」的身分
+  // 出現在新選項的統計裡，而人根本沒動
+  s.answer('amy', 1);
+  assert.equal(s.isArrived('amy'), false);
+  assert.equal(s.distribution().arrived[1], 0);
 });

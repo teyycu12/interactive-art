@@ -139,12 +139,26 @@
   }
   .quiz[hidden] { display: none; }
 
-  .q-head {
-    display: flex; align-items: baseline; justify-content: space-between;
-    font-size: 14px; font-weight: 700; letter-spacing: .12em; color: var(--soft);
-    margin-bottom: 6px;
+  /* 題目、題號、作答人數排成一行。
+     垂直堆疊時光是題頭就吃掉三行高度，而那三行的資訊量一行就放得下 ——
+     省下的每一像素都還給房間，也就是還給場上每個人的角色尺寸。 */
+  .q-line {
+    display: flex; align-items: baseline; gap: 20px;
+    margin-bottom: 10px;
   }
-  .q-title { font-size: 34px; font-weight: 900; line-height: 1.25; margin: 0 0 10px; }
+  .q-kind, .q-state {
+    flex: none;
+    font-size: 14px; font-weight: 700; letter-spacing: .12em; color: var(--soft);
+  }
+  .q-title {
+    flex: 1; min-width: 0;
+    font-size: 34px; font-weight: 900; line-height: 1.2; margin: 0;
+  }
+  .q-foot {
+    flex: none; text-align: right;
+    font-size: 17px; font-weight: 700; color: var(--soft);
+  }
+  .q-foot b { color: var(--ink); font-size: 21px; }
 
   /* 倒數條由滿到空，投影出去比數字更容易被餘光注意到 */
   .q-timebar { height: 10px; border-radius: 8px; background: var(--line); overflow: hidden; margin-bottom: 12px; }
@@ -152,6 +166,7 @@
   .q-timebar.urgent i { background: #C4453C; }
 
   .q-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .q-opts:empty { display: none; }
   @media (min-width: 1100px) {
     .q-opts { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
   }
@@ -187,12 +202,6 @@
     flex: none; font-size: 15px; font-weight: 700; opacity: .9;
     border: 2px solid rgba(255, 255, 255, .7); border-radius: 999px; padding: 2px 10px;
   }
-
-  .q-foot {
-    margin-top: 10px; text-align: center;
-    font-size: 17px; font-weight: 700; color: var(--soft);
-  }
-  .q-foot b { color: var(--ink); font-size: 21px; }
 
   /* ── 排行榜 ─────────────────────────────────────────────
      常駐在右下角：積分要一直看得到才會有人在意它。 */
@@ -256,26 +265,28 @@
 <!-- 即時問答。題目在共享畫布上呈現，手機只是輸入裝置 —— 這與任務的
      設計原則一致：完成與結果都必須被全場看見。 -->
 <div class="quiz" id="quiz" hidden>
-  <div class="q-head">
-    <span id="q-no">第 1 題</span>
-    <span id="q-state">作答中</span>
+  <div class="q-line">
+    <span class="q-kind" id="q-no">第 1 題</span>
+    <p class="q-title" id="q-title">—</p>
+    <span class="q-foot" id="q-foot">已作答 <b id="q-answered">0</b> 人</span>
+    <span class="q-state" id="q-state">作答中</span>
   </div>
-  <p class="q-title" id="q-title">—</p>
   <div class="q-timebar" id="q-timebar"><i id="q-timefill"></i></div>
   <div class="q-opts" id="q-opts"></div>
-  <div class="q-foot" id="q-foot">已作答 <b id="q-answered">0</b> 人</div>
 </div>
 
 <!-- 轉場問卷。沒有正解，因此畫面上只呈現分佈；個人答了什麼留在自己手機上。 -->
 <div class="quiz survey" id="survey" hidden>
-  <div class="q-head">
-    <span id="sv-no">問卷</span>
-    <span id="sv-state">作答中</span>
+  <div class="q-line">
+    <span class="q-kind" id="sv-no">問卷</span>
+    <p class="q-title" id="sv-title">—</p>
+    <span class="q-foot" id="sv-foot">已作答 <b id="sv-answered">0</b> 人</span>
+    <span class="q-state" id="sv-state">作答中</span>
   </div>
-  <p class="q-title" id="sv-title">—</p>
   <div class="q-timebar" id="sv-timebar"><i id="sv-timefill"></i></div>
+  <!-- 選項綁了地點時這裡是空的：選項改畫在場景裡它對應的家具旁，
+       既省掉橫幅高度，也直接回答「我選這個要走去哪」。 -->
   <div class="q-opts" id="sv-opts"></div>
-  <div class="q-foot" id="sv-foot">已作答 <b id="sv-answered">0</b> 人</div>
 </div>
 
 <div class="ranks" id="ranks" hidden>

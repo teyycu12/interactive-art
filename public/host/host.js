@@ -341,6 +341,7 @@ function buildSurveyPicker() {
 }
 
 function renderSurveyPreview() {
+  syncArriveToggle();
   const q = SURVEY_BANK_MAP[$('#survey-pick').value];
   // 先讓主辦端看到選項與對應地點：綁了道具的選項，之後可以直接叫那群人去那裡集合
   $('#survey-preview').textContent = q
@@ -374,7 +375,11 @@ function renderSurveyLive(state) {
     }
     const n = document.createElement('span');
     n.className = 'n';
-    n.textContent = `${state.counts?.[i] ?? 0} 人`;
+    // 要到場才算的題目，「按了」與「走到了」是兩個數字 ——
+    // 只顯示一個的話主辦者看不出該不該再催一次
+    n.textContent = state.requireArrival
+      ? `到位 ${state.arrived?.[i] ?? 0} / 選 ${state.counts?.[i] ?? 0}`
+      : `${state.counts?.[i] ?? 0} 人`;
     const track = document.createElement('span');
     track.className = 'track';
     const fill = document.createElement('i');
@@ -383,7 +388,9 @@ function renderSurveyLive(state) {
     li.append(lab, n, track);
     bars.append(li);
   });
-  $('#survey-live-foot').textContent = `已作答 ${state.totalAnswers ?? 0} 人　標籤 ${state.key}`;
+  $('#survey-live-foot').textContent = state.requireArrival
+    ? `已作答 ${state.totalAnswers ?? 0} 人　已到位 ${state.totalArrived ?? 0} 人　標籤 ${state.key}`
+    : `已作答 ${state.totalAnswers ?? 0} 人　標籤 ${state.key}`;
 
   if (state.closed) {
     $('#survey-countdown').textContent = '已收題';
@@ -401,11 +408,38 @@ function renderSurveyLive(state) {
 
 $('#survey-pick').addEventListener('change', () => { surveyPicked = true; renderSurveyPreview(); });
 
+/**
+ * 沒有綁地點的題目不能要求到場。
+ *
+ * 讓它勾得起來的話，伺服器會安靜地把這個要求忽略掉（start() 會檢查），
+ * 而主辦者看到的是一個勾了卻沒作用的選項 —— 不如直接不讓它勾。
+ */
+let arriveWanted = true;   // 主辦者自己的選擇，換題目時要記得
+
+function syncArriveToggle() {
+  const q = SURVEY_BANK_MAP[$('#survey-pick').value];
+  const can = !!q && q.options.every((o) => o.spot);
+  const box = $('#survey-arrive');
+  box.disabled = !can;
+  // 換成純手機題時強制取消勾選，換回有地點的題目再恢復主辦者原本的選擇。
+  // 不記的話，先瀏覽過一題沒地點的題目就會把勾選永久清掉，
+  // 而主辦者不會注意到 —— 出題後才發現全場沒有人站起來。
+  box.checked = can && arriveWanted;
+  $('#survey-arrive-note').textContent = can
+    ? '不勾就只是在手機上按一下，全場不會有人站起來。'
+    : '這一題的選項沒有綁場景裡的地點，只能在手機上作答。';
+}
+
+$('#survey-arrive').addEventListener('change', (e) => {
+  if (!e.target.disabled) arriveWanted = e.target.checked;
+});
+
 $('#btn-survey-start').addEventListener('click', () => {
   lastAction = 'survey';
   ws?.send(JSON.stringify({
     type: EV.HOST_START_SURVEY,
     bankId: $('#survey-pick').value,
+    requireArrival: $('#survey-arrive').checked,
     durationMs: Number($('#survey-duration').value),
   }));
 });

@@ -12,6 +12,7 @@ import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protoco
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
 import { TREASURE_RADIUS } from '/shared/heat.js';
+import { SURVEY } from '/shared/surveys.js';
 import { createScene, pinnedSceneId } from './scenes/registry.js';
 import { DEFAULT_THEME, isThemeId } from '/shared/themes.js';
 import { drawCharacter, drawNameplate, drawEmote, drawOffline } from '/shared/character.js';
@@ -628,6 +629,7 @@ function render(now) {
   }
 
   drawTreasure(now);
+  drawSurveyZones();
 
   // 位置內插
   for (const a of latest) {
@@ -712,8 +714,132 @@ function render(now) {
     if (a.offline) drawOffline(ctx, pos, { height });
   }
 
+  drawSurveySpots(now);
+
   if (debug) updateHud();
   requestAnimationFrame(render);
+}
+
+/**
+ * 把問卷選項畫在場景裡它對應的家具旁。
+ *
+ * 畫在角色之後：這是要看的資訊，被站在桌邊的人蓋住就失去意義。
+ * 位置抬到頭頂之上，盡量不壓到人臉。
+ */
+/**
+ * 要到場才算的題目：把每個答案的集合範圍畫在地板上。
+ *
+ * 畫在角色**之前**，因為它是地面標記 —— 蓋在人身上的話，站滿人的圈圈
+ * 就只剩一片色塊，看不出裡面有誰。看不到範圍時現場只能用猜的，
+ * 站在邊緣的人會以為系統判錯而不是自己差一步。
+ *
+ * 半徑由投影過的兩個點量出來，不是縮放乘上去的：3D 地板有透視壓縮，
+ * 直接乘會畫出一個與伺服器判定不一致的圈 —— 而那正是最難查的一種不一致。
+ */
+function drawSurveyZones() {
+  if (!surveyState?.requireArrival || !optionsAreOnStage(surveyState.options)) return;
+
+  surveyState.options.forEach((opt, i) => {
+    const prop = PROPS.find((p) => p.id === opt.spot);
+    if (!prop) return;
+    const pos = toScreen(prop);
+    const reach = (prop.r ?? 0) + SURVEY.arriveRadius;
+    const rx = Math.abs(toScreen({ x: prop.x + reach, y: prop.y }).x - pos.x);
+    const ry = Math.abs(toScreen({ x: prop.x, y: prop.y + reach }).y - pos.y) || rx * 0.6;
+    if (!(rx > 0)) return;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(pos.x, pos.y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fillStyle = `${QUIZ_CHOICES[i].color}2E`;
+    ctx.fill();
+    ctx.setLineDash([rx * 0.09, rx * 0.06]);
+    ctx.lineWidth = Math.max(2, rx * 0.035);
+    ctx.strokeStyle = QUIZ_CHOICES[i].color;
+    ctx.stroke();
+    ctx.restore();
+  });
+}
+
+function drawSurveySpots(now) {
+  if (!surveyState || !optionsAreOnStage(surveyState.options)) return;
+  const counts = surveyState.counts ?? [];
+
+  const needArrival = !!surveyState.requireArrival;
+  const arrived = surveyState.arrived ?? [];
+
+  surveyState.options.forEach((opt, i) => {
+    const prop = PROPS.find((p) => p.id === opt.spot);
+    if (!prop) return;
+    const pos = toScreen(prop);
+
+
+    // 尺寸比照站在同一個位置的人，遠近才一致 —— 固定尺寸的標籤在房間深處
+    // 會大得像貼紙浮在畫面上（與角色高度同一個理由）
+    const h = characterHeightAt(prop);
+    const pad = h * 0.16;
+    const font = Math.max(11, h * 0.26);
+    const countFont = Math.max(12, h * 0.3);
+
+    const label = opt.label;
+    // 要到場才算時，到位數才是成績；選了幾個人只是過程，所以排在後面且較小。
+    const count = needArrival
+      ? `${arrived[i] ?? 0} / ${counts[i] ?? 0}`
+      : `${counts[i] ?? 0} 人`;
+    ctx.save();
+    ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+    const labelW = ctx.measureText(label).width;
+    ctx.font = `900 ${countFont}px system-ui, "Noto Sans TC", sans-serif`;
+    const countW = ctx.measureText(count).width;
+    const gap = pad * 0.9;
+    const w = pad * 2 + font * 1.1 + gap + labelW + gap + countW;
+    const boxH = Math.max(font, countFont) + pad * 1.6;
+    const x = pos.x - w / 2;
+    const y = pos.y - h * 1.15 - boxH;
+
+    ctx.fillStyle = QUIZ_CHOICES[i].color;
+    ctx.strokeStyle = 'rgba(47,42,38,.85)';
+    ctx.lineWidth = Math.max(1.5, h * 0.025);
+    roundRect(ctx, x, y, w, boxH, boxH / 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    const midY = y + boxH / 2;
+    let cursor = x + pad;
+    ctx.font = `900 ${font * 1.1}px system-ui, sans-serif`;
+    ctx.fillText(QUIZ_CHOICES[i].glyph, cursor, midY);
+    cursor += font * 1.1 + gap;
+    ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+    ctx.fillText(label, cursor, midY);
+    cursor += labelW + gap;
+    ctx.font = `900 ${countFont}px system-ui, "Noto Sans TC", sans-serif`;
+    ctx.fillText(count, cursor, midY);
+
+    // 指向家具的小尖角，免得標籤看起來飄在半空中
+    ctx.beginPath();
+    ctx.moveTo(pos.x - boxH * 0.22, y + boxH);
+    ctx.lineTo(pos.x + boxH * 0.22, y + boxH);
+    ctx.lineTo(pos.x, y + boxH + boxH * 0.42);
+    ctx.closePath();
+    ctx.fillStyle = QUIZ_CHOICES[i].color;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  });
+}
+
+function roundRect(c, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  c.beginPath();
+  c.moveTo(x + rr, y);
+  c.arcTo(x + w, y, x + w, y + h, rr);
+  c.arcTo(x + w, y + h, x, y + h, rr);
+  c.arcTo(x, y + h, x, y, rr);
+  c.arcTo(x, y, x + w, y, rr);
+  c.closePath();
 }
 
 function updateHud() {
@@ -844,9 +970,22 @@ function spotLabel(propId) {
   return items?.[propId]?.[1] ?? (prop ? propId : null);
 }
 
+/**
+ * 選項是否每一個都綁了場景裡的地點。
+ *
+ * 全綁了就不在橫幅上列選項 —— 它們改畫在場景裡各自的家具旁（drawSurveySpots）。
+ * 這同時省掉橫幅四分之三的高度，並把「我選這個要走去哪」直接答在畫面上，
+ * 而那正是這類題目的重點：答案不是按鈕，是走過去。
+ */
+function optionsAreOnStage(options) {
+  return Array.isArray(options) && options.length > 0
+    && options.every((o) => o?.spot && PROPS.some((p) => p.id === o.spot));
+}
+
 function renderSurveyOptions(state) {
   const wrap = document.getElementById('sv-opts');
   wrap.replaceChildren();
+  if (optionsAreOnStage(state.options)) return;
   const total = Math.max(1, state.totalAnswers);
 
   state.options.forEach((opt, i) => {
@@ -912,7 +1051,23 @@ function showSurvey(state, { closed = false, durationMs = null } = {}) {
   document.getElementById('sv-no').textContent = `問卷 ${state.index ?? ''}`.trim();
   document.getElementById('sv-state').textContent = closed ? '結果' : '作答中';
   document.getElementById('sv-title').textContent = state.question;
-  document.getElementById('sv-answered').textContent = state.totalAnswers ?? state.answered ?? 0;
+  // 要到場才算的題目，橫幅上報的是到位人數 —— 那才是這一題的進度，
+  // 「按了幾個」在這種題目裡只是中途狀態
+  const answered = state.totalAnswers ?? state.answered ?? 0;
+  const foot = document.getElementById('sv-foot');
+  if (state.requireArrival) {
+    foot.replaceChildren(
+      document.createTextNode('已到位 '),
+      Object.assign(document.createElement('b'), { textContent: String(state.totalArrived ?? 0) }),
+      document.createTextNode(` / ${answered} 人`),
+    );
+  } else {
+    foot.replaceChildren(
+      document.createTextNode('已作答 '),
+      Object.assign(document.createElement('b'), { textContent: String(answered) }),
+      document.createTextNode(' 人'),
+    );
+  }
   renderSurveyOptions({
     options: state.options,
     counts: state.counts ?? new Array(state.options.length).fill(0),

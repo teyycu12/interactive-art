@@ -209,6 +209,7 @@ function spawn(avatar, name) {
     avatar, name,
     id: null, pos: null, dir: null, target: null,
     ask: null, answered: null, note: '連線中…',
+    needsArrival: false, arrived: false, answerLabel: '',
     ws: null, el: null, refs: null, gone: false,
   };
   puppets.push(p);
@@ -277,7 +278,17 @@ function handle(p, msg) {
       renderAsk(p);
       break;
     case EV.SURVEY_ACK:
-      p.note = `已記錄：${msg.label ?? ''}`;
+      p.needsArrival = !!msg.requireArrival;
+      p.answerLabel = msg.label ?? '';
+      p.arrived = !!msg.arrived;
+      p.note = arrivalNote(p);
+      break;
+
+    // 要到場才算的題目：傀儡走進／走出自己選的那一圈時伺服器會通知。
+    // 開發台顯示它，才看得出「走到了沒」與「按了沒」是兩回事。
+    case EV.SURVEY_ARRIVED:
+      p.arrived = !!msg.arrived;
+      p.note = arrivalNote(p);
       break;
     case EV.QUIZ_ACK:
       p.note = '已送出';
@@ -286,12 +297,19 @@ function handle(p, msg) {
     case EV.QUIZ_ENDED:
       p.ask = null;
       p.answered = null;
+      p.needsArrival = false;
+      p.arrived = false;
       renderAsk(p);
       break;
     default:
       return;   // 其餘事件開發台不需要，安靜忽略
   }
   renderStatus(p);
+}
+
+function arrivalNote(p) {
+  if (!p.needsArrival) return `已記錄：${p.answerLabel}`;
+  return p.arrived ? `已到位 ✓ ${p.answerLabel}` : `已選「${p.answerLabel}」，還沒走到`;
 }
 
 /** 問答的 options 是字串、問卷的是物件。攤成字串再渲染，否則會畫出 [object Object]。 */
@@ -476,7 +494,9 @@ setInterval(() => {
     const dist = Math.hypot(dx, dy);
     if (dist <= (prop.r ?? 0) + ARRIVE_SLACK) {
       clearTarget(p);
-      p.note = '已抵達';
+      // 問卷要求到場時以到位狀態為準：「已抵達」只代表走到了選單指定的道具，
+      // 未必是自己答案對應的那一個，蓋掉到位狀態會讓人誤判
+      p.note = p.needsArrival ? arrivalNote(p) : '已抵達';
       setDir(p, 0, 0);
       renderStatus(p);
       continue;

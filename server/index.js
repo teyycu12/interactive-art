@@ -387,7 +387,11 @@ function sendSurveyCatchUp(ws, agentId) {
   const mine = survey.current.answers.get(agentId);
   if (mine) {
     const option = survey.current.options[mine.choice];
-    send(ws, EV.SURVEY_ACK, { ok: true, choice: mine.choice, label: option.label, spot: option.spot });
+    send(ws, EV.SURVEY_ACK, {
+      ok: true, choice: mine.choice, label: option.label, spot: option.spot,
+      requireArrival: survey.current.requireArrival,
+      arrived: survey.isArrived(agentId),
+    });
   }
 }
 
@@ -773,7 +777,10 @@ function handleSurveyAnswer(ws, msg) {
   const r = survey.answer(ws.agentId, msg.choice);
   if (!r.ok) { send(ws, EV.SURVEY_ACK, { ok: false, reason: r.reason }); return; }
   // 回傳選到的標籤文字：手機上要顯示「你是：負責煮」，而那段文字只有伺服器有
-  send(ws, EV.SURVEY_ACK, { ok: true, choice: r.choice, label: r.option.label, spot: r.option.spot });
+  send(ws, EV.SURVEY_ACK, {
+    ok: true, choice: r.choice, label: r.option.label, spot: r.option.spot,
+    requireArrival: survey.current.requireArrival,
+  });
   surveyDirty = true;
   markDirty();
 }
@@ -853,6 +860,7 @@ function handleHostMessage(ws, msg) {
       const result = survey.start({
         bankId: msg.bankId ?? null,
         key: msg.key, question: msg.question, options: msg.options, durationMs: msg.durationMs,
+        requireArrival: msg.requireArrival,
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       const view = survey.publicView();
@@ -1226,7 +1234,20 @@ const loop = startTicker({
     // 問卷的時間到同樣由主迴圈推進，理由與問答相同：setTimeout 在事件迴圈
     // 被拖慢時會延後觸發，而這裡的時間到必須與大螢幕上的倒數一致。
     if (survey.shouldAutoClose(now)) closeSurvey(now);
-    else if (surveyDirty && now - lastSurveyAt >= 250) {
+    else if (survey.isActive) {
+      // 到位狀態由伺服器的座標判定，每拍更新。手機不知道自己在房間的哪裡
+      // （它只有搖桿），也不該由它說了算。
+      const moved = survey.syncArrivals((id) => stage.agents.get(id) ?? null);
+      for (const agentId of moved) {
+        const sock = controllers.get(agentId);
+        // 只通知狀態真的變了的那幾個人，而不是每拍廣播給全場 ——
+        // 三十個人乘以 30Hz 就是每秒九百則訊息，而其中絕大多數內容相同
+        if (sock) send(sock, EV.SURVEY_ARRIVED, { arrived: survey.isArrived(agentId) });
+      }
+      if (moved.length) surveyDirty = true;
+    }
+
+    if (survey.isActive && surveyDirty && now - lastSurveyAt >= 250) {
       lastSurveyAt = now;
       surveyDirty = false;
       blast([...screens, ...hosts], EV.SURVEY_STATE, { state: survey.distribution(now) });

@@ -88,6 +88,7 @@ export const EV = {
   SURVEY_QUESTION: 'SURVEY_QUESTION',         // Server → All：題目與選項
   SURVEY_ANSWER: 'SURVEY_ANSWER',             // Phone → Server：送出選擇（可改）
   SURVEY_ACK: 'SURVEY_ACK',                   // Server → Phone：已記錄
+  SURVEY_ARRIVED: 'SURVEY_ARRIVED',           // Server → Phone：到位狀態變了（要到場才算的題目）
   SURVEY_STATE: 'SURVEY_STATE',               // Server → Screen/Host：即時分佈
   SURVEY_CLOSED: 'SURVEY_CLOSED',             // Server → All：本題收掉，附最終分佈
 

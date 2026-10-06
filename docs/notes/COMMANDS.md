@@ -38,7 +38,7 @@ python scripts/asset_colors.py     # 先補色票，不跑的話顏色任務會�
 # 然後開 http://localhost:3000/dev/ ，輸入主辦端通行密鑰
 
 # 測試
-npm test                           # Node 單元測試（362 + wander 模式 5）
+npm test                           # Node 單元測試（367 + wander 模式 5）
 npm run test:wander                # 只跑漫遊模式那一組（PERSONAFLOW_IDLE_MOTION=wander）
 npm run test:e2e                   # 端對端，會自行啟動伺服器（147）
 pytest backend/                    # Python（423）
