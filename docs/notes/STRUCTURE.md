@@ -49,6 +49,7 @@
 │   ├── treasure.js               # ★ 尋寶（先知模式）：規則與冷熱判定
 │   ├── certcheck.js              # ★ 啟動時比對憑證 SAN 與當下 LAN IP
 │   ├── survey.js                 # ★ 轉場問卷：沒有正解的題目，答案留成參與者標籤
+│   ├── devAvatars.js             # ★ 開發用：列出可直接上場的歷史角色（見 /public/dev）
 │   └── persistence.js  scheduler.js  ratelimit.js  config.js
 ├── /shared                       # ★ 前後端共用的單一事實來源
 │   ├── protocol.js               # 事件名、節流頻率、場域尺寸
@@ -67,6 +68,7 @@
 │   │   ├── scenes/               # ★ 2D 像素主題（廚房、辦公室）與主題註冊表，見其 README
 │   │   └── 3d/RoomScene.js       # three.js 房間場景（主題 room）
 │   ├── host/                     # 主辦端控制台
+│   ├── dev/                      # ★ 人物匯入台（開發工具）：把歷史角色放回場上並個別操控
 │   └── assets/gen/               # 生成貼圖落地處（gitignored，每場重新產生）
 ├── /test                         # ★ Node 單元測試（node --test）
 ├── /samples                      # validate_cuts.py 的樣本照片（不是測試套件，見其 README）
@@ -74,6 +76,7 @@
 │   ├── e2e.mjs                   # ★ 端對端測試（會自行啟動伺服器）
 │   ├── make-cert.sh              # ★ 現場用 TLS 憑證產生
 │   ├── scene-preview.mjs         # ★ 場景離線預覽
+│   ├── asset_colors.py           # ★ 為既有貼圖補 fallbackColors（人物匯入台用）
 │   └── ...                       # 參考圖集與髮色取樣的離線檢查工具
 ├── /docs
 │   ├── INTERFACES.md             # 已移除的 2D 版 Socket.io 介面規格（僅存歷史）

@@ -32,10 +32,15 @@ python -m pytest backend/tests
 npm run bots -- --count 9          # 湊滿 10 人，自己佔 1 個
 npm run bots -- --colors           # 每種色族各保證一隻（測顏色任務）
 
+# 人物匯入台：把過去生成過的角色放回場上，每個都能單獨操控
+# （開發／調校用，現場請勿使用 —— 匯入的角色一樣佔 MAX_AGENTS 名額）
+python scripts/asset_colors.py     # 先補色票，不跑的話顏色任務會依假色判定
+# 然後開 http://localhost:3000/dev/ ，輸入主辦端通行密鑰
+
 # 測試
-npm test                           # Node 單元測試（339）
+npm test                           # Node 單元測試（362 + wander 模式 5）
 npm run test:wander                # 只跑漫遊模式那一組（PERSONAFLOW_IDLE_MOTION=wander）
-npm run test:e2e                   # 端對端，會自行啟動伺服器（128）
+npm run test:e2e                   # 端對端，會自行啟動伺服器（147）
 pytest backend/                    # Python（423）
 
 # 切片比例驗證（計畫書 §3.3 的 R1 驗收項）
