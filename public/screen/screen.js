@@ -15,6 +15,7 @@ import { TREASURE_RADIUS } from '/shared/heat.js';
 import { createScene, pinnedSceneId } from './scenes/registry.js';
 import { DEFAULT_THEME, isThemeId } from '/shared/themes.js';
 import { drawCharacter, drawNameplate, drawEmote, drawOffline } from '/shared/character.js';
+import { stageViewport, setStageTopInset, onStageViewportChange } from './stageViewport.js';
 
 let activeScene = null;
 
@@ -54,14 +55,18 @@ function resize() {
   canvas.style.width = `${innerWidth}px`;
   canvas.style.height = `${innerHeight}px`;
 
-  scale = Math.min(innerWidth / STAGE.width, innerHeight / STAGE.height);
-  offsetX = (innerWidth - STAGE.width * scale) / 2;
-  offsetY = (innerHeight - STAGE.height * scale) / 2;
+  // 畫布鋪滿視窗，但角色只落在可用區裡 —— 與場景背景用同一份 stageViewport()。
+  // 兩邊各自算的話，題目出現時角色會浮在房間外面，而畫面上只是「位置怪怪的」。
+  const vp = stageViewport();
+  scale = Math.min(vp.width / STAGE.width, vp.height / STAGE.height);
+  offsetX = vp.x + (vp.width - STAGE.width * scale) / 2;
+  offsetY = vp.y + (vp.height - STAGE.height * scale) / 2;
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingQuality = 'high';
 }
 addEventListener('resize', resize);
+onStageViewportChange(resize);
 resize();
 
 // ─────────────────────────────────────────────────────────────
@@ -760,6 +765,36 @@ function syncBanners() {
   surveyEl.hidden = surveyState === null || quiz !== null;
   document.getElementById('mission').hidden =
     quiz !== null || surveyState !== null || missionShown === null;
+  measureBannerInset();
+}
+
+/**
+ * 把目前可見的橫幅高度讓給它，場景縮到剩下的空間。
+ *
+ * 量實際高度而不是寫死：題目長度、選項字數、是否顯示集合地點都會改變高度，
+ * 寫死的值在最長的那一題上就會重新蓋到角色 —— 而那一題正是最需要看清楚的。
+ */
+const BANNER_IDS = ['quiz', 'survey', 'mission'];
+const BANNER_GAP = 14;   // 橫幅與房間上緣之間留一點縫，免得看起來黏在一起
+
+function measureBannerInset() {
+  let bottom = 0;
+  for (const id of BANNER_IDS) {
+    const el = document.getElementById(id);
+    if (!el || el.hidden) continue;
+    bottom = Math.max(bottom, el.getBoundingClientRect().bottom);
+  }
+  setStageTopInset(bottom === 0 ? 0 : bottom + BANNER_GAP);
+}
+
+// 橫幅內容會在顯示之後才填（選項、倒數條、分佈長條），高度因此是變動的。
+// 只在 syncBanners 量一次會量到還沒填完的高度，少掉的那一截正好蓋住角色。
+if (typeof ResizeObserver === 'function') {
+  const observer = new ResizeObserver(() => measureBannerInset());
+  for (const id of BANNER_IDS) {
+    const el = document.getElementById(id);
+    if (el) observer.observe(el);
+  }
 }
 
 let missionShown = null;

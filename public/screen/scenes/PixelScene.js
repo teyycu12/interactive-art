@@ -1,6 +1,7 @@
 import { ZONES } from '/shared/scene.js';
 import { THEME_MAP } from '/shared/themes.js';
 import { ROOM_W as W, ROOM_H as H, ROOM_PAD, FLOOR_X, FLOOR_Y, spotBadge } from './pixelKit.js';
+import { stageViewport, onStageViewportChange } from '../stageViewport.js';
 
 const GX = ROOM_PAD + FLOOR_X, GY = FLOOR_Y;
 
@@ -28,6 +29,8 @@ export class PixelScene {
     this.makeControls();
     this.onResize = () => this.resize();
     addEventListener('resize', this.onResize);
+    // 題目橫幅出現／消失時可用區會變，房間要重新置中到剩下的空間
+    this.offViewport = onStageViewportChange(this.onResize);
     this.resize();
   }
   projectToScreen(x, y) { return { x: this.ox + (GX + x) * this.zoom, y: this.oy + (GY + y) * this.zoom }; }
@@ -35,9 +38,12 @@ export class PixelScene {
   resetCamera() { this.resize(); }
   applyLight(name) { if (['day', 'evening', 'night'].includes(name)) this.light = name; }
   resize() {
-    this.zoom = Math.min(innerWidth / W, innerHeight / H);
-    this.ox = (innerWidth - W * this.zoom) / 2;
-    this.oy = (innerHeight - H * this.zoom) / 2;
+    // 畫布仍是整個視窗（背景色要鋪滿），但房間只縮放並置中到可用區裡 ——
+    // 橫幅佔掉的那一條因此不會蓋到任何角色。
+    const vp = stageViewport();
+    this.zoom = Math.min(vp.width / W, vp.height / H);
+    this.ox = vp.x + (vp.width - W * this.zoom) / 2;
+    this.oy = vp.y + (vp.height - H * this.zoom) / 2;
     this.dpr = Math.min(devicePixelRatio || 1, 2);
     this.canvas.width = Math.ceil(innerWidth * this.dpr);
     this.canvas.height = Math.ceil(innerHeight * this.dpr);
@@ -117,5 +123,5 @@ export class PixelScene {
       c.fillRect(-this.ox / this.zoom, -this.oy / this.zoom, innerWidth / this.zoom, innerHeight / this.zoom);
     }
   }
-  dispose() { removeEventListener('resize', this.onResize); this.canvas.remove(); this.ui.remove(); }
+  dispose() { removeEventListener('resize', this.onResize); this.offViewport?.(); this.canvas.remove(); this.ui.remove(); }
 }

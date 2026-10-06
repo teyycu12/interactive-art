@@ -65,6 +65,7 @@
 ├── /public                       # ★ 前端
 │   ├── controller/               # 手機端：拍照生成／捏臉（備援）、搖桿、任務
 │   ├── screen/                   # 大螢幕
+│   │   ├── stageViewport.js      # ★ 場景可用區：題目橫幅讓位後房間能用的範圍
 │   │   ├── scenes/               # ★ 2D 像素主題（廚房、辦公室）與主題註冊表，見其 README
 │   │   └── 3d/RoomScene.js       # three.js 房間場景（主題 room）
 │   ├── host/                     # 主辦端控制台
