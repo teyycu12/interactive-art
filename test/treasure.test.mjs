@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { TreasureHunt, heatOf } from '../server/treasure.js';
 import { HEAT_LEVELS, HEAT_MAP, TREASURE_RADIUS } from '../shared/heat.js';
 import { TREASURE } from '../server/config.js';
-import { OBSTACLES } from '../shared/scene.js';
+import { OBSTACLES, obstacleDistance } from '../shared/scene.js';
 import { STAGE } from '../shared/protocol.js';
 
 /** 造一個假的 agents Map */
@@ -84,7 +84,7 @@ describe('開局', () => {
       const t = new TreasureHunt();
       const { x, y } = t.start(['a', 'b']).round;
       for (const o of OBSTACLES) {
-        assert.ok(Math.hypot(x - o.x, y - o.y) >= o.r + TREASURE_RADIUS,
+        assert.ok(obstacleDistance(o, x, y) >= o.r + TREASURE_RADIUS,
           `第 ${i} 次藏在道具 (${o.x},${o.y}) 裡`);
       }
       assert.ok(x >= TREASURE.edgeMargin && x <= STAGE.width - TREASURE.edgeMargin);

@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { MISSION_TYPES } from '../shared/protocol.js';
+import { MISSION_TYPES, MISSION_DURATIONS } from '../shared/protocol.js';
 import { COLOR_FAMILY_MAP } from '../shared/colorFamily.js';
 
 export class MissionBoard {
@@ -29,7 +29,7 @@ export class MissionBoard {
    * 發布任務。
    * @returns {{ok: true, mission: object} | {ok: false, reason: string}}
    */
-  publish({ type, target, colorFamily = null }) {
+  publish({ type, target, colorFamily = null, durationMs = 0, now = Date.now() }) {
     if (this.active) return { ok: false, reason: '已有進行中的任務，請先結算' };
 
     const spec = MISSION_TYPES[type];
@@ -50,6 +50,13 @@ export class MissionBoard {
       param = colorFamily;
     }
 
+    // 限時由伺服器計時而非主辦端：主辦端的分頁可能被關掉或休眠，
+    // 那時任務仍要照宣布的時間收掉，大家才不會一直配對下去。
+    const limit = Number(durationMs ?? 0);
+    if (!MISSION_DURATIONS.includes(limit)) {
+      return { ok: false, reason: '不支援這個時間限制' };
+    }
+
     this.active = {
       id: `msn_${randomUUID().slice(0, 8)}`,
       type: spec.id,
@@ -57,8 +64,10 @@ export class MissionBoard {
       brief: spec.brief,
       target: n,
       colorFamily: param,
-      publishedAt: Date.now(),
+      publishedAt: now,
       closedAt: null,
+      /** 限時任務的截止時間；不限時為 null */
+      endsAt: limit > 0 ? now + limit : null,
       /** @type {Map<string, number>} 每位參與者的完成次數 */
       progress: new Map(),
       /** @type {object[]} 完成事件流水，供大螢幕回饋與事後分析 */
@@ -75,6 +84,11 @@ export class MissionBoard {
     this.history.push(closed);
     this.active = null;
     return closed;
+  }
+
+  /** 限時任務是否已經到點，該由主迴圈結算 */
+  shouldAutoClose(now = Date.now()) {
+    return !!this.active?.endsAt && now >= this.active.endsAt;
   }
 
   /** 任務是否進行中 */
@@ -112,7 +126,7 @@ export class MissionBoard {
    * 全場進度摘要。
    * @param {number} totalAgents 目前場上人數，用於計算完成率
    */
-  state(totalAgents) {
+  state(totalAgents, now = Date.now()) {
     if (!this.active) return null;
     const m = this.active;
     let finished = 0;
@@ -129,6 +143,8 @@ export class MissionBoard {
       participating: m.progress.size,
       totalCompletions,
       totalAgents,
+      // 送剩餘毫秒而非截止時刻：主辦端的電腦時鐘不一定準（理由同問答的 remainingMs）
+      remainingMs: m.endsAt ? Math.max(0, m.endsAt - now) : null,
     };
   }
 
@@ -162,6 +178,7 @@ export class MissionBoard {
       colorFamily: m.colorFamily ?? null,
       publishedAt: m.publishedAt,
       closedAt: m.closedAt,
+      endsAt: m.endsAt ?? null,
       progress: Object.fromEntries(m.progress),
       events: m.events,
     });

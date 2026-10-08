@@ -275,3 +275,35 @@ describe('配對狀態機', () => {
     assert.equal(p.confirm(B, true, t + 100).ok, false);
   });
 });
+
+describe('限時任務', () => {
+  test('不帶時間限制時不會自動結算', () => {
+    const board = new MissionBoard();
+    board.publish({ type: 'PAIRING', target: 1, now: 0 });
+    assert.equal(board.shouldAutoClose(10 ** 9), false);
+    assert.equal(board.state(3, 0).remainingMs, null);
+  });
+
+  test('到點才結算，剩餘時間由伺服器算', () => {
+    const board = new MissionBoard();
+    const r = board.publish({ type: 'PAIRING', target: 1, durationMs: 180000, now: 1000 });
+    assert.equal(r.ok, true);
+    assert.equal(board.state(3, 61000).remainingMs, 120000);
+    assert.equal(board.shouldAutoClose(180999), false);
+    assert.equal(board.shouldAutoClose(181000), true);
+  });
+
+  test('白名單以外的時間被拒絕', () => {
+    const board = new MissionBoard();
+    const r = board.publish({ type: 'PAIRING', target: 1, durationMs: 12345 });
+    assert.equal(r.ok, false);
+    assert.equal(board.isActive, false);
+  });
+
+  test('截止時間跟著快照還原，重開伺服器後仍會到點結算', () => {
+    const board = new MissionBoard();
+    board.publish({ type: 'PAIRING', target: 1, durationMs: 300000, now: 0 });
+    const revived = new MissionBoard().hydrate(JSON.parse(JSON.stringify(board.export())));
+    assert.equal(revived.shouldAutoClose(300000), true);
+  });
+});

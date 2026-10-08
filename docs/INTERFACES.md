@@ -154,7 +154,7 @@
   "characters": [
     {
       "id": "char_id",
-      "x": 0.0, "y": 0.0,          // Boids 座標，範圍 0..1920 × 0..1080
+      "x": 0.0, "y": 0.0,          // Boids 座標，範圍 0..2596 × 0..1080
       "vx": 0.0, "vy": 0.0,
       "state": "GREETING | ROAMING",  // 距離 < 80px 即 GREETING
       // ...以及該角色 join_swarm 時帶入的所有外觀欄位

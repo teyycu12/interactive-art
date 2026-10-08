@@ -12,15 +12,18 @@
 import { PROPS, ZONES } from '/shared/scene.js';
 import { THEME_MAP } from '/shared/themes.js';
 import {
-  ROOM_W, ROOM_H, ROOM_PAD, FLOOR_X, FLOOR_Y, CHARACTER_SCALE, spotBadge,
+  ROOM_W, ROOM_H, FLOOR_Y, CHARACTER_SCALE, spotBadge,
 } from '../screen/scenes/pixelKit.js';
 import { KitchenScene } from '../screen/scenes/KitchenScene.js';
 import { OfficeScene } from '../screen/scenes/OfficeScene.js';
 
 const PIXEL_SCENES = { kitchen: KitchenScene, office: OfficeScene };
 
-/** 場域邏輯座標 → 底圖座標的原點（與 PixelScene.projectToScreen 相同） */
-export const ORIGIN_X = ROOM_PAD + FLOOR_X;
+/**
+ * 場域邏輯座標 → 底圖座標的原點（與 PixelScene.projectToScreen 的 GX/GY 相同）。
+ * 舞台寬度就是整張圖的寬度，x 不再有位移；兩邊不同步時手機視角會整片錯位，且不會報錯。
+ */
+export const ORIGIN_X = 0;
 export const ORIGIN_Y = FLOOR_Y;
 export { ROOM_W, ROOM_H };
 
@@ -47,13 +50,10 @@ export function sceneBackdrop(themeId) {
   canvas.height = ROOM_H;
   const c = canvas.getContext('2d');
   Scene.paintRoom(c, ZONES);
-  c.save();
-  c.translate(ROOM_PAD, 0);
   for (const p of [...PROPS].sort((a, b) => a.y - b.y)) {
     const item = Scene.ITEMS[p.id] ?? Scene.FALLBACK;
     Scene.paintProp(c, p, item[0], -1, true);
   }
-  c.restore();
   const spots = THEME_MAP[themeId]?.spots ?? {};
   for (const p of PROPS) if (spots[p.id]) spotBadge(c, ORIGIN_X + p.x, ORIGIN_Y + p.y + 46, spots[p.id]);
 

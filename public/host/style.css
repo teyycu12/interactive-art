@@ -126,20 +126,75 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 }
 .stat span { font-size: 11px; color: var(--ink-faint); letter-spacing: .08em; }
 
-.cols {
+/* ── 分頁 ─────────────────────────────────────────────────
+   主辦者一次只做一件事：帶活動、看名單、換場景。把所有面板攤在同一頁時，
+   要找的按鈕常常被生成歷史之類的長表格擠到畫面外。 */
+.tabs { display: flex; gap: 6px; margin-bottom: 18px; flex-wrap: wrap; }
+.tabs [role="tab"] {
+  width: auto;
+  position: relative;
+  padding: 9px 18px;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: var(--surface);
+}
+.tabs [role="tab"]:hover { border-color: var(--ink-soft); color: var(--ink); background: var(--surface); }
+.tabs [role="tab"][aria-selected="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.tabs [role="tab"] .count { font-family: ui-monospace, Consolas, monospace; font-weight: 500; opacity: .8; }
+/* 「系統」是技術人員用的，推到最右邊、不跟主持用的分頁搶視線 */
+.tabs .tab-quiet { margin-left: auto; border-style: dashed; }
+
+/* 進行中的玩法：切走之後仍要找得回來 */
+.live-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  margin-left: 7px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(231, 111, 81, .25);
+}
+.live-dot[hidden] { display: none; }
+
+/* 左邊工作區＋右側常駐欄（排行、動態）
+   min-width: 0 是防爆版設定：grid item 預設 min-width 是內容的 max-content，
+   欄位裡的表格／長字串（例如 model 名稱）會把欄位撐寬到超出 grid 軌道，
+   造成兩欄視覺重疊。軌道雖用了 minmax(0, …)，item 自己不設一樣會頂出去。 */
+.layout {
   display: grid;
-  grid-template-columns: minmax(0, 260px) minmax(0, 1.5fr) minmax(0, 320px);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
   gap: 18px;
   align-items: start;
 }
-@media (max-width: 1080px) { .cols { grid-template-columns: 1fr; } }
+@media (max-width: 960px) { .layout { grid-template-columns: 1fr; } }
+.main, .side { display: grid; gap: 18px; align-content: start; min-width: 0; }
+.main > [role="tabpanel"] { min-width: 0; }
+.side { position: sticky; top: 16px; }
+@media (max-width: 960px) { .side { position: static; } }
 
-/* 每欄可堆疊多張面板：任務＋問答、參與者、排行＋動態
-   min-width: 0 是防爆版設定：grid item 預設 min-width 是內容的 max-content，
-   欄位裡的表格／長字串（例如 model 名稱）會把欄位撐寬到超出 grid 軌道，
-   在中欄與右欄之間造成視覺重疊。軌道本身雖然用了 minmax(0, …) 限制，
-   但 item 自己不設 min-width:0 的話一樣會頂出去。 */
-.col { display: grid; gap: 18px; align-content: start; min-width: 0; }
+/* 玩法選單：一次只展開一個玩法的面板 */
+.act-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.act-chip {
+  width: auto;
+  flex: 1 1 auto;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink-soft);
+  background: var(--surface);
+}
+.act-chip:hover { border-color: var(--ink-soft); color: var(--ink); background: var(--surface); }
+.act-chip[aria-pressed="true"] { border-color: var(--ink); color: var(--ink); background: var(--sunk); }
+
+/* 「為什麼這樣設計」的長說明預設收起，要看再點開 */
+.howto { margin: 0 0 14px; font-size: 13px; color: var(--ink-soft); }
+.howto summary { cursor: pointer; font-weight: 700; width: fit-content; }
+.howto summary:hover { color: var(--ink); }
+.howto p { margin: 6px 0 0; padding: 9px 12px; background: var(--sunk); border-radius: 9px; }
+
+.stage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; align-items: start; }
 
 .panel {
   background: var(--surface);
@@ -165,6 +220,8 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 }
 
 .field { display: block; margin-bottom: 14px; }
+/* .field 的 display:block 會蓋掉 [hidden]：配對任務底下曾經一直掛著用不到的顏色選單 */
+.field[hidden] { display: none; }
 .field > span {
   display: block;
   font-size: 12px;
@@ -177,7 +234,7 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
    類名刻意加 color- 前綴：.swatch 已經被名冊縮圖與生成歷史縮圖用掉，
    共用會讓那兩處被套上 flex 版面與 ::before 色塊而變形 ——
    與這一版剛修掉的 .bar 撞名是同一類問題。 */
-.color-picker { display: flex; flex-wrap: wrap; gap: 7px; }
+.color-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 7px; }
 .color-swatch {
   flex: 1 1 auto;
   min-width: 62px;
@@ -236,8 +293,6 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 
 /* 參與者表 */
 .table-wrap { overflow-x: auto; }
-/* 收合狀態：只留約 4 列高度並可垂直捲動，長長的生成歷史才不會把整欄往下拉爆 */
-.table-wrap.is-collapsed { max-height: 260px; overflow-y: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th {
   text-align: left;
@@ -289,7 +344,7 @@ td.act { text-align: right; }
 .btn-kick:hover { border-style: solid; border-color: var(--danger); color: var(--danger); background: var(--surface); }
 
 /* 動態流 */
-.feed { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow-y: auto; }
+.feed { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; }
 .feed li {
   font-size: 13px;
   padding: 8px 0;
@@ -443,3 +498,90 @@ td.act { text-align: right; }
   font-size: 11px; font-weight: 700; color: var(--teal-ink);
   border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; white-space: nowrap;
 }
+
+/* ── 投影模式 ─────────────────────────────────────────────
+   只藏東西、不改行為。藏的是「被全場看到會出事」的三樣：
+   問答編輯區（標著正解）、移除參與者的按鈕、系統分頁（花費與照片）。 */
+.topbar-right { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.btn-projector {
+  width: auto;
+  padding: 8px 14px;
+  font-size: 13px;
+  border-width: 2px;
+  border-color: var(--line);
+  color: var(--ink-soft);
+}
+.btn-projector[aria-pressed="true"] { background: var(--blue); border-color: var(--blue); color: #fff; }
+.projector-banner {
+  margin: -8px 0 18px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  background: #E7EFF5;
+  color: #2E5670;   /* 對 #E7EFF5 約 6.7:1 */
+  font-size: 13px;
+  font-weight: 700;
+}
+.projector-banner[hidden] { display: none; }
+.projector .btn-kick,
+.projector #tab-btn-system,
+.projector .quiz-editor,
+.projector .bank-load { display: none; }
+
+/* ── 節目單 ───────────────────────────────────────────── */
+.rs-list { list-style: none; margin: 0 0 12px; padding: 0; counter-reset: rs; display: grid; gap: 4px; }
+.rs-list li {
+  counter-increment: rs;
+  display: flex; align-items: center; gap: 4px;
+  border-radius: 9px;
+}
+.rs-list li::before {
+  content: counter(rs);
+  width: 22px; flex: none; text-align: center;
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--ink-faint);
+}
+.rs-label {
+  flex: 1; min-width: 0;
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 6px 10px; text-align: left;
+  border: 1.5px solid transparent; border-radius: 8px;
+  font-weight: 500; font-size: 14px;
+}
+.rs-label:hover { background: var(--sunk); }
+.rs-kind { flex: none; font-size: 11px; font-weight: 700; color: var(--teal-ink); }
+.rs-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-list li.done .rs-label { color: var(--ink-faint); text-decoration: line-through; }
+.rs-list li.done::before { content: "✓"; color: var(--teal-ink); }
+.rs-list li.next .rs-label { border-color: var(--accent); background: #FDF1EC; font-weight: 700; }
+.rs-mini {
+  width: auto; flex: none;
+  padding: 2px 8px; font-size: 12px; font-weight: 600;
+  border: none; background: none; color: var(--ink-faint);
+  position: relative;
+}
+.rs-mini:hover { background: var(--sunk); color: var(--ink); }
+/* 視覺上小、可觸範圍撐到 44px（同控制器的 .btn-exit，見 UI-STYLING） */
+.rs-mini::after {
+  content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: max(100%, 32px); height: max(100%, 44px);
+}
+#btn-rs-next { margin-bottom: 12px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#btn-rs-next:disabled { background: var(--sunk); border-color: var(--line); color: var(--ink-soft); cursor: default; }
+.rs-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; border-top: 1px dashed var(--line); padding-top: 12px; }
+.rs-add button { width: auto; padding: 6px 12px; font-size: 13px; border-width: 2px; }
+.rs-add select { width: auto; flex: 1; min-width: 120px; padding: 6px 10px; font-size: 13px; }
+
+/* ── 任務倒數 ─────────────────────────────────────────── */
+.tags-inline { display: flex; gap: 6px; }
+.tag-timer { border-color: var(--teal); color: var(--teal-ink); font-variant-numeric: tabular-nums; }
+.tag-timer.urgent { border-color: var(--danger); color: var(--danger); }
+.tag[hidden] { display: none; }
+
+/* ── 活動報告 ─────────────────────────────────────────── */
+.report-summary {
+  font-size: 13px; color: var(--ink); background: var(--sunk);
+  border-radius: 9px; padding: 9px 12px; margin: 0 0 12px;
+}
+.report-summary[hidden] { display: none; }
+.runsheet { margin-bottom: 18px; }
+/* 不能沿用 .ev-empty：pushFeed 會把那個 class 當成佔位字刪掉 */
+.feed .ev-plan { color: var(--ink-soft); }

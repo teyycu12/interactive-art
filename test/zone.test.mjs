@@ -12,7 +12,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { zoneAt, ZONES, ZONE_MAP, OBSTACLES } from '../shared/scene.js';
+import { zoneAt, ZONES, ZONE_MAP, OBSTACLES, obstacleDistance } from '../shared/scene.js';
 import { Stage } from '../server/state.js';
 import { STAGE } from '../shared/protocol.js';
 import { MAX_AGENTS } from '../server/config.js';
@@ -62,7 +62,7 @@ describe('分區判定', () => {
       let free = 0;
       for (let x = z.x + 20; x < z.x + z.w; x += 40) {
         for (let y = z.y + 20; y < z.y + z.h; y += 40) {
-          if (!OBSTACLES.some((o) => Math.hypot(x - o.x, y - o.y) < o.r)) free++;
+          if (!OBSTACLES.some((o) => obstacleDistance(o, x, y) < o.r)) free++;
         }
       }
       assert.ok(free > 10, `${z.id} 幾乎被道具塞滿，只剩 ${free} 個落點`);

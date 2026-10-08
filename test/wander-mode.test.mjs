@@ -102,9 +102,11 @@ describe("湧現漫遊態（IDLE_MOTION='wander'）", { skip: IDLE_MOTION !== 'w
       const graph = new SocialGraph();
       const at = (x, y) => makeAgent(stage, { x, y, wanderAngle: 0 });
 
-      const groupX = [at(700, 480), at(700, 600), at(640, 540)];
-      const groupY = [at(1220, 480), at(1220, 600), at(1280, 540)];
-      const me = at(960, 540); // 正中間，與兩群等距
+      // 這些座標要落在空地上。舞台擴張到整張圖之後家具整體右移了 338，
+      // 原本的「中間空地」已經是 3號工作桌，兩群人會一開始就被道具推開。
+      const groupX = [at(1038, 480), at(1038, 600), at(978, 540)];
+      const groupY = [at(1558, 480), at(1558, 600), at(1618, 540)];
+      const me = at(1298, 540); // 正中間，與兩群等距
 
       if (withAffinity) for (const y of groupY) graph.connect(me.id, y.id);
 

@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import { performance } from 'node:perf_hooks';
 
 import { RateLimiter } from './ratelimit.js';
+import { listHistoricalAvatars } from './devAvatars.js';
 
 /**
  * 建立 HTTP 層。依賴以參數注入而非 import，方向才不會繞回 index.js。
@@ -390,6 +391,30 @@ function handleHostHistory(req, res, urlPath, searchParams) {
   proxyHostHistory(req, res, `/api/dev/generations/${requestId}`, false);
 }
 
+/**
+ * 開發用的歷史角色清單。
+ *
+ * 與 /api/host/history 同樣帶主辦端密鑰：它會曝光過去所有生成角色的貼圖路徑，
+ * 而那些貼圖是參與者的照片轉譯出來的，不該是任何人連上來就讀得到的東西。
+ *
+ * 不經 Python 服務：清單來自 public/assets/gen 這個 Node 自己就在服務的目錄，
+ * 轉一手只會讓匯入台在只起 Node 的開發情境下無法使用。
+ */
+function handleHostAvatars(req, res, searchParams) {
+  if (req.method !== 'GET') {
+    sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
+    return;
+  }
+  if (!keyMatches(searchParams.get('key'))) {
+    sendJSON(res, 403, { ok: false, error: 'invalid_key' });
+    return;
+  }
+  listHistoricalAvatars(PUBLIC_DIR).then(
+    (avatars) => sendJSON(res, 200, { ok: true, avatars }),
+    () => sendJSON(res, 200, { ok: false, error: 'asset_scan_failed' }),
+  );
+}
+
 function proxyGenerate(req, res) {
   if (req.method !== 'POST') {
     sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
@@ -541,6 +566,11 @@ function handleRequest(req, res) {
 
   if (urlPath === '/api/styles') {
     proxyStyles(req, res);
+    return;
+  }
+
+  if (urlPath === '/api/host/avatars') {
+    handleHostAvatars(req, res, new URL(req.url, 'http://localhost').searchParams);
     return;
   }
 

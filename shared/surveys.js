@@ -27,6 +27,23 @@ export const SURVEY = {
   minDurationMs: 5000,
   maxDurationMs: 120000,
   defaultDurationMs: 20000,
+  /**
+   * 「到場才算」的判定半徑（邏輯單位），加在道具自己的 r 之上。
+   *
+   * 放在 shared/ 是因為三端都要用同一個值：伺服器據此判定到位、大螢幕據此畫出
+   * 那一圈範圍、手機據此顯示自己到了沒。各寫一份的話，會出現「畫面上明明站在
+   * 圈裡卻不算到位」—— 現場最惱人的一種故障，因為它看起來像系統壞了而不是規則。
+   *
+   * 45 是上限推出來的，不是隨手取的：同一題的兩個集合點若圈圈重疊，站在中間的
+   * 人會同時落在兩個答案的範圍裡，兩群人也會黏成一團，而「去跟答案一樣的人站
+   * 在一起」正是這個玩法的全部意義。題庫裡最擠的一對是 tbl_3 與 tbl_2
+   * （邊緣相距 95）與 tbl_1 與 tbl_3（98），因此半徑最多只能是 47。
+   *
+   * 下限由站位決定：道具同時是障礙物，角色擠不進 r 以內，實際站的位置大約在
+   * r + 身體半徑。45 剛好容得下繞著一張桌子站一圈的人。
+   * test/survey.test.mjs 會擋下讓圈圈重疊的題目。
+   */
+  arriveRadius: 45,
 };
 
 /**
@@ -44,9 +61,12 @@ export const SURVEY_BANK = [
     key: 'kitchen_role',
     theme: 'kitchen',
     question: '在廚房裡，你通常負責什麼？',
+    // 地點刻意散在房間四角，不是挑語意最貼的那一個：洗手台就在湯鍋正下方
+    // （相距 218），兩個集合圈會重疊成一團，看不出誰屬於哪一邊。
+    // 「負責洗」因此擺到餐具櫃。見 INTERACTION-DESIGN 的半徑說明。
     options: [
       { value: 'cook', label: '負責煮', spot: 'tbl_3' },
-      { value: 'wash', label: '負責洗', spot: 'tbl_2' },
+      { value: 'wash', label: '負責洗', spot: 'k_dishes' },
       { value: 'eat', label: '負責吃', spot: 'k_dining' },
       { value: 'order', label: '負責訂外送', spot: 'k_cart' },
     ],
@@ -56,11 +76,13 @@ export const SURVEY_BANK = [
     key: 'team_role',
     theme: 'office',
     question: '在團隊裡，你比較像哪一種人？',
+    // 同上：會議桌緊鄰行動白板、3號工作桌緊鄰1號工作桌，原本四個圈擠成兩對。
+    // 改散到白板、工作桌、圓桌、咖啡販賣機四個角落。
     options: [
       { value: 'ideas', label: '出點子的', spot: 'k_cart' },
       { value: 'build', label: '做出來的', spot: 'tbl_1' },
-      { value: 'coord', label: '協調的', spot: 'k_island' },
-      { value: 'fix', label: '救火的', spot: 'tbl_3' },
+      { value: 'coord', label: '協調的', spot: 'k_dining' },
+      { value: 'fix', label: '救火的', spot: 'spk_r' },
     ],
   },
   {

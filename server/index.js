@@ -40,6 +40,8 @@ import { certificateReport } from './certcheck.js';
 import { startTicker } from './scheduler.js';
 import { MissionBoard } from './missions.js';
 import { TreasureHunt } from './treasure.js';
+import { HarvestRelay } from './harvest.js';
+import { HARVEST, HARVEST_PLAN } from '../shared/harvest.js';
 import { SocialGraph } from './socialgraph.js';
 import { PairingSession } from './pairing.js';
 import { QuizSession } from './quiz.js';
@@ -47,6 +49,7 @@ import { SurveySession } from './survey.js';
 import { ScoreBoard } from './scores.js';
 import { SnapshotStore, Directory } from './persistence.js';
 import { createHttpLayer } from './httplayer.js';
+import { buildReport } from './report.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -56,6 +59,7 @@ const PORT = Number(process.env.PORT) || 3000;
 const stage = new Stage();
 const missions = new MissionBoard();
 const treasure = new TreasureHunt();
+const harvest = new HarvestRelay();
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
 const quiz = new QuizSession();
@@ -319,6 +323,26 @@ function hostState() {
 const pushHostState = () => blast(hosts, EV.HOST_STATE, hostState());
 
 /**
+ * 結算目前的任務。主辦端按「結算」與限時到點走同一條路，
+ * 三端收到的 MISSION_CLOSED 才會一模一樣。
+ * @param {'host'|'time'} by 誰收掉的；時間到時主辦端要在動態裡看得出來
+ */
+function closeMission(by = 'host') {
+  const closed = missions.close();
+  if (!closed) return;
+  console.log(`[mission] 結算「${closed.title}」${by === 'time' ? '（時間到）' : ''}`);
+  markDirty();
+  blastAll(EV.MISSION_CLOSED, {
+    id: closed.id,
+    title: closed.title,
+    totalCompletions: closed.events.length,
+    graphEdges: graph.size,
+    by,
+  });
+  pushHostState();
+}
+
+/**
  * 積分帳本的單一寫入點。
  *
  * 所有得分來源（配對、任務達標、問答）都走這裡，好處有兩個：
@@ -390,7 +414,11 @@ function sendSurveyCatchUp(ws, agentId) {
   const mine = survey.current.answers.get(agentId);
   if (mine) {
     const option = survey.current.options[mine.choice];
-    send(ws, EV.SURVEY_ACK, { ok: true, choice: mine.choice, label: option.label, spot: option.spot });
+    send(ws, EV.SURVEY_ACK, {
+      ok: true, choice: mine.choice, label: option.label, spot: option.spot,
+      requireArrival: survey.current.requireArrival,
+      arrived: survey.isArrived(agentId),
+    });
   }
 }
 
@@ -400,6 +428,47 @@ function sendTreasureCatchUp(ws, agentId) {
   // 回來的若正好是先知，強制下一幀重送冷熱：否則要等到等級**變動**
   // 才收得到，而隊伍恰好停在原地時那可以是好幾十秒。
   if (agentId === treasure.round.prophetId) treasure.resendHeat();
+}
+
+/** 接過／放下籃子按不動時，給手機一句看得懂的話 */
+const HAND_NOTE = {
+  TOO_FAR: '要先走到籃子旁邊',
+  ALREADY_HOLDING: '籃子已經在你手上了',
+  NOT_HOLDING: '籃子不在你手上',
+};
+
+/**
+ * 接過／放下籃子。
+ *
+ * 由**接的人**發起，不是給的人 —— 把人叫過來才是這個玩法要的那一步。
+ * 距離一律由伺服器判定：手機只有搖桿，根本不知道自己在房間的哪裡，
+ * 也不該由它說了算（同問卷的到位判定）。
+ */
+function handleHarvestHand(ws, isTake) {
+  if (!harvest.isActive) return;
+  const agentId = ws.agentId;
+  const res = isTake
+    ? harvest.take(agentId, (id) => stage.agents.get(id) ?? null)
+    : harvest.drop(agentId);
+  if (!res.ok) {
+    // 按不動時回一句話而不是沉默：「我按了沒反應」是現場最難解釋的一種失敗
+    send(ws, EV.HARVEST_REACH, {
+      canTake: harvest.canTake(agentId), note: HAND_NOTE[res.reason] ?? null,
+    });
+    return;
+  }
+  // 交接是離散事件，立刻廣播而不等節流：按下去到畫面上換手之間的延遲，
+  // 現場會讀成「沒按到」而再按一次
+  blastAll(EV.HARVEST_STATE, { round: harvest.publicView() });
+  console.log(`[harvest] ${nameOf(agentId)} ${isTake ? '接過' : '放下'}籃子`);
+}
+
+function sendHarvestCatchUp(ws, agentId) {
+  if (!harvest.isActive) return;
+  send(ws, EV.HARVEST_STATE, { round: harvest.publicView() });
+  // 「接過籃子」那個鈕只由 HARVEST_REACH 驅動，而那是只在**變動**時才推的事件 ——
+  // 少了這一行，重連回來的人站在籃子旁邊也按不到，要等走開再走回來才會恢復。
+  if (agentId) send(ws, EV.HARVEST_REACH, { canTake: harvest.canTake(agentId) });
 }
 
 function handleJoin(ws, msg) {
@@ -430,6 +499,7 @@ function handleJoin(ws, msg) {
       // 而他正是所有人都在等著聽他喊話的那一個。
       sendTreasureCatchUp(ws, existing.id);
       sendSurveyCatchUp(ws, existing.id);
+      sendHarvestCatchUp(ws, existing.id);
       return;
     }
     ws.agentId = null; // 角色已被回收，往下走正常入場流程
@@ -507,6 +577,7 @@ function handleJoin(ws, msg) {
   // 補送給手機的東西一樣不能夾帶答案。
   sendTreasureCatchUp(ws, agent.id);
   sendSurveyCatchUp(ws, agent.id);
+  sendHarvestCatchUp(ws, agent.id);
   send(ws, EV.SCORE_SELF, {
     score: scores.totalOf(agent.id),
     delta: 0,
@@ -776,7 +847,10 @@ function handleSurveyAnswer(ws, msg) {
   const r = survey.answer(ws.agentId, msg.choice);
   if (!r.ok) { send(ws, EV.SURVEY_ACK, { ok: false, reason: r.reason }); return; }
   // 回傳選到的標籤文字：手機上要顯示「你是：負責煮」，而那段文字只有伺服器有
-  send(ws, EV.SURVEY_ACK, { ok: true, choice: r.choice, label: r.option.label, spot: r.option.spot });
+  send(ws, EV.SURVEY_ACK, {
+    ok: true, choice: r.choice, label: r.option.label, spot: r.option.spot,
+    requireArrival: survey.current.requireArrival,
+  });
   surveyDirty = true;
   markDirty();
 }
@@ -802,6 +876,7 @@ function handleHostMessage(ws, msg) {
         type: msg.missionType,
         target: msg.target,
         colorFamily: msg.colorFamily ?? null,
+        durationMs: msg.durationMs ?? 0,
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       console.log(`[mission] 發布「${result.mission.title}」目標 ${result.mission.target} 次`);
@@ -852,10 +927,31 @@ function handleHostMessage(ws, msg) {
       break;
     }
 
+    case EV.HOST_START_HARVEST: {
+      const result = harvest.start([...stage.agents.keys()], HARVEST_PLAN);
+      if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
+      console.log(`[harvest] 開始，共 ${HARVEST_PLAN.beds.length} 處`);
+      // 這個玩法沒有秘密：哪一處採過了、籃子在誰手上都要讓全場看見，
+      // 「誰還沒採」正是大家要互相喊的那件事。三端送同一份。
+      blastAll(EV.HARVEST_STATE, { round: harvest.publicView() });
+      pushHostState();
+      break;
+    }
+
+    case EV.HOST_STOP_HARVEST: {
+      const r = harvest.stop();
+      if (!r) return;
+      console.log('[harvest] 本輪中止');
+      blastAll(EV.HARVEST_STATE, { round: null });
+      pushHostState();
+      break;
+    }
+
     case EV.HOST_START_SURVEY: {
       const result = survey.start({
         bankId: msg.bankId ?? null,
         key: msg.key, question: msg.question, options: msg.options, durationMs: msg.durationMs,
+        requireArrival: msg.requireArrival,
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       const view = survey.publicView();
@@ -883,20 +979,26 @@ function handleHostMessage(ws, msg) {
       break;
     }
 
-    case EV.HOST_CLOSE_MISSION: {
-      const closed = missions.close();
-      if (!closed) return;
-      console.log(`[mission] 結算「${closed.title}」`);
-      markDirty();
-      blastAll(EV.MISSION_CLOSED, {
-        id: closed.id,
-        title: closed.title,
-        totalCompletions: closed.events.length,
-        graphEdges: graph.size,
-      });
-      pushHostState();
+    case EV.HOST_CLOSE_MISSION:
+      closeMission();
       break;
-    }
+
+    case EV.HOST_REQUEST_REPORT:
+      // format 原樣帶回：主辦端據此決定要下載哪一張表
+      send(ws, EV.HOST_REPORT, {
+        format: msg.format === 'activities' ? 'activities' : 'people',
+        report: buildReport({
+          missions: missions.export(),
+          quiz: quiz.export(),
+          survey: survey.export(),
+          scores: scores.export(),
+          graph: graph.export(),
+          // 已經離場的人從 directory 找名字；被移除的人兩邊都查不到，留空
+          nameOf: (id) => nameOf(id) || directory.get(id)?.name || '',
+          isPresent,
+        }),
+      });
+      break;
 
     case EV.HOST_START_QUIZ: {
       const result = quiz.start({
@@ -1003,6 +1105,7 @@ wss.on('connection', (ws) => {
           send(ws, EV.SURVEY_QUESTION, { survey: survey.publicView() });
           send(ws, EV.SURVEY_STATE, { state: survey.distribution() });
         }
+        sendHarvestCatchUp(ws, null);
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
         // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
         send(ws, EV.STAGE_LINKS, { edges: graphEdges() });
@@ -1074,6 +1177,12 @@ wss.on('connection', (ws) => {
         handleSurveyAnswer(ws, msg);
         break;
 
+      case EV.HARVEST_TAKE:
+      case EV.HARVEST_DROP:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleHarvestHand(ws, msg.type === EV.HARVEST_TAKE);
+        break;
+
       case EV.HOST_AUTH: {
         // 與 SCREEN_HELLO 同一個理由：已綁定角色的連線改註冊為主辦端後，
         // 關閉時只會走 hosts 的清理分支，agent 的 disconnectedAt 永遠是 null，
@@ -1114,6 +1223,7 @@ wss.on('connection', (ws) => {
             round: treasure.publicView(), spot: treasure.spot(),
           });
         }
+        sendHarvestCatchUp(ws, null);
         console.log(`[host] 主辦端已連線　共 ${hosts.size} 台`);
         break;
       }
@@ -1122,6 +1232,8 @@ wss.on('connection', (ws) => {
       case EV.HOST_CLOSE_MISSION:
       case EV.HOST_START_TREASURE:
       case EV.HOST_STOP_TREASURE:
+      case EV.HOST_START_HARVEST:
+      case EV.HOST_STOP_HARVEST:
       case EV.HOST_START_QUIZ:
       case EV.HOST_REVEAL_QUIZ:
       case EV.HOST_END_QUIZ:
@@ -1130,6 +1242,7 @@ wss.on('connection', (ws) => {
       case EV.HOST_SET_THEME:
       case EV.HOST_START_SURVEY:
       case EV.HOST_CLOSE_SURVEY:
+      case EV.HOST_REQUEST_REPORT:
         // 未通過認證的連線一律忽略，不回應也不透露任何狀態
         if (ws.role !== 'host') return;
         handleHostMessage(ws, msg);
@@ -1228,8 +1341,24 @@ const loop = startTicker({
 
     // 問卷的時間到同樣由主迴圈推進，理由與問答相同：setTimeout 在事件迴圈
     // 被拖慢時會延後觸發，而這裡的時間到必須與大螢幕上的倒數一致。
+    // 限時任務到點結算，與問卷、問答同樣由主迴圈推進
+    if (missions.shouldAutoClose(now)) closeMission('time');
+
     if (survey.shouldAutoClose(now)) closeSurvey(now);
-    else if (surveyDirty && now - lastSurveyAt >= 250) {
+    else if (survey.isActive) {
+      // 到位狀態由伺服器的座標判定，每拍更新。手機不知道自己在房間的哪裡
+      // （它只有搖桿），也不該由它說了算。
+      const moved = survey.syncArrivals((id) => stage.agents.get(id) ?? null);
+      for (const agentId of moved) {
+        const sock = controllers.get(agentId);
+        // 只通知狀態真的變了的那幾個人，而不是每拍廣播給全場 ——
+        // 三十個人乘以 30Hz 就是每秒九百則訊息，而其中絕大多數內容相同
+        if (sock) send(sock, EV.SURVEY_ARRIVED, { arrived: survey.isArrived(agentId) });
+      }
+      if (moved.length) surveyDirty = true;
+    }
+
+    if (survey.isActive && surveyDirty && now - lastSurveyAt >= 250) {
       lastSurveyAt = now;
       surveyDirty = false;
       blast([...screens, ...hosts], EV.SURVEY_STATE, { state: survey.distribution(now) });
@@ -1348,6 +1477,45 @@ const loop = startTicker({
           sendToAgent(treasure.round.prophetId, EV.TREASURE_HEAT, { heat: heat.heat });
           blast([...screens, ...hosts], EV.TREASURE_HEAT, { heat: heat.heat });
         }
+      }
+    }
+
+    // 採水果。與尋寶同樣放在 `screens.size === 0` 早退**之前**：
+    // 投影機還沒接上時整輪會完全沒有反應，而現場會以為是手機壞了。
+    if (harvest.isActive) {
+      // 一人一畦的代價是它會卡死（還沒採的比還沒採過的人多）。
+      // 不能在這裡 return —— 下面還有大螢幕的整段廣播（同尋寶）。
+      const viable = harvest.viability(stage.agents.keys());
+      if (!viable.ok) {
+        harvest.stop();
+        console.log(`[harvest] 本輪中止：${viable.reason}`);
+        blastAll(EV.HARVEST_STATE, { round: null, reason: viable.reason });
+        pushHostState();
+      }
+    }
+
+    if (harvest.isActive) {
+      const r = harvest.tick((id) => stage.agents.get(id) ?? null, stage.agents.keys());
+      // 只通知狀態真的變了的那幾支手機，不是每拍廣播（同 SURVEY_ARRIVED）
+      for (const id of r.reachChanged) {
+        sendToAgent(id, EV.HARVEST_REACH, { canTake: harvest.canTake(id) });
+      }
+      if (r.picked.length > 0 || r.dropped) {
+        blastAll(EV.HARVEST_STATE, { round: harvest.publicView() });
+      }
+      if (r.delivered) {
+        const view = harvest.publicView();
+        // 出過力的人都算：採過的每一個人，加上最後把籃子送回去的那一個。
+        // 只給最後那個人分數的話，前面幾棒會覺得自己白跑 —— 而這是接力。
+        const helpers = [...new Set([...view.picked, view.holder])].filter(Boolean);
+        console.log(`[harvest] 完成，${helpers.length} 人接力`);
+        blastAll(EV.HARVEST_DONE, {
+          id: view.id, round: view,
+          helpers, helperNames: helpers.map(nameOf), points: HARVEST.points,
+        });
+        for (const id of helpers) award(id, HARVEST.points, { source: SCORE_SOURCES.HARVEST });
+        harvest.stop();
+        pushHostState();
       }
     }
 

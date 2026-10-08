@@ -25,5 +25,8 @@ export class KitchenScene extends PixelScene {
     sofa_1: ['board', '備料桌', '切一點蔬菜，添一點色彩'],
     sofa_2: ['bread', '烘焙桌', '一起揉一份好心情'],
     ctbl_1: ['tea', '茶桌', '坐下來，分享今天吧'],
+    grd_1: ['bed_lettuce', '萵苣畦', '翠綠的葉子，摘一把吧'],
+    grd_2: ['bed_tomato', '番茄畦', '紅透了，小心別壓壞'],
+    grd_3: ['bed_carrot', '紅蘿蔔畦', '抓住葉子，用力一拔'],
   };
 }

@@ -52,7 +52,9 @@ else
   SAN="DNS:localhost,IP:127.0.0.1"
   for ip in ${LAN_IPS}; do SAN="${SAN},IP:$ip"; done
 
-  openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  # Git Bash（Windows）會把 "/CN=..." 當成路徑改寫成 C:/Program Files/Git/CN=...，
+  # openssl 因此失敗；錯誤又被 2>/dev/null 吞掉，看起來像腳本無故中止。
+  MSYS2_ARG_CONV_EXCL='/CN=' openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
     -keyout "$CERT_DIR/key.pem" -out "$CERT_DIR/cert.pem" \
     -subj "/CN=PersonaFlow" \
     -addext "subjectAltName=$SAN" 2>/dev/null
