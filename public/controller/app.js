@@ -256,7 +256,7 @@ function showStep(n) {
 
 /** 只切換單一畫面，其餘全部隱藏 */
 function showScreen(id) {
-  for (const s of ['entry', 'scan', 'builder', 'controller', 'farewell']) {
+  for (const s of ['entry', 'return', 'scan', 'builder', 'controller', 'farewell']) {
     $(`#${s}`).hidden = s !== id;
   }
 }
@@ -984,7 +984,40 @@ $('#btn-next').addEventListener('click', () => {
 });
 
 refresh();
-showScreen('entry');
+showScreen(hasSavedCharacter() ? 'return' : 'entry');
+
+/**
+ * 上次有沒有真的進過場。
+ *
+ * 看 userId 而不是看 LS.avatar：refresh() 一載入就會寫 avatar，
+ * 第一次來的人也有。userId 只在伺服器回 CLIENT_WELCOME 後才寫，
+ * 而主動離場會清掉它 —— 離場的人本來就該從頭建立新角色。
+ */
+function hasSavedCharacter() {
+  try {
+    return !!(localStorage.getItem(LS.userId) && displayName);
+  } catch { return false; }
+}
+
+if (hasSavedCharacter()) {
+  $('#return-avatar').innerHTML = renderAvatarSVG(config);
+  $('#return-name').textContent = displayName;   // 自填的名字，一律 textContent
+}
+
+// 伺服器還記得這個人（12 小時內、沒被移除）就接回同一個角色，分數與配對都在；
+// 記不得也沒關係 —— CLIENT_JOIN 帶著名字與外觀，會以同樣的樣子重新建立。
+$('#btn-return').addEventListener('click', enterStage);
+
+$('#btn-new-character').addEventListener('click', () => {
+  // 一定要清掉憑證：帶著舊憑證進場，伺服器會認領回舊角色、
+  // 沿用舊的外觀，新拍的照片等於白拍
+  try {
+    localStorage.removeItem(LS.userId);
+    localStorage.removeItem(LS.rejoinToken);
+  } catch { /* 略 */ }
+  showScreen('entry');
+  syncStartButton();
+});
 
 // ─────────────────────────────────────────────────────────────
 // WebSocket 連線

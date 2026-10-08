@@ -61,7 +61,7 @@ body {
    蓋掉最上面那一列（.bar 的頭像、積分、連線狀態與離開鍵），而且因為
    html 設了 overflow:hidden，被切掉的部分是捲不出來的 —— 使用者按不到
    離開鍵，也看不到自己是否還連著線。 */
-#entry, #builder, #scan, #controller, #farewell {
+#entry, #return, #builder, #scan, #controller, #farewell {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -383,7 +383,7 @@ input:focus-visible,
    滾動」，而視窗矮到這個程度時本來就不是實際的操作情境（現場是直立
    手機），能看到完整資訊比維持不可捲更重要。 */
 @media (max-height: 420px) {
-  #entry, #builder, #scan, #controller, #farewell {
+  #entry, #return, #builder, #scan, #controller, #farewell {
     padding-top: calc(8px + env(safe-area-inset-top));
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
     gap: 6px;
@@ -1147,3 +1147,7 @@ input:focus-visible,
   font-size: 13px;
   font-weight: 700;
 }
+
+/* 歡迎回來：角色預覽 */
+.return-avatar { width: 132px; margin: 14px auto 6px; }
+.return-avatar svg, .return-avatar img { display: block; width: 100%; height: auto; }

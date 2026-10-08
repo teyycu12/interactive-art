@@ -35,6 +35,22 @@
     </div>
   </section>
 
+  <!-- ── 歡迎回來 ─────────────────────────────────────────
+       手機鎖屏太久、切到別的 App，瀏覽器常會把分頁回收，回來時整頁重新載入。
+       沒有這一頁的話只能重新拍照生成 —— 但角色其實還存在手機與伺服器上。 -->
+  <section id="return" hidden>
+    <div class="centered">
+      <h1>歡迎回來</h1>
+      <div class="return-avatar" id="return-avatar" aria-hidden="true"></div>
+      <p class="lede"><b id="return-name"></b></p>
+      <p class="hint">用原本的角色回到場上，不必重新拍照。</p>
+    </div>
+    <div class="foot">
+      <button class="btn-primary" id="btn-return">回到場上</button>
+      <button class="btn-ghost" id="btn-new-character">換一個新角色</button>
+    </div>
+  </section>
+
   <!-- ── 掃描生成（拍照 → AI 生圖 → 貼圖）──────────────── -->
   <!--
     左右分欄：左邊是直式取景（與相機原生方向、以及最終送出的 9:16 裁切一致），
