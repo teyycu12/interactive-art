@@ -219,6 +219,17 @@ export class SurveySession {
       counts[a.choice]++;
       if (a.arrived) arrived[a.choice]++;
     }
+    // 答了但還沒走到的人。大螢幕用它在那幾個角色頭上標一個記號 ——
+    // 「還差一個」只說得出數字，說不出是誰，而旁邊的人看得到記號就會開口提醒他。
+    // 這正是本專案對新玩法的判準：通關路徑上要有一步必須跟另一個人講話。
+    //
+    // 個人選了什麼因此會公開，但這類題目本來就是走過去給全場看的 ——
+    // 站進圈子的那一刻答案已經公開，記號只是早幾秒。
+    const pending = [];
+    if (s.requireArrival) {
+      for (const [agentId, a] of s.answers) if (!a.arrived) pending.push({ id: agentId, choice: a.choice });
+    }
+
     return {
       id: s.id,
       key: s.key,
@@ -227,6 +238,7 @@ export class SurveySession {
       counts,
       // 選了之後真的走過去的人。要到場才算的題目，這一欄才是成績。
       arrived,
+      pending,
       requireArrival: s.requireArrival,
       totalAnswers: s.answers.size,
       totalArrived: arrived.reduce((sum, n) => sum + n, 0),

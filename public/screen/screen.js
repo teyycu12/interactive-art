@@ -710,6 +710,7 @@ function render(now) {
     drawCharacter(ctx, a, pos, entry?.img, { time, maxSpeed: MAX_SPEED, height });
     // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
     drawNameplate(ctx, pos, entry?.name ?? a.id, { fontSize: Math.max(10, height * 0.12) });
+    drawPendingMark(a, pos, height);
     if (a.emote) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }
@@ -736,6 +737,52 @@ function render(now) {
  * 半徑由投影過的兩個點量出來，不是縮放乘上去的：3D 地板有透視壓縮，
  * 直接乘會畫出一個與伺服器判定不一致的圈 —— 而那正是最難查的一種不一致。
  */
+/**
+ * 答了但還沒走到的人，在頭上標一個自己答案顏色的箭頭。
+ *
+ * 「還差一個」只說得出數字，說不出是誰。標出來之後旁邊的人會開口提醒他 ——
+ * 而「通關路徑上要有一步必須跟另一個人講話」正是本專案對新玩法的判準
+ * （見 INTERACTION-DESIGN）。
+ */
+function drawPendingMark(a, pos, height) {
+  const choice = pendingChoice.get(a.id);
+  if (choice === undefined) return;
+  const color = QUIZ_CHOICES[choice]?.color ?? '#E76F51';
+  // 尺寸抓角色高度的 0.17：再小就與名牌上的字混在一起，
+  // 投影到場地另一端時看不出那是一個記號還是一個像素雜點
+  const r = Math.max(8, height * 0.17);
+  const y = pos.y - height * 1.5;
+  // 浮動幅度很小，但它仍然是裝飾性動態 —— 使用者要求減少動態時就不要動
+  const bob = reducedMotion.matches ? 0 : Math.sin(performance.now() / 420 + pos.x) * r * 0.18;
+
+  ctx.save();
+  ctx.translate(0, bob);   // 緩慢上下浮動：靜止的畫面上，會動的東西才抓得到餘光
+  // 朝下的三角指著這個人，與他要去的那個圈同色 —— 顏色就是「你要去哪一圈」
+  ctx.beginPath();
+  ctx.moveTo(pos.x - r, y - r * 1.15);
+  ctx.lineTo(pos.x + r, y - r * 1.15);
+  ctx.lineTo(pos.x, y + r * 0.75);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = 'rgba(255,255,255,.9)';
+  ctx.lineWidth = Math.max(1.6, r * 0.28);
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+  ctx.fill();
+  ctx.restore();
+}
+
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+/** agentId → 選項索引。只放「答了但還沒走到」的人。 */
+const pendingChoice = new Map();
+
+function syncPendingChoice() {
+  pendingChoice.clear();
+  if (!surveyState?.requireArrival) return;
+  for (const p of surveyState.pending ?? []) pendingChoice.set(p.id, p.choice);
+}
+
 function drawSurveyZones() {
   if (!surveyState?.requireArrival || !optionsAreOnStage(surveyState.options)) return;
 
@@ -748,14 +795,29 @@ function drawSurveyZones() {
     const ry = Math.abs(toScreen({ x: prop.x, y: prop.y + reach }).y - pos.y) || rx * 0.6;
     if (!(rx > 0)) return;
 
+    // 湊齊了就換成實線 —— 虛線代表「還缺人」，實線代表「這一組到齊了」。
+    // 數字要看清楚得盯著螢幕，而一圈線的虛實在場地另一端也分得出來。
+    const chosen = surveyState.counts?.[i] ?? 0;
+    const here = surveyState.arrived?.[i] ?? 0;
+    const done = chosen > 0 && here >= chosen;
+
     ctx.save();
     ctx.beginPath();
     ctx.ellipse(pos.x, pos.y, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fillStyle = `${QUIZ_CHOICES[i].color}2E`;
+    ctx.fillStyle = `${QUIZ_CHOICES[i].color}${done ? '4D' : '33'}`;
     ctx.fill();
-    ctx.setLineDash([rx * 0.09, rx * 0.06]);
-    ctx.lineWidth = Math.max(2, rx * 0.035);
+    ctx.lineWidth = Math.max(3, rx * (done ? 0.07 : 0.055));
     ctx.strokeStyle = QUIZ_CHOICES[i].color;
+    if (!done) ctx.setLineDash([rx * 0.13, rx * 0.085]);
+    ctx.stroke();
+
+    // 內側再描一圈白：投影到深色地板與淺色地毯上時，單一顏色的線
+    // 在其中一種底色上一定會糊掉，而場景裡兩種底色都有
+    ctx.beginPath();
+    ctx.ellipse(pos.x, pos.y, rx * 0.955, ry * 0.955, 0, 0, Math.PI * 2);
+    ctx.setLineDash([]);
+    ctx.lineWidth = Math.max(1.5, rx * 0.02);
+    ctx.strokeStyle = 'rgba(255,255,255,.55)';
     ctx.stroke();
     ctx.restore();
   });
@@ -783,9 +845,11 @@ function drawSurveySpots(now) {
 
     const label = opt.label;
     // 要到場才算時，到位數才是成績；選了幾個人只是過程，所以排在後面且較小。
+    const chosen = counts[i] ?? 0;
+    const here = arrived[i] ?? 0;
     const count = needArrival
-      ? `${arrived[i] ?? 0} / ${counts[i] ?? 0}`
-      : `${counts[i] ?? 0} 人`;
+      ? `${here}/${chosen}${chosen > 0 && here >= chosen ? ' ✓' : ''}`
+      : `${chosen} 人`;
     ctx.save();
     ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
     const labelW = ctx.measureText(label).width;
@@ -1044,6 +1108,7 @@ function animateSurveyBar() {
 function showSurvey(state, { closed = false, durationMs = null } = {}) {
   clearTimeout(surveyHideTimer);
   surveyState = { ...state, durationMs: durationMs ?? surveyState?.durationMs ?? state.durationMs ?? 0 };
+  syncPendingChoice();
   if (!closed) {
     surveyDeadline = Date.now() + (state.remainingMs ?? 0);
     animateSurveyBar();
@@ -1087,6 +1152,7 @@ function hideSurvey() {
   clearTimeout(surveyHideTimer);
   cancelAnimationFrame(surveyRaf);
   surveyState = null;
+  syncPendingChoice();
   syncBanners();
 }
 

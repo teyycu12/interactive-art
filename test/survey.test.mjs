@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { SurveySession } from '../server/survey.js';
 import { SURVEY, SURVEY_BANK, SURVEY_BANK_MAP, surveysForTheme } from '../shared/surveys.js';
 import { PROPS } from '../shared/scene.js';
+import { STAGE } from '../shared/protocol.js';
+import { BOUNDARY_MARGIN } from '../server/config.js';
 import { THEME_MAP } from '../shared/themes.js';
 
 /** 題目選項指向的道具座標，供到位測試用 */
@@ -56,7 +58,7 @@ test('答案在作答當下就寫成標籤，不必等收題', () => {
   assert.equal(trait.value, 'cook');
   assert.equal(trait.label, '負責煮');
   // 地點跟著標籤一起存：集合任務要知道把這群人叫到哪個道具旁
-  assert.equal(trait.spot, 'tbl_3');
+  assert.equal(trait.spot, 'tbl_3');   // 負責煮 → 湯鍋
   assert.deepEqual(s.traitsOf('amy'), { kitchen_role: { value: 'cook', label: '負責煮' } });
 });
 
@@ -152,8 +154,16 @@ test('publicView 與 distribution 的形狀足夠三端顯示', () => {
 
 // ── 到場才算 ────────────────────────────────────────────────
 
-test('同一題的兩個集合點，圈圈不可以重疊', () => {
-  // 重疊的話，站在中間的人會同時落在兩個答案的範圍裡，兩群人也會黏成一團，
+/**
+ * 兩群人之間至少要留的距離（邏輯單位）。
+ *
+ * 不重疊只是最低標：圈圈相切時兩群人仍舊肩並肩站成一片，大螢幕上看不出
+ * 是兩群還是一群。150 大約是三個人的身體寬度，投影出去看得出中間有條縫。
+ */
+const COMFORTABLE_GAP = 150;
+
+test('同一題的集合點要分得夠開，不只是不重疊', () => {
+  // 擠在一起的話，站在中間的人會落在兩個答案的範圍邊緣，兩群人也會黏成一團，
   // 而「去跟答案一樣的人站在一起」正是這個玩法的全部意義。
   for (const q of SURVEY_BANK) {
     const spots = q.options.map((o) => o.spot).filter(Boolean).map(propAt);
@@ -161,8 +171,26 @@ test('同一題的兩個集合點，圈圈不可以重疊', () => {
       for (let j = i + 1; j < spots.length; j++) {
         const a = spots[i]; const b = spots[j];
         const gap = Math.hypot(a.x - b.x, a.y - b.y) - (a.r + SURVEY.arriveRadius) - (b.r + SURVEY.arriveRadius);
-        assert.ok(gap > 0, `${q.id}：${a.id} 與 ${b.id} 的集合範圍重疊了 ${Math.round(-gap)}`);
+        assert.ok(gap >= COMFORTABLE_GAP,
+          `${q.id}：${a.id} 與 ${b.id} 的集合範圍只隔 ${Math.round(gap)}，至少要 ${COMFORTABLE_GAP}`);
       }
+    }
+  }
+});
+
+test('集合點要走得到，不能落在場域邊界之外', () => {
+  // 角色被邊界力推回 BOUNDARY_MARGIN 以內，而道具的座標是美術擺的 ——
+  // 擺在邊界外的道具，圈圈畫得出來卻永遠沒有人進得去，
+  // 現場看到的是「那一欄的到位數停在 0」，看不出原因。
+  for (const q of SURVEY_BANK) {
+    for (const o of q.options) {
+      if (!o.spot) continue;
+      const p = propAt(o.spot);
+      const reach = p.r + SURVEY.arriveRadius;
+      const nearestX = Math.min(Math.max(p.x, BOUNDARY_MARGIN), STAGE.width - BOUNDARY_MARGIN);
+      const nearestY = Math.min(Math.max(p.y, BOUNDARY_MARGIN), STAGE.height - BOUNDARY_MARGIN);
+      const d = Math.hypot(p.x - nearestX, p.y - nearestY);
+      assert.ok(d < reach, `${q.id}：${o.spot} 離可走動範圍 ${Math.round(d)}，超過判定半徑 ${reach}`);
     }
   }
 });
@@ -228,4 +256,25 @@ test('改答案會把到位狀態歸零', () => {
   s.answer('amy', 1);
   assert.equal(s.isArrived('amy'), false);
   assert.equal(s.distribution().arrived[1], 0);
+});
+
+test('還沒走到的人要列進 pending，供大螢幕標在他們頭上', () => {
+  const s = new SurveySession();
+  s.start({ bankId: 'kitchen_role' });
+  s.answer('amy', 0); s.answer('bob', 0); s.answer('cody', 1);
+  const cook = propAt('tbl_3');
+  // 只有 amy 走到了
+  s.syncArrivals((id) => (id === 'amy' ? { x: cook.x, y: cook.y } : { x: 0, y: 0 }));
+
+  const d = s.distribution();
+  assert.deepEqual(d.pending.map((p) => p.id).sort(), ['bob', 'cody']);
+  assert.equal(d.pending.find((p) => p.id === 'cody').choice, 1, '要帶選項索引，大螢幕才知道標什麼顏色');
+  assert.ok(!d.pending.some((p) => p.id === 'amy'), '到了的人不該繼續被標記');
+});
+
+test('不要求到場的題目沒有 pending —— 那個記號在這種題目上沒有意義', () => {
+  const s = new SurveySession();
+  s.start({ bankId: 'chrono' });
+  s.answer('amy', 0);
+  assert.deepEqual(s.distribution().pending, []);
 });

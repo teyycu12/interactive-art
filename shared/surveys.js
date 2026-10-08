@@ -61,9 +61,12 @@ export const SURVEY_BANK = [
     key: 'kitchen_role',
     theme: 'kitchen',
     question: '在廚房裡，你通常負責什麼？',
+    // 地點刻意散在房間四角，不是挑語意最貼的那一個：洗手台就在湯鍋正下方
+    // （相距 218），兩個集合圈會重疊成一團，看不出誰屬於哪一邊。
+    // 「負責洗」因此擺到餐具櫃。見 INTERACTION-DESIGN 的半徑說明。
     options: [
       { value: 'cook', label: '負責煮', spot: 'tbl_3' },
-      { value: 'wash', label: '負責洗', spot: 'tbl_2' },
+      { value: 'wash', label: '負責洗', spot: 'k_dishes' },
       { value: 'eat', label: '負責吃', spot: 'k_dining' },
       { value: 'order', label: '負責訂外送', spot: 'k_cart' },
     ],
@@ -73,11 +76,13 @@ export const SURVEY_BANK = [
     key: 'team_role',
     theme: 'office',
     question: '在團隊裡，你比較像哪一種人？',
+    // 同上：會議桌緊鄰行動白板、3號工作桌緊鄰1號工作桌，原本四個圈擠成兩對。
+    // 改散到白板、工作桌、圓桌、咖啡販賣機四個角落。
     options: [
       { value: 'ideas', label: '出點子的', spot: 'k_cart' },
       { value: 'build', label: '做出來的', spot: 'tbl_1' },
-      { value: 'coord', label: '協調的', spot: 'k_island' },
-      { value: 'fix', label: '救火的', spot: 'tbl_3' },
+      { value: 'coord', label: '協調的', spot: 'k_dining' },
+      { value: 'fix', label: '救火的', spot: 'spk_r' },
     ],
   },
   {
