@@ -108,8 +108,25 @@ describe('場域佈局', () => {
       }
     }
     const reached = (x, y) => seen.has(key(Math.round(x / STEP), Math.round(y / STEP)));
-    assert.ok(reached(150, 600), '西側的室外區（菜園／大廳）從室內走不到');
+    // 取菜畦南邊那一點：它只能經由靠牆的那條走道走到，等於順便驗了
+    // 「道具沒有把室外區封死」
+    assert.ok(reached(250, 950), '西側的室外區（菜園／大廳）從室內走不到');
     assert.ok(reached(2450, 600), '東側的室外區（露台／遊戲間）從室內走不到');
+  });
+
+  test('室外的道具要留得下一條走道', () => {
+    // 西側可站的只有 0 到牆面那一段。道具再往右擺一點，靠牆那條走道就會窄到
+    // 角色擠不過去 —— 而症狀不是「卡住」，是整塊室外區沒有人進得去，
+    // 跟當初沒有門是同一個結果。
+    const wall = WALLS.find((w) => w.id.startsWith('wall_w'));
+    const face = wall.x - wall.r;
+    const west = PROPS.filter((prop) => prop.x < face);
+    assert.ok(west.length >= 3, '西側室外區應該要有道具可以當集合點');
+    for (const prop of west) {
+      const lane = face - (prop.x + prop.r);
+      assert.ok(lane >= 60, `${prop.id} 與牆之間只剩 ${lane}，走不過去`);
+      assert.ok(prop.x - prop.r >= 0, `${prop.id} 凸出場域左緣`);
+    }
   });
 
   test('門的淨寬容得下一個人走過去', () => {

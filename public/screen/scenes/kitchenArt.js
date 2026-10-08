@@ -61,26 +61,16 @@ function paintGarden(c) {
   for (let i = 0; i < 9; i++) oval(128 + Math.cos(i * .7) * 44, 132 + Math.sin(i * 1.3) * 34, 46, 40, ['#4f7a48', '#5f8c54', '#73a063'][i % 3]);
   for (let i = 0; i < 11; i++) { const x = 70 + hash(i, 31) * 116, y = 92 + hash(i, 32) * 84; oval(x, y, 7, 7, INK); oval(x, y - 1, 6, 6, '#eb9a3c'); rect(x - 3, y - 4, 3, 2, '#fbd08a'); }
 
-  // Raised vegetable beds: lettuce, tomatoes, carrots.
-  const bed = (y, kind) => {
-    rect(46, y + 8, 176, 122, '#3f53353a');
-    box(40, y, 176, 118, '#8f5f3d'); rect(40, y, 176, 5, '#b77f55'); rect(50, y + 12, 156, 96, '#5a4031');
-    for (let r = 0; r < 3; r++) for (let k = 0; k < 5; k++) {
-      const x = 68 + k * 30, yy = y + 34 + r * 30;
-      if (kind === 'lettuce') { oval(x, yy, 12, 10, '#6fa25c'); oval(x, yy - 2, 8, 6, '#9cc97a'); rect(x - 1, yy - 6, 2, 8, '#c9e2a4'); }
-      else if (kind === 'tomato') { leaf(x, yy, '#5f8c54'); oval(x - 5, yy + 2, 5, 5, '#d9493a'); oval(x + 5, yy - 3, 5, 5, '#e2613f'); rect(x - 6, yy - 1, 2, 2, '#f4a28c'); }
-      else { for (let j = 0; j < 3; j++) rect(x - 5 + j * 4, yy - 10, 2, 10, '#78ab5a'); rect(x - 4, yy, 9, 5, '#e98b3a'); }
-    }
-    box(164, y - 22, 52, 16, '#e8dfcc'); rect(188, y - 6, 4, 10, '#8f5f3d');
-    c.fillStyle = INK; c.font = 'bold 10px monospace'; c.textAlign = 'center'; c.fillText({ lettuce: 'LETTUCE', tomato: 'TOMATO', carrot: 'CARROT' }[kind], 190, y - 10);
-  };
-  bed(320, 'lettuce'); bed(510, 'tomato'); bed(700, 'carrot');
+  // 菜畦已經移到 PROPS（grd_1/2/3），由 paintKitchenProp 畫 ——
+  // 它們現在是真正的障礙物兼集合點，位置必須與伺服器判定的同一份座標一致。
+  // 原本的灑水壺也一併拿掉：它正好落在最下面那一畦的位置上。
 
-  // Watering can, wheelbarrow of pumpkins and a garden bench.
-  oval(96, 922, 26, 8, '#3f53353a'); box(78, 890, 34, 30, '#5f8fa5'); rect(78, 894, 34, 4, '#86b3c6'); line(112, 900, 132, 884, '#5f8fa5', 5); rect(130, 880, 8, 6, '#86b3c6'); c.strokeStyle = INK; c.lineWidth = 3; c.beginPath(); c.arc(95, 890, 14, Math.PI, 0); c.stroke();
+  // Wheelbarrow of pumpkins and a garden bench.
+  c.save(); c.translate(0, 56);
   oval(170, 1060, 64, 14, '#3f53353a'); box(110, 1010, 104, 44, '#c7c9c4'); rect(116, 1016, 92, 8, '#e4e6e1');
   line(214, 1020, 246, 1004, '#8f5f3d', 5); line(214, 1046, 246, 1062, '#8f5f3d', 5); oval(104, 1054, 14, 14, INK); oval(104, 1054, 9, 9, '#6c7478');
   for (const [x, col] of [[134, '#e98b3a'], [162, '#f0a24b'], [190, '#d9793a']]) { oval(x, 1008, 15, 12, INK); oval(x, 1007, 13, 10, col); rect(x - 1, 993, 3, 7, '#6b7a3c'); line(x - 6, 998, x - 6, 1016, '#c96f2c', 2); line(x + 6, 998, x + 6, 1016, '#c96f2c', 2); }
+  c.restore();
   box(54, 1150, 170, 18, '#b77f55'); box(54, 1128, 170, 14, '#9c6a46'); for (const x of [60, 212]) box(x, 1168, 8, 20, '#7a5638');
   // Flower bed and a birdbath.
   box(40, 1230, 190, 110, '#5a4031'); for (let i = 0; i < 36; i++) flower(rect, 54 + (i % 9) * 20, 1248 + Math.floor(i / 9) * 24 + (i % 2) * 5, ['#f0a0b4', '#f4e2a0', '#b9a3e3', '#f7f3ea', '#e2613f'][i % 5]);
@@ -364,7 +354,21 @@ export function paintKitchenProp(c,p,kind,elapsed,reduced) {
     box(-w/2,-65,w,30,top);rect(-w/2+2,-63,w-4,4,'#fff2d2');rect(-w/2+3,-38,w-6,4,'#b7a88b');
     for(let i=0;i<2;i++){box(-w/2+6+i*w/2,-26,w/2-12,35,color);rect(-w/2+10+i*w/2,-22,w/2-20,3,'#c0cdb0');rect(-w/2+15+i*w/2,-12,15,4,'#d9bd85');}
   };
-  if(kind==='herb'){
+  if(kind.startsWith('bed_')){
+    // 菜畦。三畦共用一段繪製，只有作物不同 —— 分成三個 kind 是為了讓
+    // 「番茄畦」在集合任務裡有自己的名字，不是為了三份畫法。
+    const crop=kind.slice(4);
+    box(-w/2,-78,w,92,'#8f5f3d');rect(-w/2,-78,w,5,'#b77f55');rect(-w/2+8,-68,w-16,74,'#5a4031');
+    for(let r=0;r<3;r++)for(let k=0;k<3;k++){
+      const x=-w/2+22+k*((w-44)/2),yy=-56+r*22;
+      if(crop==='lettuce'){oval(x,yy,11,9,'#6fa25c');oval(x,yy-2,7,6,'#9cc97a');rect(x-1,yy-6,2,8,'#c9e2a4');}
+      else if(crop==='tomato'){leaf(x,yy,'#5f8c54');oval(x-5,yy+2,5,5,'#d9493a');oval(x+5,yy-3,5,5,'#e2613f');}
+      else{for(let j=0;j<3;j++)rect(x-5+j*4,yy-10,2,10,'#78ab5a');rect(x-4,yy,9,5,'#e98b3a');}
+    }
+    box(w/2-48,-102,48,16,'#e8dfcc');rect(w/2-26,-86,4,10,'#8f5f3d');
+    c.fillStyle=INK;c.font='bold 10px monospace';c.textAlign='center';
+    c.fillText({lettuce:'LETTUCE',tomato:'TOMATO',carrot:'CARROT'}[crop]??'',w/2-24,-90);
+  } else if(kind==='herb'){
     box(-19,-12,38,31,'#ae7257');rect(-15,-7,5,23,'#d59a73');box(-23,-20,46,12,'#d79e75');
     rect(-3,-66,7,51,'#6b7751');
     const sway=active&&!reduced?Math.sin(elapsed*7)*5:0;
