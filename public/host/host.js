@@ -6,7 +6,7 @@
  * 光靠「網址沒人知道」保護不了任何東西。
  */
 
-import { EV, MISSION_TYPES, QUIZ, QUIZ_CHOICES, QUIZ_PHASE } from '/shared/protocol.js';
+import { EV, MISSION_TYPES, MISSION_DURATIONS, QUIZ, QUIZ_CHOICES, QUIZ_PHASE } from '/shared/protocol.js';
 import { renderAvatarSVG, CV_FULL_PART } from '/shared/avatars.js';
 import { COLOR_FAMILIES } from '/shared/colorFamily.js';
 import { HEAT_LEVELS } from '/shared/heat.js';
@@ -63,14 +63,17 @@ function handle(msg, key) {
       $('#auth').hidden = true;
       $('#console').hidden = false;
       setConn('已連線', false);
-      loadHistory();
-      startHistoryPolling();
+      // 生成歷史不在這裡載入：它收在「系統」分頁，切過去才開始輪詢
+      if (activeTab === 'system') startHistoryPolling();
       break;
 
     case EV.HOST_REJECT:
       // 認證前的拒絕代表密鑰錯誤；認證後的拒絕來自任務或問答的發布失敗
       if (!authed) { showAuthError(msg.reason ?? '通行密鑰錯誤'); ws.close(); }
-      else showError(msg.reason ?? '操作失敗');
+      else {
+        undoRunSheetStep();
+        showError(msg.reason ?? '操作失敗');
+      }
       break;
 
     case EV.HOST_STATE:
@@ -137,7 +140,7 @@ function handle(msg, key) {
       break;
 
     case EV.MISSION_CLOSED:
-      pushFeed(`結算「${msg.title}」，共 ${msg.totalCompletions} 次完成`, 'ev-mission');
+      pushFeed(`${msg.by === 'time' ? '時間到，' : ''}結算「${msg.title}」，共 ${msg.totalCompletions} 次完成`, 'ev-mission');
       renderMission(null);
       break;
 
@@ -171,6 +174,10 @@ function handle(msg, key) {
 
     case EV.HOST_PHOTO_STATE:
       renderPhotoState(msg);
+      break;
+
+    case EV.HOST_REPORT:
+      renderReport(msg.format, msg.report);
       break;
   }
 }
@@ -239,6 +246,8 @@ const ERR_SLOT = {
   treasure: '#treasure-err',
   harvest: '#harvest-err',
   mission: '#mission-err',
+  runsheet: '#rs-err',
+  report: '#report-err',
 };
 
 /**
@@ -444,14 +453,24 @@ $('#survey-arrive').addEventListener('change', (e) => {
   if (!e.target.disabled) arriveWanted = e.target.checked;
 });
 
+function surveyStep() {
+  const q = SURVEY_BANK_MAP[$('#survey-pick').value];
+  const requireArrival = $('#survey-arrive').checked;
+  return {
+    kind: 'survey',
+    label: `${q?.question ?? '問卷'}${requireArrival ? '（要走到定點）' : ''}`,
+    msg: {
+      type: EV.HOST_START_SURVEY,
+      bankId: $('#survey-pick').value,
+      requireArrival,
+      durationMs: Number($('#survey-duration').value),
+    },
+  };
+}
+
 $('#btn-survey-start').addEventListener('click', () => {
   lastAction = 'survey';
-  ws?.send(JSON.stringify({
-    type: EV.HOST_START_SURVEY,
-    bankId: $('#survey-pick').value,
-    requireArrival: $('#survey-arrive').checked,
-    durationMs: Number($('#survey-duration').value),
-  }));
+  ws?.send(JSON.stringify(surveyStep().msg));
 });
 
 $('#btn-survey-close').addEventListener('click', () => {
@@ -507,26 +526,74 @@ function syncBrief() {
 }
 $('#mission-type').addEventListener('change', syncBrief);
 
+(function buildMissionDurations() {
+  const sel = $('#mission-duration');
+  for (const ms of MISSION_DURATIONS) {
+    const o = document.createElement('option');
+    o.value = String(ms);
+    o.textContent = ms ? `${ms / 60000} 分鐘後自動結算` : '不限時（手動結算）';
+    sel.append(o);
+  }
+})();
+
+/** 依目前表單組出發布訊息。直接發布與「加入節目單」共用，兩邊才不會漂移。 */
+function missionStep() {
+  const t = missionTypes.find((m) => m.id === $('#mission-type').value);
+  const target = Number($('#mission-target').value);
+  const durationMs = Number($('#mission-duration').value);
+  const color = t?.param === 'colorFamily'
+    ? COLOR_FAMILIES.find((f) => f.id === pickedColor) : null;
+  return {
+    kind: 'mission',
+    label: [t?.label ?? '任務', color?.label, `每人 ${target} 次`, durationMs ? `${durationMs / 60000} 分鐘` : null]
+      .filter(Boolean).join('・'),
+    msg: {
+      type: EV.HOST_PUBLISH_MISSION,
+      missionType: $('#mission-type').value,
+      target,
+      // 不需要顏色的型別送 null，伺服器會忽略
+      colorFamily: color ? pickedColor : null,
+      durationMs,
+    },
+  };
+}
+
 $('#btn-publish').addEventListener('click', () => {
   lastAction = 'mission';
-  const t = missionTypes.find((m) => m.id === $('#mission-type').value);
-  ws?.send(JSON.stringify({
-    type: EV.HOST_PUBLISH_MISSION,
-    missionType: $('#mission-type').value,
-    target: Number($('#mission-target').value),
-    // 不需要顏色的型別送 null，伺服器會忽略
-    colorFamily: t?.param === 'colorFamily' ? pickedColor : null,
-  }));
+  ws?.send(JSON.stringify(missionStep().msg));
 });
 
 $('#btn-close').addEventListener('click', () => {
+  // 還有人沒達標時多問一句：結算之後進度就收掉了，現場沒有「取消結算」
+  const left = lastMission ? lastMission.totalAgents - lastMission.finished : 0;
+  if (left > 0 && !confirm(`還有 ${left} 人沒達標，確定要現在結算嗎？`)) return;
   ws?.send(JSON.stringify({ type: EV.HOST_CLOSE_MISSION }));
 });
+
+let lastMission = null;
+let missionTimer = null;
 
 function renderMission(m) {
   const idle = $('#mission-idle');
   const live = $('#mission-live');
+  lastMission = m;
+  clearInterval(missionTimer);
+  missionTimer = null;
   if (!m) { idle.hidden = false; live.hidden = true; return; }
+
+  // 倒數以收到狀態的當下 + remainingMs 換算（同問答），每次狀態更新都重新對齊
+  const timer = $('#live-timer');
+  timer.hidden = m.remainingMs == null;
+  if (m.remainingMs != null) {
+    const end = Date.now() + m.remainingMs;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((end - Date.now()) / 1000));
+      timer.textContent = `剩 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+      timer.classList.toggle('urgent', left <= 30);
+    };
+    tick();
+    missionTimer = setInterval(tick, 1000);
+  }
 
   idle.hidden = true;
   live.hidden = false;
@@ -648,6 +715,7 @@ $('#btn-harvest-start').addEventListener('click', () => {
 });
 
 $('#btn-harvest-stop').addEventListener('click', () => {
+  if (!confirm('確定要中止這一輪採收嗎？已經採的不會給分。')) return;
   ws?.send(JSON.stringify({ type: EV.HOST_STOP_HARVEST }));
 });
 
@@ -660,6 +728,7 @@ $('#btn-treasure-start').addEventListener('click', () => {
 });
 
 $('#btn-treasure-stop').addEventListener('click', () => {
+  if (!confirm('確定要中止這一輪尋寶嗎？寶箱位置不會公布。')) return;
   ws?.send(JSON.stringify({ type: EV.HOST_STOP_TREASURE }));
 });
 
@@ -669,7 +738,10 @@ function renderState(state) {
   $('#stat-people').textContent = state.agents.length;
   $('#stat-edges').textContent = state.graphEdges;
   $('#people-count').textContent = state.agents.length;
+  $('#tab-people-count').textContent = state.agents.length;
   $('#people-empty').hidden = state.agents.length > 0;
+  // 沒有人時連表頭都不顯示，只剩一行「還沒有人進場」
+  $('#people-wrap').hidden = state.agents.length === 0;
 
   const body = $('#people-body');
   body.replaceChildren();
@@ -772,7 +844,13 @@ const STATUS_LABEL = {
 
 function startHistoryPolling() {
   if (historyPollTimer) return;
+  loadHistory();
   historyPollTimer = setInterval(loadHistory, HISTORY_POLL_MS);
+}
+
+function stopHistoryPolling() {
+  clearInterval(historyPollTimer);
+  historyPollTimer = null;
 }
 
 async function loadHistory() {
@@ -880,21 +958,93 @@ function renderHistory(items) {
 
 $('#btn-history-refresh').addEventListener('click', loadHistory);
 
-const historyToggle = $('#btn-history-toggle');
-const historyWrap = $('#history-wrap');
-historyToggle.addEventListener('click', () => {
-  const nowCollapsed = historyWrap.classList.toggle('is-collapsed');
-  historyToggle.textContent = nowCollapsed ? '展開列表' : '收合列表';
-  historyToggle.setAttribute('aria-expanded', String(!nowCollapsed));
-});
+// ─────────────────────────────────────────────────────────────
+// 分頁與玩法切換
+//
+// 分頁只是換顯示，不影響任何進行中的活動。玩法同理：切到別的玩法
+// 不會中止正在跑的那一個，所以進行中的玩法在選單與「帶活動」分頁上
+// 各有一顆亮點 —— 主辦者切走之後才找得回來。
+// ─────────────────────────────────────────────────────────────
+const TABS = ['play', 'people', 'stage', 'system'];
+let activeTab = 'play';
+
+function selectTab(id, focus = false) {
+  activeTab = id;
+  for (const t of TABS) {
+    const btn = $(`#tab-btn-${t}`);
+    const on = t === id;
+    btn.setAttribute('aria-selected', String(on));
+    btn.tabIndex = on ? 0 : -1;
+    $(`#tab-${t}`).hidden = !on;
+    if (on && focus) btn.focus();
+  }
+  if (id === 'system' && authed) startHistoryPolling();
+  else stopHistoryPolling();
+}
+
+for (const t of TABS) {
+  const btn = $(`#tab-btn-${t}`);
+  btn.addEventListener('click', () => selectTab(t));
+  // WAI-ARIA tabs：左右鍵在分頁間移動
+  btn.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    selectTab(TABS[(TABS.indexOf(t) + step + TABS.length) % TABS.length], true);
+  });
+}
+
+function selectActivity(act) {
+  for (const c of document.querySelectorAll('.act-chip')) {
+    c.setAttribute('aria-pressed', String(c.dataset.act === act));
+  }
+  for (const p of document.querySelectorAll('.act-panel')) {
+    p.hidden = p.dataset.act !== act;
+  }
+}
+
+for (const c of document.querySelectorAll('.act-chip')) {
+  c.addEventListener('click', () => selectActivity(c.dataset.act));
+}
+
+/** 各玩法「進行中」的畫面。看它的 hidden 就知道該玩法有沒有在跑。 */
+const LIVE_VIEW = {
+  mission: '#mission-live',
+  survey: '#survey-live',
+  treasure: '#treasure-live',
+  harvest: '#harvest-live',
+  quiz: '#quiz-live',
+};
+
+// 用 MutationObserver 而不是在每個 render 函式裡補一行：
+// 新增玩法時只要在 LIVE_VIEW 登記，不必記得去改好幾個地方
+const wasLive = {};
+function syncLiveDots() {
+  let any = false;
+  const picked = $('.act-chip[aria-pressed="true"]')?.dataset.act;
+  for (const [act, sel] of Object.entries(LIVE_VIEW)) {
+    const live = !$(sel).hidden;
+    any ||= live;
+    $(`.act-chip[data-act="${act}"] .live-dot`).hidden = !live;
+    // 剛開始跑的玩法自動切過去（主辦端重新整理後才接得回進行中的那一個），
+    // 但目前看的玩法本身在跑時不搶畫面
+    if (live && !wasLive[act] && act !== picked && !wasLive[picked]) selectActivity(act);
+    wasLive[act] = live;
+  }
+  $('#play-live-dot').hidden = !any;
+}
+const liveObserver = new MutationObserver(syncLiveDots);
+for (const sel of Object.values(LIVE_VIEW)) {
+  liveObserver.observe($(sel), { attributes: true, attributeFilter: ['hidden'] });
+}
 
 // ─────────────────────────────────────────────────────────────
 // 現場動態
 // ─────────────────────────────────────────────────────────────
 function pushFeed(text, cls) {
   const ul = $('#feed');
-  const empty = ul.querySelector('.ev-empty');
-  if (empty) empty.remove();
+  // 刪整列而不只是那段字：只刪 span 會留下一行只有時間的空白紀錄
+  ul.querySelector('.ev-empty')?.closest('li')?.remove();
 
   const li = document.createElement('li');
   const t = document.createElement('time');
@@ -1022,13 +1172,25 @@ function packDraft(d) {
   return { question: d.question, options: kept, correctIndex, durationMs: d.durationMs };
 }
 
-$('#btn-quiz-start').addEventListener('click', () => {
-  const draft = readDraft();
+/** 題目 → 節目單步驟。不合法時回傳 null 並把原因顯示在問答面板 */
+function quizStep(draft) {
   const err = validateDraft(draft);
-  if (err) { showError(err, '#quiz-err'); return; }
+  if (err) { showError(err, '#quiz-err'); return null; }
+  return {
+    kind: 'quiz',
+    label: draft.question,   // 只放題目不放正解：節目單在投影模式下也看得到
+    msg: { type: EV.HOST_START_QUIZ, ...packDraft(draft) },
+  };
+}
+
+function startQuiz(draft) {
+  const step = quizStep(draft);
+  if (!step) return;
   lastAction = 'quiz';
-  ws?.send(JSON.stringify({ type: EV.HOST_START_QUIZ, ...packDraft(draft) }));
-});
+  ws?.send(JSON.stringify(step.msg));
+}
+
+$('#btn-quiz-start').addEventListener('click', () => startQuiz(readDraft()));
 
 $('#btn-quiz-save').addEventListener('click', () => {
   const draft = readDraft();
@@ -1064,7 +1226,14 @@ function renderBank() {
     q.className = 'q';
     q.textContent = item.question;  // 主辦者自己打的字，仍一律走 textContent
 
+    // 直接出題不經過編輯區：投影模式下編輯區藏起來了（裡面標著正解），
+    // 只能從這裡出題
+    const go = document.createElement('button');
+    go.textContent = '出題';
+    go.addEventListener('click', () => startQuiz({ durationMs: QUIZ.defaultDurationMs, ...item }));
+
     const use = document.createElement('button');
+    use.className = 'bank-load';
     use.textContent = '載入';
     use.addEventListener('click', () => writeDraft(item));
 
@@ -1077,7 +1246,7 @@ function renderBank() {
       saveBank(next);
     });
 
-    li.append(q, use, del);
+    li.append(q, go, use, del);
     ul.append(li);
   });
 }
@@ -1211,3 +1380,245 @@ function renderRanks(rows) {
 
 buildOptionRows();
 renderBank();
+
+// ─────────────────────────────────────────────────────────────
+// 節目單
+//
+// 主持人在現場要一邊對著全場講話一邊操作，少想一步就少出一次錯。
+// 活動前在各玩法按「加入節目單」，把當下的設定原封不動存成一則訊息；
+// 現場按「下一項」就是把那則訊息送出去，與直接按該玩法的按鈕完全相同。
+// 存在這台電腦的瀏覽器裡（同題庫），伺服器重開也不會掉。
+// ─────────────────────────────────────────────────────────────
+const RS_KEY = 'personaflow.runSheet';
+const RS_KIND = {
+  mission: '任務', survey: '問卷', treasure: '尋寶', harvest: '採水果',
+  quiz: '問答', photo: '合照', theme: '場景',
+};
+
+function loadRunSheet() {
+  try {
+    const v = JSON.parse(localStorage.getItem(RS_KEY) ?? 'null');
+    if (v && Array.isArray(v.steps)) return { steps: v.steps, pointer: Number(v.pointer) || 0 };
+  } catch { /* 略 */ }
+  return { steps: [], pointer: 0 };
+}
+function saveRunSheet(rs) {
+  try { localStorage.setItem(RS_KEY, JSON.stringify(rs)); } catch { /* 略 */ }
+  renderRunSheet();
+}
+
+function addStep(step) {
+  if (!step) return;
+  const rs = loadRunSheet();
+  rs.steps.push(step);
+  saveRunSheet(rs);
+  pushFeed(`節目單加入：${RS_KIND[step.kind]}　${step.label}`, 'ev-plan');
+}
+
+const STEP_BUILDERS = {
+  mission: missionStep,
+  survey: surveyStep,
+  quiz: () => quizStep(readDraft()),
+  // 先知不存特定的人：排節目單的時候，那個人可能還沒進場
+  treasure: () => ({ kind: 'treasure', label: '尋寶（先知隨機）', msg: { type: EV.HOST_START_TREASURE, prophetId: null } }),
+  harvest: () => ({ kind: 'harvest', label: '採水果', msg: { type: EV.HOST_START_HARVEST } }),
+};
+for (const btn of document.querySelectorAll('[data-rs-add]')) {
+  btn.addEventListener('click', () => addStep(STEP_BUILDERS[btn.dataset.rsAdd]()));
+}
+
+$('#btn-rs-add-photo').addEventListener('click', () => {
+  addStep({ kind: 'photo', label: '拍大合照', msg: { type: EV.HOST_TAKE_PHOTO } });
+});
+$('#btn-rs-add-theme').addEventListener('click', () => {
+  const t = THEMES.find((x) => x.id === $('#rs-theme').value);
+  if (t) addStep({ kind: 'theme', label: `切換到「${t.label}」`, msg: { type: EV.HOST_SET_THEME, theme: t.id } });
+});
+for (const t of THEMES) {
+  const o = document.createElement('option');
+  o.value = t.id;
+  o.textContent = t.label;
+  $('#rs-theme').append(o);
+}
+
+/** 剛送出的那一項。伺服器拒絕時要把指標退回來，否則那一項就被跳過了 */
+let rsPending = null;
+let rsPendingTimer = null;
+
+function runNextStep() {
+  const rs = loadRunSheet();
+  const step = rs.steps[rs.pointer];
+  if (!step || !ws) return;
+  lastAction = 'runsheet';
+  rsPending = rs.pointer;
+  clearTimeout(rsPendingTimer);
+  // 拒絕會在一個來回內到；過了這段時間就當作成功
+  rsPendingTimer = setTimeout(() => { rsPending = null; }, 1500);
+
+  if (step.kind === 'photo') {
+    $('#btn-photo').click();
+    selectTab('stage');     // 合照結果在那一頁
+  } else {
+    ws.send(JSON.stringify(step.msg));
+    if (LIVE_VIEW[step.kind]) selectActivity(step.kind);
+  }
+  saveRunSheet({ ...rs, pointer: rs.pointer + 1 });
+}
+
+function undoRunSheetStep() {
+  if (rsPending === null) return;
+  const rs = loadRunSheet();
+  saveRunSheet({ ...rs, pointer: rsPending });
+  rsPending = null;
+}
+
+$('#btn-rs-next').addEventListener('click', runNextStep);
+$('#btn-rs-reset').addEventListener('click', () => saveRunSheet({ ...loadRunSheet(), pointer: 0 }));
+
+function smallBtn(text, label, onClick) {
+  const b = document.createElement('button');
+  b.className = 'rs-mini';
+  b.textContent = text;
+  b.setAttribute('aria-label', label);
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function renderRunSheet() {
+  const rs = loadRunSheet();
+  const ol = $('#rs-list');
+  ol.replaceChildren();
+  $('#rs-count').textContent = rs.steps.length;
+  $('#rs-empty').hidden = rs.steps.length > 0;
+  $('#btn-rs-reset').hidden = rs.pointer === 0;
+
+  rs.steps.forEach((step, i) => {
+    const li = document.createElement('li');
+    li.className = i < rs.pointer ? 'done' : i === rs.pointer ? 'next' : '';
+
+    // 點文字＝下一項從這裡開始（跳過或重來某一項都靠它）
+    const label = document.createElement('button');
+    label.className = 'rs-label';
+    label.title = '下一項從這裡開始';
+    const kind = document.createElement('span');
+    kind.className = 'rs-kind';
+    kind.textContent = RS_KIND[step.kind] ?? step.kind;
+    const text = document.createElement('span');
+    text.className = 'rs-text';
+    text.textContent = step.label;   // 可能含主辦者打的題目，一律 textContent
+    label.append(kind, text);
+    label.addEventListener('click', () => saveRunSheet({ ...loadRunSheet(), pointer: i }));
+
+    const move = (d) => () => {
+      const cur = loadRunSheet();
+      const j = i + d;
+      if (j < 0 || j >= cur.steps.length) return;
+      [cur.steps[i], cur.steps[j]] = [cur.steps[j], cur.steps[i]];
+      saveRunSheet(cur);
+    };
+    const del = () => {
+      const cur = loadRunSheet();
+      cur.steps.splice(i, 1);
+      if (i < cur.pointer) cur.pointer--;
+      saveRunSheet(cur);
+    };
+
+    li.append(
+      label,
+      smallBtn('↑', `把「${step.label}」往前移`, move(-1)),
+      smallBtn('↓', `把「${step.label}」往後移`, move(1)),
+      smallBtn('✕', `從節目單刪除「${step.label}」`, del),
+    );
+    ol.append(li);
+  });
+
+  const next = rs.steps[rs.pointer];
+  const btn = $('#btn-rs-next');
+  btn.hidden = rs.steps.length === 0;
+  btn.disabled = !next;
+  btn.textContent = next
+    ? `下一項：${RS_KIND[next.kind]}　${next.label}`
+    : '節目單已經跑完';
+}
+
+// ─────────────────────────────────────────────────────────────
+// 投影模式
+//
+// 主辦端的螢幕在現場常常被投影出去。這時編輯區裡標著的正解、
+// 名單上的「移除」鍵、生成花費都不該出現在全場面前 —— 一次誤按或
+// 一題被看光都沒有補救。只藏東西，不改任何行為。
+// ─────────────────────────────────────────────────────────────
+const PROJ_KEY = 'personaflow.projector';
+
+function setProjector(on) {
+  document.body.classList.toggle('projector', on);
+  $('#btn-projector').setAttribute('aria-pressed', String(on));
+  $('#projector-banner').hidden = !on;
+  if (on && activeTab === 'system') selectTab('play');
+  try { localStorage.setItem(PROJ_KEY, on ? '1' : '0'); } catch { /* 略 */ }
+}
+
+$('#btn-projector').addEventListener('click', () => {
+  setProjector(!document.body.classList.contains('projector'));
+});
+
+// ─────────────────────────────────────────────────────────────
+// 活動報告
+// ─────────────────────────────────────────────────────────────
+for (const [id, format] of [['#btn-report-people', 'people'], ['#btn-report-activities', 'activities']]) {
+  $(id).addEventListener('click', () => {
+    lastAction = 'report';
+    ws?.send(JSON.stringify({ type: EV.HOST_REQUEST_REPORT, format }));
+  });
+}
+
+const fmtTime = (ms) => (ms ? new Date(ms).toLocaleString('zh-TW', { hour12: false }) : '');
+
+/** CSV 欄位跳脫。名字是參與者自填的，可能含逗號、引號或換行 */
+function csvCell(v) {
+  const s = String(v ?? '');
+  // 以 = + - @ 開頭的內容在 Excel 裡會被當成公式執行（CSV injection），前面墊一個單引號
+  const safe = /^[=+\-@]/.test(s) ? `'${s}` : s;
+  return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+function downloadCsv(name, rows) {
+  // BOM：沒有它 Excel 會用系統編碼開檔，中文全變亂碼
+  const text = '﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function renderReport(format, report) {
+  if (!report) return;
+  const s = report.summary;
+  const sum = $('#report-summary');
+  sum.textContent = `共 ${s.participants} 人參與（目前在場 ${s.present}）・社交連結 ${s.edges} 條・`
+    + `${s.isolated} 人整場沒有配對過・任務 ${s.missions} 輪、問答 ${s.quizzes} 題、問卷 ${s.surveys} 題`;
+  sum.hidden = false;
+
+  const d = new Date(report.generatedAt);
+  const two = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
+  if (format === 'activities') {
+    downloadCsv(`personaflow-活動紀錄-${stamp}.csv`, [
+      ['類型', '內容', '開始', '結束', '參與人數', '結果'],
+      ...report.activities.map((a) => [a.kind, a.title, fmtTime(a.startedAt), fmtTime(a.endedAt), a.participants, a.result]),
+    ]);
+  } else {
+    downloadCsv(`personaflow-參與者-${stamp}.csv`, [
+      ['名稱', '目前在場', '積分', '社交連結', '任務完成次數', '問答作答', '問答答對', '問卷標籤'],
+      ...report.people.map((p) => [
+        p.name || '（已離場）', p.present ? '是' : '否', p.score, p.connections,
+        p.missionCompletions, p.quizAnswered, p.quizCorrect, p.surveyTags.join('、'),
+      ]),
+    ]);
+  }
+}
+
+renderRunSheet();
+try { if (localStorage.getItem(PROJ_KEY) === '1') setProjector(true); } catch { /* 略 */ }

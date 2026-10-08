@@ -24,57 +24,106 @@
 </section>
 
 <!-- ── 控制台 ───────────────────────────────────────────── -->
+<!-- 版面依「主辦者現在要做什麼」分頁，而不是把所有面板攤在同一頁：
+     帶活動時只看得到一個玩法；生成歷史（模型、token、花費）是給技術人員的，
+     收在「系統」分頁，現場主持不必看到。右側欄的排行與動態每一頁都看得到。 -->
 <section id="console" hidden>
   <header class="topbar">
     <div>
       <h1>主辦端控制台</h1>
       <p class="sub" id="conn-status">已連線</p>
     </div>
-    <div class="stats">
-      <div class="stat"><b id="stat-people">0</b><span>在場</span></div>
-      <div class="stat"><b id="stat-edges">0</b><span>社交連結</span></div>
-      <div class="stat"><b id="stat-questions">0</b><span>已出題</span></div>
+    <div class="topbar-right">
+      <div class="stats">
+        <div class="stat"><b id="stat-people">0</b><span>在場</span></div>
+        <div class="stat"><b id="stat-edges">0</b><span>社交連結</span></div>
+        <div class="stat"><b id="stat-questions">0</b><span>已出題</span></div>
+      </div>
+      <!-- 主辦端畫面常常被投影出去：打開後藏起正解、移除鍵與系統分頁 -->
+      <button class="btn-projector" id="btn-projector" aria-pressed="false"
+              title="藏起問答正解、移除參與者按鈕與系統分頁">投影模式</button>
     </div>
   </header>
+  <p class="projector-banner" id="projector-banner" hidden>投影模式中：問答正解、移除按鈕與系統分頁已隱藏。出題請用題庫或節目單。</p>
 
-  <div class="cols">
+  <nav class="tabs" role="tablist" aria-label="控制台分頁">
+    <button role="tab" id="tab-btn-play" aria-controls="tab-play" aria-selected="true">帶活動<i class="live-dot" id="play-live-dot" hidden></i></button>
+    <button role="tab" id="tab-btn-people" aria-controls="tab-people" aria-selected="false" tabindex="-1">參與者 <span class="count" id="tab-people-count">0</span></button>
+    <button role="tab" id="tab-btn-stage" aria-controls="tab-stage" aria-selected="false" tabindex="-1">場景與合照</button>
+    <button role="tab" id="tab-btn-system" class="tab-quiet" aria-controls="tab-system" aria-selected="false" tabindex="-1">系統</button>
+  </nav>
 
-   <div class="col">
-    <!-- 場景主題：切換大螢幕的背景，依活動場合挑選 -->
-    <div class="panel">
-      <h2>場景主題</h2>
-      <p class="hint">依活動場合切換大螢幕的背景。角色、分數與進行中的任務都不受影響。</p>
-      <div class="theme-list" id="theme-list" role="group" aria-label="場景主題"></div>
-      <p class="err" id="theme-err" hidden></p>
-    </div>
+  <div class="layout">
+   <main class="main">
+
+    <!-- ═══ 帶活動：一次只看一個玩法 ═══ -->
+    <div role="tabpanel" id="tab-play" aria-labelledby="tab-btn-play">
+      <!-- 節目單：活動前排好流程，現場只按「下一項」。存在這台電腦的瀏覽器裡（同題庫）。 -->
+      <div class="panel runsheet">
+        <div class="panel-head">
+          <h2>節目單 <span class="count" id="rs-count">0</span></h2>
+          <button class="btn-link" id="btn-rs-reset" hidden>從頭開始</button>
+        </div>
+        <p class="hint" id="rs-empty">活動前先把流程排好，現場只要按「下一項」。
+          在下面各玩法按「加入節目單」，就會照目前的設定排進來。</p>
+        <ol class="rs-list" id="rs-list"></ol>
+        <button class="btn-primary" id="btn-rs-next" hidden>下一項</button>
+        <div class="rs-add">
+          <button class="btn-ghost" id="btn-rs-add-photo">＋ 拍大合照</button>
+          <button class="btn-ghost" id="btn-rs-add-theme">＋ 切換場景</button>
+          <select id="rs-theme" aria-label="要切換到的場景"></select>
+        </div>
+        <p class="err" id="rs-err" hidden></p>
+      </div>
+
+      <div class="act-picker" role="group" aria-label="選擇玩法">
+        <button class="act-chip" data-act="mission" aria-pressed="true">任務<i class="live-dot" hidden></i></button>
+        <button class="act-chip" data-act="survey" aria-pressed="false">轉場問卷<i class="live-dot" hidden></i></button>
+        <button class="act-chip" data-act="treasure" aria-pressed="false">尋寶<i class="live-dot" hidden></i></button>
+        <button class="act-chip" data-act="harvest" aria-pressed="false">採水果<i class="live-dot" hidden></i></button>
+        <button class="act-chip" data-act="quiz" aria-pressed="false">即時問答<i class="live-dot" hidden></i></button>
+      </div>
 
     <!-- 任務控制 -->
-    <div class="panel">
+    <div class="panel act-panel" data-act="mission">
       <h2>任務</h2>
 
       <div id="mission-idle">
-        <p class="hint">目前沒有進行中的任務。同時只能有一項任務進行，
-          這符合實體活動「宣布 → 執行 → 收掉 → 下一項」的節奏。</p>
+        <details class="howto">
+          <summary>玩法說明</summary>
+          <p>同時只能有一項任務進行，這符合實體活動「宣布 → 執行 → 收掉 → 下一項」的節奏。</p>
+        </details>
         <label class="field">
           <span>任務類型</span>
           <select id="mission-type"></select>
         </label>
         <p class="brief" id="mission-brief"></p>
-        <label class="field" id="mission-color-field" hidden>
+        <!-- div 而非 label：label 裡包按鈕時，點標題字會誤選第一個顏色 -->
+        <div class="field" id="mission-color-field" hidden>
           <span>要找的顏色</span>
-          <div class="color-picker" id="mission-color"></div>
-        </label>
+          <div class="color-picker" id="mission-color" role="group" aria-label="要找的顏色"></div>
+        </div>
         <label class="field">
           <span>每人目標次數</span>
           <input type="number" id="mission-target" min="1" max="10" value="2">
         </label>
-        <button class="btn-primary" id="btn-publish">發布任務</button>
+        <label class="field">
+          <span>時間限制</span>
+          <select id="mission-duration"></select>
+        </label>
+        <div class="row-actions">
+          <button class="btn-primary" id="btn-publish">發布任務</button>
+          <button class="btn-ghost" data-rs-add="mission">加入節目單</button>
+        </div>
       </div>
 
       <div id="mission-live" hidden>
         <div class="live-head">
           <b id="live-title">—</b>
-          <span class="tag" id="live-target">—</span>
+          <span class="tags-inline">
+            <span class="tag tag-timer" id="live-timer" hidden>—</span>
+            <span class="tag" id="live-target">—</span>
+          </span>
         </div>
         <div class="progress-row">
           <div class="bar"><i id="live-bar"></i></div>
@@ -88,12 +137,15 @@
     </div>
 
     <!-- 轉場問卷：沒有正解的題目，答案留成參與者身上的標籤 -->
-    <div class="panel">
+    <div class="panel act-panel" data-act="survey" hidden>
       <h2>轉場問卷</h2>
 
       <div id="survey-idle">
-        <p class="hint">切換場景的空檔問一題。沒有正解、不計分，答案會留成參與者身上的標籤，
-          之後的任務可以用「答某個選項的人」當條件。</p>
+        <details class="howto">
+          <summary>玩法說明</summary>
+          <p>切換場景的空檔問一題。沒有正解、不計分，答案會留成參與者身上的標籤，
+            之後的任務可以用「答某個選項的人」當條件。</p>
+        </details>
         <label class="field">
           <span>題目</span>
           <select id="survey-pick"></select>
@@ -114,7 +166,10 @@
         </label>
         <p class="hint" id="survey-arrive-note">選項都綁了場景裡的地點時才能勾。
           不勾就只是在手機上按一下，全場不會有人站起來。</p>
-        <button class="btn-primary" id="btn-survey-start">出題</button>
+        <div class="row-actions">
+          <button class="btn-primary" id="btn-survey-start">出題</button>
+          <button class="btn-ghost" data-rs-add="survey">加入節目單</button>
+        </div>
       </div>
 
       <div id="survey-live" hidden>
@@ -131,18 +186,24 @@
     </div>
 
     <!-- 尋寶（先知模式）-->
-    <div class="panel">
+    <div class="panel act-panel" data-act="treasure" hidden>
       <h2>尋寶</h2>
       <div id="treasure-idle">
-        <p class="hint">隨機藏一個寶箱，並指定一位「先知」。
-          <b>只有先知看得到冷熱提示，而且先知本人不能得分</b> ——
-          他必須用喊的把其他人導過去。這是讓現場開口講話的關鍵，
-          若讓先知也能得分，他會自己走過去而不是喊出來。</p>
+        <p class="hint">隨機藏一個寶箱，指定一位「先知」用喊的把大家導過去。</p>
+        <details class="howto">
+          <summary>為什麼先知不能得分</summary>
+          <p><b>只有先知看得到冷熱提示，而且先知本人不能得分</b> ——
+            他必須用喊的把其他人導過去。這是讓現場開口講話的關鍵，
+            若讓先知也能得分，他會自己走過去而不是喊出來。</p>
+        </details>
         <label class="field">
           <span>先知</span>
           <select id="treasure-prophet"><option value="">隨機指定</option></select>
         </label>
-        <button class="btn-primary" id="btn-treasure-start">開始尋寶</button>
+        <div class="row-actions">
+          <button class="btn-primary" id="btn-treasure-start">開始尋寶</button>
+          <button class="btn-ghost" data-rs-add="treasure">加入節目單</button>
+        </div>
       </div>
 
       <div id="treasure-live" hidden>
@@ -159,14 +220,19 @@
     </div>
 
     <!-- 採水果（籃子接力）-->
-    <div class="panel">
+    <div class="panel act-panel" data-act="harvest" hidden>
       <h2>採水果</h2>
       <div id="harvest-idle">
-        <p class="hint">場上只有一個籃子，而且<b>一個人一輪只能採一處</b>。
-          採完就得把籃子交給一個還沒採過的人 —— 他得先被叫過來，
-          而那一句「換你拿」就是這個玩法要的東西。
-          大螢幕上看得到誰還沒採。</p>
-        <button class="btn-primary" id="btn-harvest-start">開始採收</button>
+        <p class="hint">場上只有一個籃子，<b>一個人一輪只能採一處</b>，採完要交給還沒採過的人。</p>
+        <details class="howto">
+          <summary>玩法說明</summary>
+          <p>採完就得把籃子交給一個還沒採過的人 —— 他得先被叫過來，
+            而那一句「換你拿」就是這個玩法要的東西。大螢幕上看得到誰還沒採。</p>
+        </details>
+        <div class="row-actions">
+          <button class="btn-primary" id="btn-harvest-start">開始採收</button>
+          <button class="btn-ghost" data-rs-add="harvest">加入節目單</button>
+        </div>
       </div>
 
       <div id="harvest-live" hidden>
@@ -183,10 +249,11 @@
     </div>
 
     <!-- 即時問答 -->
-    <div class="panel">
+    <div class="panel act-panel" data-act="quiz" hidden>
       <h2>即時問答</h2>
 
       <div id="quiz-compose">
+       <div class="quiz-editor">
         <label class="field">
           <span>題目</span>
           <input id="q-text" maxlength="80" placeholder="例：Boids 演算法的三條規則不包含哪一項？"
@@ -209,7 +276,9 @@
         <div class="row-actions">
           <button class="btn-primary" id="btn-quiz-start">出題</button>
           <button class="btn-ghost" id="btn-quiz-save">存入題庫</button>
+          <button class="btn-ghost" data-rs-add="quiz">加入節目單</button>
         </div>
+       </div>
 
         <p class="hint" id="quiz-rule">答對得分，愈快得分愈高。</p>
 
@@ -237,13 +306,13 @@
 
       <p class="err" id="quiz-err" hidden></p>
     </div>
-   </div>
+    </div>
 
-   <div class="col">
-    <!-- 參與者 -->
+    <!-- ═══ 參與者 ═══ -->
+    <div role="tabpanel" id="tab-people" aria-labelledby="tab-btn-people" hidden>
     <div class="panel">
       <h2>參與者 <span class="count" id="people-count">0</span></h2>
-      <div class="table-wrap">
+      <div class="table-wrap" id="people-wrap" hidden>
         <table id="people">
           <thead>
             <tr><th></th><th>名稱</th><th>標籤</th><th>積分</th><th>任務</th><th>連結</th><th>操控</th><th></th></tr>
@@ -254,38 +323,34 @@
       <p class="hint" id="people-empty">還沒有人進場。</p>
     </div>
 
-    <!-- 生成歷史 -->
     <div class="panel">
-      <div class="panel-head">
-        <h2>生成歷史 <span class="count" id="history-count">0</span></h2>
-        <button class="btn-link" id="btn-history-toggle" aria-expanded="true">收合列表</button>
+      <h2>活動報告</h2>
+      <p class="hint">整場的參與者與每一輪活動的結果，下載成 Excel 打得開的 CSV。
+        資料存在伺服器上，隨時下載都是最新的。</p>
+      <p class="report-summary" id="report-summary" hidden></p>
+      <div class="row-actions">
+        <button class="btn-ghost" id="btn-report-people">下載參與者名單</button>
+        <button class="btn-ghost" id="btn-report-activities">下載活動紀錄</button>
       </div>
-      <p class="hint tiny" id="history-summary">讀取中…</p>
-      <div class="table-wrap" id="history-wrap">
-        <table id="history-table">
-          <thead>
-            <tr><th></th><th></th><th>時間</th><th>狀態</th><th>模型</th><th>Tokens</th><th>花費</th><th>耗時</th></tr>
-          </thead>
-          <tbody id="history-body"></tbody>
-        </table>
-      </div>
-      <p class="hint" id="history-empty" hidden>還沒有生成紀錄。</p>
-      <button class="btn-ghost" id="btn-history-refresh">重新整理</button>
+      <p class="err" id="report-err" hidden></p>
     </div>
-   </div>
+    </div>
 
-   <div class="col">
-    <!-- 排行榜 -->
+    <!-- ═══ 場景與合照 ═══ -->
+    <div role="tabpanel" id="tab-stage" aria-labelledby="tab-btn-stage" hidden>
+    <div class="stage-grid">
+    <!-- 場景主題：切換大螢幕的背景，依活動場合挑選 -->
     <div class="panel">
-      <h2>積分排行</h2>
-      <ol class="ranks" id="ranks"></ol>
-      <p class="hint tiny" id="ranks-empty">還沒有人得分。任務與問答都會計分。</p>
+      <h2>場景主題</h2>
+      <p class="hint">切換大螢幕的背景。角色、分數與進行中的任務都不受影響。</p>
+      <div class="theme-list" id="theme-list" role="group" aria-label="場景主題"></div>
+      <p class="err" id="theme-err" hidden></p>
     </div>
 
     <!-- 大合照 -->
     <div class="panel">
       <h2>大合照</h2>
-      <p class="hint tiny">所有角色會原地定住並轉向鏡頭，就定位後自動拍攝。</p>
+      <p class="hint">所有角色會原地定住並轉向鏡頭，就定位後自動拍攝。</p>
       <button class="btn-primary" id="btn-photo">拍大合照</button>
       <p class="hint" id="photo-status" hidden></p>
       <div id="photo-result" hidden>
@@ -297,14 +362,45 @@
       </div>
       <p class="err" id="photo-err" hidden></p>
     </div>
+    </div>
+    </div>
 
-    <!-- 現場動態 -->
+    <!-- ═══ 系統：給技術人員，現場主持用不到 ═══ -->
+    <div role="tabpanel" id="tab-system" aria-labelledby="tab-btn-system" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>角色生成紀錄 <span class="count" id="history-count">0</span></h2>
+        <button class="btn-link" id="btn-history-refresh">重新整理</button>
+      </div>
+      <p class="hint">給技術人員排查用：掃描照片、生成結果、模型與花費。只在這一頁開著時更新。</p>
+      <p class="hint tiny" id="history-summary">讀取中…</p>
+      <div class="table-wrap" id="history-wrap">
+        <table id="history-table">
+          <thead>
+            <tr><th></th><th></th><th>時間</th><th>狀態</th><th>模型</th><th>Tokens</th><th>花費</th><th>耗時</th></tr>
+          </thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+      <p class="hint" id="history-empty" hidden>還沒有生成紀錄。</p>
+    </div>
+    </div>
+
+   </main>
+
+   <!-- 右側欄：不論在哪一頁都看得到的現場狀況 -->
+   <aside class="side">
+    <div class="panel">
+      <h2>積分排行</h2>
+      <ol class="ranks" id="ranks"></ol>
+      <p class="hint tiny" id="ranks-empty">還沒有人得分。任務與問答都會計分。</p>
+    </div>
+
     <div class="panel">
       <h2>現場動態</h2>
       <ul class="feed" id="feed"></ul>
     </div>
-   </div>
-
+   </aside>
   </div>
 </section>
 
