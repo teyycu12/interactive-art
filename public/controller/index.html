@@ -212,6 +212,17 @@
     <!-- 所在分區。走進舞台／暢飲／沙發區時出現 -->
     <p class="zone-chip" id="zone-chip" hidden></p>
 
+    <!-- 採水果（籃子接力）。手機不寫家具名稱，叫人看大螢幕 ——
+         名稱只存在大螢幕的場景設定裡，換主題會變，手機再存一份必然漂移。 -->
+    <div class="treasure harvest" id="harvest-box" hidden>
+      <div class="tr-row">
+        <span class="tr-role" id="harvest-role">🧺 採水果</span>
+        <span class="tr-heat" id="harvest-left" style="--heat:#2A9D8F">—</span>
+      </div>
+      <p class="tr-hint" id="harvest-hint"></p>
+      <button class="btn-primary hv-act" id="btn-harvest" hidden></button>
+    </div>
+
     <!-- 尋寶。先知與其他人看到的內容刻意不同，見 app.js 的 renderTreasure -->
     <div class="treasure" id="treasure-box" hidden>
       <div class="tr-row">

@@ -63,7 +63,7 @@ describe("靜止待機（IDLE_MOTION='still'）", { skip: IDLE_MOTION !== 'still
   test('推搖桿時仍能正常移動', () => {
     const stage = new Stage();
     const agent = makeAgent(stage, {
-      x: 300, y: 540, inputX: 1, inputY: 0, inputIntensity: 1,
+      x: 1200, y: 560, inputX: 1, inputY: 0, inputIntensity: 1,
     });
 
     let now = 1_000_000;

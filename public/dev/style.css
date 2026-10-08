@@ -1,0 +1,155 @@
+/* 人物匯入台（開發工具）
+   刻意不共用 host/style.css：那份樣式是展場現場要用的，
+   為了一個開發頁去改它、或讓它多背一組只有開發用得到的類別都不划算。
+   配色沿用主辦端的底色與字色，看起來才像同一套系統。 */
+:root {
+  --surface: #FFFDFA;
+  --bg: #F3EFE9;
+  --ink: #302A2D;
+  --dim: #6B6468;
+  --line: #DCD4CC;
+  --accent: #2F6F5E;      /* 填色用 */
+  --accent-ink: #1D4A3E;  /* 文字用：亮色只做填色，寫字用 -ink 版本 */
+  --warn: #F0D8A8;
+  --warn-ink: #6A4A08;
+  --danger-ink: #8C2F26;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 16px 48px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.6 system-ui, "Noto Sans TC", sans-serif;
+}
+
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+h3 { font-size: 14px; margin: 0; }
+
+.bar {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  padding: 16px 0 12px;
+}
+
+.warn-strip {
+  margin: 0; padding: 6px 12px; border-radius: 6px;
+  background: var(--warn); color: var(--warn-ink); font-size: 13px;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.row { display: flex; gap: 10px; align-items: flex-end; margin-top: 12px; }
+.row.wrap { flex-wrap: wrap; }
+
+.field { display: block; }
+.field > span { display: block; font-size: 13px; color: var(--dim); margin-bottom: 4px; }
+.field.inline { display: inline-block; }
+
+input, select {
+  font: inherit; color: var(--ink);
+  padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: #fff;
+}
+#key-input { text-transform: uppercase; letter-spacing: 2px; width: 10em; }
+#spawn-count { width: 5em; }
+
+button {
+  font: inherit; cursor: pointer;
+  /* 視覺尺寸與可觸範圍可以不一致，但這是桌機開發頁，直接給足高度最省事 */
+  min-height: 40px; padding: 8px 14px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: #fff; color: var(--ink);
+}
+button:hover { background: #F7F4F0; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { background: var(--accent-ink); }
+button.danger { color: var(--danger-ink); border-color: #E0BDB8; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+
+.msg { margin: 10px 0 0; font-size: 13px; }
+.msg.warn { color: var(--warn-ink); background: var(--warn); padding: 8px 10px; border-radius: 6px; }
+.dim { color: var(--dim); font-weight: 400; }
+
+/* ── 歷史角色池 ───────────────────────────────── */
+.pool-grid {
+  display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+}
+.pool-item {
+  position: relative;
+  border: 2px solid var(--line); border-radius: 8px;
+  background: #fff; padding: 4px; cursor: pointer;
+  min-height: 0;
+}
+.pool-item img { display: block; width: 100%; height: 92px; object-fit: contain; }
+.pool-item[aria-pressed="true"] { border-color: var(--accent); background: #EAF3F0; }
+.pool-item .swatch {
+  display: flex; gap: 2px; margin-top: 4px; height: 6px;
+}
+.pool-item .swatch i { flex: 1; border-radius: 2px; }
+.pool-item .nocolor { font-size: 11px; color: var(--warn-ink); }
+
+/* ── 個別操控 ─────────────────────────────────── */
+.puppet-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+.puppet {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; padding: 12px;
+}
+.puppet.gone { opacity: .45; }
+.puppet-head { display: flex; gap: 10px; align-items: center; }
+.puppet-head img { width: 44px; height: 56px; object-fit: contain; }
+.puppet-head .meta { flex: 1; min-width: 0; }
+.puppet-head .id { font-size: 11px; color: var(--dim); font-family: ui-monospace, monospace; }
+.puppet-head .pos { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+
+.pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 10px 0; }
+.pad button { min-height: 34px; padding: 4px; font-size: 14px; }
+.pad button.stop { font-size: 12px; }
+.pad button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.emotes { display: flex; gap: 4px; }
+.emotes button { flex: 1; min-height: 34px; padding: 4px; }
+
+.goto { margin-top: 8px; }
+.goto select { width: 100%; }
+
+.ask { margin-top: 10px; padding: 8px; border-radius: 6px; background: #EAF3F0; }
+.ask .q { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.ask .opts { display: flex; flex-wrap: wrap; gap: 4px; }
+.ask .opts button { min-height: 32px; padding: 4px 8px; font-size: 13px; }
+.ask .opts button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.puppet-foot { display: flex; gap: 6px; margin-top: 10px; }
+.puppet-foot button { flex: 1; min-height: 32px; font-size: 13px; }
+.puppet .note { font-size: 12px; color: var(--dim); margin: 6px 0 0; min-height: 1.4em; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+/* 採水果的交接鈕。開發台上它是唯一能驗證「兩個人站在一起交接」的途徑 */
+.hv {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  border-radius: 10px;
+  border: 2px solid #1f6f66;
+  background: #2A9D8F;
+  color: #fff;
+  cursor: pointer;
+}

@@ -1189,6 +1189,56 @@ function renderZone(zoneId) {
  *   其他人　完全沒有提示，只寫「聽先知的指令」
  * 若兩邊長得像，先知會以為自己也在找，整個玩法就散掉。
  */
+/** 採收：本輪狀態與「我現在按不按得到籃子」。兩者都由伺服器說了算 */
+let harvestRound = null;
+let canTakeBasket = false;
+
+/**
+ * 採收面板。
+ *
+ * **刻意不寫家具名稱** —— 名稱只存在大螢幕的場景設定裡（換主題會變），
+ * 手機再存一份必然漂移。而且這題本來就要人抬頭找地方，指向螢幕比在手機上
+ * 描述位置更有用（同問卷的到場題）。
+ */
+function renderHarvest() {
+  const box = $('#harvest-box');
+  if (!box) return;
+  box.hidden = !harvestRound;
+  if (!harvestRound) return;
+
+  const r = harvestRound;
+  const left = r.beds.filter((b) => b.pickedBy === null).length;
+  const holding = r.holder === myId;
+  const iPicked = r.picked.includes(myId);
+  box.classList.toggle('is-holder', holding);
+  $('#harvest-left').textContent = left > 0 ? `還差 ${left} 處` : '可以送回去了';
+
+  let hint;
+  if (holding && left === 0) hint = '全部採完了！把籃子送回出發的地方。';
+  else if (holding && iPicked) hint = '你這一輪採過了 —— 叫一個還沒採的人過來，請他接走籃子。';
+  else if (holding) hint = '你拿著籃子。看大螢幕，走到還沒採的那一處。';
+  else if (iPicked) hint = '你這一輪採過了。有人需要籃子時幫忙喊一聲。';
+  else hint = '看大螢幕找籃子在誰手上，走過去跟他要。';
+  $('#harvest-hint').textContent = hint;
+
+  const btn = $('#btn-harvest');
+  btn.hidden = !(holding || canTakeBasket);
+  btn.textContent = holding ? '把籃子放下' : '接過籃子';
+}
+
+$('#btn-harvest')?.addEventListener('click', () => {
+  if (!harvestRound) return;
+  // 接的人發起，不是給的人 —— 「叫他過來」才是這個玩法要的那一步。
+  // 距離由伺服器判定，手機只有搖桿，根本不知道自己在房間的哪裡。
+  sendMsg(harvestRound.holder === myId ? EV.HARVEST_DROP : EV.HARVEST_TAKE);
+});
+
+function showHarvestNote(text) {
+  const el = $('#harvest-hint');
+  if (!el) return;
+  el.textContent = text;
+}
+
 function renderTreasure(round) {
   const box = $('#treasure-box');
   if (!box) return;
@@ -1246,6 +1296,28 @@ function handleMissionMessage(msg) {
 
     case EV.PAIR_RESULT:
       handlePairResult(msg);
+      break;
+
+    // ── 採水果（籃子接力）────────────────────────────────
+    case EV.HARVEST_STATE:
+      harvestRound = msg.round;
+      if (!msg.round) canTakeBasket = false;
+      renderHarvest();
+      break;
+
+    case EV.HARVEST_REACH:
+      canTakeBasket = !!msg.canTake;
+      if (msg.note) showHarvestNote(msg.note);
+      renderHarvest();
+      break;
+
+    case EV.HARVEST_DONE:
+      harvestRound = null;
+      canTakeBasket = false;
+      renderHarvest();
+      showToast(msg.helpers.includes(myId)
+        ? `採收完成！你也有出力　+${msg.points} 分`
+        : `${msg.helperNames.join('、')} 把籃子送回去了`);
       break;
 
     // ── 尋寶 ──────────────────────────────────────────────
@@ -1757,6 +1829,29 @@ function startQuizCountdown() {
   quizTimer = setInterval(tick, 100);
 }
 
+/** 這一題要不要走到地點、自己到了沒。只影響手機上那一行提示。 */
+let surveyNeedsArrival = false;
+let surveyArrived = false;
+let lastSurveyLabel = '';
+
+/**
+ * 作答之後那一行提示。
+ *
+ * 不寫家具名稱，而是叫人看大螢幕上同名的那個標記 —— 家具的顯示名稱只存在於
+ * 大螢幕的場景設定裡（換主題會變），手機再存一份必然漂移。而且這題本來就要
+ * 人抬頭看大螢幕才找得到地方，指向螢幕比在手機上描述位置更有用。
+ */
+function showSurveyAck(label, arrived) {
+  lastSurveyLabel = label ?? lastSurveyLabel;
+  if (!surveyNeedsArrival) {
+    showQuizMsg(`已記錄：${lastSurveyLabel}　想改隨時可以再選`);
+    return;
+  }
+  showQuizMsg(arrived
+    ? `已到位 ✓　你站在「${lastSurveyLabel}」那一圈裡了`
+    : `已選「${lastSurveyLabel}」—— 看大螢幕，走到同名的那一圈才算完成`);
+}
+
 function showQuestion(q, kind = 'QUIZ') {
   // 問答的 options 是字串，問卷的是 {label, value, spot} 物件。
   // 這裡統一攤成字串再交給共用的選項渲染 —— 少了這一步，
@@ -1766,6 +1861,10 @@ function showQuestion(q, kind = 'QUIZ') {
     : q;
   askKind = kind;
   myChoice = null;
+  // 新題目把上一題的到位狀態清掉，否則上一題「已到位 ✓」會留在畫面上
+  surveyNeedsArrival = kind === 'SURVEY' && !!q.requireArrival;
+  surveyArrived = false;
+  lastSurveyLabel = '';
   $('#quiz-no').textContent = kind === 'SURVEY' ? `問卷 ${q.index}` : `第 ${q.index} 題`;
   $('#quiz-q').textContent = q.question;
   $('#quiz-result-card').hidden = true;
@@ -1840,15 +1939,21 @@ function handleQuizMessage(msg) {
         // 伺服器回傳的標籤文字才是權威值（例如「負責煮」），
         // 而且重連補送時這是唯一能還原「我剛才選了什麼」的來源
         myChoice = msg.choice;
+        surveyNeedsArrival = !!msg.requireArrival;
         renderQuizOptions();
-        // 只說「記錄了什麼」。選項對應的地點寫在大螢幕上，那是公共資訊，
-        // 手機再寫一次只會把這行擠成兩行，反而蓋住下面的選項。
-        showQuizMsg(`已記錄：${msg.label}　想改隨時可以再選`);
+        showSurveyAck(msg.label, !!msg.arrived);
       } else {
         myChoice = null;
+        surveyNeedsArrival = false;
         renderQuizOptions();
         showQuizMsg(msg.reason === 'CLOSED' ? '時間到了，這題已經截止。' : '這次作答沒有被接受。');
       }
+      return true;
+
+    // 要到場才算的題目：人走進／走出自己選的那一圈時伺服器會通知。
+    case EV.SURVEY_ARRIVED:
+      surveyArrived = !!msg.arrived;
+      showSurveyAck(lastSurveyLabel, surveyArrived);
       return true;
 
     case EV.SURVEY_CLOSED:

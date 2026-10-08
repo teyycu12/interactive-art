@@ -9,7 +9,7 @@
 
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { STAGE, AGENT_STATE, AGENT_MODE } from '../shared/protocol.js';
-import { OBSTACLES, zoneAt } from '../shared/scene.js';
+import { OBSTACLES, obstacleDistance, zoneAt } from '../shared/scene.js';
 import {
   EMOTE_DURATION_MS, EMOTE_COOLDOWN_MS, AGENT_TTL_MS, INPUT_DEADZONE,
   MAX_AGENTS,
@@ -26,7 +26,7 @@ function spawnPoint() {
     const x = STAGE.width * (0.3 + Math.random() * 0.4);
     const y = STAGE.height * (0.3 + Math.random() * 0.4);
     // 多留一點餘裕，避免出生就緊貼道具邊緣
-    if (!OBSTACLES.some((o) => Math.hypot(x - o.x, y - o.y) < o.r + 30)) return { x, y };
+    if (!OBSTACLES.some((o) => obstacleDistance(o, x, y) < o.r + 30)) return { x, y };
   }
   return { x: STAGE.width / 2, y: STAGE.height / 2 };
 }

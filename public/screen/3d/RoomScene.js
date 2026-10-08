@@ -10,6 +10,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { STAGE } from '/shared/protocol.js';
+import { stageViewport, onStageViewportChange } from '../stageViewport.js';
 
 // ===== 房間尺寸 (3D 世界單位) =====
 const RW = 17, RD = 13, WALL_H = 4.6;
@@ -126,11 +127,14 @@ export class RoomScene {
     this._resize();
     this._onResize = () => this._resize();
     window.addEventListener('resize', this._onResize);
+    // 題目橫幅出現／消失時可用區會變，3D 房間與 2D 主題一樣要讓出那一條
+    this._offViewport = onStageViewportChange(this._onResize);
   }
 
   /** 主題切換時由大螢幕呼叫：放掉 WebGL 資源與 DOM，否則每切一次就多一個 GPU context。 */
   dispose() {
     window.removeEventListener('resize', this._onResize);
+    this._offViewport?.();
     this.controls?.dispose?.();
     this.composer?.dispose?.();
     this.renderer.dispose();
@@ -788,10 +792,12 @@ export class RoomScene {
     const vector = new THREE.Vector3(p3d.x, 0, p3d.z);
     vector.project(this.camera);
 
+    // 加上 rect 的左上角：畫布讓出題目橫幅之後就不再貼齊視窗原點，
+    // 少了這個位移，角色會整群往上偏到房間外面（而且不會有任何錯誤）。
     const rect = this.renderer.domElement.getBoundingClientRect();
     return {
-      x: (vector.x * 0.5 + 0.5) * rect.width,
-      y: (-(vector.y * 0.5) + 0.5) * rect.height,
+      x: rect.left + (vector.x * 0.5 + 0.5) * rect.width,
+      y: rect.top + (-(vector.y * 0.5) + 0.5) * rect.height,
     };
   }
 
@@ -805,14 +811,20 @@ export class RoomScene {
   }
 
   _resize() {
-    this.camera.aspect = innerWidth / innerHeight;
+    // 可用區而非整個視窗：題目橫幅佔掉的上緣要讓出來，否則房間上半部的人
+    // 在題目出現的那一刻從畫面上消失，而他們正是最需要看到自己在哪的人。
+    const vp = stageViewport();
+    this.camera.aspect = vp.width / vp.height;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(innerWidth, innerHeight);
-    this.composer?.setSize(innerWidth, innerHeight);
-    this.bloom?.setSize(innerWidth, innerHeight);
+    this.renderer.setSize(vp.width, vp.height);
+    // setSize 只會把畫布縮小並留在容器左上角，不會把它往下推。
+    // 少了這一行，房間會縮小卻仍貼在螢幕頂端，橫幅照樣蓋在它身上。
+    this.renderer.domElement.style.marginTop = `${vp.y}px`;
+    this.composer?.setSize(vp.width, vp.height);
+    this.bloom?.setSize(vp.width, vp.height);
     // 漏了這行的話，切換全螢幕或投影機改解析度之後，
     // AO 會沿用舊尺寸的 G-buffer，暗部整個對不上物件邊緣。
-    this.gtao?.setSize(innerWidth, innerHeight);
+    this.gtao?.setSize(vp.width, vp.height);
   }
 
   render() {

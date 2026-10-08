@@ -19,6 +19,9 @@
 
 import { randomUUID } from 'node:crypto';
 import { SURVEY, SURVEY_BANK_MAP } from '../shared/surveys.js';
+import { PROPS } from '../shared/scene.js';
+
+const PROP_BY_ID = new Map(PROPS.map((p) => [p.id, p]));
 
 const clean = (raw, max) => (typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim().slice(0, max) : '');
 
@@ -45,7 +48,7 @@ export class SurveySession {
    * 出題。可帶 bankId 從題庫取，或自訂 key / question / options。
    * @returns {{ok: true, survey: object} | {ok: false, reason: string}}
    */
-  start({ bankId = null, key, question, options, durationMs }, now = Date.now()) {
+  start({ bankId = null, key, question, options, durationMs, requireArrival }, now = Date.now()) {
     if (this.current) return { ok: false, reason: '上一題問卷還沒收掉，請先結束本題' };
 
     let spec = { key, question, options };
@@ -89,6 +92,11 @@ export class SurveySession {
       };
     }
 
+    // 「到場才算」只在每個選項都綁了地點時成立 —— 少一個地點，選那一項的人
+    // 就永遠到不了位，而畫面上只會顯示那一欄的到位數停在 0，看不出原因。
+    const everyOptionHasSpot = opts.every((o) => o.spot && PROP_BY_ID.has(o.spot));
+    const arrival = requireArrival === undefined ? everyOptionHasSpot : (!!requireArrival && everyOptionHasSpot);
+
     this.asked++;
     this.current = {
       id: `sv_${randomUUID().slice(0, 8)}`,
@@ -99,7 +107,8 @@ export class SurveySession {
       durationMs: ms,
       startedAt: now,
       endsAt: now + ms,
-      /** @type {Map<string, {choice: number, at: number}>} */
+      requireArrival: arrival,
+      /** @type {Map<string, {choice: number, at: number, arrived: boolean, arrivedAt: number|null}>} */
       answers: new Map(),
     };
     return { ok: true, survey: this.current };
@@ -123,6 +132,7 @@ export class SurveySession {
       durationMs: s.durationMs,
       remainingMs: Math.max(0, s.endsAt - now),
       answered: s.answers.size,
+      requireArrival: s.requireArrival,
     };
   }
 
@@ -139,7 +149,9 @@ export class SurveySession {
     if (!Number.isInteger(choice) || choice < 0 || choice >= s.options.length) {
       return { ok: false, reason: 'BAD_CHOICE' };
     }
-    s.answers.set(agentId, { choice, at: now });
+    // 改答案要把到位狀態一起歸零：原本站在 A 桌旁的人改選 B，
+    // 不重設的話他會以「已到位」的身分留在 B 的統計裡，而人根本沒動。
+    s.answers.set(agentId, { choice, at: now, arrived: false, arrivedAt: null });
     const option = s.options[choice];
     this.setTrait(agentId, s.key, { value: option.value, label: option.label, spot: option.spot, questionId: s.id, at: now });
     return { ok: true, choice, option };
@@ -156,19 +168,80 @@ export class SurveySession {
     return { id: this.current?.id ?? null, answered: this.current?.answers.size ?? 0 };
   }
 
+  /**
+   * 更新「到位」狀態。由主迴圈每拍呼叫，傳入查座標的函式。
+   *
+   * 到位由伺服器自己的座標判定，不是手機回報的 ——
+   * 手機根本不知道自己在房間的哪裡（它只有搖桿），而就算知道也不該由它說了算。
+   *
+   * @param {(agentId: string) => {x: number, y: number} | null} positionOf
+   * @returns {string[]} 到位狀態有變的人，供伺服器通知他們的手機
+   */
+  syncArrivals(positionOf) {
+    const s = this.current;
+    if (!s || !s.requireArrival) return [];
+    const changed = [];
+    for (const [agentId, a] of s.answers) {
+      const spot = s.options[a.choice]?.spot;
+      const prop = spot ? PROP_BY_ID.get(spot) : null;
+      const pos = prop ? positionOf(agentId) : null;
+      // 查不到座標（人已離場）時維持原狀而不是判成離開：那一瞬間的閃爍
+      // 會讓大螢幕的到位數跳動，而現場會以為是自己走錯了
+      if (!pos) continue;
+      const reach = (prop.r ?? 0) + SURVEY.arriveRadius;
+      const here = Math.hypot(pos.x - prop.x, pos.y - prop.y) <= reach;
+      if (here === a.arrived) continue;
+      a.arrived = here;
+      // arrivedAt 只記第一次：它是「這個人完成過這題」的證據，
+      // 之後走開不該把它抹掉，否則任務結算時先到先走的人會全部不算
+      if (here && a.arrivedAt === null) {
+        a.arrivedAt = Date.now();
+        const trait = this.traits.get(agentId)?.get(s.key);
+        if (trait) trait.arrivedAt = a.arrivedAt;
+      }
+      changed.push(agentId);
+    }
+    return changed;
+  }
+
+  /** 某個人在這一題是否正站在自己選的地點旁 */
+  isArrived(agentId) {
+    return this.current?.answers.get(agentId)?.arrived === true;
+  }
+
   /** 目前這題的分佈。任何時候都能取，供大螢幕即時長出長條圖。 */
   distribution(now = Date.now()) {
     const s = this.current;
     if (!s) return null;
     const counts = new Array(s.options.length).fill(0);
-    for (const a of s.answers.values()) counts[a.choice]++;
+    const arrived = new Array(s.options.length).fill(0);
+    for (const a of s.answers.values()) {
+      counts[a.choice]++;
+      if (a.arrived) arrived[a.choice]++;
+    }
+    // 答了但還沒走到的人。大螢幕用它在那幾個角色頭上標一個記號 ——
+    // 「還差一個」只說得出數字，說不出是誰，而旁邊的人看得到記號就會開口提醒他。
+    // 這正是本專案對新玩法的判準：通關路徑上要有一步必須跟另一個人講話。
+    //
+    // 個人選了什麼因此會公開，但這類題目本來就是走過去給全場看的 ——
+    // 站進圈子的那一刻答案已經公開，記號只是早幾秒。
+    const pending = [];
+    if (s.requireArrival) {
+      for (const [agentId, a] of s.answers) if (!a.arrived) pending.push({ id: agentId, choice: a.choice });
+    }
+
     return {
       id: s.id,
       key: s.key,
       question: s.question,
       options: s.options.map((o) => ({ label: o.label, value: o.value, spot: o.spot })),
       counts,
+      // 選了之後真的走過去的人。要到場才算的題目，這一欄才是成績。
+      arrived,
+      pending,
+      requireArrival: s.requireArrival,
       totalAnswers: s.answers.size,
+      totalArrived: arrived.reduce((sum, n) => sum + n, 0),
       remainingMs: Math.max(0, s.endsAt - now),
     };
   }
@@ -230,7 +303,7 @@ export class SurveySession {
     if (!dump || typeof dump !== 'object') return this;
     // 與 quiz 相同：不還原進行中的那一題。倒數是相對於重開前算的，
     // 重開之後那個截止時間已經沒有意義，參與者手上的題目畫面也早就消失了。
-    const revive = (s) => ({ ...s, answers: new Map((s.answers ?? []).map((a) => [a.agentId, { choice: a.choice, at: a.at ?? 0 }])) });
+    const revive = (s) => ({ ...s, answers: new Map((s.answers ?? []).map((a) => [a.agentId, { choice: a.choice, at: a.at ?? 0, arrived: false, arrivedAt: a.arrivedAt ?? null }])) });
     this.history = (dump.history ?? []).map(revive);
     if (dump.current) this.history.push(revive(dump.current));
     this.asked = this.history.reduce((max, s) => Math.max(max, s.index ?? 0), 0);
@@ -246,9 +319,9 @@ export class SurveySession {
 
   export() {
     const dump = (s) => ({
-      id: s.id, index: s.index, key: s.key, question: s.question,
+      id: s.id, index: s.index, key: s.key, question: s.question, requireArrival: s.requireArrival ?? false,
       options: s.options, durationMs: s.durationMs, startedAt: s.startedAt, closedAt: s.closedAt ?? null,
-      answers: [...s.answers].map(([agentId, a]) => ({ agentId, choice: a.choice, at: a.at })),
+      answers: [...s.answers].map(([agentId, a]) => ({ agentId, choice: a.choice, at: a.at, arrivedAt: a.arrivedAt ?? null })),
     });
     return {
       current: this.current ? dump(this.current) : null,

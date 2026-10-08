@@ -1,6 +1,7 @@
 // Office theme: procedural pixel illustration in the spirit of a virtual co-working floor plan.
 // Same shared PROPS / ZONES as every other theme; only the look and the prop names change.
-import { INK, brush, hash, pill, ROOM_W, ROOM_H, ROOM_PAD } from './pixelKit.js';
+import { DOORWAYS } from '/shared/scene.js';
+import { INK, brush, hash, pill, ROOM_W, ROOM_H, ROOM_PAD, FLOOR_Y, doorway } from './pixelKit.js';
 
 const O = {
   corridor: '#ede3d3', corridorLine: '#e2d6c3',
@@ -69,7 +70,8 @@ function paintOfficeCore(c, zones) {
 
   // Zones: carpet tiles for desks, patterned carpet for meetings, diamond carpet for the lounge.
   for (const z of zones) {
-    const x = FX + z.x, y = FY + z.y;
+    // 分區座標已經是圖面座標，而這裡還在 ROOM_PAD 的位移裡
+    const x = z.x - ROOM_PAD, y = FY + z.y;
     rect(x - 5, y - 3, z.w + 10, z.h + 10, '#2b221c26');
     if (z.id === 'bar') {
       rect(x, y, z.w, z.h, '#7b818a');
@@ -177,9 +179,16 @@ function paintOfficeCore(c, zones) {
   // ── Side and bottom walls; glass entrance door at the bottom ──
   rect(120, 24, 2000, 22, O.cap); rect(120, 44, 2000, 3, O.capEdge);
   for (const x of [122, FR]) {
-    rect(x, 24, 38, FB + 36 - 24, O.cap);
-    rect(x === 122 ? FX - 4 : FR, 46, 4, FB - 46, O.capEdge);
-    for (let y = 150; y < FB; y += 260) { box(x + 8, y, 22, 60, O.glass); rect(x + 10, y + 4, 4, 30, O.glassHi); }
+    const d = DOORWAYS.find((o) => o.x - ROOM_PAD === x);
+    const top = d ? d.y : FB + 36, bot = d ? d.y + d.h : FB + 36;
+    const ex = x === 122 ? FX - 4 : FR;
+    rect(x, 24, 38, top - 24, O.cap); rect(ex, 46, 4, top - 46, O.capEdge);
+    if (d) { rect(x, bot, 38, FB + 36 - bot, O.cap); rect(ex, bot, 4, FB - bot, O.capEdge); }
+    for (let y = 150; y < FB; y += 260) {
+      if (d && y + 60 > d.y && y < bot) continue;
+      box(x + 8, y, 22, 60, O.glass); rect(x + 10, y + 4, 4, 30, O.glassHi);
+    }
+    if (d) doorway(c, x, d, O.seam, O.corridor, O.cap, O.capEdge);
   }
   for (const [l, r] of [[122, 830], [1110, 2118]]) { rect(l, FB, r - l, 36, O.cap); rect(l, FB, r - l, 3, O.capEdge); }
   for (const x of [814, 1110]) box(x, FB - 6, 16, 44, '#9aa1a8');
@@ -200,31 +209,8 @@ function paintLobby(c) {
   monitor(90, 98, false); oval(210, 96, 9, 5, '#e7b54a'); rect(206, 88, 8, 6, '#e7b54a'); plant(248, 96, .6, 1);
   chairTop(120, 70);
 
-  // Two glass phone booths.
-  for (const [y, lit] of [[260, false], [490, true]]) {
-    rect(46, y + 170, 200, 10, '#2a1f1a26');
-    box(44, y, 196, 168, '#3a4049'); rect(50, y + 6, 184, 156, lit ? '#c9e8e2' : '#b7dcd8');
-    rect(56, y + 12, 6, 80, '#ffffff70');
-    box(150, y + 40, 70, 28, O.woodLight); chairTop(120, y + 110, '#e98b3a');
-    if (lit) monitor(186, y + 40, true); else box(172, y + 26, 22, 14, '#9aa1a8');
-    rect(44, y + 166, 196, 4, '#3a4049');
-    c.fillStyle = '#f4ecdc'; c.font = 'bold 12px monospace'; c.textAlign = 'center';
-    rect(104, y - 16, 76, 18, '#3a4049'); c.fillText(lit ? 'IN USE' : 'PHONE', 142, y - 3);
-  }
-
-  // Lockers.
-  for (let i = 0; i < 4; i++) {
-    const y = 730 + i * 64;
-    box(26, y, 60, 58, '#9fb0c2'); rect(30, y + 4, 52, 3, '#c3d0dc');
-    rect(76, y + 22, 3, 14, '#5f6f84');
-    c.fillStyle = '#3a4a5c'; c.font = 'bold 12px monospace'; c.textAlign = 'center'; c.fillText(String(i + 1).padStart(2, '0'), 48, y + 38);
-  }
-  // Waiting sofa and coffee table.
-  rect(130, 820, 140, 12, '#2a1f1a26');
-  box(130, 740, 140, 30, '#5f8fa5'); box(130, 768, 140, 44, '#6f9fb5'); rect(134, 772, 132, 5, '#8fbccf');
-  for (const x of [130, 258]) box(x, 750, 12, 62, '#5f8fa5');
-  oval(200, 890, 44, 22, INK); oval(200, 888, 41, 19, O.woodLight); oval(200, 884, 32, 13, '#e8c595');
-  rect(186, 874, 26, 4, '#f7f3ea'); rect(190, 868, 18, 5, '#c9463a');
+  // 電話亭與置物櫃已經移到 PROPS（grd_1/2/3），由 paintOfficeProp 畫 ——
+  // 大廳變成可行走之後它們是真的障礙物，位置必須與伺服器判定的同一份座標一致。
   // Coat rack, umbrella stand, plants.
   oval(210, 1070, 26, 8, '#2a1f1a33'); rect(208, 980, 5, 90, '#5c4a3a');
   for (const [dx, dy, col] of [[-18, 996, '#c9463a'], [16, 1000, '#2f5b92'], [-12, 1016, '#e7b54a']]) { line(210, 986, 210 + dx, dy, '#5c4a3a', 3); box(210 + dx - 7, dy, 14, 24, col); }
@@ -284,12 +270,30 @@ function paintGameRoom(c) {
 
 // Props -----------------------------------------------------------------------
 export function paintOfficeProp(c, p, kind, elapsed, reduced) {
-  c.save(); c.translate(160 + p.x, 270 + p.y);
+  c.save(); c.translate(p.x, FLOOR_Y + p.y);
   const { rect, box, oval, line, leaf, plant, monitor, chairTop, book } = kit(c);
   const active = elapsed >= 0 && elapsed < 4.5, w = p.r * 1.65, t = active && !reduced ? elapsed : 0;
   oval(5, 15, p.r * .95, p.r * .33, '#2a1f1a40');
 
-  if (kind === 'desk') {
+  if (kind === 'booth') {
+    box(-w / 2, -104, w, 112, '#3a4049'); rect(-w / 2 + 6, -98, w - 12, 100, active ? '#c9e8e2' : '#b7dcd8');
+    rect(-w / 2 + 12, -92, 6, 50, '#ffffff70');
+    box(-14, -68, 42, 20, O.woodLight); monitor(8, -66, active);
+    chairTop(-6, -26, '#e98b3a');
+    rect(-w / 2, -2, w, 6, '#3a4049');
+    box(-24, -122, 48, 17, '#3a4049');
+    c.fillStyle = '#f4ecdc'; c.font = 'bold 11px monospace'; c.textAlign = 'center';
+    c.fillText(active ? 'IN USE' : 'PHONE', 0, -109);
+  } else if (kind === 'locker') {
+    for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) {
+      const bw = w / 2 - 8, x = -w / 2 + 4 + i * (w / 2), y = -96 + j * 52;
+      box(x, y, bw, 48, '#9fb0c2'); rect(x + 3, y + 3, bw - 6, 3, '#c3d0dc');
+      rect(x + bw - 11, y + 18, 3, 13, '#5f6f84');
+      c.fillStyle = '#3a4a5c'; c.font = 'bold 11px monospace'; c.textAlign = 'center';
+      c.fillText(String(i + j * 2 + 1).padStart(2, '0'), x + bw / 2, y + 32);
+    }
+    rect(-w / 2, -2, w, 8, '#7d8ea0');
+  } else if (kind === 'desk') {
     box(-w / 2, -58, w, 60, O.desk); rect(-w / 2, -58, w, 4, '#ffffff'); rect(-w / 2, -4, w, 6, O.deskEdge);
     for (const x of [-w / 2 + 4, w / 2 - 10]) rect(x, 2, 6, 14, '#9aa1a8');
     monitor(-18, -30, active); monitor(18, -30, active);

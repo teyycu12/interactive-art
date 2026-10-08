@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人物匯入台（開發用）— PersonaFlow</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="bar">
+  <h1>人物匯入台</h1>
+  <p class="warn-strip" role="note">
+    開發／調校工具。匯入的角色會佔用場上名額，<strong>現場請勿使用</strong>。
+  </p>
+</header>
+
+<!-- 通行密鑰：與主辦端同一把，存取控制理由見 server/httplayer.js -->
+<section id="auth" class="panel">
+  <h2>連上場域</h2>
+  <label class="field">
+    <span>主辦端通行密鑰</span>
+    <input id="key-input" type="text" inputmode="latin" autocomplete="off" spellcheck="false"
+           maxlength="12" placeholder="例如 KXW6B8">
+  </label>
+  <button id="btn-auth" class="primary" type="button">讀取歷史角色</button>
+  <p id="auth-msg" class="msg" role="status" aria-live="polite"></p>
+</section>
+
+<section id="pool" class="panel" hidden>
+  <h2>歷史角色　<span id="pool-count" class="dim"></span></h2>
+  <p id="pool-warn" class="msg warn" role="note" hidden></p>
+  <div id="pool-grid" class="pool-grid"></div>
+  <div class="row">
+    <label class="field inline">
+      <span>匯入幾個</span>
+      <input id="spawn-count" type="number" min="1" max="30" value="10">
+    </label>
+    <button id="btn-spawn" class="primary" type="button">匯入並進場</button>
+    <button id="btn-spawn-picked" type="button">只匯入選取的</button>
+  </div>
+  <p id="spawn-msg" class="msg" role="status" aria-live="polite"></p>
+</section>
+
+<section id="stageops" class="panel" hidden>
+  <h2>全體操控　<span id="live-count" class="dim"></span></h2>
+  <div class="row wrap">
+    <label class="field inline">
+      <span>全部前往</span>
+      <select id="all-target"></select>
+    </label>
+    <button id="btn-all-stop" type="button">全部站住</button>
+    <button id="btn-all-scatter" type="button">全部散開</button>
+    <button id="btn-all-leave" class="danger" type="button">全部離場</button>
+  </div>
+  <p class="msg dim">
+    「前往」會每 200ms 依伺服器回報的座標重算方向，抵達後自動停下 ——
+    用來驗集合類任務（例如「答某個選項的人到 N號桌集合」）擠不擠得下。
+  </p>
+</section>
+
+<section id="puppets" class="puppet-grid" aria-label="個別角色操控"></section>
+
+<script type="module" src="dev.js"></script>
+</body>
+</html>

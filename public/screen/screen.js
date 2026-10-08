@@ -12,9 +12,12 @@ import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protoco
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
 import { TREASURE_RADIUS } from '/shared/heat.js';
-import { createScene, pinnedSceneId } from './scenes/registry.js';
+import { SURVEY } from '/shared/surveys.js';
+import { HARVEST } from '/shared/harvest.js';
+import { createScene, pinnedSceneId, propLabel } from './scenes/registry.js';
 import { DEFAULT_THEME, isThemeId } from '/shared/themes.js';
 import { drawCharacter, drawNameplate, drawEmote, drawOffline } from '/shared/character.js';
+import { stageViewport, setStageTopInset, onStageViewportChange } from './stageViewport.js';
 
 let activeScene = null;
 
@@ -54,14 +57,18 @@ function resize() {
   canvas.style.width = `${innerWidth}px`;
   canvas.style.height = `${innerHeight}px`;
 
-  scale = Math.min(innerWidth / STAGE.width, innerHeight / STAGE.height);
-  offsetX = (innerWidth - STAGE.width * scale) / 2;
-  offsetY = (innerHeight - STAGE.height * scale) / 2;
+  // 畫布鋪滿視窗，但角色只落在可用區裡 —— 與場景背景用同一份 stageViewport()。
+  // 兩邊各自算的話，題目出現時角色會浮在房間外面，而畫面上只是「位置怪怪的」。
+  const vp = stageViewport();
+  scale = Math.min(vp.width / STAGE.width, vp.height / STAGE.height);
+  offsetX = vp.x + (vp.width - STAGE.width * scale) / 2;
+  offsetY = vp.y + (vp.height - STAGE.height * scale) / 2;
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingQuality = 'high';
 }
 addEventListener('resize', resize);
+onStageViewportChange(resize);
 resize();
 
 // ─────────────────────────────────────────────────────────────
@@ -303,6 +310,14 @@ function connect() {
       case EV.SURVEY_QUESTION:
         showSurvey({ ...msg.survey, counts: new Array(msg.survey.options.length).fill(0), totalAnswers: msg.survey.answered ?? 0 },
           { durationMs: msg.survey.durationMs });
+        break;
+
+      case EV.HARVEST_STATE:
+        harvestRound = msg.round;
+        break;
+
+      case EV.HARVEST_DONE:
+        harvestRound = null;
         break;
 
       case EV.SURVEY_STATE:
@@ -623,6 +638,8 @@ function render(now) {
   }
 
   drawTreasure(now);
+  drawSurveyZones();
+  drawHarvestZones();
 
   // 位置內插
   for (const a of latest) {
@@ -703,12 +720,202 @@ function render(now) {
     drawCharacter(ctx, a, pos, entry?.img, { time, maxSpeed: MAX_SPEED, height });
     // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
     drawNameplate(ctx, pos, entry?.name ?? a.id, { fontSize: Math.max(10, height * 0.12) });
+    drawPendingMark(a, pos, height);
+    drawHarvestMark(a, pos, height);
     if (a.emote) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }
 
+  drawSurveySpots(now);
+  drawHarvestSpots();
+
   if (debug) updateHud();
   requestAnimationFrame(render);
+}
+
+/**
+ * 把問卷選項畫在場景裡它對應的家具旁。
+ *
+ * 畫在角色之後：這是要看的資訊，被站在桌邊的人蓋住就失去意義。
+ * 位置抬到頭頂之上，盡量不壓到人臉。
+ */
+/**
+ * 要到場才算的題目：把每個答案的集合範圍畫在地板上。
+ *
+ * 畫在角色**之前**，因為它是地面標記 —— 蓋在人身上的話，站滿人的圈圈
+ * 就只剩一片色塊，看不出裡面有誰。看不到範圍時現場只能用猜的，
+ * 站在邊緣的人會以為系統判錯而不是自己差一步。
+ *
+ * 半徑由投影過的兩個點量出來，不是縮放乘上去的：3D 地板有透視壓縮，
+ * 直接乘會畫出一個與伺服器判定不一致的圈 —— 而那正是最難查的一種不一致。
+ */
+/**
+ * 答了但還沒走到的人，在頭上標一個自己答案顏色的箭頭。
+ *
+ * 「還差一個」只說得出數字，說不出是誰。標出來之後旁邊的人會開口提醒他 ——
+ * 而「通關路徑上要有一步必須跟另一個人講話」正是本專案對新玩法的判準
+ * （見 INTERACTION-DESIGN）。
+ */
+function drawPendingMark(a, pos, height) {
+  const choice = pendingChoice.get(a.id);
+  if (choice === undefined) return;
+  const color = QUIZ_CHOICES[choice]?.color ?? '#E76F51';
+  // 尺寸抓角色高度的 0.17：再小就與名牌上的字混在一起，
+  // 投影到場地另一端時看不出那是一個記號還是一個像素雜點
+  const r = Math.max(8, height * 0.17);
+  const y = pos.y - height * 1.5;
+  // 浮動幅度很小，但它仍然是裝飾性動態 —— 使用者要求減少動態時就不要動
+  const bob = reducedMotion.matches ? 0 : Math.sin(performance.now() / 420 + pos.x) * r * 0.18;
+
+  ctx.save();
+  ctx.translate(0, bob);   // 緩慢上下浮動：靜止的畫面上，會動的東西才抓得到餘光
+  // 朝下的三角指著這個人，與他要去的那個圈同色 —— 顏色就是「你要去哪一圈」
+  ctx.beginPath();
+  ctx.moveTo(pos.x - r, y - r * 1.15);
+  ctx.lineTo(pos.x + r, y - r * 1.15);
+  ctx.lineTo(pos.x, y + r * 0.75);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = 'rgba(255,255,255,.9)';
+  ctx.lineWidth = Math.max(1.6, r * 0.28);
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+  ctx.fill();
+  ctx.restore();
+}
+
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+/** agentId → 選項索引。只放「答了但還沒走到」的人。 */
+const pendingChoice = new Map();
+
+function syncPendingChoice() {
+  pendingChoice.clear();
+  if (!surveyState?.requireArrival) return;
+  for (const p of surveyState.pending ?? []) pendingChoice.set(p.id, p.choice);
+}
+
+function drawSurveyZones() {
+  if (!surveyState?.requireArrival || !optionsAreOnStage(surveyState.options)) return;
+
+  surveyState.options.forEach((opt, i) => {
+    const prop = PROPS.find((p) => p.id === opt.spot);
+    if (!prop) return;
+    const pos = toScreen(prop);
+    const reach = (prop.r ?? 0) + SURVEY.arriveRadius;
+    const rx = Math.abs(toScreen({ x: prop.x + reach, y: prop.y }).x - pos.x);
+    const ry = Math.abs(toScreen({ x: prop.x, y: prop.y + reach }).y - pos.y) || rx * 0.6;
+    if (!(rx > 0)) return;
+
+    // 湊齊了就換成實線 —— 虛線代表「還缺人」，實線代表「這一組到齊了」。
+    // 數字要看清楚得盯著螢幕，而一圈線的虛實在場地另一端也分得出來。
+    const chosen = surveyState.counts?.[i] ?? 0;
+    const here = surveyState.arrived?.[i] ?? 0;
+    const done = chosen > 0 && here >= chosen;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(pos.x, pos.y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fillStyle = `${QUIZ_CHOICES[i].color}${done ? '4D' : '33'}`;
+    ctx.fill();
+    ctx.lineWidth = Math.max(3, rx * (done ? 0.07 : 0.055));
+    ctx.strokeStyle = QUIZ_CHOICES[i].color;
+    if (!done) ctx.setLineDash([rx * 0.13, rx * 0.085]);
+    ctx.stroke();
+
+    // 內側再描一圈白：投影到深色地板與淺色地毯上時，單一顏色的線
+    // 在其中一種底色上一定會糊掉，而場景裡兩種底色都有
+    ctx.beginPath();
+    ctx.ellipse(pos.x, pos.y, rx * 0.955, ry * 0.955, 0, 0, Math.PI * 2);
+    ctx.setLineDash([]);
+    ctx.lineWidth = Math.max(1.5, rx * 0.02);
+    ctx.strokeStyle = 'rgba(255,255,255,.55)';
+    ctx.stroke();
+    ctx.restore();
+  });
+}
+
+function drawSurveySpots(now) {
+  if (!surveyState || !optionsAreOnStage(surveyState.options)) return;
+  const counts = surveyState.counts ?? [];
+
+  const needArrival = !!surveyState.requireArrival;
+  const arrived = surveyState.arrived ?? [];
+
+  surveyState.options.forEach((opt, i) => {
+    const prop = PROPS.find((p) => p.id === opt.spot);
+    if (!prop) return;
+    const pos = toScreen(prop);
+
+
+    // 尺寸比照站在同一個位置的人，遠近才一致 —— 固定尺寸的標籤在房間深處
+    // 會大得像貼紙浮在畫面上（與角色高度同一個理由）
+    const h = characterHeightAt(prop);
+    const pad = h * 0.16;
+    const font = Math.max(11, h * 0.26);
+    const countFont = Math.max(12, h * 0.3);
+
+    const label = opt.label;
+    // 要到場才算時，到位數才是成績；選了幾個人只是過程，所以排在後面且較小。
+    const chosen = counts[i] ?? 0;
+    const here = arrived[i] ?? 0;
+    const count = needArrival
+      ? `${here}/${chosen}${chosen > 0 && here >= chosen ? ' ✓' : ''}`
+      : `${chosen} 人`;
+    ctx.save();
+    ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+    const labelW = ctx.measureText(label).width;
+    ctx.font = `900 ${countFont}px system-ui, "Noto Sans TC", sans-serif`;
+    const countW = ctx.measureText(count).width;
+    const gap = pad * 0.9;
+    const w = pad * 2 + font * 1.1 + gap + labelW + gap + countW;
+    const boxH = Math.max(font, countFont) + pad * 1.6;
+    const x = pos.x - w / 2;
+    const y = pos.y - h * 1.15 - boxH;
+
+    ctx.fillStyle = QUIZ_CHOICES[i].color;
+    ctx.strokeStyle = 'rgba(47,42,38,.85)';
+    ctx.lineWidth = Math.max(1.5, h * 0.025);
+    roundRect(ctx, x, y, w, boxH, boxH / 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    const midY = y + boxH / 2;
+    let cursor = x + pad;
+    ctx.font = `900 ${font * 1.1}px system-ui, sans-serif`;
+    ctx.fillText(QUIZ_CHOICES[i].glyph, cursor, midY);
+    cursor += font * 1.1 + gap;
+    ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+    ctx.fillText(label, cursor, midY);
+    cursor += labelW + gap;
+    ctx.font = `900 ${countFont}px system-ui, "Noto Sans TC", sans-serif`;
+    ctx.fillText(count, cursor, midY);
+
+    // 指向家具的小尖角，免得標籤看起來飄在半空中
+    ctx.beginPath();
+    ctx.moveTo(pos.x - boxH * 0.22, y + boxH);
+    ctx.lineTo(pos.x + boxH * 0.22, y + boxH);
+    ctx.lineTo(pos.x, y + boxH + boxH * 0.42);
+    ctx.closePath();
+    ctx.fillStyle = QUIZ_CHOICES[i].color;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  });
+}
+
+function roundRect(c, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  c.beginPath();
+  c.moveTo(x + rr, y);
+  c.arcTo(x + w, y, x + w, y + h, rr);
+  c.arcTo(x + w, y + h, x, y + h, rr);
+  c.arcTo(x, y + h, x, y, rr);
+  c.arcTo(x, y, x + w, y, rr);
+  c.closePath();
 }
 
 function updateHud() {
@@ -760,6 +967,36 @@ function syncBanners() {
   surveyEl.hidden = surveyState === null || quiz !== null;
   document.getElementById('mission').hidden =
     quiz !== null || surveyState !== null || missionShown === null;
+  measureBannerInset();
+}
+
+/**
+ * 把目前可見的橫幅高度讓給它，場景縮到剩下的空間。
+ *
+ * 量實際高度而不是寫死：題目長度、選項字數、是否顯示集合地點都會改變高度，
+ * 寫死的值在最長的那一題上就會重新蓋到角色 —— 而那一題正是最需要看清楚的。
+ */
+const BANNER_IDS = ['quiz', 'survey', 'mission'];
+const BANNER_GAP = 14;   // 橫幅與房間上緣之間留一點縫，免得看起來黏在一起
+
+function measureBannerInset() {
+  let bottom = 0;
+  for (const id of BANNER_IDS) {
+    const el = document.getElementById(id);
+    if (!el || el.hidden) continue;
+    bottom = Math.max(bottom, el.getBoundingClientRect().bottom);
+  }
+  setStageTopInset(bottom === 0 ? 0 : bottom + BANNER_GAP);
+}
+
+// 橫幅內容會在顯示之後才填（選項、倒數條、分佈長條），高度因此是變動的。
+// 只在 syncBanners 量一次會量到還沒填完的高度，少掉的那一截正好蓋住角色。
+if (typeof ResizeObserver === 'function') {
+  const observer = new ResizeObserver(() => measureBannerInset());
+  for (const id of BANNER_IDS) {
+    const el = document.getElementById(id);
+    if (el) observer.observe(el);
+  }
 }
 
 let missionShown = null;
@@ -797,6 +1034,160 @@ function renderQuizOptions(revealed = null, counts = null) {
 // ── 轉場問卷 ────────────────────────────────────────────────
 /** @type {object|null} 目前的問卷分佈（題目 + 即時票數） */
 let surveyState = null;
+
+/**
+ * 採水果（籃子接力）。
+ *
+ * 大螢幕是這個玩法的**唯一**公開資訊來源：手機上刻意不寫家具名稱，
+ * 因此「還有哪幾處沒採」「籃子在誰手上」「誰已經採過了」三件事都得在這裡講清楚，
+ * 否則拿著籃子的人不知道要找誰，而整個玩法就只剩走路。
+ */
+let harvestRound = null;
+
+const BASKET = { full: '#2A9D8F', done: '#8FBF7F', ink: 'rgba(47,42,38,.85)' };
+
+/** 還沒採的那幾處，地上畫一圈 —— 判定範圍要看得見，不然會站在旁邊納悶怎麼沒反應 */
+function drawHarvestZones() {
+  if (!harvestRound) return;
+  for (const bed of harvestRound.beds) {
+    const prop = PROPS.find((p) => p.id === bed.propId);
+    if (!prop) continue;
+    const pos = toScreen(prop);
+    // 半徑要分別投影 x 與 y：地板是斜的，用同一個數字會畫成正圓浮在空中
+    const reach = prop.r + HARVEST.reachRadius;
+    const rx = Math.abs(toScreen({ x: prop.x + reach, y: prop.y }).x - pos.x);
+    const ry = Math.abs(toScreen({ x: prop.x, y: prop.y + reach }).y - pos.y);
+    const picked = bed.pickedBy !== null;
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(pos.x, pos.y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fillStyle = picked ? `${BASKET.done}33` : `${BASKET.full}4D`;
+    ctx.fill();
+    ctx.lineWidth = Math.max(2, rx * 0.05);
+    ctx.strokeStyle = picked ? BASKET.done : BASKET.full;
+    // 採過的換實線，還沒採的維持虛線 —— 數字要盯著看，線的虛實在場地另一端也分得出來
+    if (!picked) ctx.setLineDash([rx * 0.18, rx * 0.12]);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/** 每個人頭上的採收記號：拿著籃子的人掛籃子，採過的人掛一個 ✓ */
+function drawHarvestMark(a, pos, height) {
+  if (!harvestRound) return;
+  const holding = harvestRound.holder === a.id;
+  const used = harvestRound.picked.includes(a.id);
+  if (!holding && !used) return;
+
+  const r = Math.max(9, height * (holding ? 0.2 : 0.13));
+  const y = pos.y - height * (holding ? 1.62 : 1.5);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(pos.x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = holding ? BASKET.full : BASKET.done;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1.5, r * 0.18);
+  ctx.strokeStyle = BASKET.ink;
+  ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = `900 ${r * 1.35}px system-ui, "Noto Sans TC", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // 採過的人標 ✓ 而不是標「還沒採的人」：一輪下來採過的永遠比較少，
+  // 而拿著籃子的人要找的正是「沒有記號的那些人」
+  ctx.fillText(holding ? '🧺' : '✓', pos.x, y + r * 0.06);
+  ctx.restore();
+}
+
+/** 每一處的名牌，外加籃子沒人拿著時落在地上的位置 */
+function drawHarvestSpots() {
+  if (!harvestRound) return;
+
+  for (const bed of harvestRound.beds) {
+    const prop = PROPS.find((p) => p.id === bed.propId);
+    if (!prop) continue;
+    harvestPill(prop, propLabel(sceneId, prop.id), bed.pickedBy ? '✓ 採好了' : '還沒採',
+      bed.pickedBy ? BASKET.done : BASKET.full);
+  }
+  const home = PROPS.find((p) => p.id === harvestRound.home);
+  if (home) {
+    const left = harvestRound.beds.filter((b) => b.pickedBy === null).length;
+    harvestPill(home, propLabel(sceneId, home.id),
+      left === 0 ? '送回這裡 ←' : `還差 ${left} 處`, '#E9C46A');
+  }
+  if (!harvestRound.holder) {
+    // 沒有人拿著：籃子躺在最後一個人放下（或離場）的地方，要畫出來才有人去撿
+    const pos = toScreen(harvestRound.basket);
+    const r = Math.max(12, characterHeightAt(harvestRound.basket) * 0.2);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y - r, r, 0, Math.PI * 2);
+    ctx.fillStyle = BASKET.full;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.5, r * 0.18);
+    ctx.strokeStyle = BASKET.ink;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `900 ${r * 1.3}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🧺', pos.x, pos.y - r);
+    ctx.restore();
+  }
+}
+
+function harvestPill(prop, label, state, color) {
+  const pos = toScreen(prop);
+  const h = characterHeightAt(prop);
+  const pad = h * 0.16;
+  const font = Math.max(11, h * 0.26);
+  ctx.save();
+  ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  const labelW = ctx.measureText(label).width;
+  ctx.font = `900 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  const stateW = ctx.measureText(state).width;
+  const gap = pad * 0.9;
+  const w = pad * 2 + labelW + gap + stateW;
+  const boxH = font + pad * 1.6;
+  // 菜畦貼在畫面左緣，名牌置中就會被裁掉半截 —— 現場看到的是「蘿蔔畦」
+  // 這種少一個字的名字，而那正好是任務要喊的那個詞。夾回畫面內，
+  // 指向道具的尖角另外夾在名牌寬度之內，免得它飄到名牌外面。
+  const vp = stageViewport();
+  const x = Math.min(Math.max(pos.x - w / 2, vp.x + 6), vp.x + vp.width - w - 6);
+  // 上方放不下時改掛在道具下面（上緣是房間的牆與大標題，硬擠會疊在一起）
+  const above = pos.y - h * 1.15 - boxH;
+  const flip = above < vp.y + 6;
+  const y = flip ? pos.y + h * 0.25 : above;
+  const tipX = Math.min(Math.max(pos.x, x + boxH * 0.3), x + w - boxH * 0.3);
+
+  ctx.fillStyle = color;
+  ctx.strokeStyle = BASKET.ink;
+  ctx.lineWidth = Math.max(1.5, h * 0.025);
+  roundRect(ctx, x, y, w, boxH, boxH / 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#fff';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  const midY = y + boxH / 2;
+  ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  ctx.fillText(label, x + pad, midY);
+  ctx.font = `900 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  ctx.fillText(state, x + pad + labelW + gap, midY);
+
+  const edge = flip ? y : y + boxH;
+  const tipY = flip ? y - boxH * 0.42 : y + boxH + boxH * 0.42;
+  ctx.beginPath();
+  ctx.moveTo(tipX - boxH * 0.22, edge);
+  ctx.lineTo(tipX + boxH * 0.22, edge);
+  ctx.lineTo(tipX, tipY);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
 let surveyDeadline = 0;
 let surveyRaf = null;
 let surveyHideTimer = null;
@@ -809,9 +1200,22 @@ function spotLabel(propId) {
   return items?.[propId]?.[1] ?? (prop ? propId : null);
 }
 
+/**
+ * 選項是否每一個都綁了場景裡的地點。
+ *
+ * 全綁了就不在橫幅上列選項 —— 它們改畫在場景裡各自的家具旁（drawSurveySpots）。
+ * 這同時省掉橫幅四分之三的高度，並把「我選這個要走去哪」直接答在畫面上，
+ * 而那正是這類題目的重點：答案不是按鈕，是走過去。
+ */
+function optionsAreOnStage(options) {
+  return Array.isArray(options) && options.length > 0
+    && options.every((o) => o?.spot && PROPS.some((p) => p.id === o.spot));
+}
+
 function renderSurveyOptions(state) {
   const wrap = document.getElementById('sv-opts');
   wrap.replaceChildren();
+  if (optionsAreOnStage(state.options)) return;
   const total = Math.max(1, state.totalAnswers);
 
   state.options.forEach((opt, i) => {
@@ -870,6 +1274,7 @@ function animateSurveyBar() {
 function showSurvey(state, { closed = false, durationMs = null } = {}) {
   clearTimeout(surveyHideTimer);
   surveyState = { ...state, durationMs: durationMs ?? surveyState?.durationMs ?? state.durationMs ?? 0 };
+  syncPendingChoice();
   if (!closed) {
     surveyDeadline = Date.now() + (state.remainingMs ?? 0);
     animateSurveyBar();
@@ -877,7 +1282,23 @@ function showSurvey(state, { closed = false, durationMs = null } = {}) {
   document.getElementById('sv-no').textContent = `問卷 ${state.index ?? ''}`.trim();
   document.getElementById('sv-state').textContent = closed ? '結果' : '作答中';
   document.getElementById('sv-title').textContent = state.question;
-  document.getElementById('sv-answered').textContent = state.totalAnswers ?? state.answered ?? 0;
+  // 要到場才算的題目，橫幅上報的是到位人數 —— 那才是這一題的進度，
+  // 「按了幾個」在這種題目裡只是中途狀態
+  const answered = state.totalAnswers ?? state.answered ?? 0;
+  const foot = document.getElementById('sv-foot');
+  if (state.requireArrival) {
+    foot.replaceChildren(
+      document.createTextNode('已到位 '),
+      Object.assign(document.createElement('b'), { textContent: String(state.totalArrived ?? 0) }),
+      document.createTextNode(` / ${answered} 人`),
+    );
+  } else {
+    foot.replaceChildren(
+      document.createTextNode('已作答 '),
+      Object.assign(document.createElement('b'), { textContent: String(answered) }),
+      document.createTextNode(' 人'),
+    );
+  }
   renderSurveyOptions({
     options: state.options,
     counts: state.counts ?? new Array(state.options.length).fill(0),
@@ -897,6 +1318,7 @@ function hideSurvey() {
   clearTimeout(surveyHideTimer);
   cancelAnimationFrame(surveyRaf);
   surveyState = null;
+  syncPendingChoice();
   syncBanners();
 }
 

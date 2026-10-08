@@ -25,5 +25,8 @@ export class OfficeScene extends PixelScene {
     sofa_1: ['sofa', '窗邊沙發', '坐下來，聊聊近況'],
     sofa_2: ['sofa', '角落沙發', '坐下來，聊聊近況'],
     ctbl_1: ['lowtable', '咖啡桌', '放杯飲料，慢慢聊'],
+    grd_1: ['booth', '1號電話亭', '關上門，安靜講個電話'],
+    grd_2: ['booth', '2號電話亭', '關上門，安靜講個電話'],
+    grd_3: ['locker', '置物櫃', '把東西放好，輕裝上陣'],
   };
 }

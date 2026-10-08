@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { stepAgent } from '../server/arbiter.js';
 import { Stage } from '../server/state.js';
 import { SocialGraph } from '../server/socialgraph.js';
-import { OBSTACLES, PROPS, ZONES } from '../shared/scene.js';
+import { DOORWAYS, OBSTACLES, PROPS, WALLS, ZONES, obstacleDistance } from '../shared/scene.js';
 import { STAGE } from '../shared/protocol.js';
 import { BOIDS, MAX_AGENTS } from '../server/config.js';
 
@@ -67,13 +67,87 @@ describe('場域佈局', () => {
   });
 
   test('道具佔用的面積遠小於場域，仍有充足漫遊空間', () => {
-    const occupied = OBSTACLES.reduce((s, o) => s + Math.PI * o.r ** 2, 0);
+    // 只算道具，不算牆：牆不是散在地板中間的障礙，而是房間的邊，
+    // 把它算進「佔掉的地板」會讓這個比例失去意義。
+    const occupied = PROPS.reduce((s, o) => s + Math.PI * o.r ** 2, 0);
     const ratio = occupied / (STAGE.width * STAGE.height);
     assert.ok(ratio < 0.1, `道具佔 ${(ratio * 100).toFixed(1)}%，過於擁擠`);
   });
 
-  test('避障清單與道具清單一致', () => {
-    assert.equal(OBSTACLES.length, PROPS.length);
+  test('牆真的擋得住，門以外的地方穿不過去', () => {
+    // 牆是裝飾變成物理的那一刻才有意義。只要有人把牆段的座標改錯，
+    // 畫面上仍然是一道牆，但角色會直接穿牆走進菜園 —— 沒有任何錯誤訊息。
+    for (const w of WALLS) {
+      for (let y = w.y + 1; y < w.y2; y += 10) {
+        assert.ok(OBSTACLES.some((o) => obstacleDistance(o, w.x, y) < o.r),
+          `牆 ${w.id} 在 y=${y} 沒有擋住`);
+      }
+    }
+  });
+
+  test('室外的兩塊地走得到：牆上必須真的留了門', () => {
+    // 這一則守的是「牆改了但忘記留門」。症狀是現場有一塊地永遠沒有人進得去，
+    // 而那正是把舞台擴張到整張圖想解決的問題本身。
+    const STEP = 10;
+    const free = (x, y) => x >= 0 && y >= 0 && x <= STAGE.width && y <= STAGE.height
+      && OBSTACLES.every((o) => obstacleDistance(o, x, y) >= o.r);
+
+    const key = (ix, iy) => `${ix},${iy}`;
+    const seen = new Set();
+    const start = [Math.round(1300 / STEP), Math.round(540 / STEP)];   // 室內正中央
+    assert.ok(free(start[0] * STEP, start[1] * STEP), '起點本身要是空地');
+    const queue = [start];
+    seen.add(key(...start));
+    while (queue.length) {
+      const [ix, iy] = queue.pop();
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = ix + dx, ny = iy + dy;
+        if (seen.has(key(nx, ny)) || !free(nx * STEP, ny * STEP)) continue;
+        seen.add(key(nx, ny));
+        queue.push([nx, ny]);
+      }
+    }
+    const reached = (x, y) => seen.has(key(Math.round(x / STEP), Math.round(y / STEP)));
+    // 取菜畦南邊那一點：它只能經由靠牆的那條走道走到，等於順便驗了
+    // 「道具沒有把室外區封死」
+    assert.ok(reached(250, 950), '西側的室外區（菜園／大廳）從室內走不到');
+    assert.ok(reached(2450, 600), '東側的室外區（露台／遊戲間）從室內走不到');
+  });
+
+  test('室外的道具要留得下一條走道', () => {
+    // 西側可站的只有 0 到牆面那一段。道具再往右擺一點，靠牆那條走道就會窄到
+    // 角色擠不過去 —— 而症狀不是「卡住」，是整塊室外區沒有人進得去，
+    // 跟當初沒有門是同一個結果。
+    const wall = WALLS.find((w) => w.id.startsWith('wall_w'));
+    const face = wall.x - wall.r;
+    const west = PROPS.filter((prop) => prop.x < face);
+    assert.ok(west.length >= 3, '西側室外區應該要有道具可以當集合點');
+    for (const prop of west) {
+      const lane = face - (prop.x + prop.r);
+      assert.ok(lane >= 60, `${prop.id} 與牆之間只剩 ${lane}，走不過去`);
+      assert.ok(prop.x - prop.r >= 0, `${prop.id} 凸出場域左緣`);
+    }
+  });
+
+  test('門的淨寬容得下一個人走過去', () => {
+    // 門高扣掉牆兩端的碰撞半徑才是真正過得去的寬度。留得太窄的話，
+    // 兩側牆段的斥力會在門口正中央對消，角色卡在門前原地抖動。
+    for (const d of DOORWAYS) {
+      const x = d.x + d.w / 2;
+      let open = 0;
+      for (let y = d.y; y <= d.y + d.h; y += 2) {
+        if (OBSTACLES.every((o) => obstacleDistance(o, x, y) >= o.r)) open += 2;
+      }
+      assert.ok(open >= 120, `${d.id} 的淨寬只有 ${open}`);
+    }
+  });
+
+  test('避障清單＝道具在前、牆在後', () => {
+    // 順序有意義：好幾組測試以 OBSTACLES[n] 取「某個道具」，
+    // 牆插到前面會讓它們改成測到一道牆，而且還是會通過。
+    assert.equal(OBSTACLES.length, PROPS.length + WALLS.length);
+    assert.deepEqual(OBSTACLES.slice(0, PROPS.length).map((o) => o.r), PROPS.map((p) => p.r));
+    assert.ok(OBSTACLES.slice(PROPS.length).every((o) => o.x2 !== undefined));
   });
 });
 
@@ -99,7 +173,7 @@ describe('剛體避障', () => {
         stepAgent(a, agents, 0.033, now);
         for (const o of OBSTACLES) {
           // 位置修正是硬保證，任何一幀結束時都不該有角色位於道具內部
-          if (Math.hypot(a.x - o.x, a.y - o.y) < o.r - 0.01) violations++;
+          if (obstacleDistance(o, a.x, a.y) < o.r - 0.01) violations++;
         }
       }
     }

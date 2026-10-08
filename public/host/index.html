@@ -108,6 +108,12 @@
             <option value="45000">45 秒</option>
           </select>
         </label>
+        <label class="field check">
+          <input type="checkbox" id="survey-arrive" checked>
+          <span>要走到大螢幕上的地點才算完成</span>
+        </label>
+        <p class="hint" id="survey-arrive-note">選項都綁了場景裡的地點時才能勾。
+          不勾就只是在手機上按一下，全場不會有人站起來。</p>
         <button class="btn-primary" id="btn-survey-start">出題</button>
       </div>
 
@@ -150,6 +156,30 @@
       </div>
 
       <p class="err" id="treasure-err" hidden></p>
+    </div>
+
+    <!-- 採水果（籃子接力）-->
+    <div class="panel">
+      <h2>採水果</h2>
+      <div id="harvest-idle">
+        <p class="hint">場上只有一個籃子，而且<b>一個人一輪只能採一處</b>。
+          採完就得把籃子交給一個還沒採過的人 —— 他得先被叫過來，
+          而那一句「換你拿」就是這個玩法要的東西。
+          大螢幕上看得到誰還沒採。</p>
+        <button class="btn-primary" id="btn-harvest-start">開始採收</button>
+      </div>
+
+      <div id="harvest-live" hidden>
+        <div class="live-head">
+          <b>採收進行中</b>
+          <span class="tag" id="harvest-left">—</span>
+        </div>
+        <p class="hint">籃子在　<b id="harvest-holder">沒有人拿著</b>
+          　／　採過的人　<b id="harvest-picked">0</b></p>
+        <button class="btn-danger" id="btn-harvest-stop">中止本輪</button>
+      </div>
+
+      <p class="err" id="harvest-err" hidden></p>
     </div>
 
     <!-- 即時問答 -->

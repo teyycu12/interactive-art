@@ -88,8 +88,19 @@ export const EV = {
   SURVEY_QUESTION: 'SURVEY_QUESTION',         // Server → All：題目與選項
   SURVEY_ANSWER: 'SURVEY_ANSWER',             // Phone → Server：送出選擇（可改）
   SURVEY_ACK: 'SURVEY_ACK',                   // Server → Phone：已記錄
+  SURVEY_ARRIVED: 'SURVEY_ARRIVED',           // Server → Phone：到位狀態變了（要到場才算的題目）
   SURVEY_STATE: 'SURVEY_STATE',               // Server → Screen/Host：即時分佈
   SURVEY_CLOSED: 'SURVEY_CLOSED',             // Server → All：本題收掉，附最終分佈
+
+  // 採水果（籃子接力）。沒有秘密 —— 哪一畦採過了、籃子在誰手上都要讓全場看見，
+  // 「誰還沒採」正是大家要互相喊的那件事，因此三端送同一份狀態。
+  HOST_START_HARVEST: 'HOST_START_HARVEST',   // Host → Server：開始一輪採收
+  HOST_STOP_HARVEST: 'HOST_STOP_HARVEST',     // Host → Server：中止本輪
+  HARVEST_STATE: 'HARVEST_STATE',             // Server → All：本輪狀態（round 為 null 代表結束）
+  HARVEST_TAKE: 'HARVEST_TAKE',               // Phone → Server：接過／撿起籃子
+  HARVEST_DROP: 'HARVEST_DROP',               // Phone → Server：把籃子放在原地
+  HARVEST_REACH: 'HARVEST_REACH',             // Server → Phone：按不按得到「接過籃子」
+  HARVEST_DONE: 'HARVEST_DONE',               // Server → All：籃子送回去了，本輪完成
 
   // ── 場景主題（shared/themes.js）──────────────────────
   HOST_SET_THEME: 'HOST_SET_THEME',           // Host → Server：切換大螢幕的場景主題
@@ -170,6 +181,7 @@ export const SCORE_SOURCES = {
   MISSION_DONE: 'MISSION_DONE', // 達成該任務的目標次數
   QUIZ: 'QUIZ',               // 答對問答
   TREASURE: 'TREASURE',       // 找到寶藏
+  HARVEST: 'HARVEST',         // 採水果接力完成
 };
 
 /** 積分來源的顯示文案，集中定義避免三端各寫一套 */
@@ -178,6 +190,7 @@ export const SCORE_LABELS = {
   MISSION_DONE: '任務達標',
   QUIZ: '答對問答',
   TREASURE: '找到寶藏',
+  HARVEST: '採收接力',
 };
 
 /** 配對失敗原因，集中定義以便手機端顯示對應文案 */
@@ -250,8 +263,22 @@ export const CLIENT_SYNC_RADIUS = 320;
  */
 export const IDLE_THRESHOLD_MS = 3000;
 
-/** 場域邏輯座標系。大螢幕負責把這個座標系縮放到實際解析度 */
-export const STAGE = { width: 1920, height: 1080 };
+/**
+ * 場域邏輯座標系。大螢幕負責把這個座標系縮放到實際解析度。
+ *
+ * 寬度 2596 不是隨便取的，它就是像素場景那張圖的寬度（`pixelKit.ROOM_W`）。
+ * 原本是 1920×1080，剛好等於房間室內地板那一塊 —— 而整張圖是 2596×1460，
+ * 於是左右各 338px（菜園／露台、大廳／遊戲間）與上方 270px（牆與吊櫃）
+ * **永遠站不上人**：投影機有 45% 的畫素在演一個沒有人能走進去的地方。
+ *
+ * 現在舞台橫向吃滿整張圖，縱向仍然只有室內地板那一段（上面是牆，
+ * 下面是樹籬，兩者本來就不該站人）。可站立面積從 54.7% 提升到 74.0%。
+ *
+ * 對應關係是**純平移、沒有縮放**（畫面 x = 舞台 x，畫面 y = 舞台 y + 270），
+ * 見 `PixelScene` 的 GX/GY。改這個值就要同步改那裡，否則角色會整群浮在房間外，
+ * 而畫面上只會看起來像「位置怪怪的」，不會有任何錯誤。
+ */
+export const STAGE = { width: 2596, height: 1080 };
 
 /**
  * 角色最高移動速度（邏輯單位／秒）。

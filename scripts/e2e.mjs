@@ -121,7 +121,7 @@ let scoreBoard = null;
 const live = () => syncs.at(-1)?.agents ?? [];
 
 await sleep(400);
-check('大螢幕收到 STAGE_META', meta?.stage?.width === 1920);
+check('大螢幕收到 STAGE_META', meta?.stage?.width === STAGE.width, `收到 ${meta?.stage?.width}`);
 check('大螢幕連線時收到目前的場景主題', screenThemes[0] === 'kitchen', `收到 ${JSON.stringify(screenThemes)}`);
 
 // ── 資料驗證 ──────────────────────────────────────────────
