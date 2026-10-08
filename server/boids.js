@@ -20,7 +20,7 @@ import {
   OBSTACLE_WEIGHT, IDLE_MOTION,
 } from './config.js';
 import { STAGE } from '../shared/protocol.js';
-import { OBSTACLES } from '../shared/scene.js';
+import { OBSTACLES, nearestOnObstacle } from '../shared/scene.js';
 
 /** 將向量長度限制在 max 以內 */
 function limit(x, y, max) {
@@ -116,8 +116,9 @@ function obstacleForce(agent) {
   let deepest = 0;
 
   for (const o of OBSTACLES) {
-    const dx = agent.x - o.x;
-    const dy = agent.y - o.y;
+    const [ox, oy] = nearestOnObstacle(o, agent.x, agent.y);
+    const dx = agent.x - ox;
+    const dy = agent.y - oy;
     const distSq = dx * dx + dy * dy;
     const reach = o.r + BOIDS.obstacleMargin;
     if (distSq > reach * reach) continue;
@@ -158,8 +159,9 @@ function obstacleForce(agent) {
  */
 export function resolveObstacleOverlap(agent) {
   for (const o of OBSTACLES) {
-    const dx = agent.x - o.x;
-    const dy = agent.y - o.y;
+    const [ox, oy] = nearestOnObstacle(o, agent.x, agent.y);
+    const dx = agent.x - ox;
+    const dy = agent.y - oy;
     const distSq = dx * dx + dy * dy;
     if (distSq >= o.r * o.r) continue;
 
@@ -173,8 +175,8 @@ export function resolveObstacleOverlap(agent) {
       ny = dy / dist;
     }
 
-    agent.x = o.x + nx * o.r;
-    agent.y = o.y + ny * o.r;
+    agent.x = ox + nx * o.r;
+    agent.y = oy + ny * o.r;
 
     const into = agent.vx * nx + agent.vy * ny;
     if (into < 0) {
@@ -219,8 +221,9 @@ export function obstacleAvoidance(agent, vx, vy) {
   let nx = 0, ny = 0;
 
   for (const o of OBSTACLES) {
-    const dx = agent.x - o.x;
-    const dy = agent.y - o.y;
+    const [ox, oy] = nearestOnObstacle(o, agent.x, agent.y);
+    const dx = agent.x - ox;
+    const dy = agent.y - oy;
     const distSq = dx * dx + dy * dy;
     const reach = o.r + BOIDS.obstacleMargin;
     if (distSq > reach * reach) continue;

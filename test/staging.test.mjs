@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 
 import { stepAgent } from '../server/arbiter.js';
 import { Stage } from '../server/state.js';
-import { OBSTACLES } from '../shared/scene.js';
+import { OBSTACLES, obstacleDistance } from '../shared/scene.js';
 import { STAGE, AGENT_MODE } from '../shared/protocol.js';
 import { ARRIVE, MAX_SPEED } from '../server/config.js';
 
@@ -40,7 +40,7 @@ describe('出生點', () => {
     for (let i = 0; i < 500; i++) {
       const a = stage.addAgent({ name: 'T', avatar: AVATAR });
       for (const o of OBSTACLES) {
-        assert.ok(Math.hypot(a.x - o.x, a.y - o.y) >= o.r,
+        assert.ok(obstacleDistance(o, a.x, a.y) >= o.r,
           `出生點落在 ${o.x},${o.y} 的道具內`);
       }
       stage.removeAgent(a.id);
@@ -336,7 +336,7 @@ describe('避障交接', () => {
     let deepest = Infinity;
     for (let i = 0; i < 200; i++) {
       stage.tick(0.033);
-      deepest = Math.min(deepest, Math.hypot(a.x - o.x, a.y - o.y));
+      deepest = Math.min(deepest, obstacleDistance(o, a.x, a.y));
     }
     assert.ok(deepest >= o.r - 0.01,
       `放手後不應侵入道具（半徑 ${o.r}），最近距離 ${deepest.toFixed(1)}`);

@@ -1,6 +1,7 @@
 // Office theme: procedural pixel illustration in the spirit of a virtual co-working floor plan.
 // Same shared PROPS / ZONES as every other theme; only the look and the prop names change.
-import { INK, brush, hash, pill, ROOM_W, ROOM_H, ROOM_PAD } from './pixelKit.js';
+import { DOORWAYS } from '/shared/scene.js';
+import { INK, brush, hash, pill, ROOM_W, ROOM_H, ROOM_PAD, FLOOR_Y, doorway } from './pixelKit.js';
 
 const O = {
   corridor: '#ede3d3', corridorLine: '#e2d6c3',
@@ -69,7 +70,8 @@ function paintOfficeCore(c, zones) {
 
   // Zones: carpet tiles for desks, patterned carpet for meetings, diamond carpet for the lounge.
   for (const z of zones) {
-    const x = FX + z.x, y = FY + z.y;
+    // 分區座標已經是圖面座標，而這裡還在 ROOM_PAD 的位移裡
+    const x = z.x - ROOM_PAD, y = FY + z.y;
     rect(x - 5, y - 3, z.w + 10, z.h + 10, '#2b221c26');
     if (z.id === 'bar') {
       rect(x, y, z.w, z.h, '#7b818a');
@@ -177,9 +179,16 @@ function paintOfficeCore(c, zones) {
   // ── Side and bottom walls; glass entrance door at the bottom ──
   rect(120, 24, 2000, 22, O.cap); rect(120, 44, 2000, 3, O.capEdge);
   for (const x of [122, FR]) {
-    rect(x, 24, 38, FB + 36 - 24, O.cap);
-    rect(x === 122 ? FX - 4 : FR, 46, 4, FB - 46, O.capEdge);
-    for (let y = 150; y < FB; y += 260) { box(x + 8, y, 22, 60, O.glass); rect(x + 10, y + 4, 4, 30, O.glassHi); }
+    const d = DOORWAYS.find((o) => o.x - ROOM_PAD === x);
+    const top = d ? d.y : FB + 36, bot = d ? d.y + d.h : FB + 36;
+    const ex = x === 122 ? FX - 4 : FR;
+    rect(x, 24, 38, top - 24, O.cap); rect(ex, 46, 4, top - 46, O.capEdge);
+    if (d) { rect(x, bot, 38, FB + 36 - bot, O.cap); rect(ex, bot, 4, FB - bot, O.capEdge); }
+    for (let y = 150; y < FB; y += 260) {
+      if (d && y + 60 > d.y && y < bot) continue;
+      box(x + 8, y, 22, 60, O.glass); rect(x + 10, y + 4, 4, 30, O.glassHi);
+    }
+    if (d) doorway(c, x, d, O.seam, O.corridor, O.cap, O.capEdge);
   }
   for (const [l, r] of [[122, 830], [1110, 2118]]) { rect(l, FB, r - l, 36, O.cap); rect(l, FB, r - l, 3, O.capEdge); }
   for (const x of [814, 1110]) box(x, FB - 6, 16, 44, '#9aa1a8');
@@ -284,7 +293,7 @@ function paintGameRoom(c) {
 
 // Props -----------------------------------------------------------------------
 export function paintOfficeProp(c, p, kind, elapsed, reduced) {
-  c.save(); c.translate(160 + p.x, 270 + p.y);
+  c.save(); c.translate(p.x, FLOOR_Y + p.y);
   const { rect, box, oval, line, leaf, plant, monitor, chairTop, book } = kit(c);
   const active = elapsed >= 0 && elapsed < 4.5, w = p.r * 1.65, t = active && !reduced ? elapsed : 0;
   oval(5, 15, p.r * .95, p.r * .33, '#2a1f1a40');

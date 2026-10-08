@@ -1,9 +1,12 @@
 import { ZONES } from '/shared/scene.js';
 import { THEME_MAP } from '/shared/themes.js';
-import { ROOM_W as W, ROOM_H as H, ROOM_PAD, FLOOR_X, FLOOR_Y, spotBadge } from './pixelKit.js';
+import { ROOM_W as W, ROOM_H as H, FLOOR_Y, spotBadge } from './pixelKit.js';
 import { stageViewport, onStageViewportChange } from '../stageViewport.js';
 
-const GX = ROOM_PAD + FLOOR_X, GY = FLOOR_Y;
+// 舞台座標 → 圖面座標：純平移，沒有縮放。舞台寬度就是整張圖的寬度，
+// 因此 x 是 1:1；y 只差一個 FLOOR_Y（上方那段牆不屬於舞台）。
+// 與 shared/protocol.js 的 STAGE 必須同進退，見那裡的註解。
+const GX = 0, GY = FLOOR_Y;
 
 /**
  * Base for the procedural 2D pixel themes. Subclasses supply static config:
@@ -108,14 +111,12 @@ export class PixelScene {
     c.fillStyle = '#383c43'; c.fillRect(0, 0, innerWidth, innerHeight);
     c.translate(this.ox, this.oy); c.scale(this.zoom, this.zoom); c.imageSmoothingEnabled = false;
     c.drawImage(this.staticCanvas, 0, 0);
-    c.save(); c.translate(ROOM_PAD, 0);
     for (const p of [...this.props].sort((a, b) => a.y - b.y)) {
       const started = this.effects.get(p.id);
       const elapsed = started === undefined ? -1 : (now - started) / 1000;
       this.constructor.paintProp(c, p, this.item(p)[0], elapsed, this.reduced.matches);
       if (elapsed > 4.5) this.effects.delete(p.id);
     }
-    c.restore();
     const spots = this.spots();
     for (const p of this.props) if (spots[p.id]) spotBadge(c, GX + p.x, GY + p.y + 46, spots[p.id]);  // below the prop's front chair, not on it
     if (this.light !== 'day') {

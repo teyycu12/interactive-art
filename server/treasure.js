@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import { STAGE } from '../shared/protocol.js';
 import { TREASURE } from './config.js';
-import { OBSTACLES } from '../shared/scene.js';
+import { OBSTACLES, obstacleDistance } from '../shared/scene.js';
 
 // 冷熱等級由 shared/ 定義（三端共用），這裡只再匯出方便伺服器內部引用
 export { HEAT_LEVELS } from '../shared/heat.js';
@@ -42,7 +42,7 @@ function pickSpot() {
     const x = m + Math.random() * (STAGE.width - m * 2);
     const y = m + Math.random() * (STAGE.height - m * 2);
     // 藏在道具裡的話沒有人走得到，那一輪會永遠結束不了
-    if (!OBSTACLES.some((o) => Math.hypot(x - o.x, y - o.y) < o.r + TREASURE.claimRadius)) {
+    if (!OBSTACLES.some((o) => obstacleDistance(o, x, y) < o.r + TREASURE.claimRadius)) {
       return { x, y };
     }
   }

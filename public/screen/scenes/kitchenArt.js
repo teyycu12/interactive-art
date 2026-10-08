@@ -1,5 +1,6 @@
 // Kitchen theme: procedural pixel illustration. All floor furniture is supplied by shared PROPS.
-import { INK, brush, hash, pill as drawPill, ROOM_W, ROOM_H, ROOM_PAD } from './pixelKit.js';
+import { DOORWAYS } from '/shared/scene.js';
+import { INK, brush, hash, pill as drawPill, ROOM_W, ROOM_H, ROOM_PAD, FLOOR_Y, doorway } from './pixelKit.js';
 
 // Room palette: mid-tone floor so pale avatars and dark nameplates both read; dark walls frame the stage.
 const ROOM = {
@@ -175,7 +176,8 @@ function paintRoomCore(c, zones) {
 
   // Zones: each gets its own floor material and a floating name pill (visual aliases only).
   for (const z of zones) {
-    const x = FX + z.x, y = FY + z.y;
+    // 分區座標已經是圖面座標，而這裡還在 ROOM_PAD 的位移裡
+    const x = z.x - ROOM_PAD, y = FY + z.y;
     rect(x - 5, y - 3, z.w + 10, z.h + 10, '#2b221c38');
     if (z.id === 'bar') {
       const t = 38;
@@ -329,12 +331,19 @@ function paintRoomCore(c, zones) {
   box(1940, 172, 96, 46, '#dfe1dc'); rect(1946, 178, 62, 34, '#3d4a4e'); rect(1950, 182, 20, 3, '#ffffff40'); for (let i = 0; i < 3; i++) rect(2016, 182 + i * 9, 12, 5, '#8a9296');
   for (const x of [336, 1236, 2060]) { box(x - 12, 196, 24, 22, '#c9805c'); for (let i = 0; i < 6; i++) leaf(x + Math.sin(i * 2.4) * 12, 186 + Math.cos(i * 2.4) * 9, i % 2 ? ROOM.leafA : ROOM.leafC); }
 
-  // ── Side and bottom walls with timber caps; the doorway sits in the bottom wall ──
+  // ── Side and bottom walls with timber caps; side doors lead to the garden and the terrace ──
   rect(120, 24, 2000, 22, ROOM.cap); rect(120, 44, 2000, 3, ROOM.capEdge);
   for (const x of [122, FR]) {
-    rect(x, 24, 38, FB + 36 - 24, ROOM.cap);
-    rect(x === 122 ? FX - 4 : FR, 46, 4, FB - 46, ROOM.capEdge);
-    for (let y = 120; y < FB; y += 240) { box(x + 6, y, 26, 34, ROOM.wood); rect(x + 6, y, 26, 5, ROOM.woodLight); }
+    const d = DOORWAYS.find((o) => o.x - ROOM_PAD === x);
+    const top = d ? d.y : FB + 36, bot = d ? d.y + d.h : FB + 36;
+    const ex = x === 122 ? FX - 4 : FR;
+    rect(x, 24, 38, top - 24, ROOM.cap); rect(ex, 46, 4, top - 46, ROOM.capEdge);
+    if (d) { rect(x, bot, 38, FB + 36 - bot, ROOM.cap); rect(ex, bot, 4, FB - bot, ROOM.capEdge); }
+    for (let y = 120; y < FB; y += 240) {
+      if (d && y + 34 > d.y && y < bot) continue;
+      box(x + 6, y, 26, 34, ROOM.wood); rect(x + 6, y, 26, 5, ROOM.woodLight);
+    }
+    if (d) doorway(c, x, d, ROOM.planks[1], GRASS.base, ROOM.wood, ROOM.woodLight);
   }
   for (const [l, r] of [[122, 830], [1110, 2118]]) { rect(l, FB, r - l, 36, ROOM.cap); rect(l, FB, r - l, 3, ROOM.capEdge); }
   for (const x of [814, 1110]) { box(x, FB - 6, 16, 44, ROOM.wood); rect(x, FB - 6, 16, 5, ROOM.woodLight); }
@@ -346,7 +355,7 @@ function paintRoomCore(c, zones) {
 }
 
 export function paintKitchenProp(c,p,kind,elapsed,reduced) {
-  c.save();c.translate(160+p.x,270+p.y);
+  c.save();c.translate(p.x,FLOOR_Y+p.y);
   const {rect,box,oval,line,plate,bottle,leaf}=brush(c);
   const active=elapsed>=0&&elapsed<4.5,w=p.r*1.65;
   oval(5,15,p.r*.95,p.r*.33,'#2a1f1a4d');

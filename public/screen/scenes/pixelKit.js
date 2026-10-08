@@ -33,6 +33,26 @@ export function pill(c, x, y, text, dot = '#7fd28a', alignRight = false) {
 }
 
 /**
+ * 側牆上的門洞。
+ *
+ * 位置來自 `shared/scene.js` 的 `DOORWAYS` —— 那同一份資料也決定了牆的物理缺口
+ * 在哪裡。兩邊各寫一份的話，擋人的地方和畫出來的門會錯開，而現場看到的是
+ * 角色對著一扇畫出來的門撞牆，畫面上沒有任何異常。
+ *
+ * 門洞本身不畫門板：這是俯視視角，門就是「牆在這一段沒有畫」，
+ * 地面直接從室內接到室外。
+ */
+export function doorway(c, x, d, inside, outside, frame, frameHi) {
+  const { rect, box } = brush(c);
+  const west = d.x < ROOM_W / 2;
+  rect(x, d.y, 19, d.h, west ? outside : inside);
+  rect(x + 19, d.y, 19, d.h, west ? inside : outside);
+  rect(x, d.y, 38, 3, '#2b1f1840');
+  rect(x, d.y + d.h - 3, 38, 3, '#2b1f1840');
+  for (const yy of [d.y - 12, d.y + d.h - 2]) { box(x + 2, yy, 34, 14, frame); rect(x + 2, yy, 34, 4, frameHi); }
+}
+
+/**
  * Numbered spot badge (「1號桌」). Spots come from shared/themes.js so future missions
  * ("wearing white? meet at desk 1") and the picture always agree on which prop is which.
  */

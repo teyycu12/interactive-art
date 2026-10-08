@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { KitchenScene } from './KitchenScene.js';
 import { PROPS } from '../../../shared/scene.js';
+import { STAGE } from '../../../shared/protocol.js';
 
 function fixture() {
   const scene = Object.create(KitchenScene.prototype);
@@ -10,8 +11,9 @@ function fixture() {
 }
 test('projection maps feet into the stage in CSS pixels with proportional height', () => {
   const scene=fixture();
-  assert.deepEqual(scene.projectToScreen(0,0),{x:199,y:155});
-  assert.deepEqual(scene.projectToScreen(1920,1080),{x:1159,y:695});
+  // 舞台原點就是圖面原點（x 不再有位移），右下角是整張圖的右下角
+  assert.deepEqual(scene.projectToScreen(0,0),{x:30,y:155});
+  assert.deepEqual(scene.projectToScreen(STAGE.width,STAGE.height),{x:1328,y:695});
   assert.equal(scene.scaleAt(960,540,2.1),59.85);
   assert.equal(scene.scaleAt(NaN,540,2.1),0);
 });
