@@ -105,7 +105,19 @@ export const EV = {
   // ── 場景主題（shared/themes.js）──────────────────────
   HOST_SET_THEME: 'HOST_SET_THEME',           // Host → Server：切換大螢幕的場景主題
   STAGE_THEME: 'STAGE_THEME',                 // Server → Screen/Host：目前主題（連線時補送、切換時廣播）
+
+  // ── 活動報告 ─────────────────────────────────────────
+  HOST_REQUEST_REPORT: 'HOST_REQUEST_REPORT', // Host → Server：要一份整場的活動報告
+  HOST_REPORT: 'HOST_REPORT',                 // Server → Host：參與者與各輪活動的彙整
 };
+
+/**
+ * 任務的時間限制（毫秒）。0 代表不限時、由主辦端手動結算。
+ *
+ * 用白名單而不是任意數值：主辦端 UI 據此渲染選單，伺服器據此驗證，
+ * 兩邊各存一份必然會漂移（理由同 QUIZ）。
+ */
+export const MISSION_DURATIONS = [0, 3 * 60000, 5 * 60000, 8 * 60000, 10 * 60000];
 
 /**
  * 任務型別目錄。

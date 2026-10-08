@@ -49,6 +49,7 @@ import { SurveySession } from './survey.js';
 import { ScoreBoard } from './scores.js';
 import { SnapshotStore, Directory } from './persistence.js';
 import { createHttpLayer } from './httplayer.js';
+import { buildReport } from './report.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -317,6 +318,26 @@ function hostState() {
 }
 
 const pushHostState = () => blast(hosts, EV.HOST_STATE, hostState());
+
+/**
+ * 結算目前的任務。主辦端按「結算」與限時到點走同一條路，
+ * 三端收到的 MISSION_CLOSED 才會一模一樣。
+ * @param {'host'|'time'} by 誰收掉的；時間到時主辦端要在動態裡看得出來
+ */
+function closeMission(by = 'host') {
+  const closed = missions.close();
+  if (!closed) return;
+  console.log(`[mission] 結算「${closed.title}」${by === 'time' ? '（時間到）' : ''}`);
+  markDirty();
+  blastAll(EV.MISSION_CLOSED, {
+    id: closed.id,
+    title: closed.title,
+    totalCompletions: closed.events.length,
+    graphEdges: graph.size,
+    by,
+  });
+  pushHostState();
+}
 
 /**
  * 積分帳本的單一寫入點。
@@ -852,6 +873,7 @@ function handleHostMessage(ws, msg) {
         type: msg.missionType,
         target: msg.target,
         colorFamily: msg.colorFamily ?? null,
+        durationMs: msg.durationMs ?? 0,
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       console.log(`[mission] 發布「${result.mission.title}」目標 ${result.mission.target} 次`);
@@ -954,20 +976,26 @@ function handleHostMessage(ws, msg) {
       break;
     }
 
-    case EV.HOST_CLOSE_MISSION: {
-      const closed = missions.close();
-      if (!closed) return;
-      console.log(`[mission] 結算「${closed.title}」`);
-      markDirty();
-      blastAll(EV.MISSION_CLOSED, {
-        id: closed.id,
-        title: closed.title,
-        totalCompletions: closed.events.length,
-        graphEdges: graph.size,
-      });
-      pushHostState();
+    case EV.HOST_CLOSE_MISSION:
+      closeMission();
       break;
-    }
+
+    case EV.HOST_REQUEST_REPORT:
+      // format 原樣帶回：主辦端據此決定要下載哪一張表
+      send(ws, EV.HOST_REPORT, {
+        format: msg.format === 'activities' ? 'activities' : 'people',
+        report: buildReport({
+          missions: missions.export(),
+          quiz: quiz.export(),
+          survey: survey.export(),
+          scores: scores.export(),
+          graph: graph.export(),
+          // 已經離場的人從 directory 找名字；被移除的人兩邊都查不到，留空
+          nameOf: (id) => nameOf(id) || directory.get(id)?.name || '',
+          isPresent,
+        }),
+      });
+      break;
 
     case EV.HOST_START_QUIZ: {
       const result = quiz.start({
@@ -1211,6 +1239,7 @@ wss.on('connection', (ws) => {
       case EV.HOST_SET_THEME:
       case EV.HOST_START_SURVEY:
       case EV.HOST_CLOSE_SURVEY:
+      case EV.HOST_REQUEST_REPORT:
         // 未通過認證的連線一律忽略，不回應也不透露任何狀態
         if (ws.role !== 'host') return;
         handleHostMessage(ws, msg);
@@ -1309,6 +1338,9 @@ const loop = startTicker({
 
     // 問卷的時間到同樣由主迴圈推進，理由與問答相同：setTimeout 在事件迴圈
     // 被拖慢時會延後觸發，而這裡的時間到必須與大螢幕上的倒數一致。
+    // 限時任務到點結算，與問卷、問答同樣由主迴圈推進
+    if (missions.shouldAutoClose(now)) closeMission('time');
+
     if (survey.shouldAutoClose(now)) closeSurvey(now);
     else if (survey.isActive) {
       // 到位狀態由伺服器的座標判定，每拍更新。手機不知道自己在房間的哪裡
