@@ -13,7 +13,8 @@ import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
 import { TREASURE_RADIUS } from '/shared/heat.js';
 import { SURVEY } from '/shared/surveys.js';
-import { createScene, pinnedSceneId } from './scenes/registry.js';
+import { HARVEST } from '/shared/harvest.js';
+import { createScene, pinnedSceneId, propLabel } from './scenes/registry.js';
 import { DEFAULT_THEME, isThemeId } from '/shared/themes.js';
 import { drawCharacter, drawNameplate, drawEmote, drawOffline } from '/shared/character.js';
 import { stageViewport, setStageTopInset, onStageViewportChange } from './stageViewport.js';
@@ -309,6 +310,14 @@ function connect() {
       case EV.SURVEY_QUESTION:
         showSurvey({ ...msg.survey, counts: new Array(msg.survey.options.length).fill(0), totalAnswers: msg.survey.answered ?? 0 },
           { durationMs: msg.survey.durationMs });
+        break;
+
+      case EV.HARVEST_STATE:
+        harvestRound = msg.round;
+        break;
+
+      case EV.HARVEST_DONE:
+        harvestRound = null;
         break;
 
       case EV.SURVEY_STATE:
@@ -630,6 +639,7 @@ function render(now) {
 
   drawTreasure(now);
   drawSurveyZones();
+  drawHarvestZones();
 
   // 位置內插
   for (const a of latest) {
@@ -711,11 +721,13 @@ function render(now) {
     // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
     drawNameplate(ctx, pos, entry?.name ?? a.id, { fontSize: Math.max(10, height * 0.12) });
     drawPendingMark(a, pos, height);
+    drawHarvestMark(a, pos, height);
     if (a.emote) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }
 
   drawSurveySpots(now);
+  drawHarvestSpots();
 
   if (debug) updateHud();
   requestAnimationFrame(render);
@@ -1022,6 +1034,160 @@ function renderQuizOptions(revealed = null, counts = null) {
 // ── 轉場問卷 ────────────────────────────────────────────────
 /** @type {object|null} 目前的問卷分佈（題目 + 即時票數） */
 let surveyState = null;
+
+/**
+ * 採水果（籃子接力）。
+ *
+ * 大螢幕是這個玩法的**唯一**公開資訊來源：手機上刻意不寫家具名稱，
+ * 因此「還有哪幾處沒採」「籃子在誰手上」「誰已經採過了」三件事都得在這裡講清楚，
+ * 否則拿著籃子的人不知道要找誰，而整個玩法就只剩走路。
+ */
+let harvestRound = null;
+
+const BASKET = { full: '#2A9D8F', done: '#8FBF7F', ink: 'rgba(47,42,38,.85)' };
+
+/** 還沒採的那幾處，地上畫一圈 —— 判定範圍要看得見，不然會站在旁邊納悶怎麼沒反應 */
+function drawHarvestZones() {
+  if (!harvestRound) return;
+  for (const bed of harvestRound.beds) {
+    const prop = PROPS.find((p) => p.id === bed.propId);
+    if (!prop) continue;
+    const pos = toScreen(prop);
+    // 半徑要分別投影 x 與 y：地板是斜的，用同一個數字會畫成正圓浮在空中
+    const reach = prop.r + HARVEST.reachRadius;
+    const rx = Math.abs(toScreen({ x: prop.x + reach, y: prop.y }).x - pos.x);
+    const ry = Math.abs(toScreen({ x: prop.x, y: prop.y + reach }).y - pos.y);
+    const picked = bed.pickedBy !== null;
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(pos.x, pos.y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fillStyle = picked ? `${BASKET.done}33` : `${BASKET.full}4D`;
+    ctx.fill();
+    ctx.lineWidth = Math.max(2, rx * 0.05);
+    ctx.strokeStyle = picked ? BASKET.done : BASKET.full;
+    // 採過的換實線，還沒採的維持虛線 —— 數字要盯著看，線的虛實在場地另一端也分得出來
+    if (!picked) ctx.setLineDash([rx * 0.18, rx * 0.12]);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+/** 每個人頭上的採收記號：拿著籃子的人掛籃子，採過的人掛一個 ✓ */
+function drawHarvestMark(a, pos, height) {
+  if (!harvestRound) return;
+  const holding = harvestRound.holder === a.id;
+  const used = harvestRound.picked.includes(a.id);
+  if (!holding && !used) return;
+
+  const r = Math.max(9, height * (holding ? 0.2 : 0.13));
+  const y = pos.y - height * (holding ? 1.62 : 1.5);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(pos.x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = holding ? BASKET.full : BASKET.done;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1.5, r * 0.18);
+  ctx.strokeStyle = BASKET.ink;
+  ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = `900 ${r * 1.35}px system-ui, "Noto Sans TC", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // 採過的人標 ✓ 而不是標「還沒採的人」：一輪下來採過的永遠比較少，
+  // 而拿著籃子的人要找的正是「沒有記號的那些人」
+  ctx.fillText(holding ? '🧺' : '✓', pos.x, y + r * 0.06);
+  ctx.restore();
+}
+
+/** 每一處的名牌，外加籃子沒人拿著時落在地上的位置 */
+function drawHarvestSpots() {
+  if (!harvestRound) return;
+
+  for (const bed of harvestRound.beds) {
+    const prop = PROPS.find((p) => p.id === bed.propId);
+    if (!prop) continue;
+    harvestPill(prop, propLabel(sceneId, prop.id), bed.pickedBy ? '✓ 採好了' : '還沒採',
+      bed.pickedBy ? BASKET.done : BASKET.full);
+  }
+  const home = PROPS.find((p) => p.id === harvestRound.home);
+  if (home) {
+    const left = harvestRound.beds.filter((b) => b.pickedBy === null).length;
+    harvestPill(home, propLabel(sceneId, home.id),
+      left === 0 ? '送回這裡 ←' : `還差 ${left} 處`, '#E9C46A');
+  }
+  if (!harvestRound.holder) {
+    // 沒有人拿著：籃子躺在最後一個人放下（或離場）的地方，要畫出來才有人去撿
+    const pos = toScreen(harvestRound.basket);
+    const r = Math.max(12, characterHeightAt(harvestRound.basket) * 0.2);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y - r, r, 0, Math.PI * 2);
+    ctx.fillStyle = BASKET.full;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.5, r * 0.18);
+    ctx.strokeStyle = BASKET.ink;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `900 ${r * 1.3}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🧺', pos.x, pos.y - r);
+    ctx.restore();
+  }
+}
+
+function harvestPill(prop, label, state, color) {
+  const pos = toScreen(prop);
+  const h = characterHeightAt(prop);
+  const pad = h * 0.16;
+  const font = Math.max(11, h * 0.26);
+  ctx.save();
+  ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  const labelW = ctx.measureText(label).width;
+  ctx.font = `900 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  const stateW = ctx.measureText(state).width;
+  const gap = pad * 0.9;
+  const w = pad * 2 + labelW + gap + stateW;
+  const boxH = font + pad * 1.6;
+  // 菜畦貼在畫面左緣，名牌置中就會被裁掉半截 —— 現場看到的是「蘿蔔畦」
+  // 這種少一個字的名字，而那正好是任務要喊的那個詞。夾回畫面內，
+  // 指向道具的尖角另外夾在名牌寬度之內，免得它飄到名牌外面。
+  const vp = stageViewport();
+  const x = Math.min(Math.max(pos.x - w / 2, vp.x + 6), vp.x + vp.width - w - 6);
+  // 上方放不下時改掛在道具下面（上緣是房間的牆與大標題，硬擠會疊在一起）
+  const above = pos.y - h * 1.15 - boxH;
+  const flip = above < vp.y + 6;
+  const y = flip ? pos.y + h * 0.25 : above;
+  const tipX = Math.min(Math.max(pos.x, x + boxH * 0.3), x + w - boxH * 0.3);
+
+  ctx.fillStyle = color;
+  ctx.strokeStyle = BASKET.ink;
+  ctx.lineWidth = Math.max(1.5, h * 0.025);
+  roundRect(ctx, x, y, w, boxH, boxH / 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = '#fff';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  const midY = y + boxH / 2;
+  ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  ctx.fillText(label, x + pad, midY);
+  ctx.font = `900 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  ctx.fillText(state, x + pad + labelW + gap, midY);
+
+  const edge = flip ? y : y + boxH;
+  const tipY = flip ? y - boxH * 0.42 : y + boxH + boxH * 0.42;
+  ctx.beginPath();
+  ctx.moveTo(tipX - boxH * 0.22, edge);
+  ctx.lineTo(tipX + boxH * 0.22, edge);
+  ctx.lineTo(tipX, tipY);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
 let surveyDeadline = 0;
 let surveyRaf = null;
 let surveyHideTimer = null;

@@ -108,6 +108,15 @@ function handle(msg, key) {
       pushFeed(`${msg.a.name} × ${msg.b.name} 完成配對`, 'ev-pair');
       break;
 
+    case EV.HARVEST_STATE:
+      renderHarvest(msg.round, msg.reason);
+      break;
+
+    case EV.HARVEST_DONE:
+      renderHarvest(null);
+      pushFeed(`採收完成　${msg.helperNames.join('、')}　各 +${msg.points}`, 'ev-pair');
+      break;
+
     case EV.TREASURE_START:
       renderTreasure(msg.round);
       pushFeed(`尋寶開始，先知＝${nameOfAgent(msg.round.prophetId)}`, 'ev-mission');
@@ -228,6 +237,7 @@ const ERR_SLOT = {
   survey: '#survey-err',
   quiz: '#quiz-err',
   treasure: '#treasure-err',
+  harvest: '#harvest-err',
   mission: '#mission-err',
 };
 
@@ -612,6 +622,34 @@ function syncProphetOptions() {
   // 保留主辦端已經選好的人，重新渲染名冊不該把選擇清掉
   if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
 }
+
+/**
+ * 採收面板。與尋寶同樣是事件驅動（HOST_STATE 不含它），因此主辦端重整或
+ * 斷線重連時由 HARVEST_STATE 的補送把畫面接回來 —— 少了那一步，
+ * 重整後的主辦端會停在「開始採收」那一頁，「中止本輪」根本不在畫面上。
+ */
+function renderHarvest(round, reason) {
+  $('#harvest-idle').hidden = !!round;
+  $('#harvest-live').hidden = !round;
+  if (round) {
+    const left = round.beds.filter((b) => b.pickedBy === null).length;
+    $('#harvest-left').textContent = left > 0 ? `還差 ${left} 處` : '送回去就完成';
+    $('#harvest-holder').textContent = round.holder ? nameOfAgent(round.holder) : '沒有人拿著（放在地上）';
+    $('#harvest-picked').textContent = `${round.picked.length} 人`;
+  } else if (reason) {
+    pushFeed(reason === 'NO_FRESH_HANDS'
+      ? '採收中止：還沒採過的人不夠了' : '採收中止：場上沒有人', 'ev-mission');
+  }
+}
+
+$('#btn-harvest-start').addEventListener('click', () => {
+  lastAction = 'harvest';
+  ws?.send(JSON.stringify({ type: EV.HOST_START_HARVEST }));
+});
+
+$('#btn-harvest-stop').addEventListener('click', () => {
+  ws?.send(JSON.stringify({ type: EV.HOST_STOP_HARVEST }));
+});
 
 $('#btn-treasure-start').addEventListener('click', () => {
   lastAction = 'treasure';

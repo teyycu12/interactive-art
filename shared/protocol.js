@@ -92,6 +92,16 @@ export const EV = {
   SURVEY_STATE: 'SURVEY_STATE',               // Server → Screen/Host：即時分佈
   SURVEY_CLOSED: 'SURVEY_CLOSED',             // Server → All：本題收掉，附最終分佈
 
+  // 採水果（籃子接力）。沒有秘密 —— 哪一畦採過了、籃子在誰手上都要讓全場看見，
+  // 「誰還沒採」正是大家要互相喊的那件事，因此三端送同一份狀態。
+  HOST_START_HARVEST: 'HOST_START_HARVEST',   // Host → Server：開始一輪採收
+  HOST_STOP_HARVEST: 'HOST_STOP_HARVEST',     // Host → Server：中止本輪
+  HARVEST_STATE: 'HARVEST_STATE',             // Server → All：本輪狀態（round 為 null 代表結束）
+  HARVEST_TAKE: 'HARVEST_TAKE',               // Phone → Server：接過／撿起籃子
+  HARVEST_DROP: 'HARVEST_DROP',               // Phone → Server：把籃子放在原地
+  HARVEST_REACH: 'HARVEST_REACH',             // Server → Phone：按不按得到「接過籃子」
+  HARVEST_DONE: 'HARVEST_DONE',               // Server → All：籃子送回去了，本輪完成
+
   // ── 場景主題（shared/themes.js）──────────────────────
   HOST_SET_THEME: 'HOST_SET_THEME',           // Host → Server：切換大螢幕的場景主題
   STAGE_THEME: 'STAGE_THEME',                 // Server → Screen/Host：目前主題（連線時補送、切換時廣播）
@@ -171,6 +181,7 @@ export const SCORE_SOURCES = {
   MISSION_DONE: 'MISSION_DONE', // 達成該任務的目標次數
   QUIZ: 'QUIZ',               // 答對問答
   TREASURE: 'TREASURE',       // 找到寶藏
+  HARVEST: 'HARVEST',         // 採水果接力完成
 };
 
 /** 積分來源的顯示文案，集中定義避免三端各寫一套 */
@@ -179,6 +190,7 @@ export const SCORE_LABELS = {
   MISSION_DONE: '任務達標',
   QUIZ: '答對問答',
   TREASURE: '找到寶藏',
+  HARVEST: '採收接力',
 };
 
 /** 配對失敗原因，集中定義以便手機端顯示對應文案 */

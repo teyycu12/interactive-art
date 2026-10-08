@@ -267,6 +267,25 @@ function handle(p, msg) {
     case EV.CLIENT_SYNC:
       if (msg.self) p.pos = { x: msg.self.x, y: msg.self.y };
       break;
+    // 採水果：狀態是全場共用的，但每個傀儡要知道籃子是不是在自己手上
+    case EV.HARVEST_STATE:
+      p.holdsBasket = msg.round?.holder === p.id;
+      p.harvest = msg.round;
+      if (!msg.round) p.canTake = false;
+      renderHand(p);
+      break;
+    case EV.HARVEST_REACH:
+      p.canTake = !!msg.canTake;
+      if (msg.note) p.note = msg.note;
+      renderHand(p);
+      break;
+    case EV.HARVEST_DONE:
+      p.harvest = null;
+      p.holdsBasket = false;
+      p.canTake = false;
+      p.note = msg.helpers.includes(p.id) ? `採收完成，+${msg.points}` : '採收完成';
+      renderHand(p);
+      break;
     case EV.SURVEY_QUESTION:
       p.ask = normalizeAsk(msg.survey, 'SURVEY');
       p.answered = null;
@@ -391,6 +410,13 @@ function buildCard(p) {
   ask.className = 'ask';
   ask.hidden = true;
 
+  // 採水果的交接鈕。這個玩法只能靠「兩個人站在一起」才試得出來，
+  // 而開發階段湊不出兩支手機 —— 沒有這一顆，整個接力在這裡無法驗證。
+  const hv = document.createElement('button');
+  hv.type = 'button';
+  hv.className = 'hv';
+  hv.hidden = true;
+
   const note = document.createElement('p');
   note.className = 'note';
 
@@ -403,8 +429,12 @@ function buildCard(p) {
   leave.addEventListener('click', () => leavePuppet(p));
   foot.append(leave);
 
-  el.append(head, pad, emotes, goto, ask, note, foot);
-  p.refs = { idEl, posEl, pad, ask, note, sel };
+  hv.addEventListener('click', () => {
+    sendTo(p, p.holdsBasket ? EV.HARVEST_DROP : EV.HARVEST_TAKE, {});
+  });
+
+  el.append(head, pad, emotes, goto, ask, hv, note, foot);
+  p.refs = { idEl, posEl, pad, ask, hv, note, sel };
   return el;
 }
 
@@ -435,6 +465,17 @@ function renderStatus(p) {
     ? `x ${Math.round(p.pos.x)}　y ${Math.round(p.pos.y)}${p.target ? `　→ ${p.target}` : ''}`
     : '—';
   note.textContent = p.note;
+}
+
+/**
+ * 採水果的交接鈕。與題目面板同樣不在 renderStatus 裡重建 ——
+ * 15Hz 重建會讓按下去的瞬間按鈕已經被換掉，點擊落空而畫面看起來完全正常。
+ */
+function renderHand(p) {
+  const { hv } = p.refs ?? {};
+  if (!hv) return;
+  hv.hidden = !p.harvest || !(p.holdsBasket || p.canTake);
+  hv.textContent = p.holdsBasket ? '🧺 放下籃子' : '🧺 接過籃子';
 }
 
 /** 題目面板。只在題目本身或自己的選擇變動時呼叫。 */

@@ -49,6 +49,7 @@
 │   ├── treasure.js               # ★ 尋寶（先知模式）：規則與冷熱判定
 │   ├── certcheck.js              # ★ 啟動時比對憑證 SAN 與當下 LAN IP
 │   ├── survey.js                 # ★ 轉場問卷：沒有正解的題目，答案留成參與者標籤
+│   ├── harvest.js                # ★ 採水果（籃子接力）：一人一畦，逼出交接那一步
 │   ├── devAvatars.js             # ★ 開發用：列出可直接上場的歷史角色（見 /public/dev）
 │   └── persistence.js  scheduler.js  ratelimit.js  config.js
 ├── /shared                       # ★ 前後端共用的單一事實來源
@@ -61,7 +62,8 @@
 │   ├── heat.js                   # ★ 尋寶冷熱等級與判定半徑（三端共用）
 │   ├── themes.js                 # ★ 場景主題目錄與號碼地點（1號桌…），三端共用
 │   ├── surveys.js                # ★ 轉場問卷題庫與格式限制（選項可綁道具 id）
-│   └── scene.js                  # 場景障礙物佈局
+│   ├── harvest.js                # ★ 採收接力的判定半徑與採收點（三端共用）
+│   └── scene.js                  # ★ 場景佈局：道具、分區、牆與門（伺服器與大螢幕共用）
 ├── /public                       # ★ 前端
 │   ├── controller/               # 手機端：拍照生成／捏臉（備援）、搖桿、任務
 │   ├── screen/                   # 大螢幕

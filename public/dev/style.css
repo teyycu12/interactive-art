@@ -139,3 +139,17 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* 採水果的交接鈕。開發台上它是唯一能驗證「兩個人站在一起交接」的途徑 */
+.hv {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  border-radius: 10px;
+  border: 2px solid #1f6f66;
+  background: #2A9D8F;
+  color: #fff;
+  cursor: pointer;
+}

@@ -1116,6 +1116,18 @@ input:focus-visible,
   /* 冷熱是先知唯一的資訊來源，變動時要看得出來 */
   transition: background .25s ease;
 }
+/* 採收的框：拿著籃子的人要一眼知道「東西在我手上」 */
+.treasure.harvest.is-holder {
+  border-color: #2A9D8F;
+  background: rgba(42, 157, 143, .12);
+}
+.hv-act {
+  margin-top: 10px;
+  width: 100%;
+  /* 交接是這個玩法唯一要按的鈕，而現場是站著單手操作：按鈕放大到整列 */
+  min-height: 52px;
+  font-size: 16px;
+}
 .tr-hint {
   margin: 7px 0 0;
   font-size: 13px;
