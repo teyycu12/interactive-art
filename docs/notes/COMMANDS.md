@@ -16,6 +16,10 @@ bash start.sh                      # 生成服務 :5055 + 互動層 :3000
                                    # 偵測到 certs/ 就自動走 HTTPS（相機需要），
                                    # 沒有憑證則以 HTTP 啟動並說明代價
 
+# 正式場次：一定要帶場次名稱，事件紀錄才不會混進工程師測試（見 FIELD-OPS「事件紀錄」）
+PERSONAFLOW_SESSION=live-1019 bash start.sh    # → data/events/live-1019.jsonl
+PERSONAFLOW_SESSION=rehearsal-1017 bash start.sh   # 彩排：非 live 開頭一律標為 test
+
 # 或分別啟動（除錯時比較好看 log）
 npm start                          # 互動層，印出大螢幕/手機/主辦端三個網址
 python backend/service.py          # 角色生成服務（127.0.0.1:5055）

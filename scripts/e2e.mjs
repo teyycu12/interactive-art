@@ -39,6 +39,14 @@ function check(label, ok, extra = '') {
 const STATE_FILE = path.join(os.tmpdir(), 'personaflow-e2e-state.json');
 const KEY_PATTERN = /主辦端通行密鑰\s+([A-Z0-9]+)/;
 try { fs.rmSync(STATE_FILE, { force: true }); } catch { /* 略 */ }
+// 事件紀錄同理：寫到暫存目錄，不能落進專案的 data/events/ 混進真正的場次
+const EVENTS_DIR = path.join(os.tmpdir(), `personaflow-e2e-events-${process.pid}`);
+const EVENTS_FILE = path.join(EVENTS_DIR, 'e2e.jsonl');
+const readEvents = () => {
+  try {
+    return fs.readFileSync(EVENTS_FILE, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  } catch { return []; }
+};
 
 let server = null;
 let serverLog = [];
@@ -53,7 +61,10 @@ let serverLog = [];
 async function launch() {
   serverLog = [];
   server = spawn(process.execPath, [path.join(ROOT, 'server', 'index.js')], {
-    env: { ...process.env, PORT: String(PORT), PERSONAFLOW_STATE_FILE: STATE_FILE },
+    env: {
+      ...process.env, PORT: String(PORT), PERSONAFLOW_STATE_FILE: STATE_FILE,
+      PERSONAFLOW_SESSION: 'e2e', PERSONAFLOW_EVENTS_DIR: EVENTS_DIR,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   server.stdout.on('data', (d) => serverLog.push(String(d)));
@@ -87,6 +98,7 @@ const HOST_KEY = await launch();
 function finish() {
   server?.kill();
   try { fs.rmSync(STATE_FILE, { force: true }); } catch { /* 略 */ }
+  try { fs.rmSync(EVENTS_DIR, { recursive: true, force: true }); } catch { /* 略 */ }
   console.log(`\n${pass}/${pass + fail} 通過`);
   process.exit(fail ? 1 : 0);
 }
@@ -887,7 +899,42 @@ const amyToken = amy.welcome.rejoinToken;
 const amyScoreBefore = amy.scores.at(-1)?.score ?? 0;
 
 await stopServer();
+
+// ── 事件紀錄 ──────────────────────────────────────────────
+// 實測的停留時間、操控時間、配對成功率全靠這份檔案。這裡驗的是真的伺服器
+// 跑完前半段之後實際寫出了什麼，而不是 EventLog 類別本身（那在單元測試）。
+{
+  const evs = readEvents();
+  const kinds = new Set(evs.map((e) => e.ev));
+  check('事件紀錄每一行都帶場次與伺服器時間',
+    evs.length > 0 && evs.every((e) => e.session === 'e2e' && Number.isFinite(e.t)),
+    `${evs.length} 筆`);
+  check('事件紀錄以 session_start 開頭、正常關機寫下 session_end',
+    evs[0]?.ev === 'session_start' && evs[0]?.kind === 'test'
+    && evs.some((e) => e.ev === 'session_end' && e.reason === 'shutdown'),
+    `${evs[0]?.ev} … ${evs.at(-1)?.ev}`);
+  const missing = ['join', 'disconnect', 'leave', 'mode_change', 'pair_claim', 'pair_confirm',
+    'mission_publish', 'mission_progress', 'mission_close', 'quiz_start', 'quiz_answer',
+    'quiz_reveal', 'treasure_start', 'survey_start', 'survey_answer', 'theme_change']
+    .filter((k) => !kinds.has(k));
+  check('前半段走過的玩法都留下事件', missing.length === 0, `缺 ${missing.join('、')}`);
+  const joins = evs.filter((e) => e.ev === 'join');
+  check('捏臉入場記為 builder 且沒有生成 id',
+    joins.length > 0 && joins.every((e) => e.entry === 'builder' && e.genReq === undefined
+      && typeof e.name === 'string'),
+    JSON.stringify(joins[0]));
+  check('配對成功的確認事件帶雙方 id',
+    evs.some((e) => e.ev === 'pair_confirm' && e.ok === true && e.agent && e.peer && e.agent !== e.peer));
+  check('問答作答事件帶伺服器算的作答時間',
+    evs.some((e) => e.ev === 'quiz_answer' && Number.isFinite(e.elapsedMs)));
+  check('事件紀錄不含照片或重連憑證',
+    !fs.readFileSync(EVENTS_FILE, 'utf8').match(/rejoinToken|data:image/));
+}
+
 const keyAfterRestart = await launch();
+check('同一場次重開後接著寫，不覆蓋前半場',
+  readEvents().filter((e) => e.ev === 'session_start').length === 2
+  && readEvents().at(-1)?.resumed === true);
 
 check('重開後通行密鑰不變，主辦端不必重讀新號碼',
   keyAfterRestart === HOST_KEY, `${HOST_KEY} → ${keyAfterRestart}`);

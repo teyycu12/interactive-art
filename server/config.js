@@ -238,6 +238,14 @@ export const PERSISTENCE = {
   directoryTtlMs: 12 * 60 * 60 * 1000,
 };
 
+// 逐筆事件紀錄（見 eventlog.js）。場次名稱決定檔名，測試與正式場次自然分檔。
+export const EVENTS = {
+  session: process.env.PERSONAFLOW_SESSION || 'dev',
+  dir: process.env.PERSONAFLOW_EVENTS_DIR || 'data/events',
+  // 與快照共用同一個開關：測試關掉持久化時，也不該在 data/ 底下留紀錄
+  enabled: process.env.PERSONAFLOW_PERSIST !== '0',
+};
+
 // 入站速率限制（參數取捨見 ratelimit.js）
 export const RATE_LIMIT = {
   capacity: 60,              // 突發容許量：協定規格 20Hz 的 3 倍

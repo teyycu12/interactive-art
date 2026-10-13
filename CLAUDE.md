@@ -34,8 +34,8 @@
 ```bash
 npm install && pip install -r requirements.txt requirements-dev.txt
 bash start.sh          # 生成服務 :5055 + 互動層 :3000（偵測到 certs/ 自動走 HTTPS）
-npm test               # Node 396      npm run test:e2e   # 端對端 147
-pytest backend/        # Python 429
+npm test               # Node 409      npm run test:e2e   # 端對端 156
+pytest backend/        # Python 433
 ```
 
 完整指令（壓測機器人、切片驗證、憑證產生、關閉服務）見
@@ -57,7 +57,7 @@ pytest backend/        # Python 429
 | 專案佈局、某個檔案放哪 | [STRUCTURE.md](docs/notes/STRUCTURE.md) |
 | Boids、M1–M3 里程碑 | [CONVENTIONS.md](docs/notes/CONVENTIONS.md) |
 | 風格、VLM、切片、貼圖、手機同步 | [GENERATION.md](docs/notes/GENERATION.md) |
-| 場館網路、TLS 憑證、生成耗時、震動 | [FIELD-OPS.md](docs/notes/FIELD-OPS.md) |
+| 場館網路、TLS 憑證、生成耗時、震動、事件紀錄 | [FIELD-OPS.md](docs/notes/FIELD-OPS.md) |
 | `server/`、測試、`IDLE_MOTION`、人數上限 | [SERVER-AND-TESTS.md](docs/notes/SERVER-AND-TESTS.md) |
 | 尋寶、COLOR_HUNT、分區、任何新玩法 | [INTERACTION-DESIGN.md](docs/notes/INTERACTION-DESIGN.md) |
 | 顏色、對比、按鈕尺寸、`style.css` | [UI-STYLING.md](docs/notes/UI-STYLING.md) |

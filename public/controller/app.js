@@ -463,7 +463,16 @@ function stopScanStream() {
   scanStream = null;
 }
 
+/**
+ * 入場路徑，隨 CLIENT_JOIN 回報給伺服器的事件紀錄。
+ * 拍照生成的角色伺服器自己認得出來（貼圖路徑），但「直接捏臉」與
+ * 「拍照失敗才改捏臉」在伺服器眼中長得一樣 —— 只有手機知道走過哪一條。
+ * @type {'builder'|'scan_fallback'}
+ */
+let entryRoute = 'builder';
+
 function fallbackToBuilder(message) {
+  entryRoute = 'scan_fallback';
   stopScanStream();
   if (message) showToast(message);
   ensureTokenConfig();
@@ -1009,6 +1018,7 @@ if (hasSavedCharacter()) {
 $('#btn-return').addEventListener('click', enterStage);
 
 $('#btn-new-character').addEventListener('click', () => {
+  entryRoute = 'builder';
   // 一定要清掉憑證：帶著舊憑證進場，伺服器會認領回舊角色、
   // 沿用舊的外觀，新拍的照片等於白拍
   try {
@@ -1068,7 +1078,9 @@ function connect() {
       userId = localStorage.getItem(LS.userId);
       rejoinToken = localStorage.getItem(LS.rejoinToken);
     } catch { /* 略 */ }
-    sendMsg(EV.CLIENT_JOIN, { userId, rejoinToken, name: displayName, avatar: config });
+    sendMsg(EV.CLIENT_JOIN, {
+      userId, rejoinToken, name: displayName, avatar: config, entry: entryRoute,
+    });
   });
 
   ws.addEventListener('message', (e) => {
