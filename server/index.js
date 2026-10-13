@@ -228,7 +228,9 @@ function resolveScreenCapture(requestId, image) {
   return true;
 }
 
-const { handleRequest } = createHttpLayer({
+// VISION_HOST / VISION_PORT 曾在抽出 httplayer.js 時被一起搬走，下面的大合照卻還在用：
+// 按下「拍大合照」就是 ReferenceError → unhandledRejection → 整個伺服器結束。
+const { handleRequest, VISION_HOST, VISION_PORT } = createHttpLayer({
   root: ROOT,
   publicDir: PUBLIC_DIR,
   keyMatches,

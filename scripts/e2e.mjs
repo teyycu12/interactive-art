@@ -1156,4 +1156,31 @@ const huge = Buffer.alloc(2 * 1024 * 1024, 0x20);
 check('引導端點擋下過大的影格',
   await postApi('/api/preview', huge) === 'frame_too_large');
 
+// ── 大合照不能讓伺服器當掉 ────────────────────────────────
+// 抽出 httplayer.js 時 VISION_HOST 被一起搬走，index.js 的合照卻還在用：
+// 按一下「拍大合照」就是 ReferenceError → unhandledRejection → 整台伺服器結束。
+// 生成服務開或沒開都要成立（沒開時收到的是 ERROR，但伺服器必須還活著）。
+// 場上要有角色，否則合照在「場上沒有角色」就提早回了，走不到出事的那一段。
+{
+  const model = new WebSocket(URL);
+  await new Promise((r) => model.on('open', r));
+  model.send(JSON.stringify({ type: 'CLIENT_JOIN', name: '合照模特兒', avatar: AVATAR }));
+  const photoHost = new WebSocket(URL);
+  const phases = [];
+  photoHost.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'HOST_WELCOME') photoHost.send(JSON.stringify({ type: 'HOST_TAKE_PHOTO' }));
+    if (m.type === 'HOST_PHOTO_STATE') phases.push(m.phase);
+  });
+  photoHost.on('open', () => photoHost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY })));
+  // 大螢幕不會交回截圖（測試的螢幕不回應），要等 8 秒逾時才進合成
+  for (let i = 0; i < 300 && !phases.some((p) => p === 'DONE' || p === 'ERROR'); i++) await sleep(100);
+  await sleep(300);
+  check('拍大合照走完流程且伺服器仍在執行',
+    phases.includes('COMPOSING') && server?.exitCode === null,
+    `phases=${phases.join('→')} exit=${server?.exitCode}`);
+  photoHost.close();
+  model.close();
+}
+
 finish();

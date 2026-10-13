@@ -604,5 +604,7 @@ function handleRequest(req, res) {
   });
 }
 
-  return { handleRequest, resolveStatic };
+  // 生成服務位址一併交回：index.js 的大合照直接打 /compose（不經這裡的代理），
+  // 兩邊共用同一份，換 port 時才不會只改到一邊。
+  return { handleRequest, resolveStatic, VISION_HOST, VISION_PORT };
 }
