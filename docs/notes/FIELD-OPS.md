@@ -21,8 +21,8 @@
 `gemini-3-pro-image-preview` 回話。要縮短只有兩條路：換更快的模型，
 或改變動線（讓人先用捏臉進場，生成好再換貼圖）。
 
-併發已經處理過了：`service.py` 的 `ThreadPoolExecutor(max_workers=16)`，
-每個請求佔 4 個 slot，因此約 4 人可同時生成而不互相排隊。
+多人同時生成時的行為（排隊、429 重試、熔斷、總預算）見
+[GENERATION.md「多人同時生成」](GENERATION.md)。
 
 ### 現場連線：手機必須與電腦同一個區網
 

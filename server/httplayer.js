@@ -132,8 +132,16 @@ function sendJSON(res, code, body) {
 // Python 服務的執行緒池被塞滿而排擠正在報到的人。
 const GENERATE_RATE = { capacity: 3, refillPerSec: 1 / 30, violationLimit: Infinity };
 
-/** 同時進行中的生成上限。Python 端每個請求要 4 個 worker（共 16 個）。 */
-const MAX_CONCURRENT_GENERATES = 4;
+/**
+ * 同時進行中的生成上限（含在 Python 端排隊等生圖名額的）。
+ *
+ * 原本是 4，理由是 Python 執行緒池每個請求要 4 個 worker（共 16 個）。但 worker
+ * 只在 CV／VLM 那一兩秒被佔用，排隊等生圖的請求不佔 worker —— 於是第 5 個人
+ * 同時按下拍照，是在 Python 明明排得下的時候被這裡當場打回 too_busy。
+ * 真正的節流在 Python 端（GEN_MAX_CONCURRENT 名額＋總時間預算 queue_timeout），
+ * 這裡只防止整個場館同時灌進來。
+ */
+const MAX_CONCURRENT_GENERATES = 10;
 let inFlightGenerates = 0;
 
 /** @type {Map<string, {limiter: RateLimiter, seenAt: number}>} 依來源位址計費 */

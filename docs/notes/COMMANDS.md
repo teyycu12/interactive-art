@@ -36,6 +36,9 @@ python -m pytest backend/tests
 npm run bots -- --count 9          # 湊滿 10 人，自己佔 1 個
 npm run bots -- --colors           # 每種色族各保證一隻（測顏色任務）
 
+# 多人同時生成的壓測：假的生圖上游，不花錢、不碰 :5055、不寫帳本
+bash scripts/gen-burst/run.sh 3 --latency 13 --max-inflight 1
+
 # 人物匯入台：把過去生成過的角色放回場上，每個都能單獨操控
 # （開發／調校用，現場請勿使用 —— 匯入的角色一樣佔 MAX_AGENTS 名額）
 python scripts/asset_colors.py     # 先補色票，不跑的話顏色任務會依假色判定

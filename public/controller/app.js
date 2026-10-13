@@ -859,7 +859,14 @@ const SCAN_ERRORS = {
   generation_timeout: '生成等太久逾時了。',
   vision_service_unavailable: '生成服務連不上。',
   imagegen_unavailable: '生成服務尚未就緒。',
-  circuit_open: '生成服務暫時過載。',
+  circuit_open: '生成服務暫時過載，等半分鐘再試。',
+  // 以下是上游生圖 API 回報的真實原因（以前一律被寫成 circuit_open）
+  upstream_rate_limited: '現在同時拍照的人比較多，再按一次重拍。',
+  upstream_error: '生成服務剛剛出了點狀況，再按一次重拍。',
+  upstream_unreachable: '生成服務連不上外部網路。',
+  upstream_timeout: '生成等太久逾時了。',
+  queue_timeout: '排隊的人太多，等太久了。',
+  insufficient_credits: '生成額度用完了，請通知工作人員。',
   no_person: '照片裡沒有偵測到人。',
 };
 
