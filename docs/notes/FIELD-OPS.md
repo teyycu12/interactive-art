@@ -156,3 +156,45 @@ OpenRouter 對「輸出圖片」的請求要求**餘額至少 1 美元**，不�
 快速失敗也會說出原因（`service._open_fallback`），手機顯示「生成額度用完了，
 請通知工作人員」。**佈場前查一次餘額**：額度剩不到 1 美元時，生成一張都做不出來。
 儲值後不必重啟，熔斷器約 20 秒後會自動再試。
+
+## 事件紀錄（實測數據）
+
+`data/state.json` 只有「最新狀態」，答不出停留時間、操控時間、斷線次數。
+這些靠 `server/eventlog.js` 逐筆寫出的 JSONL：一行一筆、只附加不修改，
+當機也只少最後一行，Excel / Python / JASP 都能直接讀。
+
+**啟動時一定要帶場次名稱**：`PERSONAFLOW_SESSION=live-1019 bash start.sh`。
+沒帶就是 `dev`，正式場次的資料會跟工程師測試寫進同一個 `data/events/dev.jsonl`
+—— 而事後要從一份檔案裡挑出哪些是測試，幾乎不可能。檔名就是場次名稱，
+`live` 開頭的在 `session_start` 標為 `kind: "live"`，其餘（含彩排）一律 `test`。
+同一個名稱也寫進生成服務 SQLite 的 `experiment_id`。
+
+| 事件 | 主要欄位 | 算得出 |
+|---|---|---|
+| `session_start` / `session_end` | kind、theme、resumed／reason（shutdown、crash） | 場次邊界 |
+| `join` | agent、name、entry（photo／scan_fallback／builder）、genReq、rejoin（new／reattach／claim） | 入場時間、生成成功率、入場漏斗 |
+| `disconnect`、`leave` | leave.reason：self／kick／timeout | 停留時間、斷線次數 |
+| `mode_change` | from、to（SWARM／ACTIVE／STAGED） | 操控時間比例 |
+| `pair_claim`、`pair_confirm` | agent（發起方）、peer、ok、reason、mission | 配對成功率、失敗原因 |
+| `mission_publish` / `_progress` / `_complete` / `_close` | mission、type、target、count、by | 完成率、完成所需時間 |
+| `quiz_start` / `_answer` / `_reveal` / `_end` | correctIndex、choice、elapsedMs | 作答率、答對率、反應時間 |
+| `treasure_start` / `_found` / `_stop` | prophet、x／y、ms | 尋寶花費時間 |
+| `harvest_start` / `_take` / `_drop` / `_done` / `_stop` | helpers | 接力參與人數 |
+| `survey_start` / `_answer` / `_close` | key、choice、label | 轉場問卷作答率 |
+| `photo_start`、`photo` | count、ok、uploaded | 合照參與人數 |
+| `theme_change` | theme | 不同主題下的互動量 |
+
+幾個不明顯的地方：
+
+- **`genReq` 不是手機回報的**：生成服務用同一個 id 當帳本主鍵與貼圖目錄名
+  （`/assets/gen/<id>/head.webp`），伺服器從貼圖路徑就取得到，拿它對
+  `generation_runs.request_id` 就能查風格、耗時與重試。
+- **「拍照失敗改捏臉」只有手機知道**：在伺服器眼中它跟直接捏臉長得一樣，
+  所以手機在 `CLIENT_JOIN` 帶 `entry`。CV 角色一律記 `photo`，不採信手機。
+- **關機時的那串 `disconnect` 不是參與者斷線**：`session_end` 先寫，
+  之後 terminate 連線才觸發 close。分析時以 `session_end` 為界。
+- **不記 `INPUT_MOVE`**：30 人一小時是數十萬筆，操控時間由 `mode_change` 就算得出來。
+- **只存暱稱與 agentId，不存照片與重連憑證**（e2e 有檢查）。報告引用時以編號取代暱稱。
+- 寫入失敗只警告一次並停用，**不拋錯** —— 為了紀錄讓現場的伺服器當掉是本末倒置。
+- `PERSONAFLOW_PERSIST=0` 會一併關掉事件紀錄；e2e 用 `PERSONAFLOW_EVENTS_DIR` 寫到暫存目錄。
+

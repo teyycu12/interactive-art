@@ -32,7 +32,7 @@ import { avatarMatchesFamily, COLOR_FAMILIES } from '../shared/colorFamily.js';
 import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
-  PERSISTENCE, VISION_HOST, VISION_PORT, GREET,
+  PERSISTENCE, VISION_HOST, VISION_PORT, GREET, EVENTS,
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
 import { RateLimiter } from './ratelimit.js';
@@ -64,6 +64,7 @@ import { isBlockedName } from './nameFilter.js';
 import {
   defaultBingoFacts, validateBingoFacts, BINGO_FACTS_ASK, BINGO_ASK_MS,
 } from '../shared/bingoFacts.js';
+import { EventLog, sessionName, sessionKind, generationIdOf } from './eventlog.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -185,6 +186,20 @@ const personaView = () => ({
   version: personaQuizVersion(personaQuiz),
   isDefault: personaQuiz === DEFAULT_PERSONA_QUIZ,
 });
+
+// 逐筆事件紀錄（見 eventlog.js）。session_start 寫在 listen 成功之後，
+// 綁不上 port 的那次啟動不該在紀錄裡多出一個空場次。
+const SESSION = sessionName(EVENTS.session);
+const events = new EventLog({
+  dir: path.isAbsolute(EVENTS.dir) ? EVENTS.dir : path.join(ROOT, EVENTS.dir),
+  session: SESSION,
+  enabled: EVENTS.enabled,
+});
+/** agentId → 上次記下的仲裁模式。只在模式改變時記一筆，不是每幀 */
+const loggedMode = new Map();
+
+/** 手機自報的入場路徑白名單。CV 角色一律是 photo，不採信手機 */
+const ENTRY_ROUTES = new Set(['builder', 'scan_fallback']);
 
 /** 快照內容。集中在一處，新增要落地的東西時只改這裡與還原段。 */
 const snapshotData = () => ({
@@ -463,6 +478,9 @@ const pushHostState = () => blast(hosts, EV.HOST_STATE, hostState());
 function closeMission(by, id) {
   const closed = missions.close(id);
   if (!closed) return;
+  events.log('mission_close', {
+    mission: closed.id, by, completions: closed.events.length, present: stage.agents.size,
+  });
   console.log(`[mission] 結算「${closed.title}」${by === 'time' ? '（時間到）' : ''}`);
   markDirty();
   blastAll(EV.MISSION_CLOSED, {
@@ -866,12 +884,15 @@ function handleJoin(ws, msg) {
   let agent = typeof msg.userId === 'string'
     ? stage.reattach(msg.userId, msg.rejoinToken)
     : null;
+  /** 這次入場是怎麼接上的：new 全新角色、reattach 斷線重連、claim 重開後認領 */
+  let rejoin = agent ? 'reattach' : 'new';
 
   // 伺服器重開後場上是空的，reattach 一定失敗。此時改用身分目錄認領：
   // 憑證相符就以原本的 id 重建角色，積分與社交圖譜自動接回（見 state.claimAgent）。
   if (!agent && typeof msg.userId === 'string') {
     agent = stage.claimAgent(directory.get(msg.userId), msg.rejoinToken);
     if (agent) {
+      rejoin = 'claim';
       agent.name = name;
       agent.avatar = avatar.value;
       console.log(`[claim] ${agent.name} (${agent.id}) 於重開後認領回原角色　${scores.totalOf(agent.id)} 分`);
@@ -928,6 +949,16 @@ function handleJoin(ws, msg) {
     rank: scores.rankOf(agent.id, isPresent),
   });
   pushHostState();
+  const isCV = agent.avatar?.source === 'CV';
+  events.log('join', {
+    agent: agent.id,
+    name: agent.name,
+    entry: isCV ? 'photo' : (ENTRY_ROUTES.has(msg.entry) ? msg.entry : 'builder'),
+    genReq: isCV ? generationIdOf(agent.avatar) : undefined,
+    rejoin,
+    present: stage.agents.size,
+  });
+  loggedMode.set(agent.id, agent.mode);
   console.log(`[join] ${agent.name} (${agent.id})　場上人數 ${stage.agents.size}`);
 }
 
@@ -1089,6 +1120,10 @@ function handlePairClaim(ws, msg) {
           colorFamily: colored[0].colorFamily,
           colorFamilies: colored.map((m) => m.colorFamily),
         });
+        events.log('pair_claim', {
+          agent: ws.agentId, peer: targetAgent.id, ok: false,
+          reason: PAIR_ERRORS.COLOR_MISMATCH, missions: colored.map((m) => m.id),
+        });
         return;
       }
       // 沒有命中「顏色不符」的情況（查無此碼、或對方符合條件）一律記冷卻，
@@ -1098,6 +1133,10 @@ function handlePairClaim(ws, msg) {
   }
   const result = pairing.claim(ws.agentId, msg.code, Date.now(),
     [...plain, ...matched].map((m) => m.id));
+  events.log('pair_claim', {
+    agent: ws.agentId, peer: result.target, ok: result.ok,
+    reason: result.ok ? undefined : result.reason, missions: [...plain, ...matched].map((m) => m.id),
+  });
   if (!result.ok) {
     send(ws, EV.PAIR_RESULT, { ok: false, reason: result.reason });
     return;
@@ -1115,6 +1154,11 @@ function handlePairClaim(ws, msg) {
 
 function handlePairConfirm(ws, msg) {
   const result = pairing.confirm(ws.agentId, msg.accept === true);
+  // agent 是發起方、peer 是確認方，與 pair_claim 同一個方向，兩筆才對得起來
+  events.log('pair_confirm', {
+    agent: result.from, peer: ws.agentId, ok: result.ok,
+    reason: result.ok ? undefined : result.reason, missions: result.missionIds ?? undefined,
+  });
   if (!result.ok) {
     send(ws, EV.PAIR_RESULT, { ok: false, reason: result.reason });
     if (result.from) {
@@ -1146,7 +1190,9 @@ function handlePairConfirm(ws, msg) {
       const credit = missions.credit(mid, id, { with: partnerId });
       const m = missions.get(mid);
       progress.push({ id: mid, title: m.title, target: m.target, progress: credit.count, done: credit.done });
+      events.log('mission_progress', { mission: mid, agent: id, peer: partnerId, count: credit.count, target: m.target });
       if (credit.count === m.target) {
+        events.log('mission_complete', { mission: mid, agent: id });
         earned += SCORING.missionFinish;
         total = award(id, SCORING.missionFinish, { source: SCORE_SOURCES.MISSION_DONE, ref: mid, detail });
       }
@@ -1219,6 +1265,12 @@ function revealQuiz(now = Date.now()) {
     }
   }
 
+  events.log('quiz_reveal', {
+    quiz: result.id,
+    correctIndex: result.correctIndex,
+    answers: result.totalAnswers,
+    correct: result.awards.filter((a) => a.correct).length,
+  });
   const answered = new Set(result.awards.map((a) => a.agentId));
   for (const a of result.awards) {
     sendToAgent(a.agentId, EV.QUIZ_RESULT, {
@@ -1264,6 +1316,7 @@ function revealQuiz(now = Date.now()) {
 function endQuiz() {
   const closed = quiz.end();
   if (!closed) return;
+  events.log('quiz_end', { quiz: closed.id });
   blastAll(EV.QUIZ_ENDED, { id: closed.id });
   markDirty();
   pushHostState();
@@ -1278,6 +1331,10 @@ let wordcloudDirty = false;
 function closeWordCloud(now = Date.now()) {
   const result = wordcloud.close(now);
   if (!result) return;
+  events.log('wordcloud_close', {
+    round: result.id, participants: result.participants,
+    words: result.words.slice(0, 20).map((w) => w.text),
+  });
   blastAll(EV.WORDCLOUD_CLOSED, { result });
   markDirty();
   pushHostState();
@@ -1288,7 +1345,11 @@ function handleWordCloudAnswer(ws, msg) {
   const r = wordcloud.answer(ws.agentId, msg.text);
   // mine 一律帶回：手機的「你送過的」清單以伺服器為準（重連、被拒時都對得上）
   send(ws, EV.WORDCLOUD_ACK, r.ok ? { ok: true, mine: r.mine } : { ok: false, reason: r.reason, mine: r.mine ?? [] });
-  if (r.ok) wordcloudDirty = true;
+  if (r.ok) {
+    wordcloudDirty = true;
+    // 只記誰送了幾個詞，不記內容：個別答案對應得到人，雲上只看得到彙整後的詞
+    events.log('wordcloud_answer', { round: wordcloud.publicView()?.id, agent: ws.agentId, count: r.mine.length });
+  }
 }
 
 function handleQuizAnswer(ws, msg) {
@@ -1297,6 +1358,10 @@ function handleQuizAnswer(ws, msg) {
     send(ws, EV.QUIZ_ACK, { ok: false, reason: result.reason });
     return;
   }
+  // 對錯不在這裡記：正解要到揭曉才算數，分析時以 quiz_start 的 correctIndex 對照
+  events.log('quiz_answer', {
+    quiz: quiz.current.id, agent: ws.agentId, choice: result.choice, elapsedMs: result.elapsedMs,
+  });
   // 只回「已鎖定」，不回對錯 —— 倒數期間任何一位參與者都不該提前知道答案
   send(ws, EV.QUIZ_ACK, { ok: true, choice: result.choice });
   quizTallyDirty = true;
@@ -1362,6 +1427,7 @@ function setStageTheme(theme) {
   if (theme === stageTheme) return;
   stageTheme = theme;
   console.log(`[theme] 切換為「${THEME_MAP[stageTheme].label}」`);
+  events.log('theme_change', { theme: stageTheme });
   markDirty();
   // 手機也要：個人視角畫的是同一個場景的局部，主題不同步就會一邊廚房一邊辦公室
   blast([...screens, ...hosts, ...controllers.values()], EV.STAGE_THEME, { theme: stageTheme });
@@ -1428,6 +1494,12 @@ function handleHostMessage(ws, msg) {
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       console.log(`[mission] 發布「${result.mission.title}」目標 ${result.mission.target} 次`
         + `（進行中 ${missions.actives.length} 個）`);
+      events.log('mission_publish', {
+        mission: result.mission.id, type: result.mission.type, title: result.mission.title,
+        target: result.mission.target, colorFamily: result.mission.colorFamily ?? undefined,
+        durationMs: result.mission.durationMs || undefined, present: stage.agents.size,
+        concurrent: missions.actives.length,
+      });
       markDirty();
       // 公告同時推送至手機與大螢幕。只送新的這一個：其他進行中的任務各端本來就有
       const ann = missions.announcement(result.mission.id);
@@ -1460,6 +1532,9 @@ function handleHostMessage(ws, msg) {
       const result = wordcloud.start({ question: msg.question });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       console.log(`[wordcloud] 出題「${result.round.question}」`);
+      events.log('wordcloud_start', {
+        round: result.round.id, question: result.round.question, present: stage.agents.size,
+      });
       markDirty();
       // 手機要作答、大螢幕與主辦端要顯示題目，三端都送題目；雲本身只給大螢幕與主辦端
       blastAll(EV.WORDCLOUD_QUESTION, { cloud: result.round });
@@ -1592,6 +1667,12 @@ function handleHostMessage(ws, msg) {
       markDirty();
       console.log(`[quiz] 第 ${result.quiz.index} 題「${result.quiz.question}」`
         + `${result.quiz.talkMs ? `討論 ${result.quiz.talkMs / 1000} 秒＋` : ''}${result.quiz.durationMs / 1000} 秒`);
+      events.log('quiz_start', {
+        quiz: result.quiz.id, index: result.quiz.index, question: result.quiz.question,
+        options: result.quiz.options, correctIndex: result.quiz.correctIndex,
+        talkMs: result.quiz.talkMs || undefined,
+        durationMs: result.quiz.durationMs, present: stage.agents.size,
+      });
       sendQuestion();
       pushHostState();
       break;
@@ -1615,6 +1696,8 @@ function handleHostMessage(ws, msg) {
       const target = stage.get(msg.agentId);
       if (!target) return;
       console.log(`[kick] 主辦端移除 ${target.name} (${target.id})`);
+      events.log('leave', { agent: target.id, reason: 'kick' });
+      loggedMode.delete(target.id);
       const sock = controllers.get(target.id);
       detachAgent(target.id, { forget: true });
       stage.removeAgent(target.id);
@@ -1762,6 +1845,8 @@ wss.on('connection', (ws) => {
         // 主動退出與被動斷線不同：使用者已明確表達離開意圖，
         // 因此立即移除角色，而非讓它轉入 Boids 漫遊等待重連。
         console.log(`[leave] ${ws.agentId} 主動離場`);
+        events.log('leave', { agent: ws.agentId, reason: 'self' });
+        loggedMode.delete(ws.agentId);
         detachAgent(ws.agentId, { forget: true });
         stage.removeAgent(ws.agentId);
         ws.agentId = null;
@@ -1921,6 +2006,7 @@ wss.on('connection', (ws) => {
       controllers.delete(ws.agentId);
       stage.markDisconnected(ws.agentId);
       console.log(`[leave] ${ws.agentId} 斷線，轉入漫遊態`);
+      events.log('disconnect', { agent: ws.agentId });
       pushHostState();
     }
   });
@@ -1983,6 +2069,10 @@ const loop = startTicker({
 
     // 逾時未回應的配對請求：兩邊都要收到結果，否則發起方會一直空等
     for (const p of pairing.sweep()) {
+      events.log('pair_confirm', {
+        agent: p.from, peer: p.to, ok: false, reason: PAIR_ERRORS.EXPIRED,
+        mission: p.missionId ?? undefined,
+      });
       sendToAgent(p.from, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.EXPIRED });
       sendToAgent(p.to, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.EXPIRED });
     }
@@ -1992,6 +2082,21 @@ const loop = startTicker({
       for (const id of [...pairing.codes.keys()]) {
         if (!stage.agents.has(id)) pairing.release(id);
       }
+      // 主動離場與被踢都已在當下記過並刪掉；還留在這裡的就是斷線逾時被回收的
+      for (const id of [...loggedMode.keys()]) {
+        if (stage.agents.has(id)) continue;
+        loggedMode.delete(id);
+        events.log('leave', { agent: id, reason: 'timeout' });
+      }
+    }
+
+    // 仲裁模式（漫遊／操控／合照定位）只在改變時記一筆。
+    // 操控時間比例、放手後多久回來操控，都由這串事件算得出來。
+    for (const a of stage.agents.values()) {
+      const prev = loggedMode.get(a.id);
+      if (prev === a.mode) continue;
+      loggedMode.set(a.id, a.mode);
+      if (prev !== undefined) events.log('mode_change', { agent: a.id, from: prev, to: a.mode });
     }
 
     // 問答的時間推進由主迴圈負責，不用 setTimeout ——
@@ -2143,6 +2248,13 @@ server.listen(PORT, '0.0.0.0', () => {
   // 沒有這一次寫入，開機後尚無人進場就當機的話，重開會換一組新密鑰，
   // 而主辦者手上那張寫著號碼的紙就作廢了。
   store.save(snapshotData(), { force: true });
+
+  events.log('session_start', {
+    kind: sessionKind(SESSION), theme: stageTheme, pid: process.pid, resumed: !!snapshot,
+  });
+  if (events.enabled) {
+    console.log(`  事件紀錄　${events.file}（場次 ${SESSION}，${sessionKind(SESSION) === 'live' ? '正式' : '測試'}）`);
+  }
 
   if (addrs.length) {
     console.log('\n  同一區網的手機請改用下列位址（現場請用這個做 QR Code）：');
@@ -2325,6 +2437,7 @@ const takeGroupPhoto = async (ws) => {
       agents.map((a) => [a.id, { x: a.x, y: a.y, heading: FACING_CAMERA }]),
     );
     const n = stage.lockStage(assignments);
+    events.log('photo_start', { count: n });
     send(ws, EV.HOST_PHOTO_STATE, { phase: 'STAGING', count: n });
     console.log(`[photo] 定位 ${n} 位角色…`);
 
@@ -2342,6 +2455,11 @@ const takeGroupPhoto = async (ws) => {
     const res = await requestCompose(photoRoster(), backdrop);
     if (res && res.ok) {
       console.log(`[photo] 完成　${res.character_count} 人　${res.photo_id}`);
+      events.log('photo', {
+        ok: true, photoId: res.photo_id, count: res.character_count,
+        backdrop: backdrop !== null,
+        uploaded: typeof res.photo_url === 'string' && !res.photo_url.includes(`${VISION_HOST}:${VISION_PORT}`),
+      });
       send(ws, EV.HOST_PHOTO_STATE, {
         phase: 'DONE',
         photoId: res.photo_id,
@@ -2353,6 +2471,7 @@ const takeGroupPhoto = async (ws) => {
     } else {
       const error = res?.error || 'compose_failed';
       console.warn(`[photo] 失敗：${error}`);
+      events.log('photo', { ok: false, error });
       send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error });
     }
   } finally {
@@ -2375,9 +2494,14 @@ const shutdown = () => {
   // 必須逐一 terminate：wss.close() 只停止接受新連線，不會結束既有連線，
   // 而 server.close() 會等所有連線結束才回呼 —— 大螢幕連著時，
   // 現場按 Ctrl+C 會像沒反應一樣一直卡住。
+  // session_end 要在 terminate 之前寫：之後的 close 事件會再記一串 disconnect，
+  // 那是關機造成的，不是參與者斷線，分析時以 session_end 為界就能排除。
+  events.log('session_end', { reason: 'shutdown', present: stage.agents.size });
   for (const client of wss.clients) client.terminate();
   wss.close();
-  server.close(() => process.exit(0));
+  // 等事件紀錄的緩衝寫完再結束，否則最後幾筆（包括 session_end）會掉
+  Promise.all([events.close(), new Promise((r) => server.close(r))])
+    .then(() => process.exit(0));
   // 最後的保險：仍有殘留 handle 時不要讓收工的人卡在終端機前面。
   setTimeout(() => process.exit(0), 2000).unref();
 };
@@ -2389,6 +2513,7 @@ const handleCrash = (type, err) => {
   try {
     store.save(snapshotData(), { force: true });
     console.error(`  崩潰前已緊急保存狀態快照　${store.file}`);
+    events.logSync('session_end', { reason: 'crash', error: String(err?.message ?? err) });
   } catch (saveErr) {
     console.error('  快照緊急存檔失敗：', saveErr);
   }

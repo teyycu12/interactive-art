@@ -529,3 +529,28 @@ class TestVlmGate:
         body = client.get("/health").get_json()
         assert "vlm_enabled" in body, "關著與一直失敗在現場長得一樣，必須報出來"
         assert body["vlm_model"]
+
+
+class TestSessionName:
+    """場次名稱要與互動層（server/eventlog.js 的 sessionName）同一套規則，
+    生成紀錄的 experiment_id 才對得上事件紀錄的檔名。"""
+
+    def test_defaults_to_dev(self, monkeypatch):
+        monkeypatch.delenv("PERSONAFLOW_SESSION", raising=False)
+        assert service.session_name() == "dev"
+
+    def test_read_at_call_time_not_import_time(self, monkeypatch):
+        monkeypatch.setenv("PERSONAFLOW_SESSION", "live-1019")
+        assert service.session_name() == "live-1019"
+
+    def test_strips_unsafe_characters(self, monkeypatch):
+        monkeypatch.setenv("PERSONAFLOW_SESSION", "../../etc/passwd")
+        assert service.session_name() == "etcpasswd"
+
+    def test_generate_records_session_as_experiment_id(self, client, monkeypatch):
+        monkeypatch.setenv("PERSONAFLOW_SESSION", "live-1019")
+        seen = {}
+        monkeypatch.setattr(service, "start_run",
+                            lambda request_id, **kw: seen.update(kw))
+        client.post("/generate", json={"image": _photo_b64()})
+        assert seen.get("experiment_id") == "live-1019"

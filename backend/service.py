@@ -423,6 +423,18 @@ def _asset_path(url):
     if not path.startswith(os.path.realpath(ASSET_DIR) + os.sep) and not path.startswith(ASSET_DIR + os.sep):
         return None
     return path if os.path.isfile(path) else None
+def session_name() -> str:
+    """場次名稱，與互動層的事件紀錄（server/eventlog.js）同一套規則。
+
+    寫進 generation_runs.experiment_id，工程師測試與正式場次的生成紀錄
+    才分得開；事件紀錄的 join.genReq 再對上這裡的 request_id。
+    每次呼叫時才讀環境變數，不放進 AppConfig —— 那裡的欄位在 import 時就凍結了
+    （見 docs/notes/SERVER-AND-TESTS.md）。
+    """
+    raw = os.environ.get("PERSONAFLOW_SESSION", "")
+    return re.sub(r"[^A-Za-z0-9_-]", "", raw.strip())[:64] or "dev"
+
+
 @app.route("/generate", methods=["POST"])
 def generate():
     """一張照片進、三張貼圖出。
@@ -520,7 +532,7 @@ def _generate():
     # 現場的原則是掃描失敗一律降級，不擋人進場。
     style_id = resolve_style_id(payload.get("styleId"))
     _history_call(start_run, request_id, mode="full_character", style_id=style_id,
-                  source_type="camera")
+                  source_type="camera", experiment_id=session_name())
     _history_call(save_input_photo, request_id, img_str)
 
     body_poly: Optional[np.ndarray] = None
