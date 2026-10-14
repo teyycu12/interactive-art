@@ -495,7 +495,17 @@ function startPreviewLoop() {
   previewTimer = setInterval(previewTick, PREVIEW_INTERVAL_MS);
 }
 
+/**
+ * 每次開相機的序號。stopScanStream() 會遞增它，讓還在等 getUserMedia 的那一次作廢。
+ *
+ * 連點兩下切換鏡頭時，兩次 openCamera() 都會在對方的 getUserMedia 回來之前
+ * 執行 stopScanStream()，於是兩條串流都開成功，先回來的那條被覆寫掉、永遠沒人關 ——
+ * 相機一直被佔著，iOS 上下一次開啟會直接 NotReadableError（「開不起相機」）。
+ */
+let cameraOpenSeq = 0;
+
 function stopScanStream() {
+  cameraOpenSeq++;
   stopPreviewLoop();
   if (!scanStream) return;
   for (const track of scanStream.getTracks()) track.stop();
@@ -660,21 +670,30 @@ async function openCamera() {
   // 上一次若是相機失敗，取景框被藏起來了，重試時要收回來
   $('.scan-stage')?.classList.remove('is-empty', 'shutter', 'is-result', 'is-pixel');
   showScanPhase('aim');
+  const seq = cameraOpenSeq;
   try {
     // 兩軸都要 1280 而不是指定 720×1280：後者等於向瀏覽器要一個 9:16 的
     // 直式串流，但筆電鏡頭是橫式且感光元件不會轉向，瀏覽器只能從中央裁掉
     // 大半的左右視野再放大 —— 而那正是要把一個人塞進畫面所需要的視野。
     // 兩軸同值讀作「給我最接近這個大小的原生模式」，不暗示任何方向，
     // 筆電拿到完整的 16:9、手機拿到完整的直式，兩邊都是最大視野。
-    scanStream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: cameraFacing, width: { ideal: 1280 }, height: { ideal: 1280 } },
       audio: false,
     });
+    // 等待期間又開了一次、或已經離開掃描頁：這條串流沒有人要了，立刻關掉
+    if (seq !== cameraOpenSeq) {
+      for (const track of stream.getTracks()) track.stop();
+      return false;
+    }
+    scanStream = stream;
     $('#scan-video').srcObject = scanStream;
     startPreviewLoop();
     updateFlipAvailability();
     return true;
   } catch (err) {
+    // 已被後來的那一次取代：失敗畫面由後來那一次決定，這裡不要蓋上去
+    if (seq !== cameraOpenSeq) return false;
     // 切到前鏡頭才失敗的話，重試要回到後鏡頭，否則「重新嘗試」會一直撞同一顆
     cameraFacing = 'environment';
     // 不直接踢回捏臉：使用者可能只是誤按拒絕，或想去設定裡開啟。
