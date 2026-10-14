@@ -53,7 +53,9 @@ let serverLog = [];
 async function launch() {
   serverLog = [];
   server = spawn(process.execPath, [path.join(ROOT, 'server', 'index.js')], {
-    env: { ...process.env, PORT: String(PORT), PERSONAFLOW_STATE_FILE: STATE_FILE },
+    // VISION_PORT 指向一個沒人聽的 port：e2e 不能打到開發者本機正在跑的生成服務
+    // （合照合成會上傳到公開圖床），而且結果不該取決於那個服務有沒有開
+    env: { ...process.env, PORT: String(PORT), PERSONAFLOW_STATE_FILE: STATE_FILE, VISION_PORT: '9' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   server.stdout.on('data', (d) => serverLog.push(String(d)));
@@ -965,6 +967,31 @@ check('任務結算後可再發布新任務',
   })());
 await sleep(400);
 check('新任務已生效', hostStates.at(-1)?.mission?.target === 2, `target=${hostStates.at(-1)?.mission?.target}`);
+
+// ── 大合照 ──────────────────────────────────────────────
+// 曾因 index.js 引用已搬到 httplayer.js 的 VISION_HOST，一按「拍大合照」
+// 就 ReferenceError，整個互動層行程結束、全場斷線。生成服務沒開（這裡就是）
+// 時，合照應該回報 ERROR，伺服器照常運作。
+{
+  const photoStates = [];
+  host.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'HOST_PHOTO_STATE') photoStates.push(m); });
+  // 大螢幕立刻交出（空的）底圖，省掉 8 秒的截圖逾時
+  screen.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'SCREEN_CAPTURE_REQ') {
+      sendPost('/api/screen-capture', Buffer.from(JSON.stringify({ requestId: m.requestId, image: null })));
+    }
+  });
+  host.send(JSON.stringify({ type: 'HOST_TAKE_PHOTO' }));
+  const deadline = Date.now() + 25000;
+  while (Date.now() < deadline && !photoStates.some((x) => x.phase === 'DONE' || x.phase === 'ERROR')) {
+    await sleep(200);
+  }
+  const final = photoStates.find((x) => x.phase === 'DONE' || x.phase === 'ERROR');
+  check('拍大合照時生成服務沒開，主辦端收到失敗而不是伺服器當掉',
+    final?.phase === 'ERROR', JSON.stringify(photoStates.map((x) => x.phase)));
+  check('拍完大合照伺服器仍存活', (await httpStatus('/screen/')) === 200);
+}
 
 amy.ws.close();
 ben.ws.close();

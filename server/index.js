@@ -32,7 +32,7 @@ import { avatarMatchesFamily } from '../shared/colorFamily.js';
 import { DEFAULT_THEME, isThemeId, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
-  PERSISTENCE, TREASURE,
+  PERSISTENCE, TREASURE, VISION_HOST, VISION_PORT,
 } from './config.js';
 import { Stage } from './state.js';
 import { RateLimiter } from './ratelimit.js';
