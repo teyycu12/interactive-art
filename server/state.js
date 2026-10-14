@@ -8,7 +8,7 @@
  */
 
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
-import { STAGE, AGENT_STATE, AGENT_MODE } from '../shared/protocol.js';
+import { STAGE, AGENT_STATE, AGENT_MODE, AGENT_VIEW } from '../shared/protocol.js';
 import { OBSTACLES, obstacleDistance, zoneAt } from '../shared/scene.js';
 import {
   EMOTE_DURATION_MS, EMOTE_COOLDOWN_MS, AGENT_TTL_MS, INPUT_DEADZONE,
@@ -116,6 +116,11 @@ export class Stage {
       // 翻面防抖：累積中的反向與其持續時間（見 arbiter.js 的 updateFacing）
       facingPendingDir: null,
       facingPendingMs: 0,
+      // 正面／背面／側面與其防抖（見 arbiter.js 的 updateView）
+      view: AGENT_VIEW.FRONT,
+      viewPending: null,
+      viewPendingMs: 0,
+      viewIdleMs: 0,
       emote: null,
       lastEmoteAt: 0,
       // 行為 Log（WP-C 數據收集 / M4 活躍度加權的原始資料）
@@ -355,7 +360,7 @@ export class Stage {
       facing: a.facing,
       offline: a.offline,
       emote: a.emote ? a.emote.action : null,
-      // 以下兩欄只在有意義時才送。它們絕大多數時間都是預設值，
+      // 以下幾欄只在有意義時才送。它們絕大多數時間都是預設值，
       // 而這是每秒 30 次 × 30 人的廣播 —— 與捏臉外觀不放進 STAGE_SYNC
       // 是同一個理由。渲染端讀到 undefined 與讀到預設值等價。
       ...(a.emote && {
@@ -366,6 +371,7 @@ export class Stage {
       }),
       // 定位鎖定時才有意義，供合照流程判斷是否可以拍
       ...(a.arrived && { arrived: true }),
+      ...(a.view !== AGENT_VIEW.FRONT && { view: a.view }),
     }));
   }
 
@@ -420,6 +426,7 @@ export class Stage {
         // α 是手機端唯一需要的仲裁資訊：它決定「你正在操控」的提示
         alpha: Math.round(me.alpha * 100) / 100,
         facing: me.facing,
+        view: me.view,
         // 所在分區。手機端據此顯示「你在暢飲區」，與 ZONE_SELF 的
         // 進出事件互補：這個是狀態，那個是事件（重連時只有狀態拿得到）
         zone: me.zone,

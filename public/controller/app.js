@@ -851,6 +851,8 @@ const SCAN_ERRORS = {
   vision_service_unavailable: '生成服務連不上。',
   imagegen_unavailable: '生成服務尚未就緒。',
   circuit_open: '生成服務暫時過載。',
+  // 402：等一下不會好，要有人去儲值。寫明「通知工作人員」，現場才不會一直重拍
+  insufficient_credits: '生成額度用完了，請通知工作人員。',
   no_person: '照片裡沒有偵測到人。',
 };
 

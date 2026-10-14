@@ -43,10 +43,10 @@ except ImportError:
 from config import config  # noqa: E402  isort:skip
 
 from avatar_pipeline import build_face_data, build_outfit_data, decode_frame
-from circuit_breaker import CircuitBreaker
+from circuit_breaker import CircuitBreaker, CallFailed
 from cv_module import get_clothing_features
 from face_module import get_face_features
-from slicer import slice_character
+from slicer import slice_character, save_view, VIEW_PARTS
 
 # 缺金鑰或缺套件時以降級模式啟動，沿用 app.py 的既有作法。
 # vlm_module 在缺 GEMINI_API_KEY 時是 import 當下就 raise（vlm_module.py:9），
@@ -195,11 +195,29 @@ app = Flask(__name__)
 
 
 def _raise_on_failure(fn, *args, **kwargs):
-    """熔斷器要求呼叫失敗時拋例外，但底層函式是以 {ok: False} 表達失敗。"""
+    """熔斷器要求呼叫失敗時拋例外，但底層函式是以 {ok: False} 表達失敗。
+
+    例外帶著原本的結果（CallFailed.result），熔斷器記下失敗後會把它原樣
+    回傳 —— 呼叫端看到的是真正的錯誤碼（例如 insufficient_credits），
+    不是 fallback 的 circuit_open。
+    """
     result = fn(*args, **kwargs)
     if isinstance(result, dict) and result.get("ok") is False:
-        raise RuntimeError(result.get("error") or "call_failed")
+        raise CallFailed(result.get("error") or "call_failed", result)
     return result
+
+
+def _open_fallback(breaker):
+    """熔斷中的快速失敗結果：說出熔斷的原因。
+
+    額度用完（402）時熔斷器會連續跳開，若一律回 circuit_open，手機寫
+    「生成服務暫時過載」—— 現場會以為等一下就好，其實要去儲值。
+    """
+    def fallback(*_args, **_kwargs):
+        if breaker.last_error == "insufficient_credits":
+            return {"ok": False, "error": "insufficient_credits"}
+        return {"ok": False, "error": "circuit_open"}
+    return fallback
 
 
 def _vlm_result(future, label: str) -> Dict[str, Any]:
@@ -559,11 +577,14 @@ def _generate():
                 _raise_on_failure, generate_full_character_png,
                 rgb_full, body_poly, face_data, outfit_data, True, regions, style_id, correction,
                 max_retries=0,
-                fallback={"ok": False, "error": "circuit_open"},
+                fallback=_open_fallback(_imagegen_breaker),
             )
         if isinstance(out, dict) and out.get("body_png"):
             out = dict(out)
             out["body_png"] = add_transparent_margin(out["body_png"])
+            for part in VIEW_PARTS:
+                if out.get(f"{part}_png"):
+                    out[f"{part}_png"] = add_transparent_margin(out[f"{part}_png"])
         return out if isinstance(out, dict) else {"ok": False, "error": "generation_failed"}
 
     def _validate(out: Dict[str, Any]) -> Dict[str, Any]:
@@ -617,6 +638,19 @@ def _generate():
     except Exception as e:
         return _fail(f"slice_failed: {e}", stage="slice",
                      validation=validation, retries=retries, generation_ms=generation_ms)
+
+    # 三視圖的側面與背面（像素風）。選用：存不成功就少一面，角色照樣進場 ——
+    # 大螢幕往側面、背面走時退回正面，不值得為此讓整個人生成失敗。
+    for part in VIEW_PARTS:
+        png = gen.get(f"{part}_png")
+        if not png:
+            continue
+        try:
+            result["textures"][part] = save_view(png, ASSET_DIR, request_id, part)
+        except Exception as e:
+            print(f"[service] {part} view not saved: {e}")
+    if gen.get("turnaround_figures") is not None:
+        result["turnaroundFigures"] = gen["turnaround_figures"]
 
     result["elapsedMs"] = round((time.perf_counter() - started) * 1000.0, 1)
     # 回報實際採用的風格，而不是讓手機端假設它送出去的那個一定成立 ——

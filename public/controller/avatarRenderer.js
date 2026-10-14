@@ -213,6 +213,7 @@ export class AvatarRenderer {
       this.vx += (target.x - this.vx) * k;
       this.vy += (target.y - this.vy) * k;
       this.facing = this.serverSelf.facing;
+      this.view = this.serverSelf.view;
     } else if (this.serverSelf) {
       // 狀態過期（掉封包或斷線）：收斂到靜止，不外推位置。
       // 繼續以最後速度前進會讓角色一路飄出場外，與大螢幕徹底脫節。
@@ -293,12 +294,15 @@ export class AvatarRenderer {
       vx: this.vx * MAX_SPEED,
       vy: this.vy * MAX_SPEED,
       facing: this.facing,
+      view: this.view,
     };
 
     drawCharacter(ctx, agent, { x: w / 2, y: footY }, this.sprite, {
       time: this.time,
       maxSpeed: MAX_SPEED,
       height: CHARACTER_HEIGHT,
+      // 步伐相位以鍵區分（shared/character.js 的 stepPhase）；自己沒有 id
+      gaitKey: "self",
     });
   }
 
@@ -335,7 +339,7 @@ export class AvatarRenderer {
       ctx.save();
       ctx.globalAlpha = 0.25 + fade * 0.55;
       drawCharacter(ctx,
-        { state: n.state, vx: 0, vy: 0, facing: n.facing ?? 1 },
+        { id: n.id, state: n.state, vx: 0, vy: 0, facing: n.facing ?? 1 },
         { x, y },
         null,   // 鄰居不載入貼圖：10 個人 × 3 張圖的流量不值得這點細節
         { time: this.time, maxSpeed: MAX_SPEED,

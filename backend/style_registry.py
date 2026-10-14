@@ -47,6 +47,12 @@ class GenerationStyle:
     # /health 報出來），但 list_styles()／has_style()／resolve_style_id()
     # 一律當它不存在。圖備齊之後把這一行拿掉就上線。
     ready: bool = True
+    # 一次生成三視圖（正面｜右側｜背面並排），後端切成三張。
+    #
+    # 這是 prompt、姿勢參考圖、輸出比例三件事的共同約定：只開這個旗標而
+    # prompt 仍要求單一正面，模型只會畫一個人；只改 prompt 而姿勢參考仍是
+    # 單一站姿，模型會在兩者之間自己挑（GENERATION.md「風格的四樣東西必須成套」）。
+    turnaround: bool = False
 
 
 _STYLES: Dict[str, GenerationStyle] = {}

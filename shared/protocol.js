@@ -303,6 +303,17 @@ export const WALK_THRESHOLD = 18;
 export const AGENT_STATE = { IDLE: 'IDLE', WALK: 'WALK' };
 
 /**
+ * 角色朝向觀眾的哪一面：正面、背面、側面。
+ *
+ * 側面只有一張（朝右），朝左由 facing 鏡像得到。邏輯座標的 +y 是朝鏡頭
+ * 走近，所以往 +y 走是正面、往 −y 走是背面。
+ *
+ * STAGE_SYNC 只在不是正面時才帶這個欄位（絕大多數時間大家都站著看鏡頭），
+ * 渲染端讀到 undefined 一律當正面。
+ */
+export const AGENT_VIEW = { FRONT: 'front', BACK: 'back', SIDE: 'side' };
+
+/**
  * 控制模式。
  * ACTIVE / SWARM 是 M2 的兩個常態端點；
  * STAGED 代表場域被鎖定、角色正被帶往指定位置（合照等情境），

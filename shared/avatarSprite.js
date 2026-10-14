@@ -10,7 +10,7 @@
  * 只會出現「手機上的我」和「大螢幕上的我」長得不一樣。
  */
 
-import { renderAvatarSVG, CV_CUTS, CV_PARTS, CV_FULL_PART } from './avatars.js';
+import { renderAvatarSVG, CV_CUTS, CV_PARTS, CV_FULL_PART, CV_VIEW_PARTS } from './avatars.js';
 
 // 角色畫布的解析度。
 //
@@ -70,6 +70,11 @@ export function cvAvatarImage(avatar, { enhance = false } = {}) {
   // 先讓替身可被繪製；貼圖到齊後原地重畫，roster 不需要重新建立條目
   canvas.complete = true;
   canvas.naturalWidth = canvas.width;
+  // 供 spriteCache 判斷要不要重新推導側面／背面：替身階段不推導，
+  // 貼圖每畫一次版本就加一（見 shared/spriteCache.js）
+  canvas.spriteReady = false;
+  canvas.spriteVersion = 0;
+  const markDrawn = () => { canvas.spriteReady = true; canvas.spriteVersion++; };
 
   /**
    * 整張圖：等比縮放後底部對齊。
@@ -89,6 +94,7 @@ export function cvAvatarImage(avatar, { enhance = false } = {}) {
     if (enhance) ctx.filter = 'contrast(1.15) saturate(1.15) brightness(1.05)';
     ctx.drawImage(img, (AVATAR_W - w) / 2, AVATAR_H - h, w, h);
     ctx.filter = 'none';
+    markDrawn();
   };
 
   const loaded = {};
@@ -117,6 +123,7 @@ export function cvAvatarImage(avatar, { enhance = false } = {}) {
       ctx.drawImage(img, 0, AVATAR_H * top, AVATAR_W, AVATAR_H * (bottom - top));
     }
     ctx.filter = 'none';
+    markDrawn();
   };
 
   const loadParts = () => {
@@ -127,6 +134,32 @@ export function cvAvatarImage(avatar, { enhance = false } = {}) {
       img.src = avatar.textures[part];
     }
   };
+
+  // 側面與背面（像素風的三視圖才有）。各自畫進一張與正面同尺寸的畫布、
+  // 用同一套「等比縮放、底部對齊」：三張都經過 slicer.normalize() 縮到同一個
+  // 高度，這樣換面時角色不會忽大忽小、腳底不會跳。
+  // 沒有或載入失敗就不掛 —— spriteView() 會退回正面，不會消失。
+  canvas.views = {};
+  for (const part of CV_VIEW_PARTS) {
+    const url = avatar.textures?.[part];
+    if (!url) continue;
+    const img = new Image();
+    img.addEventListener('load', () => {
+      const view = document.createElement('canvas');
+      view.width = AVATAR_W;
+      view.height = AVATAR_H;
+      const vctx = view.getContext('2d');
+      const scale = Math.min(AVATAR_W / img.naturalWidth, AVATAR_H / img.naturalHeight);
+      const w = img.naturalWidth * scale;
+      const h = img.naturalHeight * scale;
+      if (enhance) vctx.filter = 'contrast(1.15) saturate(1.15) brightness(1.05)';
+      vctx.drawImage(img, (AVATAR_W - w) / 2, AVATAR_H - h, w, h);
+      view.complete = true;
+      view.naturalWidth = view.width;
+      canvas.views[part] = view;
+    });
+    img.src = url;
+  }
 
   // 整張圖是選用的：改版前生成的資產目錄只有三張切片，那些角色仍在場上，
   // 把它列為必要會讓一次改版就把先前生成的人全部踢出場。
