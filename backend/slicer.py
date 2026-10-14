@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -207,6 +208,15 @@ def slice_character(
     # （實測人像高約 980px，部分模型回 1062px），已經比任何顯示需求都大。
     preview = decode_png(png_b64)
     preview.save(os.path.join(out_dir, "preview.webp"), "WEBP", quality=95)
+
+    # 顏色落地一份：這組顏色原本只存在於這一次的 HTTP 回應裡，事後要把角色
+    # 匯出或放回場上（人物匯入台、character_export）就得從貼圖重新取樣。
+    # 格式與 scripts/asset_colors.py 寫的 colors.json 相同。
+    try:
+        with open(os.path.join(out_dir, "colors.json"), "w", encoding="utf-8") as f:
+            json.dump(colors, f, ensure_ascii=False)
+    except OSError:
+        pass  # 只是少一份快取，匯出時會重新取樣；不該讓已經生成好的角色失敗
 
     return {
         "ok": True,

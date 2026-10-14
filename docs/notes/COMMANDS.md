@@ -37,6 +37,11 @@ npm run bots -- --colors           # 每種色族各保證一隻（測顏色任�
 python scripts/asset_colors.py     # 先補色票，不跑的話顏色任務會依假色判定
 # 然後開 http://localhost:3000/dev/ ，輸入主辦端通行密鑰
 
+# 匯出／匯入單一角色：主辦端「系統 → 角色生成紀錄」每列有「圖檔」（去背 PNG）
+# 與「角色檔」（.persona.json，內含貼圖與外觀設定）。角色檔換一台電腦還原：
+python scripts/import_character.py character-xxxxxxxx.persona.json   # 已存在時加 --force
+# 還原後同樣到人物匯入台放上場（格式見 backend/character_export.py）
+
 # 測試
 npm test                           # Node 單元測試（370 + wander 模式 5）
 npm run test:wander                # 只跑漫遊模式那一組（PERSONAFLOW_IDLE_MOTION=wander）

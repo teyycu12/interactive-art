@@ -100,6 +100,45 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
   margin-bottom: 16px;
 }
 
+/* ── 活動設定 ─────────────────────────────────────────────
+   認證之後、控制台之前的必經頁。場景卡沿用 .theme-card（含 aria-pressed 的選取樣式）。 */
+#setup { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.setup-card {
+  background: var(--surface);
+  border: 2.5px solid var(--ink);
+  border-radius: 20px;
+  padding: 28px 32px;
+  max-width: 560px;
+  width: 100%;
+}
+.setup-card h1 { margin: 0; }
+.setup-card .lede { color: var(--ink-soft); font-size: 14px; margin: 6px 0 18px; }
+.setup-step { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .08em; color: var(--teal-ink); }
+.setup-field { border: none; padding: 0; margin: 0 0 18px; }
+.setup-field legend, .setup-field > label {
+  display: block; padding: 0; margin: 0 0 8px;
+  font-size: 14px; font-weight: 700; color: var(--ink);
+}
+.setup-field .setup-optional { margin-top: 12px; font-size: 13px; font-weight: 600; color: var(--ink-soft); }
+.setup-field .hint.tiny { margin-top: 6px; }
+#setup-themes .theme-card[aria-checked="true"] { border-color: var(--teal); background: #EAF4F2; }
+#setup-themes .theme-card[aria-checked="true"] b::before { content: "✓ "; color: var(--teal-ink); }
+.setup-actions { display: flex; gap: 10px; }
+.setup-actions button { flex: 1; }
+
+/* 頂欄的活動名稱與場景 */
+.event-meta { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 13px; color: var(--ink-soft); }
+
+/* ── 大螢幕面板 ─────────────────────────────────────────── */
+.screen-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.screen-row > .btn-ghost { width: auto; flex: 1 1 auto; min-height: 44px; }
+.screen-label { font-size: 13px; font-weight: 700; color: var(--ink-soft); min-width: 3em; }
+.seg { display: flex; gap: 6px; flex: 1; }
+.seg button { flex: 1; min-height: 44px; padding: 6px 10px; border-width: 2px; border-color: var(--line); color: var(--ink-soft); }
+.seg button[aria-pressed="true"], #btn-screen-debug[aria-pressed="true"] {
+  border-color: var(--ink); color: var(--ink); background: var(--sunk);
+}
+
 /* ── 控制台 ───────────────────────────────────────────── */
 #console { max-width: 1240px; margin: 0 auto; padding: 26px 24px 64px; }
 
@@ -321,6 +360,12 @@ td.face .swatch { display: block; width: 34px; height: 44px; border-radius: 4px;
 td.face .swatch i { display: block; }
 td.num { font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
 td.act { text-align: right; }
+/* 生成紀錄的匯出欄：兩顆小按鈕並排，窄螢幕時換行 */
+td.export { white-space: nowrap; }
+.btn-export {
+  width: auto; padding: 3px 10px; margin: 2px 4px 2px 0;
+  font-size: 12px; border-width: 2px; border-radius: 8px;
+}
 .badge-off {
   font-size: 10px;
   font-weight: 700;

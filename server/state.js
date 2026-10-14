@@ -10,6 +10,7 @@
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { STAGE, AGENT_STATE, AGENT_MODE } from '../shared/protocol.js';
 import { OBSTACLES, obstacleDistance, zoneAt } from '../shared/scene.js';
+import { avatarLook } from '../shared/avatars.js';
 import {
   EMOTE_DURATION_MS, EMOTE_COOLDOWN_MS, AGENT_TTL_MS, INPUT_DEADZONE,
   MAX_AGENTS,
@@ -76,7 +77,10 @@ export class Stage {
       ...spawnPoint(),
       vx: 0,
       vy: 0,
-      heading: Math.random() * Math.PI * 2, // 3D 用的完整朝向角（弧度）
+      // 完整朝向角（弧度）。出生時面向觀眾（π/2 = 邏輯平面 +y）：
+      // 像素角色依它選四方向之一，剛進場的人要能在大螢幕上看到自己的臉，
+      // 隨機朝向會讓約四分之三的人一出場是背面或側面。
+      heading: Math.PI / 2,
       // Boids 影子速度（見 boids.js 的關鍵設計說明）
       boidsVx: (Math.random() - 0.5) * 60,
       boidsVy: (Math.random() - 0.5) * 60,
@@ -402,6 +406,8 @@ export class Stage {
         dx: round(dx),
         dy: round(dy),
         facing: a.facing,
+        // 像素角色依它選上下左右，手機上的鄰居才會面向與大螢幕相同的方向
+        heading: round3(a.heading),
         state: a.state,
         // 有社交動作時才帶，與 snapshot() 同一個省頻寬的理由
         ...(a.emote && { emote: a.emote.action }),
@@ -420,6 +426,8 @@ export class Stage {
         // α 是手機端唯一需要的仲裁資訊：它決定「你正在操控」的提示
         alpha: Math.round(me.alpha * 100) / 100,
         facing: me.facing,
+        // 自己的揮手／乾杯：手機 POV 上的自己也要做出動作
+        ...(me.emote && { emote: me.emote.action }),
         // 所在分區。手機端據此顯示「你在暢飲區」，與 ZONE_SELF 的
         // 進出事件互補：這個是狀態，那個是事件（重連時只有狀態拿得到）
         zone: me.zone,
@@ -431,13 +439,24 @@ export class Stage {
   /**
    * 手機端用的精簡名冊：只有 id 與名字。
    *
-   * 與 roster() 分開是因為手機不需要捏臉外觀 —— POV 畫布上的鄰居
-   * 只有幾十像素高，不載入貼圖（見 avatarRenderer 的 _drawNeighbors）。
-   * 名字放這裡而非塞進 CLIENT_SYNC 的每個鄰居：名字是靜態資料，
+   * 與 roster() 分開：手機 POV 把鄰居畫成像素角色，只需要精簡的 look
+   * （捏臉 token 或 CV 取樣色，見 avatars.js 的 avatarLook），
+   * 不需要 CV 貼圖網址 —— 那是大螢幕才載入的東西。
+   * 名字與外觀放這裡而非塞進 CLIENT_SYNC 的每個鄰居：它們是靜態資料，
    * 隨 15Hz 的座標重送等於每秒多送十幾 KB 的重複字串。
    */
   nameRoster() {
-    return [...this.agents.values()].map((a) => ({ id: a.id, name: a.name }));
+    return [...this.agents.values()].map((a) => ({ id: a.id, name: a.name, look: avatarLook(a.avatar) }));
+  }
+
+  /**
+   * 手機名冊的內容指紋。主迴圈比對它決定要不要重送（見 server/index.js）。
+   * 外觀也要算進去：同一連線重新捏臉時 id 與名字都沒變，只看這兩樣會漏送。
+   */
+  clientRosterSignature() {
+    if (!this.agents.size) return '';
+    return `${this.agents.size}:${[...this.agents.values()]
+      .map((a) => `${a.id}~${a.name}~${JSON.stringify(avatarLook(a.avatar))}`).join('|')}`;
   }
 
   /** 參與者名冊：id、顯示名稱與捏臉設定，僅在成員變動時廣播 */

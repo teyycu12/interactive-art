@@ -234,3 +234,26 @@ describe('CV avatar：未切割的整張圖（選用）', () => {
     assert.equal(validateAvatarConfig(cfg).ok, false);
   });
 });
+
+describe('CV avatar：pixelParts（側面與背面的髮型、服裝）', () => {
+  test('白名單內的 token 保留下來', () => {
+    const r = validateAvatarConfig(withCV((c) => { c.pixelParts = { head: 'head_long_04', body: 'body_hoodie_01' }; }));
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.value.pixelParts, { head: 'head_long_04', body: 'body_hoodie_01' });
+  });
+
+  test('不合法的值丟掉，不擋角色進場', () => {
+    const r = validateAvatarConfig(withCV((c) => { c.pixelParts = { head: '<svg onload=x>', body: 'body_tee_01', face: 'face_x' }; }));
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.value.pixelParts, { body: 'body_tee_01' });
+    const none = validateAvatarConfig(withCV((c) => { c.pixelParts = 'long'; }));
+    assert.equal(none.ok, true);
+    assert.equal(none.value.pixelParts, undefined);
+  });
+
+  test('側面的像素角色用 pixelParts 的髮型，沒給就用預設', async () => {
+    const { avatarPixelSpec } = await import('../shared/avatars.js');
+    assert.equal(avatarPixelSpec({ ...CV_AVATAR, pixelParts: { head: 'head_bun_03' } }).parts.head, 'head_bun_03');
+    assert.equal(avatarPixelSpec(CV_AVATAR).parts.head, 'head_short_01');
+  });
+});

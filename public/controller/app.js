@@ -19,7 +19,7 @@ import {
 import { COLOR_FAMILY_MAP } from '/shared/colorFamily.js';
 import { HEAT_MAP } from '/shared/heat.js';
 import { ZONE_MAP } from '/shared/scene.js';
-import { avatarImage } from '/shared/avatarSprite.js';
+import { avatarImage, avatarPortrait } from '/shared/avatarSprite.js';
 import { AvatarRenderer } from './avatarRenderer.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -247,11 +247,32 @@ function showStep(n) {
   document.querySelectorAll('.step-body').forEach((el) => {
     el.hidden = Number(el.dataset.step) !== n;
   });
-  document.querySelectorAll('.steps i').forEach((el, i) => {
-    el.classList.toggle('on', i < n);
-  });
+  setStepBar('#builder-steps', n);
   $('#btn-prev').textContent = n === 1 ? '改名字' : '上一步';
   $('#btn-next').textContent = n === 3 ? '完成，進入現場' : '下一步';
+}
+
+/**
+ * 角色肖像放進容器：與場上同一格像素畫格（shared/avatarSprite.js 的 avatarPortrait）。
+ * 拍照角色不能用 renderAvatarSVG —— 那只會畫出取樣色的通用角色，
+ * 左上角的「自己」就會跟大螢幕上的自己長得不一樣。
+ */
+function showPortrait(el, avatar) {
+  if (!el) return;
+  el.replaceChildren();
+  if (!avatar) return;
+  avatarPortrait(avatar).then((c) => {
+    c.className = 'portrait';
+    c.setAttribute('aria-hidden', 'true');
+    el.replaceChildren(c);
+  });
+}
+
+/** 三段進度條（捏臉與拍照共用同一個元件） */
+function setStepBar(selector, n) {
+  document.querySelectorAll(`${selector} i`).forEach((el, i) => {
+    el.classList.toggle('on', i < n);
+  });
 }
 
 /** 只切換單一畫面，其餘全部隱藏 */
@@ -331,6 +352,13 @@ let pendingScanConfig = null;
  * 四個階段共用同一個左右分欄，只換右欄內容 —— 整塊重繪會讓畫面跳動，
  * 而左邊的取景框在拍照前後必須留在原位（拍完顯示成果圖，位置不變）。
  */
+const SCAN_STEPS = {
+  aim: [1, '拍照'],
+  working: [2, '生成中'],
+  failed: [2, '沒能生成'],
+  done: [3, '確認角色'],
+};
+
 function showScanPhase(phase) {
   for (const el of document.querySelectorAll('#scan .scan-panel')) {
     el.hidden = el.dataset.phase !== phase;
@@ -338,6 +366,10 @@ function showScanPhase(phase) {
   // 成果階段換白底。生成中顯示的是剛拍下的照片（深色框比較合適），
   // 只有最後展示角色時才轉白 —— 角色是透明背景，白底才襯得出來。
   $('.scan-stage')?.classList.toggle('is-result', phase === 'done');
+  // 與捏臉同一套三段進度：拍照 → 生成 → 確認。失敗停在第二段（卡在生成這一步）
+  const [stepNo, stepName] = SCAN_STEPS[phase] ?? SCAN_STEPS.aim;
+  $('#scan-step-label').textContent = `${stepNo} / 3　${stepName}`;
+  setStepBar('#scan-steps', stepNo);
 
   // 名字貫穿整條流程：使用者在上一頁輸入之後就再也沒看到它，
   // 但那正是等一下會出現在大螢幕角色頭上的名字。
@@ -579,7 +611,7 @@ async function openCamera() {
   $('#btn-capture').disabled = false;
   $('#btn-capture').textContent = '拍照';
   // 上一次若是相機失敗，取景框被藏起來了，重試時要收回來
-  $('.scan-stage')?.classList.remove('is-empty', 'shutter', 'is-result');
+  $('.scan-stage')?.classList.remove('is-empty', 'shutter', 'is-result', 'is-pixel');
   showScanPhase('aim');
   try {
     // 兩軸都要 1280 而不是指定 720×1280：後者等於向瀏覽器要一個 9:16 的
@@ -610,6 +642,8 @@ async function openCamera() {
 }
 
 $('#btn-scan-back').addEventListener('click', () => fallbackToBuilder(null));
+// 捏臉頁的反向切換。名字在命名頁就存好了，直接走同一個入口
+$('#btn-to-scan').addEventListener('click', () => $('#btn-scan').click());
 
 /** 倒數中被按下取消時設為 true，讓倒數迴圈中止。
     宣告必須排在下方上傳處理器之前 —— let 不會提升，放在後面會落入
@@ -808,6 +842,7 @@ async function submitScanImage(image) {
   // 「數位轉譯成什麼樣子」正是這件作品的核心體驗，跳過等於白等 25 秒。
   pendingScanConfig = {
     source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors,
+    ...(body.pixelParts && { pixelParts: body.pixelParts }),
   };
   // previewPng 優先：確認頁把角色放進 74vh 的直式框，手機 dpr=3 時顯示高度
   // 接近 2000 實際像素，而 fullPng 是為場上渲染縮過的貼圖（1024），
@@ -815,6 +850,14 @@ async function submitScanImage(image) {
   // 舊版伺服器沒有這個欄位，因此保留 fullPng 作為後備。
   const shot = body.previewPng || body.fullPng;
   if (shot) $('#scan-result').src = shot;
+  // 接著換成場上實際的樣子（兩頭身的像素角色）：確認的應該是等一下
+  // 出現在大螢幕上的那個角色，而不是轉換前的原圖
+  const confirming = pendingScanConfig;
+  avatarPortrait(confirming).then((c) => {
+    if (pendingScanConfig !== confirming) return;   // 期間已經重拍
+    $('#scan-result').src = c.toDataURL();
+    $('.scan-stage')?.classList.add('is-pixel');
+  });
   showScanPhase('done');
 }
 
@@ -1000,7 +1043,8 @@ function hasSavedCharacter() {
 }
 
 if (hasSavedCharacter()) {
-  $('#return-avatar').innerHTML = renderAvatarSVG(config);
+  // 與場上同一格像素肖像（理由見 showPortrait）：拍照角色用 renderAvatarSVG 會畫成通用角色
+  showPortrait($('#return-avatar'), config);
   $('#return-name').textContent = displayName;   // 自填的名字，一律 textContent
 }
 
@@ -1025,6 +1069,10 @@ $('#btn-new-character').addEventListener('click', () => {
 let ws = null;
 let reconnectDelay = 500;
 let joystick = null;
+/** 目前的場景主題（EV.STAGE_THEME）。可能比 POV 畫布更早送達，先記下來。 */
+let stageTheme = null;
+/** 最近一次的手機名冊。進場時名冊常比畫布先到，畫布建立後要補套。 */
+let rosterAgents = [];
 
 function setStatus(text, cls = '') {
   const el = $('#status');
@@ -1096,8 +1144,13 @@ function connect() {
       serverMode = msg.self?.mode ?? null;
       lastSyncSeenAt = Date.now();
     } else if (msg.type === EV.CLIENT_ROSTER) {
-      // id → 名字。只在成員變動時送，供 POV 畫布標示鄰居是誰。
-      renderer?.setNames(msg.agents ?? []);
+      // id → 名字與外觀。只在成員變動時送，供 POV 畫布畫出鄰居、標示是誰。
+      rosterAgents = msg.agents ?? [];
+      renderer?.setNames(rosterAgents);
+    } else if (msg.type === EV.STAGE_THEME) {
+      // 個人視角畫的是大螢幕同一個場景的局部，主題要跟著主辦端切換
+      stageTheme = msg.theme;
+      renderer?.setTheme(stageTheme);
     } else if (msg.type === EV.CLIENT_REJECT) {
       setStatus('資料有誤', 'warn');
       showToast(`登入失敗：${msg.reason}`);
@@ -1444,7 +1497,7 @@ const confirmPair = $('#pair-confirm');
 function openConfirmPair(msg) {
   $('#pair-confirm-title').textContent = `${msg.name} 想和你配對`;
   $('#pair-confirm-text').textContent = '請確認對方就站在你面前，再按下確認。';
-  $('#pair-confirm-avatar').innerHTML = msg.avatar ? renderAvatarSVG(msg.avatar) : '';
+  showPortrait($('#pair-confirm-avatar'), msg.avatar);
   confirmPair.hidden = false;
   // Esc 一律當成「不是這個人」：這是對方發起的，靜默關掉會讓對方一直等。
   pushOverlay(confirmPair, {
@@ -1521,7 +1574,7 @@ $('#btn-confirm-exit').addEventListener('click', () => {
     localStorage.removeItem(LS.rejoinToken);
   } catch { /* 略 */ }
 
-  $('#farewell-avatar').innerHTML = renderAvatarSVG(config);
+  showPortrait($('#farewell-avatar'), config);
   showScreen('farewell');
 });
 
@@ -1558,16 +1611,39 @@ function initRenderer() {
   renderer = new AvatarRenderer(canvas, config);
   // 腳步震動：由步態相位驅動，與畫面上的落腳完全同步（見 avatarRenderer._detectFootstep）
   renderer.onFootstep(() => vibrate(15));
+  // 角色站在搖桿區的中央；主題可能在畫布建立前就已送達
+  renderer.setAnchorElement($('#joystick-zone'));
+  if (stageTheme) renderer.setTheme(stageTheme);
+  if (rosterAgents.length) renderer.setNames(rosterAgents);
   renderer.start();
 }
+
+/**
+ * 搖桿擺在哪裡。原本在搖桿區正中央，而角色也站在那裡 —— 推桿的手指與搖桿
+ * 底座正好蓋住自己的臉。改成放在角色下方（直式）或左下角（橫式，右手留給
+ * 右側那一欄的表情鍵），兩者都離開角色的上半身。
+ */
+const landscapeQuery = matchMedia('(orientation: landscape)');
+function joystickPosition() {
+  return landscapeQuery.matches
+    ? { left: '96px', top: 'calc(100% - 96px)' }
+    : { left: '50%', top: 'calc(100% - 84px)' };
+}
+// 轉向時重建：nipplejs 的 static 位置在建立時就固定了
+landscapeQuery.addEventListener('change', () => {
+  if (!joystick) return;
+  joystick.destroy();
+  joystick = null;
+  initJoystick();
+});
 
 function initJoystick() {
   if (joystick) return;
   joystick = nipplejs.create({
     zone: $('#joystick-zone'),
     mode: 'static',
-    position: { left: '50%', top: '50%' },
-    color: '#2F2A26',
+    position: joystickPosition(),
+    color: '#3A2E27',
     size: 130,
     restJoystick: true,
   });
@@ -1714,7 +1790,7 @@ document.addEventListener('visibilitychange', () => {
 function enterStage() {
   showScreen('controller');
   requestWakeLock();
-  $('#mini-avatar').innerHTML = renderAvatarSVG(config);
+  showPortrait($('#mini-avatar'), config);
   $('#my-name').textContent = displayName;
   $('#my-id').textContent = '—';
   setStatus('連線中…');
@@ -1812,7 +1888,7 @@ function renderQuizOptions({ locked = false, revealed = null } = {}) {
     if (revealed !== null) {
       btn.disabled = true;
       btn.classList.add(i === revealed ? 'right' : 'wrong');
-      if (i === revealed) btn.style.borderColor = '#2F2A26';
+      if (i === revealed) btn.style.borderColor = '#3A2E27';
     } else if (locked) {
       btn.disabled = true;
     } else {

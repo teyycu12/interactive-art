@@ -227,6 +227,19 @@ export const HOST_KEY_LENGTH = 6;   // 通行密鑰長度
  * 引入 SQLite 或 Redis 換來的是部署複雜度，不是可靠度。
  * 寫入採「先寫暫存檔再改名」，中途斷電不會留下半截檔案。
  */
+/**
+ * 生成服務（backend/service.py）的位址。httplayer.js 的代理與 index.js 的大合照共用。
+ *
+ * 放這裡而不是 httplayer.js：抽出 HTTP 層時這兩個常數跟著搬進 createHttpLayer()，
+ * 合照那段卻還留在 index.js 引用它們 —— 只要場上有人按「拍大合照」就 ReferenceError，
+ * 整個互動層行程結束、全場斷線（e2e「拍大合照時生成服務沒開…」釘住這條）。
+ *
+ * 用 || 而非 ??：?? 只接住 null/undefined，接不到空字串，
+ * 而 .env 裡留一行 VISION_PORT= 正是會產生空字串的寫法。
+ */
+export const VISION_HOST = process.env.VISION_HOST || '127.0.0.1';
+export const VISION_PORT = Number(process.env.VISION_PORT || 5055);
+
 export const PERSISTENCE = {
   file: process.env.PERSONAFLOW_STATE_FILE || 'data/state.json',
   // 關閉持久化（測試用）。現場請勿設定。

@@ -185,7 +185,11 @@ scaleAt(logicX, logicY, worldHeight)
   - `avatar.source === 'CV'`：先載 `textures.full`，失敗或不存在才依
     `CV_CUTS` 把 `head / torso / legs` 疊回；**等比縮放、底部對齊**。
   - 貼圖未到之前先畫 `fallbackColors` 取樣色替身，**角色不可有空白期**。
-  - 其他來源：捏臉 SVG（備援路徑，**不可移除**）。
+  - 在場上時（回傳物件帶 `pixelFrames`，`drawCharacter` 自動改走像素畫法）：
+    正面由生成圖縮成 40×54 的像素格子並 Q 版化成兩頭身；側面與背面用
+    `pixelGrid` 依 `fallbackColors` 與選填的 `pixelParts`（`{head, body}`，
+    捏臉的 token）畫出。生成服務只畫正面，`pixelParts` 讓側面與背面接近本人。
+  - 其他來源：捏臉像素角色（備援路徑，**不可移除**）。
 - 畫布尺寸固定 `AVATAR_W × AVATAR_H = 788 × 1024`，寬高比 200:260。
 - 若 3D 場景要把角色做成 billboard／貼圖平面，**必須**以 `avatarImage()`
   回傳的 canvas 作為材質來源，並維持 200:260 比例與底部錨點。
@@ -216,7 +220,9 @@ scaleAt(logicX, logicY, worldHeight)
 - **必須**讓步態觀感與 `shared/character.js` 一致：速度低於
   `WALK_THRESHOLD`（18）時步態連續淡出至靜止，**不可**以 `state` 布林硬切；
   步頻依 `MAX_SPEED`（190）縮放。
-- 朝向使用 `heading`（完整角度）；2D 圖層使用 `facing`（±1 鏡像）。
+- 朝向使用 `heading`（完整角度）。2D 圖層中，捏臉的像素角色依 `heading` 取
+  上下左右四方向之一（`shared/pixelAvatar.js` 的 `dirFromHeading`，帶遲滯）；
+  掃描生成的角色只有正面貼圖，仍用 `facing`（±1 鏡像）。
 - 名牌、表情、離線標記仍**必須**出現，內容與 2D 版一致。
 
 > 違反時：步態硬切會讓角色停下瞬間抽一下；自訂步頻會讓「手機上的我」

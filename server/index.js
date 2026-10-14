@@ -25,14 +25,14 @@ import { randomBytes, timingSafeEqual, X509Certificate } from 'node:crypto';
 import {
   EV, ACTIONS, STAGE, SYNC_FPS, PAIR_ERRORS, MISSION_TYPES,
   CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS,
-  SCORE_SOURCES,
+  SCORE_SOURCES, EVENT_INFO, SCREEN_LIGHTS,
 } from '../shared/protocol.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
 import { avatarMatchesFamily } from '../shared/colorFamily.js';
 import { DEFAULT_THEME, isThemeId, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
-  PERSISTENCE, TREASURE,
+  PERSISTENCE, TREASURE, VISION_HOST, VISION_PORT,
 } from './config.js';
 import { Stage } from './state.js';
 import { RateLimiter } from './ratelimit.js';
@@ -99,6 +99,23 @@ if (snapshot) {
  */
 let stageTheme = isThemeId(snapshot?.theme) ? snapshot.theme : DEFAULT_THEME;
 
+/**
+ * 活動名稱，取代大螢幕左上角的場景名。null 代表還沒設定 ——
+ * 主辦端此時只看得到「活動設定」那一頁，要先選場景、命名才進得了活動編排。
+ * 落地進快照：活動中途重開伺服器時，不能把主辦端趕回設定頁、大螢幕也不能跳回場景名。
+ */
+let eventInfo = parseEventInfo(snapshot?.event);
+
+/**
+ * 大螢幕的持續性設定。原本是投影畫面右上角的按鈕，已全部收進主辦端 ——
+ * 投影畫面上的按鈕現場沒人點得到，而且會被投出去。
+ * 光線落地（重開後投影不該自己變回白天），除錯視圖不落地（那是臨時檢查用的）。
+ */
+const screenSettings = {
+  light: SCREEN_LIGHTS.some((l) => l.id === snapshot?.screenLight) ? snapshot.screenLight : 'day',
+  debug: false,
+};
+
 /** 快照內容。集中在一處，新增要落地的東西時只改這裡與還原段。 */
 const snapshotData = () => ({
   version: 1,
@@ -111,6 +128,8 @@ const snapshotData = () => ({
   survey: survey.export(),
   directory: directory.export(),
   theme: stageTheme,
+  event: eventInfo,
+  screenLight: screenSettings.light,
 });
 
 /** 狀態有變動，等下一次自動存檔 */
@@ -272,6 +291,9 @@ function sendToAgent(agentId, type, payload) {
  */
 function sendClientRoster(ws) {
   send(ws, EV.CLIENT_ROSTER, { agents: stage.nameRoster() });
+  // 場景主題與名冊同一時機補送：進場與重連都走這裡，
+  // 手機的個人視角才知道要畫廚房還是辦公室
+  send(ws, EV.STAGE_THEME, { theme: stageTheme });
 }
 
 function blast(targets, type, payload) {
@@ -376,16 +398,35 @@ function broadcastMissionState() {
   pushHostState();
 }
 
-/** 顯示名稱驗證：長度限制並剝除控制字元，避免大螢幕排版被破壞 */
-function sanitizeName(raw) {
-  if (typeof raw !== 'string') return null;
+/** 剝除控制字元並去頭尾空白。名稱會上大螢幕，控制字元會破壞排版 */
+function stripControl(raw) {
+  if (typeof raw !== 'string') return '';
   // 逐字元過濾，避免在原始碼中嵌入字面控制字元
-  const name = [...raw]
+  return [...raw]
     .filter((ch) => { const c = ch.codePointAt(0); return c > 0x1f && c !== 0x7f; })
     .join('')
     .trim();
+}
+
+/** 顯示名稱驗證：長度限制並剝除控制字元，避免大螢幕排版被破壞 */
+function sanitizeName(raw) {
+  const name = stripControl(raw);
   if (name.length === 0) return null;
   return name.slice(0, MAX_NAME_LENGTH);
+}
+
+/**
+ * 活動名稱驗證。超長一律拒絕而不是截斷 —— 主辦端 UI 已經設了 maxlength，
+ * 會送來超長的只有繞過 UI 的客戶端；默默截掉會讓大螢幕出現半個字的標題。
+ * @returns {{name: string, subtitle: string}|null}
+ */
+function parseEventInfo(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = stripControl(raw.name);
+  const subtitle = stripControl(raw.subtitle ?? '');
+  if (!name || [...name].length > EVENT_INFO.maxNameLength) return null;
+  if ([...subtitle].length > EVENT_INFO.maxSubtitleLength) return null;
+  return { name, subtitle };
 }
 
 /** 取有限數值，非數值一律歸零，防止 NaN 汙染整個物理模擬 */
@@ -863,6 +904,62 @@ function handleQuizAnswer(ws, msg) {
   quizTallyDirty = true;
 }
 
+/** 切換場景主題。HOST_SET_THEME 與活動設定共用 */
+function setStageTheme(theme) {
+  if (theme === stageTheme) return;
+  stageTheme = theme;
+  console.log(`[theme] 切換為「${THEME_MAP[stageTheme].label}」`);
+  markDirty();
+  // 手機也要：個人視角畫的是同一個場景的局部，主題不同步就會一邊廚房一邊辦公室
+  blast([...screens, ...hosts, ...controllers.values()], EV.STAGE_THEME, { theme: stageTheme });
+}
+
+/**
+ * 大螢幕操作（原本是投影畫面上的按鈕與鍵盤快捷鍵）。
+ *
+ * 光線與除錯視圖是「狀態」，由伺服器保存並廣播 SCREEN_SETTINGS ——
+ * 投影機中途重開、或同時接了兩台螢幕，畫面才會一致，主辦端的按鈕也才知道目前選哪個。
+ * 清除效果、重置視角是一次性動作，只轉發給大螢幕。
+ */
+function handleScreenCommand(ws, msg) {
+  switch (msg.cmd) {
+    case 'light':
+      if (!SCREEN_LIGHTS.some((l) => l.id === msg.value)) return;
+      if (screenSettings.light === msg.value) return;
+      screenSettings.light = msg.value;
+      markDirty();
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
+      break;
+    case 'debug':
+      screenSettings.debug = msg.value === true;
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
+      break;
+    case 'clear':
+    case 'reset':
+      blast(screens, EV.SCREEN_CMD, { cmd: msg.cmd });
+      break;
+    case 'capture':
+      captureForHost(ws);
+      break;
+    default:
+  }
+}
+
+/**
+ * 「儲存畫面」：截圖由大螢幕產生（3D 場景只存在於它的 WebGL 畫布上），
+ * 走合照同一條 /api/screen-capture 管線，再把圖交給按下按鈕的那台主辦端下載。
+ * 原本是在投影電腦上直接下載，檔案落在投影機那台電腦裡，主辦者拿不到。
+ * 刻意不 await，理由同 HOST_TAKE_PHOTO。
+ */
+async function captureForHost(ws) {
+  if (![...screens].some((s) => s.readyState === s.OPEN)) {
+    send(ws, EV.HOST_SCREEN_SHOT, { error: '大螢幕沒有連線' });
+    return;
+  }
+  const image = await requestScreenCapture();
+  send(ws, EV.HOST_SCREEN_SHOT, image ? { image } : { error: '大螢幕沒有回應，請再試一次' });
+}
+
 // ─────────────────────────────────────────────────────────────
 // 主辦端處理
 // ─────────────────────────────────────────────────────────────
@@ -967,14 +1064,32 @@ function handleHostMessage(ws, msg) {
 
     case EV.HOST_SET_THEME: {
       if (!isThemeId(msg.theme)) { send(ws, EV.HOST_REJECT, { reason: '沒有這個場景主題' }); return; }
-      if (msg.theme === stageTheme) return;
-      stageTheme = msg.theme;
-      console.log(`[theme] 切換為「${THEME_MAP[stageTheme].label}」`);
-      markDirty();
-      // 只送公開畫面：手機端不顯示場景，送了也只是多一則沒人收的訊息
-      blast([...screens, ...hosts], EV.STAGE_THEME, { theme: stageTheme });
+      setStageTheme(msg.theme);
       break;
     }
+
+    case EV.HOST_SETUP_EVENT: {
+      // 場景與名稱一起驗證、一起生效：只套用一半的話，大螢幕會出現
+      // 「新名稱配舊場景」，而主辦端以為設定失敗、其實場景已經換了
+      if (!isThemeId(msg.theme)) { send(ws, EV.HOST_REJECT, { reason: '請先選擇一個場景' }); return; }
+      const info = parseEventInfo(msg);
+      if (!info) {
+        send(ws, EV.HOST_REJECT, {
+          reason: `請填寫活動名稱（${EVENT_INFO.maxNameLength} 字內，副標 ${EVENT_INFO.maxSubtitleLength} 字內）`,
+        });
+        return;
+      }
+      eventInfo = info;
+      console.log(`[event] 活動「${info.name}」　場景「${THEME_MAP[msg.theme].label}」`);
+      markDirty();
+      setStageTheme(msg.theme);
+      blast([...screens, ...hosts], EV.STAGE_EVENT, { event: eventInfo });
+      break;
+    }
+
+    case EV.HOST_SCREEN_CMD:
+      handleScreenCommand(ws, msg);
+      break;
 
     case EV.HOST_CLOSE_MISSION:
       closeMission();
@@ -1096,6 +1211,8 @@ wss.on('connection', (ws) => {
         send(ws, EV.STAGE_META, { stage: STAGE, fps: SYNC_FPS });
         // 投影機中途重開或新接一台螢幕，都要知道現在該顯示哪個主題
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
+        send(ws, EV.STAGE_EVENT, { event: eventInfo });
+        send(ws, EV.SCREEN_SETTINGS, { settings: screenSettings });
         send(ws, EV.STAGE_ROSTER, { agents: stage.roster() });
         // 進行中的問卷：投影機中途重開時要接回目前的題目與分佈
         if (survey.isActive) {
@@ -1204,6 +1321,10 @@ wss.on('connection', (ws) => {
         send(ws, EV.HOST_STATE, hostState());
         // 主題選單只由 STAGE_THEME 驅動，重整後的主辦端要靠這則才知道目前選的是哪個
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
+        send(ws, EV.SCREEN_SETTINGS, { settings: screenSettings });
+        // 主辦端據此決定先進「活動設定」還是直接進控制台，所以排在主題之後
+        //（設定頁要用目前的主題預選場景卡）
+        send(ws, EV.STAGE_EVENT, { event: eventInfo });
         // 補送進行中的尋寶。HOST_STATE 不含尋寶（見 hostState），而主辦端的
         // 尋寶面板只由 TREASURE_* 事件驅動 —— 少了這裡，中途重整或斷線重連的
         // 主辦端會停在「開始尋寶」那一頁，#treasure-live 永遠是 hidden，
@@ -1237,6 +1358,8 @@ wss.on('connection', (ws) => {
       case EV.HOST_KICK:
       case EV.HOST_TAKE_PHOTO:
       case EV.HOST_SET_THEME:
+      case EV.HOST_SETUP_EVENT:
+      case EV.HOST_SCREEN_CMD:
       case EV.HOST_START_SURVEY:
       case EV.HOST_CLOSE_SURVEY:
       case EV.HOST_REQUEST_REPORT:
@@ -1386,9 +1509,7 @@ const loop = startTicker({
     // `screens.size === 0` 早退之後 —— 沒有大螢幕連線時它會一直是 true，
     // 於是每一幀都重新舉旗，名冊變成 30Hz 廣播（實測 2 秒送了 60 次）。
     // 因此改為比對「上次送出的名冊內容」，與大螢幕的清除時機完全脫鉤。
-    const rosterSig = stage.agents.size
-      ? `${stage.agents.size}:${[...stage.agents.values()].map((a) => `${a.id}~${a.name}`).join('|')}`
-      : '';
+    const rosterSig = stage.clientRosterSignature();
     if (rosterSig !== lastClientRosterSig) clientRosterDirty = true;
     if (controllers.size && clientRosterDirty) {
       clientRosterDirty = false;

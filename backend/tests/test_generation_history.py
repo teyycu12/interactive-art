@@ -299,6 +299,21 @@ class GenerationHistoryTests(unittest.TestCase):
         self.assertEqual(run["output_path"], output_path)
         self.assertEqual(run["api_call_count"], 0)
 
+    def test_summary_counts_integrated_service_ok_status_as_success(self):
+        """整合版 service.py 把成功記成 'ok'；只數 'success' 時成功率永遠是 0%。"""
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "history.sqlite3"
+            for rid, status in (("ok-1", "ok"), ("ok-2", "ok"), ("fail-1", "failed")):
+                start_run(rid, mode="full_character", style_id="pixel",
+                          source_type="camera", db_path=db_path)
+                finish_run(rid, status=status, stage="base", height_class=None,
+                           duration_ms=1000, cv_ms=0, vlm_ms=0, generation_ms=900,
+                           retry_count=0, validation=None, db_path=db_path)
+            summary = get_summary(db_path=db_path)
+        self.assertEqual(summary["success_count"], 2)
+        self.assertAlmostEqual(summary["success_rate"], 2 / 3)
+        self.assertEqual(summary["avg_success_ms"], 1000)
+
     def test_run_attempt_tokens_and_provider_cost_are_aggregated(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "history.sqlite3"

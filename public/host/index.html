@@ -23,6 +23,36 @@
   </div>
 </section>
 
+<!-- ── 活動設定 ─────────────────────────────────────────── -->
+<!-- 進入活動編排前必經的一步：一場活動只用一個場景，名稱會取代大螢幕左上角的場景名。
+     伺服器記得設定（落地進快照），之後重整或重開都直接進控制台，不會再被擋在這裡。 -->
+<section id="setup" hidden>
+  <div class="setup-card">
+    <p class="setup-step">開始之前</p>
+    <h1>活動設定</h1>
+    <p class="lede">選一個場景、為這場活動命名，就能進入活動編排。</p>
+
+    <fieldset class="setup-field">
+      <legend>1. 選擇場景</legend>
+      <div class="theme-list" id="setup-themes" role="radiogroup" aria-label="場景"></div>
+    </fieldset>
+
+    <div class="setup-field">
+      <label for="event-name">2. 活動名稱</label>
+      <input id="event-name" autocomplete="off" placeholder="例：新生交流夜">
+      <label for="event-subtitle" class="setup-optional">副標（選填）</label>
+      <input id="event-subtitle" autocomplete="off" placeholder="例：一起煮點好時光">
+      <p class="hint tiny">名稱會顯示在大螢幕左上角，取代原本的場景名。</p>
+    </div>
+
+    <p class="err" id="setup-err" hidden role="alert" aria-live="assertive"></p>
+    <div class="setup-actions">
+      <button class="btn-ghost" id="btn-setup-cancel" hidden>取消</button>
+      <button class="btn-primary" id="btn-setup">進入活動編排</button>
+    </div>
+  </div>
+</section>
+
 <!-- ── 控制台 ───────────────────────────────────────────── -->
 <!-- 版面依「主辦者現在要做什麼」分頁，而不是把所有面板攤在同一頁：
      帶活動時只看得到一個玩法；生成歷史（模型、token、花費）是給技術人員的，
@@ -30,7 +60,11 @@
 <section id="console" hidden>
   <header class="topbar">
     <div>
-      <h1>主辦端控制台</h1>
+      <h1 id="event-title">主辦端控制台</h1>
+      <p class="event-meta">
+        <span id="event-scene"></span>
+        <button class="btn-link" id="btn-edit-event">修改活動設定</button>
+      </p>
       <p class="sub" id="conn-status">已連線</p>
     </div>
     <div class="topbar-right">
@@ -70,8 +104,6 @@
         <button class="btn-primary" id="btn-rs-next" hidden>下一項</button>
         <div class="rs-add">
           <button class="btn-ghost" id="btn-rs-add-photo">＋ 拍大合照</button>
-          <button class="btn-ghost" id="btn-rs-add-theme">＋ 切換場景</button>
-          <select id="rs-theme" aria-label="要切換到的場景"></select>
         </div>
         <p class="err" id="rs-err" hidden></p>
       </div>
@@ -339,12 +371,24 @@
     <!-- ═══ 場景與合照 ═══ -->
     <div role="tabpanel" id="tab-stage" aria-labelledby="tab-btn-stage" hidden>
     <div class="stage-grid">
-    <!-- 場景主題：切換大螢幕的背景，依活動場合挑選 -->
+    <!-- 大螢幕：原本在投影畫面右上角的按鈕與鍵盤快捷鍵，全部收到這裡。
+         場景在「活動設定」選定，一場活動只用一個場景，所以這裡不能切換。 -->
     <div class="panel">
-      <h2>場景主題</h2>
-      <p class="hint">切換大螢幕的背景。角色、分數與進行中的任務都不受影響。</p>
-      <div class="theme-list" id="theme-list" role="group" aria-label="場景主題"></div>
-      <p class="err" id="theme-err" hidden></p>
+      <h2>大螢幕</h2>
+      <p class="hint">場景：<b id="screen-scene"></b>（要換場景請按上方「修改活動設定」）</p>
+      <div class="screen-row">
+        <span class="screen-label" id="light-label">光線</span>
+        <div class="seg" id="light-list" role="group" aria-labelledby="light-label"></div>
+      </div>
+      <div class="screen-row">
+        <button class="btn-ghost" id="btn-screen-clear" title="清掉場景物件被點擊或靠近時的小動畫">清除效果</button>
+        <button class="btn-ghost" id="btn-screen-reset" title="3D 客廳的鏡頭回到預設角度">重置視角</button>
+        <button class="btn-ghost" id="btn-screen-shot">儲存畫面</button>
+        <button class="btn-ghost" id="btn-screen-debug" aria-pressed="false"
+                title="在大螢幕上顯示 α 權重、避障半徑與速度向量">除錯視圖</button>
+      </div>
+      <p class="hint" id="screen-status" hidden role="status"></p>
+      <p class="err" id="screen-err" hidden></p>
     </div>
 
     <!-- 大合照 -->
@@ -377,11 +421,14 @@
       <div class="table-wrap" id="history-wrap">
         <table id="history-table">
           <thead>
-            <tr><th></th><th></th><th>時間</th><th>狀態</th><th>模型</th><th>Tokens</th><th>花費</th><th>耗時</th></tr>
+            <tr><th></th><th></th><th>時間</th><th>狀態</th><th>模型</th><th>Tokens</th><th>花費</th><th>耗時</th><th>匯出</th></tr>
           </thead>
           <tbody id="history-body"></tbody>
         </table>
       </div>
+      <p class="hint tiny">匯出：「圖檔」是去背的角色 PNG；「角色檔」是 .persona.json，內含貼圖與外觀設定，
+        換一台電腦可用 <code>python scripts/import_character.py 檔名</code> 還原，再到人物匯入台放上場。</p>
+      <p class="err" id="history-err" hidden></p>
       <p class="hint" id="history-empty" hidden>還沒有生成紀錄。</p>
     </div>
     </div>

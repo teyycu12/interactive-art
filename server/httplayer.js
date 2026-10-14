@@ -17,6 +17,7 @@ import { performance } from 'node:perf_hooks';
 
 import { RateLimiter } from './ratelimit.js';
 import { listHistoricalAvatars } from './devAvatars.js';
+import { VISION_HOST, VISION_PORT } from './config.js';
 
 /**
  * 建立 HTTP 層。依賴以參數注入而非 import，方向才不會繞回 index.js。
@@ -102,10 +103,7 @@ function resolveStatic(urlPath) {
 //   3. 生成服務掛掉時，這裡能回一個結構化的降級結果，而不是讓手機端看到
 //      連線錯誤 —— 對參與者而言那應該是「用預設外觀進場」，不是故障
 // ─────────────────────────────────────────────────────────────
-// 用 || 而非 ??：?? 只接住 null/undefined，接不到空字串，
-// 而 .env 裡留一行 VISION_PORT= 正是會產生空字串的寫法。
-const VISION_HOST = process.env.VISION_HOST || '127.0.0.1';
-const VISION_PORT = Number(process.env.VISION_PORT || 5055);
+// 位址（VISION_HOST / VISION_PORT）定義在 config.js，index.js 的大合照也要用。
 
 /** 手機照片經 base64 後可達數 MB；超過此上限直接拒收，不讓記憶體被灌爆 */
 const MAX_PHOTO_BYTES = 12 * 1024 * 1024;
@@ -324,9 +322,12 @@ function proxyHostHistory(req, res, upstreamPath, isBinary) {
     timeout: HISTORY_TIMEOUT_MS,
   }, (up) => {
     if (isBinary) {
-      res.writeHead(up.statusCode ?? 200, {
+      const headers = {
         'Content-Type': up.headers['content-type'] ?? 'application/octet-stream',
-      });
+      };
+      // 匯出角色時由生成服務決定下載檔名
+      if (up.headers['content-disposition']) headers['Content-Disposition'] = up.headers['content-disposition'];
+      res.writeHead(up.statusCode ?? 200, headers);
       up.pipe(res);
       return;
     }
@@ -384,6 +385,13 @@ function handleHostHistory(req, res, urlPath, searchParams) {
     const filename = suffix.slice('/inputs/'.length);
     if (!SAFE_FILENAME.test(filename)) { res.writeHead(400).end('Bad Request'); return; }
     proxyHostHistory(req, res, `/api/dev/inputs/${filename}`, true);
+    return;
+  }
+  // 匯出角色：/<request_id>/image（PNG）與 /<request_id>/bundle（角色檔 JSON）。
+  // 角色檔內嵌整組貼圖的 base64，等同把參與者的照片轉譯結果帶走，所以同樣要密鑰。
+  const exportMatch = /^\/([0-9a-f]{32})\/(image|bundle)$/.exec(suffix);
+  if (exportMatch) {
+    proxyHostHistory(req, res, `/api/dev/characters/${exportMatch[1]}/${exportMatch[2]}`, true);
     return;
   }
   const requestId = suffix.slice(1);

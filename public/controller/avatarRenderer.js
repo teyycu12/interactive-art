@@ -19,8 +19,13 @@
  * 步態一律 import shared/character.js，不另抄常數。
  */
 
-import { drawCharacter } from '/shared/character.js';
+import {
+  drawCharacter, drawNameplate, drawEmote, stepIndex, emoteIsPosed,
+} from '/shared/character.js';
 import { avatarImage } from '/shared/avatarSprite.js';
+import {
+  sceneBackdrop, ORIGIN_X, ORIGIN_Y, ROOM_W, ROOM_H, BODY_UNITS, OUTSIDE,
+} from './sceneBackdrop.js';
 import {
   MAX_SPEED, CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS, EMOTE_GLYPH, WALK_THRESHOLD,
 } from '/shared/protocol.js';
@@ -76,6 +81,21 @@ export class AvatarRenderer {
     this.lastSyncAt = 0;
     /** id → 名字（CLIENT_ROSTER）。名字是靜態資料，不隨座標重送。 */
     this.names = new Map();
+    /** id → 鄰居的像素角色（由 CLIENT_ROSTER 的 look 產生），以及產生它的 look 指紋 */
+    this.looks = new Map();
+
+    // ── 場景視角 ──
+    // 有像素底圖時，畫面是大螢幕同一張場景的局部，鏡頭跟著自己。
+    // 沒有（3D 主題、或還不知道主題）時退回原本的地面網格。
+    this.backdrop = null;
+    /** 自己在場域上的顯示位置（平滑過的伺服器座標），鏡頭中心 */
+    this.selfPos = null;
+    /** 累計走過的距離（身高數）。步伐換腳與腳步震動都以它為準。 */
+    this.travel = 0;
+    this._lastStep = null;
+    /** 角色要站在哪個元素的範圍內（搖桿區）。由 app.js 指定，見 setAnchorElement。 */
+    this.anchorEl = null;
+    this.anchorBox = null;
 
     this.running = false;
     this.lastAt = 0;
@@ -94,6 +114,37 @@ export class AvatarRenderer {
   /** 更換角色外觀（例如掃描生成完成後） */
   setAvatar(avatar) {
     this.sprite = avatar ? avatarImage(avatar) : null;
+  }
+
+  /**
+   * 切換場景主題（EV.STAGE_THEME）。像素主題會畫出與大螢幕相同的底圖，
+   * 3D 主題沒有像素底圖，回到地面網格。
+   */
+  setTheme(themeId) {
+    this.backdrop = sceneBackdrop(themeId);
+  }
+
+  /**
+   * 角色站在這個元素的範圍中央（元素本身是透明的搖桿區）。
+   * 用實際版面決定而非寫死比例：直式與橫式的搖桿區位置完全不同，
+   * 任務橫幅出現時也會把它往下推。
+   */
+  setAnchorElement(el) {
+    this.anchorEl = el;
+    this._measureAnchor();
+    if (typeof ResizeObserver !== 'undefined' && el) {
+      this._anchorObserver?.disconnect();
+      this._anchorObserver = new ResizeObserver(() => this._measureAnchor());
+      this._anchorObserver.observe(el);
+    }
+  }
+
+  _measureAnchor() {
+    const el = this.anchorEl;
+    if (!el?.getBoundingClientRect || !this.canvas.getBoundingClientRect) { this.anchorBox = null; return; }
+    const z = el.getBoundingClientRect();
+    const c = this.canvas.getBoundingClientRect();
+    this.anchorBox = { x: z.left - c.left, y: z.top - c.top, w: z.width, h: z.height };
   }
 
   /** 註冊觸地回呼，供 app.js 接上震動 */
@@ -122,6 +173,15 @@ export class AvatarRenderer {
    */
   setNames(agents) {
     this.names = new Map(agents.map((a) => [a.id, a.name]));
+    // 鄰居外觀：只在 look 真的變了才重畫 12 格，名冊重送時其他人不必重建
+    const next = new Map();
+    for (const a of agents) {
+      if (!a.look) continue;
+      const key = JSON.stringify(a.look);
+      const prev = this.looks.get(a.id);
+      next.set(a.id, prev?.key === key ? prev : { key, sprite: avatarImage(a.look) });
+    }
+    this.looks = next;
   }
 
   /**
@@ -139,15 +199,22 @@ export class AvatarRenderer {
     for (const n of view.neighbors ?? []) {
       seen.add(n.id);
       const prev = this.neighbors.get(n.id);
+      // 絕對座標：相對位移是以「伺服器上的自己」為準，換回場域座標後
+      // 才能與平滑過的鏡頭分開內插，否則自己一動，所有鄰居都跟著抖
+      const ax = view.self.x + n.dx;
+      const ay = view.self.y + n.dy;
       if (prev) {
         prev.fromDx = prev.dx; prev.fromDy = prev.dy;
         prev.dx = n.dx; prev.dy = n.dy;
-        prev.facing = n.facing; prev.state = n.state; prev.emote = n.emote;
+        prev.fromAx = prev.x ?? ax; prev.fromAy = prev.y ?? ay;
+        prev.ax = ax; prev.ay = ay;
+        prev.facing = n.facing; prev.heading = n.heading; prev.state = n.state; prev.emote = n.emote;
         prev.t = 0;
       } else {
         // 新出現的鄰居直接就位，不從畫面中心滑進來
         this.neighbors.set(n.id, {
-          ...n, fromDx: n.dx, fromDy: n.dy, t: 1,
+          ...n, fromDx: n.dx, fromDy: n.dy, ax, ay, fromAx: ax, fromAy: ay,
+          x: ax, y: ay, vx: 0, vy: 0, travel: 0, t: 1,
         });
       }
     }
@@ -172,6 +239,7 @@ export class AvatarRenderer {
   }
 
   _resize() {
+    this._measureAnchor?.();
     // 低階手機上 devicePixelRatio 可能是 3，全螢幕畫布的填色成本會跟著平方成長。
     // 上限壓在 2：視覺差異在這個尺寸下幾乎看不出來，幀率差異則很明顯。
     const dpr = Math.min(devicePixelRatio || 1, 2);
@@ -235,9 +303,36 @@ export class AvatarRenderer {
     this.scrollX -= this.vx * MAX_SPEED * GRID_PARALLAX * dt;
     this.scrollY -= this.vy * MAX_SPEED * GRID_PARALLAX * dt;
 
-    // 鄰居內插：把上一次的相對座標推進到最新值
+    // 自己的顯示位置：以最後一次同步為起點、依速度外推到現在，再平滑逼近。
+    // 鏡頭中心就是它 —— 世界在腳下移動的距離與換腳的距離因此是同一個數。
+    if (this.serverSelf) {
+      const age = fresh ? Math.min(now - this.lastSyncAt, SYNC_STALE_MS) / 1000 : 0;
+      const tx = this.serverSelf.x + (fresh ? this.serverSelf.vx * age : 0);
+      const ty = this.serverSelf.y + (fresh ? this.serverSelf.vy * age : 0);
+      if (!this.selfPos) {
+        this.selfPos = { x: tx, y: ty };
+      } else {
+        const k = 1 - Math.exp(-dt / 0.06);
+        const nx = this.selfPos.x + (tx - this.selfPos.x) * k;
+        const ny = this.selfPos.y + (ty - this.selfPos.y) * k;
+        const moved = Math.hypot(nx - this.selfPos.x, ny - this.selfPos.y);
+        if (moved < BODY_UNITS) this.travel += moved / BODY_UNITS;
+        this.selfPos = { x: nx, y: ny };
+      }
+    } else {
+      // 還沒有伺服器座標：用搖桿輸入推算，讓剛推桿時腳就會動
+      this.travel += (speed * MAX_SPEED * dt) / BODY_UNITS;
+    }
+
+    // 鄰居內插：把上一次的座標推進到最新值
     for (const n of this.neighbors.values()) {
       if (n.t < 1) n.t = Math.min(1, n.t + dt / (CLIENT_SYNC_MS / 1000));
+      const x = n.fromAx + (n.ax - n.fromAx) * n.t;
+      const y = n.fromAy + (n.ay - n.fromAy) * n.t;
+      const moved = Math.hypot(x - n.x, y - n.y);
+      if (moved < BODY_UNITS) n.travel += moved / BODY_UNITS;
+      if (dt > 0) { n.vx = (x - n.x) / dt; n.vy = (y - n.y) / dt; }
+      n.x = x; n.y = y;
     }
 
     this._detectFootstep(speed);
@@ -254,6 +349,17 @@ export class AvatarRenderer {
    * 這裡的震動就會對不上腳步。兩者的耦合刻意留在註解裡。
    */
   _detectFootstep(speed) {
+    // 像素角色的換腳由走過的距離決定（shared/character.js 的 STEP_BODIES），
+    // 震動要跟著同一把尺，否則腳踏下去的那一格與震動會錯開。
+    if (this.sprite?.pixelFrames) {
+      const step = stepIndex(this.travel);
+      if (speed >= FOOTSTEP_MIN_SPEED && this._lastStep !== null && step !== this._lastStep) {
+        this._onFootstep?.();
+      }
+      this._lastStep = step;
+      return;
+    }
+
     // 門檻要高於 _update 低通濾波的殘量。濾波是指數收斂，速度會長時間
     // 停在 0 附近的極小值 —— 門檻壓太低會讓角色明明站著不動卻持續震動。
     if (speed < FOOTSTEP_MIN_SPEED) { this._prevPhaseSin = 0; return; }
@@ -269,6 +375,7 @@ export class AvatarRenderer {
   }
 
   _draw() {
+    if (this.backdrop) { this._drawScene(); return; }
     const { ctx, w, h } = this;
     const horizon = h * HORIZON_RATIO;
 
@@ -293,6 +400,9 @@ export class AvatarRenderer {
       vx: this.vx * MAX_SPEED,
       vy: this.vy * MAX_SPEED,
       facing: this.facing,
+      // 像素角色依 heading 選方向。用伺服器的值，手機與大螢幕才會面向同一邊；
+      // 還沒收到同步時是 undefined，drawCharacter 會改用速度推算。
+      heading: this.serverSelf?.heading,
     };
 
     drawCharacter(ctx, agent, { x: w / 2, y: footY }, this.sprite, {
@@ -302,8 +412,93 @@ export class AvatarRenderer {
     });
   }
 
+  /** 角色腳底要落在畫面上的哪一點（CSS px），與這個縮放下的角色身高 */
+  _layout() {
+    const box = this.anchorBox ?? { x: 0, y: 0, w: this.w, h: this.h };
+    // 身高約佔搖桿區高度的 18%：看得清自己，也看得到周圍的道具與人。
+    // 下限 0.6 是手機橫放時的保底（區域只剩兩百多 px 高，再小就看不出表情）。
+    const zoom = Math.max(0.6, Math.min(1.2, (box.h * 0.18) / BODY_UNITS));
+    return {
+      ax: box.x + box.w / 2,
+      // 腳底略低於中線，讓整個角色落在區域正中
+      ay: box.y + box.h * 0.6,
+      zoom,
+    };
+  }
+
   /**
-   * 鄰居。以相對座標畫在主角周圍，越遠越小越淡。
+   * 場景視角：大螢幕同一張底圖的局部，鏡頭跟著自己。
+   * 角色、名牌、表情都用大螢幕的同一組繪圖函式，兩邊長得一樣。
+   */
+  _drawScene() {
+    const { ctx, w, h } = this;
+    const { ax, ay, zoom } = this._layout();
+    const dpr = this.canvas.width / (w || 1);
+    const snap = (v) => Math.round(v * dpr) / dpr;
+
+    // 還沒收到座標前，先看場景正中央
+    const cam = this.selfPos ?? { x: ROOM_W / 2 - ORIGIN_X, y: ROOM_H / 2 - ORIGIN_Y };
+    const ox = snap(ax - (ORIGIN_X + cam.x) * zoom);
+    const oy = snap(ay - (ORIGIN_Y + cam.y) * zoom);
+
+    ctx.fillStyle = OUTSIDE;
+    ctx.fillRect(0, 0, w, h);
+
+    // 只取畫面看得到的那一塊底圖，不把整張 2596×1460 丟給 drawImage
+    const sx0 = Math.max(0, -ox / zoom);
+    const sy0 = Math.max(0, -oy / zoom);
+    const sx1 = Math.min(ROOM_W, (w - ox) / zoom);
+    const sy1 = Math.min(ROOM_H, (h - oy) / zoom);
+    if (sx1 > sx0 && sy1 > sy0) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(this.backdrop, sx0, sy0, sx1 - sx0, sy1 - sy0,
+        ox + sx0 * zoom, oy + sy0 * zoom, (sx1 - sx0) * zoom, (sy1 - sy0) * zoom);
+      ctx.restore();
+    }
+
+    const height = BODY_UNITS * zoom;
+    const toScreen = (x, y) => ({ x: ox + (ORIGIN_X + x) * zoom, y: oy + (ORIGIN_Y + y) * zoom });
+    const speed = Math.hypot(this.vx, this.vy);
+
+    // 自己與鄰居一起依 y 排序，前面的人蓋住後面的人（與大螢幕相同）
+    const people = [...this.neighbors.values()].map((n) => ({ n, y: n.y }));
+    people.push({ self: true, y: cam.y });
+    people.sort((a, b) => a.y - b.y);
+
+    for (const p of people) {
+      if (p.self) {
+        drawCharacter(ctx, {
+          state: speed * MAX_SPEED > WALK_THRESHOLD ? 'WALK' : 'IDLE',
+          vx: this.vx * MAX_SPEED,
+          vy: this.vy * MAX_SPEED,
+          facing: this.facing,
+          heading: this.serverSelf?.heading,
+          // 自己按下揮手／乾杯時，手機上的自己也要跟著做
+          emote: this.serverSelf?.emote,
+        }, { x: ax, y: ay }, this.sprite, {
+          time: this.time, maxSpeed: MAX_SPEED, height, travel: this.travel,
+        });
+        continue;
+      }
+      const n = p.n;
+      const pos = toScreen(n.x, n.y);
+      if (pos.x < -height || pos.x > w + height || pos.y < -40 || pos.y > h + height) continue;
+      drawCharacter(ctx,
+        { state: n.state, vx: n.vx, vy: n.vy, facing: n.facing ?? 1, heading: n.heading, emote: n.emote },
+        pos, this.looks.get(n.id)?.sprite ?? null,
+        { time: this.time, maxSpeed: MAX_SPEED, height, travel: n.travel });
+      // 名字：配對任務要「走向另一位參與者」，看不出誰是誰就無從找起
+      const name = this.names.get(n.id);
+      if (name) drawNameplate(ctx, pos, name, { fontSize: Math.max(11, Math.round(height * 0.12)) });
+      if (n.emote && !emoteIsPosed(this.looks.get(n.id)?.sprite, n.emote)) {
+        drawEmote(ctx, pos, EMOTE_GLYPH[n.emote] ?? '·', { height });
+      }
+    }
+  }
+
+  /**
+   * 鄰居（地面網格模式）。以相對座標畫在主角周圍，越遠越小越淡。
    *
    * 這裡只用 dy 決定深度而不做真透視：手機畫面小，鄰居本來就只有
    * 幾十像素高，完整的透視矩陣在這個尺寸下看不出差別，卻要多算一輪。
@@ -356,12 +551,12 @@ export class AvatarRenderer {
         // 米白底襯：名字會落在網格線上，純色文字讀不清
         const w = ctx.measureText(name).width + 10;
         ctx.globalAlpha = (0.25 + fade * 0.55) * 0.9;
-        ctx.fillStyle = '#FAF8F5';
+        ctx.fillStyle = '#F7F1E3';
         ctx.beginPath();
         ctx.roundRect(x - w / 2, ny, w, fs + 6, 5);
         ctx.fill();
         ctx.globalAlpha = 0.35 + fade * 0.65;
-        ctx.fillStyle = '#2F2A26';
+        ctx.fillStyle = '#3A2E27';
         ctx.fillText(name, x, ny + 3);
         ctx.restore();
       }
@@ -382,8 +577,9 @@ export class AvatarRenderer {
   _drawSky(horizon) {
     const { ctx, w } = this;
     const g = ctx.createLinearGradient(0, 0, 0, horizon);
-    g.addColorStop(0, '#FAF8F5');
-    g.addColorStop(1, '#EFEAE3');
+    // 與大螢幕廚房的流理台背牆同色系；上方文字列壓在這裡，所以維持淺色
+    g.addColorStop(0, '#F7F1E3');
+    g.addColorStop(1, '#EDE3CE');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, horizon);
   }
@@ -398,8 +594,10 @@ export class AvatarRenderer {
     const { ctx, w, h } = this;
 
     const g = ctx.createLinearGradient(0, horizon, 0, h);
-    g.addColorStop(0, '#EFEAE3');
-    g.addColorStop(1, '#E3DCD2');
+    // 淺木地板（大螢幕廚房地板的淡化版）。刻意比場景淺：
+    // 搖桿提示與角色都疊在上面，太深會吃掉對比。
+    g.addColorStop(0, '#EADBC1');
+    g.addColorStop(1, '#DCC4A1');
     ctx.fillStyle = g;
     ctx.fillRect(0, horizon, w, h - horizon);
 
@@ -408,7 +606,7 @@ export class AvatarRenderer {
     ctx.rect(0, horizon, w, h - horizon);
     ctx.clip();
 
-    ctx.strokeStyle = 'rgba(47, 42, 38, 0.13)';
+    ctx.strokeStyle = 'rgba(122, 76, 49, 0.2)';
     ctx.lineWidth = 1;
 
     // ── 橫線：往地平線靠攏時間距收縮 ──

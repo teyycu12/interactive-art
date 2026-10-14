@@ -14,7 +14,7 @@ test('projection maps feet into the stage in CSS pixels with proportional height
   // 舞台原點就是圖面原點（x 不再有位移），右下角是整張圖的右下角
   assert.deepEqual(scene.projectToScreen(0,0),{x:30,y:155});
   assert.deepEqual(scene.projectToScreen(STAGE.width,STAGE.height),{x:1328,y:695});
-  assert.equal(scene.scaleAt(960,540,2.1),59.85);
+  assert.ok(Math.abs(scene.scaleAt(960,540,2.1) - 2.1 * 76 * scene.zoom) < 1e-9);
   assert.equal(scene.scaleAt(NaN,540,2.1),0);
 });
 test('proximity triggers on entry, never changes participant state, allows re-entry', () => {

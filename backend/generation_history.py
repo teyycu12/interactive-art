@@ -576,6 +576,8 @@ def save_review(
 
 def get_summary(db_path: Optional[Path] = None) -> Dict[str, Any]:
     init_history_db(db_path)
+    # 成功的狀態值有三種寫法：整合版的 service.py 記 'ok'，已移除的 2D 版記
+    # 'success' / 'base_only'。只數後兩者時，整合版的成功率永遠是 0%。
     with _db(db_path) as connection:
         totals = connection.execute(
             """
@@ -583,8 +585,8 @@ def get_summary(db_path: Optional[Path] = None) -> Dict[str, Any]:
                    (SELECT COUNT(*) FROM generation_attempts) AS api_call_count,
                    (SELECT COALESCE(SUM(cost_usd), 0.0) FROM generation_attempts) AS cost_usd,
                    (SELECT COALESCE(SUM(total_tokens), 0) FROM generation_attempts) AS total_tokens,
-                   (SELECT COALESCE(AVG(duration_ms), 0) FROM generation_runs WHERE status='success') AS avg_success_ms,
-                   (SELECT COUNT(*) FROM generation_runs WHERE status IN ('success', 'base_only')) AS success_count
+                   (SELECT COALESCE(AVG(duration_ms), 0) FROM generation_runs WHERE status IN ('ok', 'success')) AS avg_success_ms,
+                   (SELECT COUNT(*) FROM generation_runs WHERE status IN ('ok', 'success', 'base_only')) AS success_count
                    ,(SELECT COUNT(*) FROM generation_reviews WHERE verdict!='pending') AS reviewed_count
                    ,(SELECT COUNT(*) FROM generation_reviews WHERE verdict='pass') AS review_pass_count
             """
