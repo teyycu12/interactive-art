@@ -293,7 +293,10 @@ garment_gen 把風格註冊進其中一份，service.py 從另一份查詢，查
 
 - `avatarImage()` 遇到拍照角色回傳 `cvAvatarImage`（生成的原圖 + 三視圖）；捏臉角色仍是
   `pixelAvatarImage` + `drawPixelCharacter`。
-- `cvPixelSprite` 只留給縮圖 `avatarPortrait`（主辦端、手機的頭像），場上不用。
+- 縮圖 `avatarPortrait`（主辦端、手機的頭像）後來也改用同一張生成原圖（`cvPortrait`），
+  `cvPixelSprite` 從此沒有任何路徑會走到，2026-10-15 連同它專用的十多個輔助函式移除。
+  commit `7ca0906`「大頭變香菇」修的脖子搜尋範圍就在這段，因此一併消失 ——
+  場上用的是生成原圖，本來就不經過那段推導。
 - 手機的腳步震動：捏臉角色依走過的距離（`stepIndex`），拍照角色讀 `gaitPhase('self')`，
   起伏最低點（兩腳張到最開）震一次。不要另算一份相位，步頻一改就與畫面錯開。
 - 手機的場景視角（自己與鄰居）也要帶 `view` 與 `id`／`gaitKey`，否則手機上永遠是正面。
