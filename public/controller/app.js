@@ -298,19 +298,21 @@ nameInput.addEventListener('keydown', (e) => {
 syncStartButton();
 
 /** 兩條入場路徑共用：確認名字、收鍵盤。回傳 false 表示名字還沒填 */
-const LEGO_PREFIXES = ['快樂的', '無敵', '魔法', '酷炫', '光速', '熱血', '創意', '宇宙', '調皮的', '神秘'];
-const LEGO_NOUNS = ['樂高', '工程師', '積木人', '拼裝者', '方塊', '大師', '探險家', '騎士', '魔法師', '小天才'];
+// 沒填名字時的隨機名。用詞跟著畫風走：現在只有像素風格，原本的
+// 「樂高」「積木人」「拼裝者」會讓人以為選錯了風格。
+const NAME_PREFIXES = ['快樂的', '無敵', '魔法', '酷炫', '光速', '熱血', '創意', '宇宙', '調皮的', '神秘'];
+const NAME_NOUNS = ['像素人', '小方塊', '玩家', '勇者', '大師', '探險家', '騎士', '魔法師', '小天才', '冒險者'];
 
-function generateLegoName() {
-  const p = LEGO_PREFIXES[Math.floor(Math.random() * LEGO_PREFIXES.length)];
-  const n = LEGO_NOUNS[Math.floor(Math.random() * LEGO_NOUNS.length)];
+function generateRandomName() {
+  const p = NAME_PREFIXES[Math.floor(Math.random() * NAME_PREFIXES.length)];
+  const n = NAME_NOUNS[Math.floor(Math.random() * NAME_NOUNS.length)];
   return p + n;
 }
 
 function commitName() {
   let name = nameInput.value.trim();
   if (!name) { 
-    name = generateLegoName();
+    name = generateRandomName();
     nameInput.value = name;
   }
   displayName = name;

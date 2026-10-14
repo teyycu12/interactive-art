@@ -1000,7 +1000,7 @@ def generate_full_character_png(
     outfit_data: Optional[Dict[str, Any]] = None,
     remove_bg: bool = True,
     regions: Optional[Dict[str, Any]] = None,
-    style_id: str = "lego",
+    style_id: str = "pixel",
     correction: Optional[str] = None,
     model_override: Optional[str] = None,
 ) -> Dict[str, Any]:

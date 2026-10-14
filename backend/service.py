@@ -107,9 +107,9 @@ try:
     from style_registry import get_event_style_id, list_styles, resolve_style_id
 except Exception as _e:
     _degraded("style_registry（生成風格註冊表）", _e)
-    get_event_style_id = lambda: "lego"
+    get_event_style_id = lambda: "pixel"
     list_styles = lambda: []
-    resolve_style_id = lambda requested: "lego"
+    resolve_style_id = lambda requested: "pixel"
 
 # 生成帳本。現場燒掉多少 token、花多少錢、失敗率多少，全靠這個；
 # 缺它不影響參與者，因此所有呼叫都經 _history_call 包起來、失敗只印一行。
