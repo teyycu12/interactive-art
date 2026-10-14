@@ -5,7 +5,9 @@
  *   靜態場景　由 scene.js 離屏渲染一次，每幀貼圖（見該檔的說明）
  *   角色　　　由 shared/character.js 逐幀以變換矩陣算出步態（手機端 POV 共用同一份）
  *
- * 除錯視圖（按 D）保留自 M2 開發期，用於檢查 α 權重、避障半徑與速度向量。
+ * 除錯視圖保留自 M2 開發期，用於檢查 α 權重、避障半徑與速度向量。
+ * 它與光線、清除效果、重置視角、儲存畫面一樣，都由主辦端的「大螢幕」面板操作
+ *（SCREEN_SETTINGS / SCREEN_CMD）；投影畫面上不留任何按鈕或快捷鍵。
  */
 
 import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protocol.js';
@@ -15,7 +17,7 @@ import { TREASURE_RADIUS } from '/shared/heat.js';
 import { SURVEY } from '/shared/surveys.js';
 import { HARVEST } from '/shared/harvest.js';
 import { createScene, pinnedSceneId, propLabel } from './scenes/registry.js';
-import { DEFAULT_THEME, isThemeId } from '/shared/themes.js';
+import { DEFAULT_THEME, isThemeId, THEME_MAP } from '/shared/themes.js';
 import {
   drawCharacter, drawNameplate, drawEmote, drawOffline, emoteIsPosed,
 } from '/shared/character.js';
@@ -33,16 +35,43 @@ const COLOR_SWARM = '#457B9D';
 const CHARACTER_HEIGHT = 150;   // 邏輯座標下的角色高度
 
 let debug = false;
-addEventListener('keydown', (e) => {
-  if (e.key === 'd' || e.key === 'D') {
-    debug = !debug;
-    document.getElementById('hud').hidden = !debug;
+/** 目前光線。由伺服器的 SCREEN_SETTINGS 決定，換場景後要重新套用到新場景上 */
+let light = 'day';
+
+function applySettings(settings) {
+  if (!settings) return;
+  debug = settings.debug === true;
+  document.getElementById('hud').hidden = !debug;
+  if (typeof settings.light === 'string') {
+    light = settings.light;
+    activeScene?.applyLight(light);
   }
-  if (e.key === '1') activeScene?.applyLight('day');
-  if (e.key === '2') activeScene?.applyLight('evening');
-  if (e.key === '3') activeScene?.applyLight('night');
-  if (e.key === 'r' || e.key === 'R') activeScene?.resetCamera();
-});
+}
+
+function runCommand(cmd) {
+  if (cmd === 'clear') activeScene?.clearEffects?.();
+  if (cmd === 'reset') activeScene?.resetCamera();
+}
+
+// ─────────────────────────────────────────────────────────────
+// 左上角標題卡：活動名稱
+// ─────────────────────────────────────────────────────────────
+// 主辦端設定活動名稱後，標題卡顯示活動主題而非場景名；尚未設定時退回場景名。
+// 畫在頁面層而非場景裡，3D 客廳與像素場景才會長得一樣。
+const eventCard = document.getElementById('event-card');
+let eventInfo = null;
+
+function renderEventCard() {
+  const scene = activeScene?.constructor;
+  const title = eventInfo?.name || scene?.TITLE || THEME_MAP[sceneId]?.label || '';
+  const subtitle = eventInfo ? eventInfo.subtitle : (scene?.SUBTITLE ?? '');
+  eventCard.querySelector('h1').textContent = title;
+  const sub = eventCard.querySelector('p');
+  sub.textContent = subtitle;
+  sub.hidden = !subtitle;
+  eventCard.hidden = !title;
+  document.title = eventInfo?.name ? `${eventInfo.name}｜PersonaFlow 大螢幕` : 'PersonaFlow 大螢幕';
+}
 
 // ─────────────────────────────────────────────────────────────
 // 畫布縮放與場景圖層
@@ -95,6 +124,8 @@ async function switchScene(id) {
   // 載入期間又切了一次：丟掉這個過期的場景，不然兩張畫布會疊在一起
   if (token !== sceneToken) { next.dispose?.(); return; }
   activeScene = next;
+  activeScene.applyLight(light);
+  renderEventCard();
 }
 
 function followTheme(id) {
@@ -209,6 +240,19 @@ function connect() {
     switch (msg.type) {
       case EV.STAGE_THEME:
         followTheme(msg.theme);
+        break;
+
+      case EV.STAGE_EVENT:
+        eventInfo = msg.event ?? null;
+        renderEventCard();
+        break;
+
+      case EV.SCREEN_SETTINGS:
+        applySettings(msg.settings);
+        break;
+
+      case EV.SCREEN_CMD:
+        runCommand(msg.cmd);
         break;
 
       case EV.STAGE_ROSTER: {
@@ -570,13 +614,6 @@ function captureStageFrame() {
   return out.toDataURL('image/png');
 }
 
-// Local export uses the exact same scene + character compositor as SCREEN_CAPTURE_REQ.
-addEventListener('scene-capture', () => {
-  const link = document.createElement('a');
-  link.download = 'personaflow-scene.png';
-  link.href = captureStageFrame();
-  link.click();
-});
 
 /**
  * 寶箱。畫在角色下方（先繪製），避免蓋住站上去的人。

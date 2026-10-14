@@ -444,6 +444,114 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
   check('切換主題後主辦端也收到 STAGE_THEME（多台主辦端的選單要同步）', themeMsgs.at(-1) === 'office');
 }
 
+// ── 活動設定 ──────────────────────────────────────────────
+// 主辦端進入活動編排前要先選場景、為活動命名；名稱取代大螢幕左上角的場景名。
+// 主辦端靠 HOST_AUTH 補送的 STAGE_EVENT 決定先進設定頁還是直接進控制台。
+{
+  const probe = (type) => {
+    const ws = new WebSocket(URL);
+    const got = [];
+    ws.on('message', (d) => { const m = JSON.parse(d); if (m.type === type) got.push(m); });
+    return { ws, got, open: new Promise((res) => ws.on('open', res)) };
+  };
+
+  const fresh = probe('STAGE_EVENT');
+  await fresh.open;
+  fresh.ws.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(300);
+  check('尚未設定活動時，主辦端認證後收到 event: null（要先進設定頁）',
+    fresh.got.length === 1 && fresh.got[0].event === null, JSON.stringify(fresh.got));
+  fresh.ws.close();
+
+  const screenEvents = [];
+  screen.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'STAGE_EVENT') screenEvents.push(m.event); });
+
+  badHost.send(JSON.stringify({ type: 'HOST_SETUP_EVENT', theme: 'office', name: '入侵者之夜' }));
+  await sleep(200);
+  check('未認證連線無法設定活動', screenEvents.length === 0, JSON.stringify(screenEvents));
+
+  // 名稱不合格時整份設定都不生效 —— 場景也不能先換過去
+  let rejectsBefore = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_SETUP_EVENT', theme: 'kitchen', name: '   ' }));
+  await sleep(200);
+  check('活動名稱空白被拒絕，場景也不跟著換',
+    hostRejects.length === rejectsBefore + 1 && screenThemes.at(-1) === 'office' && screenEvents.length === 0,
+    hostRejects.at(-1)?.reason);
+
+  rejectsBefore = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_SETUP_EVENT', theme: 'office', name: '名'.repeat(21) }));
+  await sleep(200);
+  check('超過長度上限的活動名稱被拒絕（不默默截斷）', hostRejects.length === rejectsBefore + 1 && screenEvents.length === 0);
+
+  rejectsBefore = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_SETUP_EVENT', name: '沒選場景' }));
+  await sleep(200);
+  check('沒選場景被拒絕', hostRejects.length === rejectsBefore + 1 && screenEvents.length === 0);
+
+  host.send(JSON.stringify({ type: 'HOST_SETUP_EVENT', theme: 'office', name: ' 新生\u0007交流夜 ', subtitle: '一起把事情做好' }));
+  await sleep(300);
+  check('設定活動後大螢幕收到活動名稱（剝除控制字元與頭尾空白）',
+    screenEvents.at(-1)?.name === '新生交流夜' && screenEvents.at(-1)?.subtitle === '一起把事情做好',
+    JSON.stringify(screenEvents));
+
+  const again = probe('STAGE_EVENT');
+  await again.open;
+  again.ws.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(300);
+  check('設定過後，重新登入的主辦端直接拿到活動名稱（不再被擋在設定頁）',
+    again.got[0]?.event?.name === '新生交流夜', JSON.stringify(again.got));
+  again.ws.close();
+}
+
+// ── 大螢幕控制 ────────────────────────────────────────────
+// 原本在投影畫面上的按鈕（光線、清除效果、重置視角、除錯）全部改由主辦端操作。
+// 光線是狀態（由伺服器保存、連線時補送），清除與重置是一次性動作。
+{
+  const settings = [];
+  const cmds = [];
+  screen.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'SCREEN_SETTINGS') settings.push(m.settings);
+    if (m.type === 'SCREEN_CMD') cmds.push(m.cmd);
+  });
+
+  badHost.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'light', value: 'night' }));
+  badHost.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'clear' }));
+  await sleep(200);
+  check('未認證連線無法操作大螢幕', settings.length === 0 && cmds.length === 0);
+
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'light', value: 'sunset<script>' }));
+  await sleep(150);
+  check('不存在的光線被忽略', settings.length === 0, JSON.stringify(settings));
+
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'light', value: 'evening' }));
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'clear' }));
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'reset' }));
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'debug', value: true }));
+  await sleep(300);
+  check('主辦端切換光線後大螢幕收到 SCREEN_SETTINGS', settings.some((x) => x.light === 'evening'), JSON.stringify(settings));
+  check('清除效果與重置視角轉發給大螢幕', cmds.includes('clear') && cmds.includes('reset'), JSON.stringify(cmds));
+  check('除錯視圖可由主辦端打開', settings.at(-1)?.debug === true);
+
+  // 投影機中途重開：要接回目前的光線，不能自己變回白天
+  const reScreen = new WebSocket(URL);
+  let reSettings = null;
+  let reEvent;
+  reScreen.on('open', () => reScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
+  reScreen.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'SCREEN_SETTINGS') reSettings = m.settings;
+    if (m.type === 'STAGE_EVENT') reEvent = m.event;
+  });
+  await sleep(300);
+  check('大螢幕重新連線時接回目前的光線與活動名稱',
+    reSettings?.light === 'evening' && reEvent?.name === '新生交流夜', JSON.stringify({ reSettings, reEvent }));
+  reScreen.close();
+
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'debug', value: false }));
+  await sleep(100);
+}
+
 // ── 轉場問卷 ──────────────────────────────────────────────
 // 沒有正解的題目。答案留成參與者身上的標籤，供後續任務當條件使用。
 // 這一段在參與者進場前先驗「未認證不得出題」，其餘在兩人進場後補。
@@ -903,6 +1011,23 @@ check('重開後終端機顯示已接續上次的活動資料',
   await sleep(400);
   check('重開後場景主題維持主辦端上次的選擇', reTheme === 'office', `收到 ${reTheme}`);
   reScreen.close();
+}
+
+// 活動中途重開，主辦端不能被趕回設定頁、投影的標題與光線也不能跳掉
+{
+  const reHost = new WebSocket(URL);
+  let reEvent;
+  let reSettings = null;
+  reHost.on('open', () => reHost.send(JSON.stringify({ type: 'HOST_AUTH', key: keyAfterRestart })));
+  reHost.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'STAGE_EVENT') reEvent = m.event;
+    if (m.type === 'SCREEN_SETTINGS') reSettings = m.settings;
+  });
+  await sleep(400);
+  check('重開後活動名稱還在，主辦端直接進控制台', reEvent?.name === '新生交流夜', JSON.stringify(reEvent));
+  check('重開後大螢幕光線維持上次的設定', reSettings?.light === 'evening', JSON.stringify(reSettings));
+  reHost.close();
 }
 
 const back = new WebSocket(URL);

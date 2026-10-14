@@ -46,11 +46,6 @@
   .note { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--soft); font-size: 11px; }
   kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 10px; }
 
-  /* 投影時這行應該不顯眼；它只是給操作者的提示 */
-  .hint-key {
-    position: fixed; bottom: 14px; right: 16px;
-    font-size: 11px; color: var(--line); user-select: none;
-  }
 
   /* ── 斷線提示 ─────────────────────────────────────────────
      沒有這個提示時，斷線在畫面上「完全看不出來」：伺服器的 IDLE_MOTION
@@ -304,7 +299,7 @@
   <div class="note">
     橘＝主動控制態，藍＝湧現漫遊態；角色外圈粗細即為 α 權重。<br>
     黃圈為道具的剛體避障半徑，黃框為邊界回推帶。<br>
-    再按 <kbd>D</kbd> 關閉。
+    在主辦端「場景與合照 → 大螢幕」關閉。
   </div>
 </div>
 
@@ -314,7 +309,11 @@
   <span id="offline-text">與伺服器斷線，正在重新連線…</span>
 </div>
 
-<div class="hint-key">按 <kbd>1–3</kbd> 切換光線 · <kbd>R</kbd> 重置視角 · <kbd>D</kbd> 除錯</div>
+<!-- 左上角標題卡：主辦端設定的活動名稱（未設定時顯示場景名）。樣式見 scenes/pixel-scene.css -->
+<header class="event-card" id="event-card" hidden>
+  <h1></h1>
+  <p hidden></p>
+</header>
 <script type="module" src="screen.js"></script>
 </body>
 </html>

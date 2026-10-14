@@ -106,10 +106,31 @@ export const EV = {
   HOST_SET_THEME: 'HOST_SET_THEME',           // Host → Server：切換大螢幕的場景主題
   STAGE_THEME: 'STAGE_THEME',                 // Server → Screen/Host：目前主題（連線時補送、切換時廣播）
 
+  // ── 活動設定與大螢幕控制 ─────────────────────────────
+  HOST_SETUP_EVENT: 'HOST_SETUP_EVENT',       // Host → Server：選定場景並為活動命名（進入活動編排前必填）
+  STAGE_EVENT: 'STAGE_EVENT',                 // Server → Screen/Host：目前的活動名稱（尚未設定時為 null）
+  HOST_SCREEN_CMD: 'HOST_SCREEN_CMD',         // Host → Server：操作大螢幕（光線、清除效果、重置視角、除錯、截圖）
+  SCREEN_SETTINGS: 'SCREEN_SETTINGS',         // Server → Screen/Host：大螢幕的持續性設定（光線、除錯視圖）
+  SCREEN_CMD: 'SCREEN_CMD',                   // Server → Screen：一次性的動作（清除效果、重置視角）
+  HOST_SCREEN_SHOT: 'HOST_SCREEN_SHOT',       // Server → Host：「儲存畫面」的截圖
+
   // ── 活動報告 ─────────────────────────────────────────
   HOST_REQUEST_REPORT: 'HOST_REQUEST_REPORT', // Host → Server：要一份整場的活動報告
   HOST_REPORT: 'HOST_REPORT',                 // Server → Host：參與者與各輪活動的彙整
 };
+
+/**
+ * 活動名稱的長度上限。名稱取代大螢幕左上角的場景名，要隔著整個場地讀得到，
+ * 太長會撐破標題卡。主辦端 UI 據此設 maxlength，伺服器據此驗證。
+ */
+export const EVENT_INFO = { maxNameLength: 20, maxSubtitleLength: 40 };
+
+/** 大螢幕的光線。主辦端渲染按鈕、伺服器驗證、場景套用，三端同一份 */
+export const SCREEN_LIGHTS = [
+  { id: 'day', label: '日光' },
+  { id: 'evening', label: '黃昏' },
+  { id: 'night', label: '夜晚' },
+];
 
 /**
  * 任務的時間限制（毫秒）。0 代表不限時、由主辦端手動結算。

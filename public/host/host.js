@@ -6,11 +6,13 @@
  * 光靠「網址沒人知道」保護不了任何東西。
  */
 
-import { EV, MISSION_TYPES, MISSION_DURATIONS, QUIZ, QUIZ_CHOICES, QUIZ_PHASE } from '/shared/protocol.js';
+import {
+  EV, MISSION_TYPES, MISSION_DURATIONS, QUIZ, QUIZ_CHOICES, QUIZ_PHASE, EVENT_INFO, SCREEN_LIGHTS,
+} from '/shared/protocol.js';
 import { renderAvatarSVG, CV_FULL_PART } from '/shared/avatars.js';
 import { COLOR_FAMILIES } from '/shared/colorFamily.js';
 import { HEAT_LEVELS } from '/shared/heat.js';
-import { THEMES } from '/shared/themes.js';
+import { THEMES, THEME_MAP } from '/shared/themes.js';
 import { surveysForTheme, SURVEY_BANK_MAP } from '/shared/surveys.js';
 import { propLabel } from '/screen/scenes/registry.js';
 
@@ -60,8 +62,8 @@ function handle(msg, key) {
       buildMissionTypes();
       buildThemes();
       buildSurveyPicker();
+      // 先不開控制台：要等 STAGE_EVENT 才知道這場活動設定過沒有（緊接在後面送到）
       $('#auth').hidden = true;
-      $('#console').hidden = false;
       setConn('已連線', false);
       // 生成歷史不在這裡載入：它收在「系統」分頁，切過去才開始輪詢
       if (activeTab === 'system') startHistoryPolling();
@@ -82,6 +84,18 @@ function handle(msg, key) {
 
     case EV.STAGE_THEME:
       renderTheme(msg.theme);
+      break;
+
+    case EV.STAGE_EVENT:
+      renderEvent(msg.event ?? null);
+      break;
+
+    case EV.SCREEN_SETTINGS:
+      renderScreenSettings(msg.settings);
+      break;
+
+    case EV.HOST_SCREEN_SHOT:
+      receiveScreenShot(msg);
       break;
 
     case EV.SURVEY_QUESTION:
@@ -240,7 +254,8 @@ function showAuthError(text) {
 
 /** 各面板的錯誤欄位。lastAction 決定訊息落在哪一格 */
 const ERR_SLOT = {
-  theme: '#theme-err',
+  setup: '#setup-err',
+  screen: '#screen-err',
   survey: '#survey-err',
   quiz: '#quiz-err',
   treasure: '#treasure-err',
@@ -295,43 +310,193 @@ try {
 let pickedColor = COLOR_FAMILIES[0].id;
 
 // ─────────────────────────────────────────────────────────────
-// 場景主題
+// 活動設定：場景 + 活動名稱
 // ─────────────────────────────────────────────────────────────
-// 目前主題只由 STAGE_THEME 決定（伺服器在 HOST_AUTH 時補送），
-// 按下去不先樂觀地切換外觀：伺服器拒絕時畫面才不會停在一個沒生效的選項上。
+// 認證之後先到這一頁：一場活動只用一個場景，選好、命名之後才進得了活動編排。
+// 伺服器記得設定（快照），所以只有「這場活動第一次開控制台」會停在這裡；
+// 之後要換場景或改名，從頂欄的「修改活動設定」回來。
+//
+// 目前主題只由 STAGE_THEME 決定（伺服器在 HOST_AUTH 時補送）。設定頁上點場景卡
+// 只是「選取」，按下「進入活動編排」才和名稱一起送出 —— 伺服器拒絕時大螢幕不會變。
+
+let currentTheme = null;
+/** 伺服器上的活動設定。undefined＝還沒收到 STAGE_EVENT，null＝尚未設定 */
+let eventInfo;
+/** 設定頁上選取中的場景（尚未送出） */
+let setupTheme = null;
+
+$('#event-name').maxLength = EVENT_INFO.maxNameLength;
+$('#event-subtitle').maxLength = EVENT_INFO.maxSubtitleLength;
+
 function buildThemes() {
-  const list = $('#theme-list');
+  const list = $('#setup-themes');
   list.replaceChildren();
   for (const t of THEMES) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'theme-card';
     b.dataset.theme = t.id;
-    b.setAttribute('aria-pressed', 'false');
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', 'false');
     const name = document.createElement('b'); name.textContent = t.label;
     const occasion = document.createElement('span'); occasion.className = 'theme-occasion'; occasion.textContent = t.occasion;
     const brief = document.createElement('span'); brief.className = 'theme-brief'; brief.textContent = t.brief;
-    const mark = document.createElement('span'); mark.className = 'theme-current'; mark.textContent = '目前顯示';
-    b.append(name, occasion, brief, mark);
-    b.addEventListener('click', () => {
-      if (b.getAttribute('aria-pressed') === 'true') return;
-      lastAction = 'theme';
-      ws?.send(JSON.stringify({ type: EV.HOST_SET_THEME, theme: t.id }));
-    });
+    b.append(name, occasion, brief);
+    b.addEventListener('click', () => pickSetupTheme(t.id));
     list.append(b);
+  }
+  pickSetupTheme(setupTheme ?? currentTheme);
+}
+
+function pickSetupTheme(id) {
+  setupTheme = THEME_MAP[id] ? id : null;
+  const cards = [...document.querySelectorAll('#setup-themes .theme-card')];
+  for (const b of cards) {
+    const on = b.dataset.theme === setupTheme;
+    b.setAttribute('aria-checked', String(on));
+    // radiogroup 的鍵盤慣例：只有選中的那張在 Tab 順序裡（都沒選時是第一張）
+    b.tabIndex = on || (!setupTheme && b === cards[0]) ? 0 : -1;
   }
 }
 
-let currentTheme = null;
-
 function renderTheme(id) {
   currentTheme = id;
-  for (const b of document.querySelectorAll('.theme-card')) {
-    b.setAttribute('aria-pressed', String(b.dataset.theme === id));
-  }
+  const label = THEME_MAP[id]?.label ?? '';
+  $('#event-scene').textContent = label ? `場景：${label}` : '';
+  $('#screen-scene').textContent = label;
+  // 設定頁還開著、主辦者也還沒自己挑過的話，預選目前的場景
+  if (!$('#setup').hidden && setupTheme === null) pickSetupTheme(id);
   // 場景專屬的問卷題（廚房分工、團隊角色）要跟著主題換，
   // 否則在辦公室裡會看到「你在廚房負責什麼」排在第一個
   buildSurveyPicker();
+}
+
+function renderEvent(info) {
+  const first = eventInfo === undefined;
+  eventInfo = info;
+  $('#event-title').textContent = info?.name ?? '主辦端控制台';
+  document.title = info?.name ? `${info.name}｜主辦端` : 'PersonaFlow 主辦端';
+  // 斷線重連時設定頁可能已經開著、名稱打到一半 —— 不要把它清掉重來
+  if (!info) { if ($('#setup').hidden) openSetup(false); return; }
+  // 剛在設定頁送出 → 進控制台的「帶活動」分頁（活動編排）。
+  // 一連上就已經設定過 → 直接進控制台，停在原本的分頁。
+  // 其他主辦端改了設定 → 只更新名稱，不打斷這台正在做的事。
+  const fromSetup = !$('#setup').hidden;
+  if (first || fromSetup) {
+    showConsole();
+    if (fromSetup) selectTab('play');
+  }
+}
+
+function openSetup(editing) {
+  $('#event-name').value = eventInfo?.name ?? '';
+  $('#event-subtitle').value = eventInfo?.subtitle ?? '';
+  setupTheme = null;
+  pickSetupTheme(currentTheme);
+  $('#btn-setup-cancel').hidden = !editing;
+  $('#btn-setup').textContent = editing ? '儲存設定' : '進入活動編排';
+  $('#setup-err').hidden = true;
+  $('#console').hidden = true;
+  $('#setup').hidden = false;
+  $('#event-name').focus();
+}
+
+function showConsole() {
+  $('#setup').hidden = true;
+  $('#console').hidden = false;
+}
+
+$('#btn-setup').addEventListener('click', () => {
+  lastAction = 'setup';
+  const name = $('#event-name').value.trim();
+  if (!setupTheme) { showError('請先選擇一個場景'); return; }
+  if (!name) { showError('請填寫活動名稱'); $('#event-name').focus(); return; }
+  ws?.send(JSON.stringify({
+    type: EV.HOST_SETUP_EVENT,
+    theme: setupTheme,
+    name,
+    subtitle: $('#event-subtitle').value.trim(),
+  }));
+});
+for (const id of ['#event-name', '#event-subtitle']) {
+  $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btn-setup').click(); });
+}
+$('#btn-setup-cancel').addEventListener('click', showConsole);
+$('#btn-edit-event').addEventListener('click', () => openSetup(true));
+
+// 方向鍵在場景卡之間移動（radiogroup 慣例）
+$('#setup-themes').addEventListener('keydown', (e) => {
+  const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  const i = THEMES.findIndex((t) => t.id === setupTheme);
+  const next = THEMES[(Math.max(i, 0) + step + THEMES.length) % THEMES.length];
+  pickSetupTheme(next.id);
+  $(`#setup-themes [data-theme="${next.id}"]`).focus();
+});
+
+// ─────────────────────────────────────────────────────────────
+// 大螢幕：原本是投影畫面上的按鈕與鍵盤快捷鍵
+// ─────────────────────────────────────────────────────────────
+// 光線與除錯視圖的按下狀態只由 SCREEN_SETTINGS 決定（伺服器在 HOST_AUTH 時補送），
+// 不樂觀切換：兩台主辦端同時開著時，畫面上亮的才會是大螢幕真正的狀態。
+const sendScreen = (cmd, value) => {
+  lastAction = 'screen';
+  ws?.send(JSON.stringify({ type: EV.HOST_SCREEN_CMD, cmd, value }));
+};
+
+for (const l of SCREEN_LIGHTS) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.dataset.light = l.id;
+  b.textContent = l.label;
+  b.setAttribute('aria-pressed', 'false');
+  b.addEventListener('click', () => sendScreen('light', l.id));
+  $('#light-list').append(b);
+}
+
+let screenDebug = false;
+
+function renderScreenSettings(settings) {
+  if (!settings) return;
+  for (const b of $('#light-list').children) {
+    b.setAttribute('aria-pressed', String(b.dataset.light === settings.light));
+  }
+  screenDebug = settings.debug === true;
+  $('#btn-screen-debug').setAttribute('aria-pressed', String(screenDebug));
+}
+
+let screenStatusTimer = null;
+function screenStatus(text) {
+  const el = $('#screen-status');
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(screenStatusTimer);
+  screenStatusTimer = setTimeout(() => { el.hidden = true; }, 3000);
+}
+
+$('#btn-screen-clear').addEventListener('click', () => { sendScreen('clear'); screenStatus('已清除大螢幕上的效果'); });
+$('#btn-screen-reset').addEventListener('click', () => { sendScreen('reset'); screenStatus('已重置視角'); });
+$('#btn-screen-debug').addEventListener('click', () => sendScreen('debug', !screenDebug));
+$('#btn-screen-shot').addEventListener('click', () => {
+  $('#btn-screen-shot').disabled = true;
+  screenStatus('向大螢幕要畫面中…');
+  sendScreen('capture');
+});
+
+function receiveScreenShot(msg) {
+  $('#btn-screen-shot').disabled = false;
+  if (!msg.image) {
+    $('#screen-status').hidden = true;
+    showError(msg.error ?? '截圖失敗', '#screen-err');
+    return;
+  }
+  const stamp = new Date().toTimeString().slice(0, 8).replaceAll(':', '');
+  const a = document.createElement('a');
+  a.download = `${eventInfo?.name ?? 'personaflow'}-畫面-${stamp}.png`;
+  a.href = msg.image;
+  a.click();
+  screenStatus('畫面已下載');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1430,16 +1595,6 @@ for (const btn of document.querySelectorAll('[data-rs-add]')) {
 $('#btn-rs-add-photo').addEventListener('click', () => {
   addStep({ kind: 'photo', label: '拍大合照', msg: { type: EV.HOST_TAKE_PHOTO } });
 });
-$('#btn-rs-add-theme').addEventListener('click', () => {
-  const t = THEMES.find((x) => x.id === $('#rs-theme').value);
-  if (t) addStep({ kind: 'theme', label: `切換到「${t.label}」`, msg: { type: EV.HOST_SET_THEME, theme: t.id } });
-});
-for (const t of THEMES) {
-  const o = document.createElement('option');
-  o.value = t.id;
-  o.textContent = t.label;
-  $('#rs-theme').append(o);
-}
 
 /** 剛送出的那一項。伺服器拒絕時要把指標退回來，否則那一項就被跳過了 */
 let rsPending = null;

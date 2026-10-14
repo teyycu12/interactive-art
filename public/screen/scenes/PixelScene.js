@@ -40,6 +40,7 @@ export class PixelScene {
   scaleAt(x, y, height) { return Number.isFinite(x + y + height) ? height * CHARACTER_SCALE * this.zoom : 0; }
   resetCamera() { this.resize(); }
   applyLight(name) { if (['day', 'evening', 'night'].includes(name)) this.light = name; }
+  clearEffects() { this.effects.clear(); this.status.textContent = '效果已清除。'; }
   resize() {
     // 畫布仍是整個視窗（背景色要鋪滿），但房間只縮放並置中到可用區裡 ——
     // 橫幅佔掉的那一條因此不會蓋到任何角色。
@@ -56,26 +57,15 @@ export class PixelScene {
     }
   }
   makeControls() {
-    const { TITLE, SUBTITLE } = this.constructor;
+    // 標題卡（活動名稱）與光線、清除效果、儲存畫面等按鈕都不在這裡：
+    // 標題卡由 screen.js 依主辦端設定的活動名稱繪製，所有場景共用；
+    // 按鈕已收進主辦端「大螢幕」面板 —— 投影畫面上的按鈕現場沒人點得到，還會被投出去。
     this.ui = document.createElement('div');
     this.ui.className = 'scene-ui';
-    const header = document.createElement('header');
-    const title = document.createElement('h1'); title.textContent = TITLE;
-    const subtitle = document.createElement('p'); subtitle.textContent = SUBTITLE;
-    header.append(title, subtitle);
     this.status = document.createElement('p');
     this.status.className = 'scene-status'; this.status.setAttribute('role', 'status');
     this.status.textContent = '點一下物件，或帶著角色靠近，讓場景熱鬧起來。';
-    const nav = document.createElement('nav'); nav.setAttribute('aria-label', '場景光線');
-    for (const [key, label] of [['day', '日光'], ['evening', '黃昏'], ['night', '夜晚']]) {
-      const b = document.createElement('button'); b.textContent = label;
-      b.addEventListener('click', () => this.applyLight(key)); nav.append(b);
-    }
-    const reset = document.createElement('button'); reset.textContent = '清除效果';
-    reset.addEventListener('click', () => { this.effects.clear(); this.status.textContent = '效果已清除。'; }); nav.append(reset);
-    const save = document.createElement('button'); save.textContent = '儲存畫面';
-    save.addEventListener('click', () => dispatchEvent(new Event('scene-capture'))); nav.append(save);
-    this.ui.append(header, nav, this.status);
+    this.ui.append(this.status);
     this.buttons = this.props.map(p => {
       const b = document.createElement('button');
       b.className = 'scene-object'; b.setAttribute('aria-label', `互動：${this.item(p)[1]}`);
