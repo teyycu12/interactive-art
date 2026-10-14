@@ -508,6 +508,26 @@ function forwardGenerate(body, res, done) {
   // 原本手機一斷線就歸還，但那時 Python 還在生成 —— 這裡立刻放下一個人
   // 進去，實際並發就超過 GEN_MAX_CONCURRENT，多出來的在 Python 的信號量上
   // 隱形排隊。GENERATE_TIMEOUT_MS 保證每一條路徑最後都會走到 done()。
+  //
+  // 同一次失敗可能同時觸發好幾個事件（回應中斷時 up 的 error/close 與
+  // upstream 的 error 都可能來），所以收尾只做一次。
+  let settled = false;
+  const finish = () => {
+    if (settled) return false;
+    settled = true;
+    done();
+    return true;
+  };
+
+  // 生成服務沒開、逾時、或回到一半斷掉，都回降級結果讓參與者仍能進場（整合計畫 §3.5）。
+  // 「回到一半斷掉」原本只歸還名額、不回手機 —— 手機的 fetch 沒有逾時，
+  // 會永遠停在 92%，也不會退回捏臉。
+  const degrade = (error) => {
+    if (!finish()) return;
+    if (res.destroyed || res.headersSent) return;
+    sendJSON(res, 200, { ok: false, error, fallbackColors: DEFAULT_FALLBACK_COLORS });
+  };
+
   const upstream = http.request({
     host: VISION_HOST,
     port: VISION_PORT,
@@ -519,22 +539,18 @@ function forwardGenerate(body, res, done) {
     const out = [];
     up.on('data', (c) => out.push(c));
     up.on('end', () => {
-      done();
+      if (!finish()) return;
       if (res.destroyed || res.headersSent) return;   // 手機已經走了
       res.writeHead(up.statusCode ?? 200, {
         'Content-Type': 'application/json; charset=utf-8',
       });
       res.end(Buffer.concat(out));
     });
-    up.on('error', () => done());
+    up.on('error', () => degrade('vision_service_unavailable'));
+    // 沒有 error、也沒有 end 就關掉（連線被重設）也要收尾
+    up.on('close', () => { if (!up.complete) degrade('vision_service_unavailable'); });
   });
 
-  // 生成服務沒開或逾時，都回降級結果讓參與者仍能進場（整合計畫 §3.5）
-  const degrade = (error) => {
-    done();
-    if (res.destroyed || res.headersSent) return;
-    sendJSON(res, 200, { ok: false, error, fallbackColors: DEFAULT_FALLBACK_COLORS });
-  };
   upstream.on('timeout', () => { upstream.destroy(); degrade('generation_timeout'); });
   upstream.on('error', () => degrade('vision_service_unavailable'));
 
