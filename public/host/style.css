@@ -360,6 +360,12 @@ td.face .swatch { display: block; width: 34px; height: 44px; border-radius: 4px;
 td.face .swatch i { display: block; }
 td.num { font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
 td.act { text-align: right; }
+/* 生成紀錄的匯出欄：兩顆小按鈕並排，窄螢幕時換行 */
+td.export { white-space: nowrap; }
+.btn-export {
+  width: auto; padding: 3px 10px; margin: 2px 4px 2px 0;
+  font-size: 12px; border-width: 2px; border-radius: 8px;
+}
 .badge-off {
   font-size: 10px;
   font-weight: 700;

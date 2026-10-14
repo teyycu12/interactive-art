@@ -1131,6 +1131,17 @@ check('無效百分比編碼回 400 而非終止行程',
 check('送出無效網址之後伺服器仍存活',
   (await httpStatus('/screen/')) === 200);
 
+// 匯出角色：角色檔內嵌整組貼圖（參與者照片的轉譯結果），與生成紀錄同樣要主辦端密鑰
+{
+  const id = '0123456789abcdef0123456789abcdef';
+  check('沒有密鑰不能匯出角色圖檔',
+    (await httpStatus(`/api/host/history/${id}/image`)) === 403);
+  check('密鑰錯誤不能匯出角色檔',
+    (await httpStatus(`/api/host/history/${id}/bundle?key=WRONG1`)) === 403);
+  check('匯出路徑不接受資產編號以外的字元',
+    (await httpStatus(`/api/host/history/..%2f..%2f.env/bundle?key=${HOST_KEY}`)) === 400);
+}
+
 // 曾可讓已入場的控制器改註冊為大螢幕，使角色永久留在場上、耗盡人數上限
 const shifty = new WebSocket(URL);
 let shiftyGotScreenData = false;

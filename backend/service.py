@@ -27,7 +27,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -47,6 +47,7 @@ from circuit_breaker import CircuitBreaker
 from cv_module import get_clothing_features
 from face_module import get_face_features
 from slicer import slice_character
+from character_export import ExportError, build_bundle, image_png
 
 # 缺金鑰或缺套件時以降級模式啟動，沿用 app.py 的既有作法。
 # vlm_module 在缺 GEMINI_API_KEY 時是 import 當下就 raise（vlm_module.py:9），
@@ -673,6 +674,41 @@ def dev_generation_detail(request_id):
 @app.route("/api/dev/summary", methods=["GET"])
 def dev_generation_summary():
     return jsonify(get_summary())
+
+
+# ── 匯出角色（主辦端「角色生成紀錄」的匯出按鈕，見 character_export.py） ──
+#
+# request_id 就是貼圖目錄名（slice_character 以它當 asset_id），
+# 所以生成紀錄的每一筆成功紀錄都對得到 public/assets/gen/<request_id>/。
+_EXPORT_STATUS = {"invalid_asset_id": 400, "asset_not_found": 404, "asset_incomplete": 404}
+
+
+def _export_error(e: ExportError):
+    return jsonify({"ok": False, "error": e.code, "message": str(e)}), _EXPORT_STATUS.get(e.code, 500)
+
+
+@app.route("/api/dev/characters/<request_id>/image", methods=["GET"])
+def dev_character_image(request_id):
+    try:
+        data = image_png(ASSET_DIR, request_id)
+    except ExportError as e:
+        return _export_error(e)
+    return Response(data, mimetype="image/png", headers={
+        "Content-Disposition": f'attachment; filename="character-{request_id[:8]}.png"',
+    })
+
+
+@app.route("/api/dev/characters/<request_id>/bundle", methods=["GET"])
+def dev_character_bundle(request_id):
+    try:
+        bundle = build_bundle(ASSET_DIR, request_id, get_run(request_id))
+    except ExportError as e:
+        return _export_error(e)
+    response = jsonify(bundle)
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="character-{request_id[:8]}.persona.json"'
+    )
+    return response
 
 
 @app.route("/api/dev/outputs/<path:filename>", methods=["GET"])

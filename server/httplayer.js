@@ -324,9 +324,12 @@ function proxyHostHistory(req, res, upstreamPath, isBinary) {
     timeout: HISTORY_TIMEOUT_MS,
   }, (up) => {
     if (isBinary) {
-      res.writeHead(up.statusCode ?? 200, {
+      const headers = {
         'Content-Type': up.headers['content-type'] ?? 'application/octet-stream',
-      });
+      };
+      // 匯出角色時由生成服務決定下載檔名
+      if (up.headers['content-disposition']) headers['Content-Disposition'] = up.headers['content-disposition'];
+      res.writeHead(up.statusCode ?? 200, headers);
       up.pipe(res);
       return;
     }
@@ -384,6 +387,13 @@ function handleHostHistory(req, res, urlPath, searchParams) {
     const filename = suffix.slice('/inputs/'.length);
     if (!SAFE_FILENAME.test(filename)) { res.writeHead(400).end('Bad Request'); return; }
     proxyHostHistory(req, res, `/api/dev/inputs/${filename}`, true);
+    return;
+  }
+  // 匯出角色：/<request_id>/image（PNG）與 /<request_id>/bundle（角色檔 JSON）。
+  // 角色檔內嵌整組貼圖的 base64，等同把參與者的照片轉譯結果帶走，所以同樣要密鑰。
+  const exportMatch = /^\/([0-9a-f]{32})\/(image|bundle)$/.exec(suffix);
+  if (exportMatch) {
+    proxyHostHistory(req, res, `/api/dev/characters/${exportMatch[1]}/${exportMatch[2]}`, true);
     return;
   }
   const requestId = suffix.slice(1);

@@ -421,11 +421,14 @@
       <div class="table-wrap" id="history-wrap">
         <table id="history-table">
           <thead>
-            <tr><th></th><th></th><th>時間</th><th>狀態</th><th>模型</th><th>Tokens</th><th>花費</th><th>耗時</th></tr>
+            <tr><th></th><th></th><th>時間</th><th>狀態</th><th>模型</th><th>Tokens</th><th>花費</th><th>耗時</th><th>匯出</th></tr>
           </thead>
           <tbody id="history-body"></tbody>
         </table>
       </div>
+      <p class="hint tiny">匯出：「圖檔」是去背的角色 PNG；「角色檔」是 .persona.json，內含貼圖與外觀設定，
+        換一台電腦可用 <code>python scripts/import_character.py 檔名</code> 還原，再到人物匯入台放上場。</p>
+      <p class="err" id="history-err" hidden></p>
       <p class="hint" id="history-empty" hidden>還沒有生成紀錄。</p>
     </div>
     </div>

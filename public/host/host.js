@@ -1116,10 +1116,70 @@ function renderHistory(items) {
     duration.className = 'num';
     duration.textContent = item.duration_ms != null ? `${(item.duration_ms / 1000).toFixed(1)}s` : '—';
 
-    tr.append(before, after, time, status, model, tokens, cost, duration);
+    const exportCell = document.createElement('td');
+    exportCell.className = 'export';
+    // 只有成功的紀錄才有貼圖可匯出（request_id 即 public/assets/gen 下的資產目錄名）
+    if (EXPORTABLE.has(item.status) && /^[0-9a-f]{32}$/.test(item.request_id ?? '')) {
+      exportCell.append(
+        exportButton('圖檔', '下載去背的角色 PNG', item.request_id, 'image'),
+        exportButton('角色檔', '下載 .persona.json（貼圖＋外觀設定，程式可直接讀）', item.request_id, 'bundle'),
+      );
+    } else {
+      exportCell.textContent = '—';
+    }
+
+    tr.append(before, after, time, status, model, tokens, cost, duration, exportCell);
     body.append(tr);
   }
 }
+
+const EXPORTABLE = new Set(['ok', 'success', 'base_only']);
+
+function exportButton(label, title, requestId, kind) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'btn-ghost btn-export';
+  b.textContent = label;
+  b.title = title;
+  b.addEventListener('click', () => exportCharacter(b, requestId, kind));
+  return b;
+}
+
+/**
+ * 下載匯出檔。用 fetch 而不是直接開連結：舊資產可能已被清掉或缺貼圖，
+ * 直接開連結的話主辦端只會看到一頁 JSON 錯誤，而不是一句看得懂的說明。
+ */
+async function exportCharacter(button, requestId, kind) {
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = '下載中…';
+  try {
+    const res = await fetch(`/api/host/history/${requestId}/${kind}?key=${encodeURIComponent(hostKeyValue)}`);
+    if (!res.ok) {
+      let reason = '';
+      try { reason = (await res.json()).error ?? ''; } catch { /* 略 */ }
+      throw new Error(EXPORT_ERRORS[reason] ?? `匯出失敗（${res.status}）`);
+    }
+    const blob = await res.blob();
+    const fromHeader = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1];
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fromHeader ?? `character-${requestId.slice(0, 8)}${kind === 'image' ? '.png' : '.persona.json'}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  } catch (err) {
+    showError(err.message || '匯出失敗', '#history-err');
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+const EXPORT_ERRORS = {
+  asset_not_found: '找不到這個角色的貼圖（可能已被清除）',
+  asset_incomplete: '這個角色的貼圖不完整，無法匯出',
+  invalid_asset_id: '紀錄編號不正確',
+};
 
 $('#btn-history-refresh').addEventListener('click', loadHistory);
 
