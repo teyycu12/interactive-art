@@ -1090,7 +1090,13 @@ function startScanProgress() {
     // 問卷在作答時不出提示：兩個都要人看，疊在一起反而都不看
     if (!personaScanActive && sec >= 3 && sec - lastTipAt >= (lastTipAt === 0 ? 0 : 6)) {
       if (tipEl) tipEl.hidden = false;
-      if (tipTextEl) tipTextEl.textContent = TIPS[tipIndex % TIPS.length];
+      // 答完問卷的人，結果本身就是開口的理由：每隔一則換成「找同類型的人」。
+      // 問卷作答那幾題是低頭的，這一句把它接回「抬頭看人」。
+      const persona = PERSONA_RESULT_MAP[personaAnswers?.resultId];
+      const text = persona && tipIndex % 2 === 0
+        ? `找找看身邊誰也是${persona.emoji} ${persona.name}，問問他怎麼答的。`
+        : TIPS[tipIndex % TIPS.length];
+      if (tipTextEl) tipTextEl.textContent = text;
       tipIndex += 1;
       lastTipAt = sec;
     }
