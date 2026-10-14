@@ -110,6 +110,28 @@ describe('伺服器：正面／背面／側面', () => {
     assert.equal(agent.view, AGENT_VIEW.FRONT, '停下夠久要轉回正面讓人認得出來');
   });
 
+  test('輕推搖桿慢慢往回走也會轉面，不會一路倒退著走', () => {
+    const agent = makeAgent(new Stage());
+    let now = push(agent, 0, -1, 30, 1_000_000);
+    assert.equal(agent.view, AGENT_VIEW.BACK);
+    // 輕推往下（朝鏡頭），速度落在 WALK_THRESHOLD 與 FACING_FLIP_SPEED 之間
+    now = push(agent, 0, 0.18, 90, now);
+    const speed = Math.hypot(agent.vx, agent.vy);
+    assert.ok(speed > 18 && speed <= 45, `測試前提：慢速區間，實得 ${speed.toFixed(1)}`);
+    assert.equal(agent.view, AGENT_VIEW.FRONT, '朝觀眾走就該是正面');
+  });
+
+  test('合照定位到位的當下就是面向鏡頭，不等停留計時', () => {
+    const agent = makeAgent(new Stage());
+    let now = push(agent, 0, -1, 30, 1_000_000);
+    assert.equal(agent.view, AGENT_VIEW.BACK);
+    // 合照流程在 allArrived() 成立時立刻截圖
+    agent.arrived = true;
+    agent.targetHeading = Math.PI / 2;
+    now = push(agent, 0, 0, 1, now);
+    assert.equal(agent.view, AGENT_VIEW.FRONT);
+  });
+
   test('STAGE_SYNC 只在不是正面時帶 view', () => {
     const stage = new Stage();
     const agent = makeAgent(stage);
