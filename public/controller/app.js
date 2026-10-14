@@ -376,6 +376,9 @@ function showScanPhase(phase) {
   for (const el of [$('#aim-name'), $('#done-name')]) {
     if (el) el.textContent = displayName || '';
   }
+  renderAimCopy();
+  // 切換鏡頭只在取景時有意義；生成中與成果階段相機已經關了
+  $('#btn-flip').hidden = !(canFlipCamera && phase === 'aim');
   // 輔助線只在取景時有意義，其餘階段會擋住成果圖。
   //
   // 這裡用 class 而不是 .hidden：`hidden` 是 HTMLElement 的屬性，
@@ -484,7 +487,11 @@ async function previewTick() {
 function startPreviewLoop() {
   stopPreviewLoop();
   previewSessionId = null;
-  if ($('#aim-guide')) $('#aim-guide').textContent = '請站遠一點，讓全身與雙腳入鏡';
+  if ($('#aim-guide')) {
+    $('#aim-guide').textContent = cameraFacing === 'user'
+      ? '請站遠一點，讓全身與雙腳入鏡'
+      : '請對方站遠一點，讓全身與雙腳入鏡';
+  }
   previewTimer = setInterval(previewTick, PREVIEW_INTERVAL_MS);
 }
 
@@ -602,6 +609,46 @@ $('#btn-scan').addEventListener('click', async () => {
  */
 const SUBMIT_RATIO = 9 / 16;
 
+/**
+ * 目前用哪一顆鏡頭。預設後鏡頭：拍全身得站到 2–3 公尺外，一定要有人拿著手機，
+ * 而「請旁邊的人幫我拍」正好是進場的第一次交談（CLAUDE.md 新玩法第 3 條）。
+ * 前鏡頭留給只有自己一個人、要把手機立起來自拍的情況。
+ *
+ * 前鏡頭的預覽刻意**不**鏡像：站位指示（captureGuidanceText 的「往畫面左側移動」）
+ * 以送出的原始畫面為準，預覽一翻轉，指示就會跟畫面左右相反。
+ */
+let cameraFacing = 'environment';
+/** 有兩顆以上鏡頭才顯示切換鍵。筆電只有一顆，facingMode 兩個值拿到的是同一顆。 */
+let canFlipCamera = false;
+
+/** 取景階段的標題與提示。後鏡頭時看螢幕的是幫忙拍的人，前鏡頭時是本人。 */
+function renderAimCopy() {
+  const selfie = cameraFacing === 'user';
+  $('#aim-pre').textContent = !selfie && displayName ? '幫 ' : '';
+  $('#aim-post').textContent = selfie ? '自拍一張全身照' : '拍一張全身照';
+  // 以下皆為固定字串，沒有使用者輸入，可以直接寫 innerHTML
+  $('#tip-who').innerHTML = selfie
+    ? '<b>把手機立好</b>　靠在桌上或牆邊，你退後 2–3 公尺'
+    : '<b>找人幫你拍</b>　手機交給旁邊的人，你退後 2–3 公尺';
+  let solo;
+  if (!canFlipCamera) solo = '不方便當場拍的話，也可以 <b>從相簿選一張全身照</b>。';
+  else if (selfie) solo = '有人能幫忙的話，按取景框右上角的鍵切回 <b>後鏡頭</b>，畫質比較好。';
+  else solo = '只有自己一個人的話，按取景框右上角的鍵改用 <b>前鏡頭自拍</b>，或 <b>從相簿選一張全身照</b>。';
+  $('#note-solo').innerHTML = solo;
+}
+
+/** 權限取得之後 enumerateDevices 才會列出全部鏡頭，因此在相機開成功後才呼叫 */
+async function updateFlipAvailability() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    canFlipCamera = devices.filter((d) => d.kind === 'videoinput').length >= 2;
+  } catch {
+    canFlipCamera = false;
+  }
+  $('#btn-flip').hidden = !canFlipCamera;
+  renderAimCopy();
+}
+
 /** 開啟相機並回到取景階段。重拍會再次呼叫，因此不能寫在事件處理器裡。 */
 async function openCamera() {
   stopScanStream();
@@ -620,13 +667,16 @@ async function openCamera() {
     // 兩軸同值讀作「給我最接近這個大小的原生模式」，不暗示任何方向，
     // 筆電拿到完整的 16:9、手機拿到完整的直式，兩邊都是最大視野。
     scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 1280 } },
+      video: { facingMode: cameraFacing, width: { ideal: 1280 }, height: { ideal: 1280 } },
       audio: false,
     });
     $('#scan-video').srcObject = scanStream;
     startPreviewLoop();
+    updateFlipAvailability();
     return true;
   } catch (err) {
+    // 切到前鏡頭才失敗的話，重試要回到後鏡頭，否則「重新嘗試」會一直撞同一顆
+    cameraFacing = 'environment';
     // 不直接踢回捏臉：使用者可能只是誤按拒絕，或想去設定裡開啟。
     // 捏臉仍在，但那是「他選的」而不是「系統替他決定的」。
     const denied = err?.name === 'NotAllowedError';
@@ -642,6 +692,11 @@ async function openCamera() {
 }
 
 $('#btn-scan-back').addEventListener('click', () => fallbackToBuilder(null));
+$('#btn-flip').addEventListener('click', () => {
+  if (counting) return;   // 倒數中換鏡頭，拍下來的會是另一個方向
+  cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+  openCamera();
+});
 // 捏臉頁的反向切換。名字在命名頁就存好了，直接走同一個入口
 $('#btn-to-scan').addEventListener('click', () => $('#btn-scan').click());
 
@@ -724,6 +779,7 @@ $('#btn-capture').addEventListener('click', async () => {
   countdownCancelled = false;
   display.hidden = false;
   $('#btn-scan-back').disabled = true;
+  $('#btn-flip').disabled = true;
 
   for (let i = 5; i > 0; i--) {
     display.textContent = i;
@@ -740,6 +796,7 @@ $('#btn-capture').addEventListener('click', async () => {
   display.classList.remove('tick');
   counting = false;
   $('#btn-scan-back').disabled = false;
+  $('#btn-flip').disabled = false;
   btn.textContent = '拍照';
 
   if (countdownCancelled) {
@@ -907,8 +964,10 @@ function startScanProgress() {
   const STEPS = [
     [0, '正在分析服裝特徵…'],
     [22, '正在辨識臉部特徵…'],
-    [45, 'AI 正在挑選樂高積木…'],
-    [68, '積木拼裝與上色中…'],
+    // 不提任何特定風格：參與者可能選了像素或皮克斯，寫「樂高積木」
+    // 會讓人以為自己的選擇沒被採用。
+    [45, 'AI 正在畫出你的角色…'],
+    [68, '上色與細節修飾中…'],
     [86, '即將完成，準備登場…'],
   ];
   // 等待時的提示。每一則的通關路徑上都有「跟另一個人講話」這一步 ——

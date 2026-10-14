@@ -896,6 +896,33 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   background: rgba(26, 23, 19, .28);
 }
 #countdown-display[hidden] { display: none; }
+
+/* 切換前後鏡頭：取景框右上角，與一般相機 App 同一個位置。
+   深色半透明圓底而不是紙色按鈕 —— 它浮在相機畫面上，亮底會在畫面裡跳出來。
+   不用 backdrop-filter（低階裝置限制，見檔頭）。 */
+.btn-flip {
+  position: absolute;
+  top: 10px; right: 10px;
+  z-index: 2;
+  width: 40px; height: 40px; padding: 0;
+  display: grid; place-items: center;
+  border: 2px solid rgba(255, 255, 255, .85);
+  border-radius: 50%;
+  background: rgba(26, 23, 19, .55);
+  color: #fff;
+  box-shadow: none;
+}
+.btn-flip[hidden] { display: none; }
+.btn-flip:disabled { opacity: .35; border-style: solid; }
+/* 視覺 40px，可觸範圍補到 44px（同 .btn-exit 的做法，見 UI-STYLING.md） */
+.btn-flip::after {
+  content: "";
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px; height: 44px;
+  border-radius: 50%;
+}
 /* 每秒重播一次，數字才有跳動感而不是靜靜地換字 */
 #countdown-display.tick { animation: count-tick .9s ease-out; }
 @keyframes count-tick {
