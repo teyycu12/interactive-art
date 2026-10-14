@@ -12,6 +12,7 @@ export const EV = {
   INPUT_MOVE: 'INPUT_MOVE',         // 搖桿即時向量（節流 20Hz）
   INPUT_ACTION: 'INPUT_ACTION',     // 社交動作
   CLIENT_LEAVE: 'CLIENT_LEAVE',     // 主動退出，角色立即離場
+  CLIENT_RETIRE: 'CLIENT_RETIRE',   // 換新角色：憑舊憑證讓斷線中的舊角色立即離場（不必先進場）
   // Screen → Server
   SCREEN_HELLO: 'SCREEN_HELLO',     // 大螢幕註冊為顯示端
   // Server → Phone

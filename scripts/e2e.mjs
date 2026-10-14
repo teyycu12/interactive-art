@@ -138,6 +138,20 @@ await sleep(300);
 check('非法 head token 被拒絕', !!reject, reject?.reason);
 bad.close();
 
+// 不雅名稱：入場就擋，不能等它上了大螢幕才靠主辦端踢人
+const rude = new WebSocket(URL);
+let rudeReject = null;
+let rudeWelcome = null;
+rude.on('open', () => rude.send(JSON.stringify({ type: 'CLIENT_JOIN', name: '幹 你 娘', avatar: AVATAR })));
+rude.on('message', (d) => {
+  const m = JSON.parse(d);
+  if (m.type === 'CLIENT_REJECT') rudeReject = m;
+  if (m.type === 'CLIENT_WELCOME') rudeWelcome = m;
+});
+await sleep(300);
+check('不雅名稱被拒絕入場', !!rudeReject && !rudeWelcome, rudeReject?.reason);
+rude.close();
+
 // ── 登入 ──────────────────────────────────────────────────
 const phone = new WebSocket(URL);
 let welcome = null;

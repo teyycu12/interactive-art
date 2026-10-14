@@ -1061,6 +1061,15 @@ function historyThumb(url, alt) {
   img.style.cursor = 'zoom-in';
   img.src = `${url}${url.includes('?') ? '&' : '?'}key=${encodeURIComponent(hostKeyValue)}`;
   img.addEventListener('click', () => window.open(img.src, '_blank'));
+  // 檔案已被清掉（或紀錄本身沒有對應的檔案）時，不要顯示破圖加替代文字 ——
+  // 那在窄欄裡會擠成「生成結／果」，看起來像整張表壞了。換成同一種空色塊。
+  img.addEventListener('error', () => {
+    const span = document.createElement('span');
+    span.className = 'swatch';
+    span.style.background = 'var(--sunk)';
+    span.title = `${alt}：檔案已不存在`;
+    img.replaceWith(span);
+  }, { once: true });
   return img;
 }
 
@@ -1095,6 +1104,7 @@ function renderHistory(items) {
       : '—';
 
     const status = document.createElement('td');
+    status.className = 'status';
     status.textContent = STATUS_LABEL[item.status] ?? item.status ?? '—';
     if (item.status === 'failed') status.style.color = 'var(--danger)';
     else if (item.status === 'success' || item.status === 'ok' || item.status === 'base_only') {

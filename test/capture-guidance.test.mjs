@@ -26,6 +26,9 @@ describe('引導文案', () => {
     ['show_feet', { missing_foot_sides: [] }, '左右腳尚未完整辨識，請露出雙腳'],
     ['body_clipped', { clipped_edges: ['bottom'] }, '腳太靠近畫面底部，請稍微後退'],
     ['body_clipped', { clipped_edges: ['top'] }, '頭頂被裁切，請稍微後退'],
+    // 曾經左右寫反（碰到左緣卻說「碰到右側，請往左移」，照做會被裁得更多）
+    ['body_clipped', { clipped_edges: ['left'] }, '身體碰到畫面左緣，請往人形中央靠'],
+    ['body_clipped', { clipped_edges: ['right'] }, '身體碰到畫面右緣，請往人形中央靠'],
     ['align_with_guide', { alignment_issues: ['face_camera'] }, '請面向鏡頭並自然站直'],
     ['move_inside_guide', {}, '請將身體移到人形中央'],
     ['show_full_body', {}, '請保持全身與雙腳入鏡'],

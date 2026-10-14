@@ -34,7 +34,7 @@ import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
   PERSISTENCE, TREASURE, VISION_HOST, VISION_PORT,
 } from './config.js';
-import { Stage } from './state.js';
+import { Stage, tokensMatch } from './state.js';
 import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
 import { startTicker } from './scheduler.js';
@@ -50,6 +50,7 @@ import { ScoreBoard } from './scores.js';
 import { SnapshotStore, Directory } from './persistence.js';
 import { createHttpLayer } from './httplayer.js';
 import { buildReport } from './report.js';
+import { isBlockedName } from './nameFilter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -408,6 +409,9 @@ function stripControl(raw) {
     .trim();
 }
 
+// 名稱會投影在大螢幕上。不說是哪個字被擋 —— 說了等於教人怎麼繞過去
+const NAME_BLOCKED_REASON = '這個名稱不能使用，請換一個';
+
 /** 顯示名稱驗證：長度限制並剝除控制字元，避免大螢幕排版被破壞 */
 function sanitizeName(raw) {
   const name = stripControl(raw);
@@ -519,6 +523,10 @@ function handleJoin(ws, msg) {
     if (existing) {
       // 允許在同一連線內更新暱稱與造型，但不另建角色
       const rename = sanitizeName(msg.name);
+      if (rename && isBlockedName(rename)) {
+        send(ws, EV.CLIENT_REJECT, { reason: NAME_BLOCKED_REASON });
+        return;
+      }
       const restyle = validateAvatarConfig(msg.avatar ?? msg.avatarConfig);
       if (rename) existing.name = rename;
       if (restyle.ok) existing.avatar = restyle.value;
@@ -546,6 +554,10 @@ function handleJoin(ws, msg) {
   const name = sanitizeName(msg.name);
   if (!name) {
     send(ws, EV.CLIENT_REJECT, { reason: '顯示名稱不可為空' });
+    return;
+  }
+  if (isBlockedName(name)) {
+    send(ws, EV.CLIENT_REJECT, { reason: NAME_BLOCKED_REASON });
     return;
   }
   const avatar = validateAvatarConfig(msg.avatar ?? msg.avatarConfig);
@@ -990,6 +1002,7 @@ function handleHostMessage(ws, msg) {
     case EV.HOST_START_TREASURE: {
       const result = treasure.start([...stage.agents.keys()], {
         prophetId: msg.prophetId ?? null,
+        avoid: [...stage.agents.values()].map((a) => ({ x: a.x, y: a.y })),
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       const view = treasure.publicView();
@@ -1255,6 +1268,24 @@ wss.on('connection', (ws) => {
         if (ws.role !== 'controller') return;
         if (!ACTIONS.includes(msg.action)) return; // 白名單外的動作直接丟棄
         stage.applyAction(ws.agentId, msg.action);
+        break;
+      }
+
+      case EV.CLIENT_RETIRE: {
+        // 只接受還沒進場的連線：這是「換一個新角色」在進場前送出的，
+        // 已綁定角色的連線要離場請走 CLIENT_LEAVE。
+        if (ws.role || ws.agentId) return;
+        const id = typeof msg.userId === 'string' ? msg.userId : null;
+        if (!id) return;
+        const removed = stage.retire(id, msg.rejoinToken);
+        // 還在場上卻沒移除 = 憑證不符，或另一條連線正在用：都不能動
+        if (!removed && stage.get(id)) return;
+        // 已被回收的角色仍留在身分目錄裡，伺服器重開後會被認領回來，一併忘掉
+        const entry = directory.get(id);
+        if (!removed && !(entry && tokensMatch(entry.rejoinToken, msg.rejoinToken))) return;
+        console.log(`[retire] ${id} 換新角色，舊角色離場`);
+        detachAgent(id, { forget: true });
+        pushHostState();
         break;
       }
 

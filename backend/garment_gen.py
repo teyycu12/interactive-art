@@ -1225,6 +1225,12 @@ _PIXEL_NEGATIVE = (
     "projector. "
     "The pixel grid must be UNIFORM: every cell the same size everywhere in the "
     "image, never smaller cells on the face and larger ones on the body. "
+    # 「grid」這個字在上面出現很多次，模型會照字面把格子畫出來。實測抓到過
+    # 一張整片方格紙背景（2026-10-14）：格線把白底切成封閉小格，去背灌不進去，
+    # 角色連同方格紙一起上了大螢幕。
+    "The grid is INVISIBLE - it only decides where colour changes. NEVER draw "
+    "the grid itself: NO grid lines, NO graph paper, NO lined or squared "
+    "background, NO cell borders across the background. "
     "NO realistic adult body proportions, NO 6-head, 7-head or 8-head figure, "
     "NO small head on a long body, NO slender elongated limbs, NO fashion-plate "
     "proportions - the head fills the top third of the figure. "
@@ -1320,8 +1326,9 @@ _PIXEL_PROMPT_TEMPLATE = (
     "- Prints, logos and stripes on a garment are drawn as whole cells in a flat "
     "colour. Anything that cannot be said in two or three cells is left out "
     "rather than smeared.\n"
-    "- Center the figure on a pure solid white background (#FFFFFF), with the "
-    "figure's cell grid aligned to the image edges. No text, no border lines.\n\n"
+    "- Center the figure on a pure solid white background (#FFFFFF) - one flat "
+    "white with no grid lines or any other marks on it. The figure's cells line "
+    "up with the image edges. No text, no border lines.\n\n"
     + _PIXEL_NEGATIVE
 )
 

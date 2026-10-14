@@ -35,18 +35,28 @@ export function heatOf(distance) {
   return 'FREEZING';
 }
 
-/** 挑一個不落在道具內、也不貼邊的藏寶點 */
-function pickSpot() {
+/**
+ * 挑一個不落在道具內、不貼邊、也不在任何人腳邊的藏寶點。
+ *
+ * @param {Array<{x:number,y:number}>} avoid 場上所有人的位置
+ *   （見 config 的 TREASURE.minStartDistance：藏到腳邊會開局即被踩中）
+ */
+export function pickSpot(avoid = []) {
   const m = TREASURE.edgeMargin;
-  for (let i = 0; i < 60; i++) {
+  let best = null;
+  let bestGap = -1;
+  for (let i = 0; i < 80; i++) {
     const x = m + Math.random() * (STAGE.width - m * 2);
     const y = m + Math.random() * (STAGE.height - m * 2);
     // 藏在道具裡的話沒有人走得到，那一輪會永遠結束不了
-    if (!OBSTACLES.some((o) => obstacleDistance(o, x, y) < o.r + TREASURE.claimRadius)) {
-      return { x, y };
-    }
+    if (OBSTACLES.some((o) => obstacleDistance(o, x, y) < o.r + TREASURE.claimRadius)) continue;
+    let gap = Infinity;
+    for (const p of avoid) gap = Math.min(gap, Math.hypot(p.x - x, p.y - y));
+    if (gap >= TREASURE.minStartDistance) return { x, y };
+    // 人多到找不到夠遠的點時，記下離最近的人最遠的那一個
+    if (gap > bestGap) { best = { x, y }; bestGap = gap; }
   }
-  return { x: STAGE.width / 2, y: STAGE.height / 2 };
+  return best ?? { x: STAGE.width / 2, y: STAGE.height / 2 };
 }
 
 export class TreasureHunt {
@@ -65,8 +75,9 @@ export class TreasureHunt {
    * @param {string[]} candidateIds 場上可當先知的人
    * @param {{x:number,y:number}|null} spot 指定藏寶點，null 為隨機
    * @param {string|null} prophetId 指定先知，null 為隨機挑
+   * @param {Array<{x:number,y:number}>} avoid 場上所有人的位置，隨機挑點時避開
    */
-  start(candidateIds, { spot = null, prophetId = null } = {}) {
+  start(candidateIds, { spot = null, prophetId = null, avoid = [] } = {}) {
     if (this.round) return { ok: false, reason: '已有進行中的尋寶，請先結束' };
     const ids = [...new Set(candidateIds)];
     // 至少要兩個人：一個先知加一個找的人。只有先知的話沒人能得分，
@@ -80,7 +91,7 @@ export class TreasureHunt {
 
     this.round = {
       id: `tre_${randomUUID().slice(0, 8)}`,
-      ...(spot ?? pickSpot()),
+      ...(spot ?? pickSpot(avoid)),
       prophetId: prophet,
       startedAt: Date.now(),
       foundBy: null,

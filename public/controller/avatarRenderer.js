@@ -21,7 +21,9 @@
 
 import {
   drawCharacter, drawNameplate, drawEmote, stepIndex, emoteIsPosed,
+  measureNameplate, NAMEPLATE_DROP,
 } from '/shared/character.js';
+import { layoutNameplates } from '/shared/nameplateLayout.js';
 import { avatarImage } from '/shared/avatarSprite.js';
 import {
   sceneBackdrop, ORIGIN_X, ORIGIN_Y, ROOM_W, ROOM_H, BODY_UNITS, OUTSIDE,
@@ -61,6 +63,8 @@ export class AvatarRenderer {
   constructor(canvas, avatar) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    /** 名牌目前的位移，逐幀朝避讓結果內插（同大螢幕的 drawNameplates） */
+    this.plateOffset = new Map();
     this.sprite = avatar ? avatarImage(avatar) : null;
 
     // 背景網格的累積位移。角色不動，世界動。
@@ -219,7 +223,7 @@ export class AvatarRenderer {
       }
     }
     for (const id of this.neighbors.keys()) {
-      if (!seen.has(id)) this.neighbors.delete(id);
+      if (!seen.has(id)) { this.neighbors.delete(id); this.plateOffset.delete(id); }
     }
   }
 
@@ -465,6 +469,8 @@ export class AvatarRenderer {
     const people = [...this.neighbors.values()].map((n) => ({ n, y: n.y }));
     people.push({ self: true, y: cam.y });
     people.sort((a, b) => a.y - b.y);
+    // 名牌等所有人畫完再一起排：配對時對方就站在旁邊，名牌最容易疊在一起
+    const plates = [];
 
     for (const p of people) {
       if (p.self) {
@@ -490,10 +496,24 @@ export class AvatarRenderer {
         { time: this.time, maxSpeed: MAX_SPEED, height, travel: n.travel });
       // 名字：配對任務要「走向另一位參與者」，看不出誰是誰就無從找起
       const name = this.names.get(n.id);
-      if (name) drawNameplate(ctx, pos, name, { fontSize: Math.max(11, Math.round(height * 0.12)) });
+      if (name) {
+        const fontSize = Math.max(11, Math.round(height * 0.12));
+        const { w: pw, h: ph } = measureNameplate(ctx, name, { fontSize });
+        plates.push({ id: n.id, x: pos.x, y: pos.y + NAMEPLATE_DROP, w: pw, h: ph, pos, name, fontSize });
+      }
       if (n.emote && !emoteIsPosed(this.looks.get(n.id)?.sprite, n.emote)) {
         drawEmote(ctx, pos, EMOTE_GLYPH[n.emote] ?? '·', { height });
       }
+    }
+
+    const target = layoutNameplates(plates, { bottom: h });
+    for (const p of plates) {
+      const t = target.get(p.id);
+      let cur = this.plateOffset.get(p.id);
+      if (!cur) { cur = { dx: t.dx, dy: t.dy }; this.plateOffset.set(p.id, cur); }
+      cur.dx += (t.dx - cur.dx) * 0.2;
+      cur.dy += (t.dy - cur.dy) * 0.2;
+      drawNameplate(ctx, p.pos, p.name, { fontSize: p.fontSize, offset: cur });
     }
   }
 

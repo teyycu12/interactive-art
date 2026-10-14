@@ -7,6 +7,7 @@
 
 // 閒置門檻由協定層定義並直接再匯出 —— 手機端提示與伺服器仲裁必須共用同一個值
 export { IDLE_THRESHOLD_MS } from '../shared/protocol.js';
+import fs from 'node:fs';
 import { TREASURE_RADIUS } from '../shared/heat.js';
 
 export const TICK_HZ = 30;                    // 伺服器模擬與廣播頻率（技術文件 §3：30 FPS）
@@ -173,6 +174,16 @@ export const TREASURE = {
   /** 藏寶點與場邊的最小距離，避免藏在角色難以貼近的邊角 */
   edgeMargin: 160,
 
+  /**
+   * 開局時藏寶點與每個人的理想最小距離（＝「溫」的門檻 heatThresholds[2]），
+   * 讓所有人一開始都在「冷」以外，先知有東西可以喊。
+   *
+   * 原本挑點完全不看人站哪：藏到某人腳邊時，開局下一個 tick 就被踩中，
+   * 先知一句話都還沒說這一輪就結束了（e2e 偶發失敗就是這樣抓到的）。
+   * 人多到找不到這麼遠的點時，退而挑「離最近的人最遠」的候選點。
+   */
+  minStartDistance: 480,
+
   /** 找到寶藏的得分。高於一次配對（20），因為它需要整隊合作 */
   points: 80,
 
@@ -239,6 +250,30 @@ export const HOST_KEY_LENGTH = 6;   // 通行密鑰長度
  */
 export const VISION_HOST = process.env.VISION_HOST || '127.0.0.1';
 export const VISION_PORT = Number(process.env.VISION_PORT || 5055);
+
+/**
+ * 同時送去生成的人數上限。**與生成服務共用 .env 的 GEN_MAX_CONCURRENT。**
+ *
+ * 兩邊原本各自寫死 4。Node 這邊若比 Python 大，多出來的請求會在 Python 的
+ * 信號量上隱形排隊 —— 手機顯示「輪到你了」卻還要再等一輪，而且 150 秒的
+ * 逾時已經開始計。若比 Python 小，則是白白少用了上游的配額。
+ *
+ * Node 不載入 .env（API 金鑰沒有理由進到這個行程），所以只從檔案裡挑出
+ * 這一個值。預設 2 與 backend/config.py 相同。
+ */
+export const GEN_MAX_CONCURRENT = readGenMaxConcurrent();
+
+function readGenMaxConcurrent() {
+  let raw = process.env.GEN_MAX_CONCURRENT;
+  if (!raw) {
+    try {
+      const envFile = fs.readFileSync(new URL('../.env', import.meta.url), 'utf8');
+      raw = envFile.match(/^\s*GEN_MAX_CONCURRENT\s*=\s*["']?(\d+)/m)?.[1];
+    } catch { /* 沒有 .env：用預設值 */ }
+  }
+  const n = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(n) && n >= 1 ? n : 2;
+}
 
 export const PERSISTENCE = {
   file: process.env.PERSONAFLOW_STATE_FILE || 'data/state.json',

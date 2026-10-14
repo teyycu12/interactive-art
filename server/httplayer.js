@@ -14,10 +14,13 @@ import http from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
 import { performance } from 'node:perf_hooks';
+import { randomBytes } from 'node:crypto';
 
 import { RateLimiter } from './ratelimit.js';
 import { listHistoricalAvatars } from './devAvatars.js';
-import { VISION_HOST, VISION_PORT } from './config.js';
+import { VISION_HOST, VISION_PORT, GEN_MAX_CONCURRENT } from './config.js';
+import { GenerateQueue, isValidTicket } from './generateQueue.js';
+import { clientIp } from './clientIp.js';
 
 /**
  * 建立 HTTP 層。依賴以參數注入而非 import，方向才不會繞回 index.js。
@@ -130,9 +133,18 @@ function sendJSON(res, code, body) {
 // Python 服務的執行緒池被塞滿而排擠正在報到的人。
 const GENERATE_RATE = { capacity: 3, refillPerSec: 1 / 30, violationLimit: Infinity };
 
-/** 同時進行中的生成上限。Python 端每個請求要 4 個 worker（共 16 個）。 */
-const MAX_CONCURRENT_GENERATES = 4;
-let inFlightGenerates = 0;
+/**
+ * 生成排隊（見 generateQueue.js）。同時送出的人數與生成服務共用
+ * GEN_MAX_CONCURRENT；Python 端每個請求在 CV 階段要 4 個 worker（共 16 個），
+ * 調到 4 以上時那段會短暫排隊，但只佔幾百毫秒，不是瓶頸。
+ *
+ * 排隊上限 40：一場 30 人全部同時按也排得下。再多就回 too_busy，
+ * 那種量代表場上有東西在狂送請求，不是真的有 40 個人在等。
+ */
+const MAX_QUEUED_GENERATES = 40;
+const generateQueue = new GenerateQueue({
+  maxActive: GEN_MAX_CONCURRENT, maxQueued: MAX_QUEUED_GENERATES,
+});
 
 /** @type {Map<string, {limiter: RateLimiter, seenAt: number}>} 依來源位址計費 */
 const generateLimiters = new Map();
@@ -198,7 +210,7 @@ function proxyPreview(req, res) {
     sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
     return;
   }
-  const ip = req.socket.remoteAddress ?? 'unknown';
+  const ip = clientIp(req);
   // 引導丟一幀沒有代價，下一幀就補上了 —— 因此逾量、滿載、逾時一律安靜丟棄，
   // 不回降級外觀（那是生成才需要的東西）。
   if (previewLimiterFor(ip, Date.now()).check() !== 'ok') {
@@ -431,15 +443,22 @@ function proxyGenerate(req, res) {
 
   // 逾量與滿載都回降級結果而非 429/503：對手機端而言這兩種情況與
   // 「生成失敗」沒有差別，都應該安靜地退回捏臉，不是彈出錯誤。
-  const ip = req.socket.remoteAddress ?? 'unknown';
+  const ip = clientIp(req);
   if (limiterFor(ip, Date.now()).check() !== 'ok') {
     sendJSON(res, 200, { ok: false, error: 'rate_limited', fallbackColors: DEFAULT_FALLBACK_COLORS });
     return;
   }
-  if (inFlightGenerates >= MAX_CONCURRENT_GENERATES) {
+  // 隊伍滿了就不收照片 —— 先擋再讀，免得把數 MB 的上傳讀完才拒絕。
+  // 這裡只是預檢，真正的判定在 enqueue()。
+  if (generateQueue.size.waiting >= MAX_QUEUED_GENERATES) {
     sendJSON(res, 200, { ok: false, error: 'too_busy', fallbackColors: DEFAULT_FALLBACK_COLORS });
     return;
   }
+
+  // 號碼牌由手機產生，用來輪詢 /api/generate/status。舊版手機沒帶就自己發一張，
+  // 照樣排隊，只是看不到自己排第幾。
+  const headerTicket = req.headers['x-gen-ticket'];
+  const ticket = isValidTicket(headerTicket) ? headerTicket : randomBytes(16).toString('hex');
 
   const chunks = [];
   let size = 0;
@@ -461,46 +480,101 @@ function proxyGenerate(req, res) {
     if (aborted) return;
     const body = Buffer.concat(chunks);
 
-    inFlightGenerates += 1;
-    let settled = false;
-    const release = () => {
-      if (settled) return;   // 成功、逾時、錯誤只能還一次計數
-      settled = true;
-      inFlightGenerates -= 1;
-    };
+    const outcome = generateQueue.enqueue(ticket, (done) => forwardGenerate(body, res, done));
+    if (outcome === 'full' || outcome === 'duplicate') {
+      sendJSON(res, 200, { ok: false, error: 'too_busy', fallbackColors: DEFAULT_FALLBACK_COLORS });
+      return;
+    }
+    // 排隊中斷線（關分頁、App 被系統收掉）要讓出位子，否則後面的人
+    // 會白等一個永遠不會送出的請求。已經在生成的由 forwardGenerate 自己處理。
+    res.on('close', () => generateQueue.cancel(ticket));
+  });
+}
 
-    const upstream = http.request({
-      host: VISION_HOST,
-      port: VISION_PORT,
-      path: '/generate',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
-      timeout: GENERATE_TIMEOUT_MS,
-    }, (up) => {
-      const out = [];
-      up.on('data', (c) => out.push(c));
-      up.on('end', () => {
-        release();
-        res.writeHead(up.statusCode ?? 200, {
-          'Content-Type': 'application/json; charset=utf-8',
-        });
-        res.end(Buffer.concat(out));
+/**
+ * 輪到了：把照片送去生成服務。done() 歸還排隊名額，必須在每一條結束路徑上呼叫。
+ *
+ * GENERATE_TIMEOUT_MS 從這裡才開始算 —— 排隊的時間不算在內。
+ */
+function forwardGenerate(body, res, done) {
+  // 排隊期間手機已經走了：不送。這是唯一還沒花錢就能省下來的時機。
+  if (res.destroyed || res.writableEnded) {
+    done();
+    return;
+  }
+
+  // 名額只在生成服務回覆（或逾時、連不上）時歸還，手機斷線不算。
+  //
+  // 原本手機一斷線就歸還，但那時 Python 還在生成 —— 這裡立刻放下一個人
+  // 進去，實際並發就超過 GEN_MAX_CONCURRENT，多出來的在 Python 的信號量上
+  // 隱形排隊。GENERATE_TIMEOUT_MS 保證每一條路徑最後都會走到 done()。
+  //
+  // 同一次失敗可能同時觸發好幾個事件（回應中斷時 up 的 error/close 與
+  // upstream 的 error 都可能來），所以收尾只做一次。
+  let settled = false;
+  const finish = () => {
+    if (settled) return false;
+    settled = true;
+    done();
+    return true;
+  };
+
+  // 生成服務沒開、逾時、或回到一半斷掉，都回降級結果讓參與者仍能進場（整合計畫 §3.5）。
+  // 「回到一半斷掉」原本只歸還名額、不回手機 —— 手機的 fetch 沒有逾時，
+  // 會永遠停在 92%，也不會退回捏臉。
+  const degrade = (error) => {
+    if (!finish()) return;
+    if (res.destroyed || res.headersSent) return;
+    sendJSON(res, 200, { ok: false, error, fallbackColors: DEFAULT_FALLBACK_COLORS });
+  };
+
+  const upstream = http.request({
+    host: VISION_HOST,
+    port: VISION_PORT,
+    path: '/generate',
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': body.length },
+    timeout: GENERATE_TIMEOUT_MS,
+  }, (up) => {
+    const out = [];
+    up.on('data', (c) => out.push(c));
+    up.on('end', () => {
+      if (!finish()) return;
+      if (res.destroyed || res.headersSent) return;   // 手機已經走了
+      res.writeHead(up.statusCode ?? 200, {
+        'Content-Type': 'application/json; charset=utf-8',
       });
+      res.end(Buffer.concat(out));
     });
+    up.on('error', () => degrade('vision_service_unavailable'));
+    // 沒有 error、也沒有 end 就關掉（連線被重設）也要收尾
+    up.on('close', () => { if (!up.complete) degrade('vision_service_unavailable'); });
+  });
 
-    // 生成服務沒開或逾時，都回降級結果讓參與者仍能進場（整合計畫 §3.5）
-    const degrade = (error) => {
-      release();
-      if (res.headersSent) return;
-      sendJSON(res, 200, { ok: false, error, fallbackColors: DEFAULT_FALLBACK_COLORS });
-    };
-    upstream.on('timeout', () => { upstream.destroy(); degrade('generation_timeout'); });
-    upstream.on('error', () => degrade('vision_service_unavailable'));
-    // 手機在生成途中關掉分頁時 upstream 不一定會收到 error，
-    // 沒有這一條，名額會被這類中斷請求一個個吃掉直到永遠滿載。
-    res.on('close', release);
+  upstream.on('timeout', () => { upstream.destroy(); degrade('generation_timeout'); });
+  upstream.on('error', () => degrade('vision_service_unavailable'));
 
-    upstream.end(body);
+  upstream.end(body);
+}
+
+/**
+ * 手機輪詢自己排第幾。回應刻意很小、不限流 —— 它每 2 秒才問一次，
+ * 而且不碰生成服務。
+ */
+function generateStatus(req, res) {
+  const ticket = new URL(req.url, 'http://localhost').searchParams.get('ticket');
+  const status = isValidTicket(ticket) ? generateQueue.status(ticket) : null;
+  if (!status) {
+    sendJSON(res, 200, { ok: false });
+    return;
+  }
+  sendJSON(res, 200, {
+    ok: true,
+    state: status.state,
+    ...(status.state === 'queued' && {
+      ahead: status.ahead,
+      etaSec: Math.round(status.etaMs / 1000),
+    }),
   });
 }
 
@@ -564,6 +638,11 @@ function handleRequest(req, res) {
 
   if (urlPath === '/api/generate') {
     proxyGenerate(req, res);
+    return;
+  }
+
+  if (urlPath === '/api/generate/status') {
+    generateStatus(req, res);
     return;
   }
 
