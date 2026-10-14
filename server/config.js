@@ -138,6 +138,15 @@ export const HEADING_TURN_RATE = 9;
 export const EMOTE_DURATION_MS = 2200;        // 頭頂氣泡顯示時長
 export const EMOTE_COOLDOWN_MS = 600;         // 單一使用者的動作發送冷卻，防洗版
 
+// 揮手與乾杯要對方回應才算數（server/greetings.js）。
+// radius 刻意小於 CLIENT_SYNC_RADIUS（320）：揮給的那個人一定也在自己手機的
+// 個人視角裡 —— 否則手機跳出「你跟小明揮手」，畫面上卻找不到小明是誰。
+export const GREET = {
+  radius: 240,
+  waveWindowMs: 8000,     // 對方要看到提示、抬頭找人、再按，給足時間
+  cheersWindowMs: 3000,   // 「一起按」要的是同時，拉長就不需要喊那一聲了
+};
+
 // ── 連線防護 ──────────────────────────────────────────────────
 export const MAX_MESSAGE_BYTES = 4096;        // 單則訊息大小上限
 export const MAX_NAME_LENGTH = 12;            // 顯示名稱長度上限

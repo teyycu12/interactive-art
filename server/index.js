@@ -25,14 +25,14 @@ import { randomBytes, timingSafeEqual, X509Certificate } from 'node:crypto';
 import {
   EV, ACTIONS, STAGE, SYNC_FPS, PAIR_ERRORS, MISSION_TYPES,
   CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS,
-  SCORE_SOURCES, EVENT_INFO,
+  SCORE_SOURCES, EVENT_INFO, GREET_OUTCOME,
 } from '../shared/protocol.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
 import { avatarMatchesFamily } from '../shared/colorFamily.js';
 import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
-  PERSISTENCE, TREASURE, VISION_HOST, VISION_PORT,
+  PERSISTENCE, TREASURE, VISION_HOST, VISION_PORT, GREET,
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
 import { RateLimiter } from './ratelimit.js';
@@ -44,6 +44,7 @@ import { HarvestRelay } from './harvest.js';
 import { HARVEST, HARVEST_PLAN } from '../shared/harvest.js';
 import { SocialGraph } from './socialgraph.js';
 import { PairingSession } from './pairing.js';
+import { Greetings } from './greetings.js';
 import { QuizSession } from './quiz.js';
 import { SurveySession } from './survey.js';
 import { MessageRelay } from './messages.js';
@@ -67,6 +68,8 @@ const treasure = new TreasureHunt();
 const harvest = new HarvestRelay();
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
+// 揮手要尊重私訊的封鎖：封鎖了卻還能讓對方手機一直跳出「某某在跟你揮手」，封鎖就沒有意義
+const greetings = new Greetings({ ...GREET, isBlocked: (by, target) => messages.isBlocked(by, target) });
 const quiz = new QuizSession();
 /** 轉場問卷：沒有正解的題目，答案留成參與者身上的標籤 */
 const survey = new SurveySession();
@@ -702,6 +705,7 @@ function handleJoin(ws, msg) {
 function detachAgent(agentId, { forget = false } = {}) {
   controllers.delete(agentId);
   pairing.release(agentId);
+  greetings.drop(agentId);
   if (forget) {
     directory.forget(agentId);
     // 問卷標籤是「這個人是誰」，主動離場或被請出場時要一起忘掉；
@@ -710,6 +714,45 @@ function detachAgent(agentId, { forget = false } = {}) {
     messages.forget(agentId);
     markDirty();
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// 揮手與乾杯（要對方回應才算數，見 server/greetings.js）
+// ─────────────────────────────────────────────────────────────
+function handleWave(agentId, targetId) {
+  const r = greetings.wave(agentId, stage.agents, Date.now(), targetId);
+  if (r.kind === 'nobody') {
+    sendToAgent(agentId, EV.GREET_RESULT, { kind: 'WAVE', outcome: GREET_OUTCOME.NOBODY });
+  } else if (r.kind === 'invite') {
+    if (!r.silent) sendToAgent(r.to, EV.GREET_INVITE, { fromId: r.from, fromName: nameOf(r.from) });
+    sendToAgent(r.from, EV.GREET_RESULT, {
+      kind: 'WAVE', outcome: GREET_OUTCOME.SENT, otherName: nameOf(r.to),
+    });
+  } else {
+    greetDone('WAVE', GREET_OUTCOME.MUTUAL, r.a, r.b);
+  }
+}
+
+function handleCheers(agentId) {
+  const r = greetings.cheer(agentId, stage.agents, Date.now());
+  if (r.kind === 'clink') {
+    greetDone('CHEERS', GREET_OUTCOME.CLINK, r.a, r.b);
+  } else {
+    sendToAgent(agentId, EV.GREET_RESULT, {
+      kind: 'CHEERS',
+      outcome: r.kind === 'waiting' ? GREET_OUTCOME.WAITING : GREET_OUTCOME.NOBODY,
+    });
+  }
+}
+
+/** 兩人成功：雙方手機各收一則，大螢幕在兩人之間畫一道連線 */
+function greetDone(kind, outcome, a, b) {
+  sendToAgent(a, EV.GREET_RESULT, { kind, outcome, otherName: nameOf(b) });
+  sendToAgent(b, EV.GREET_RESULT, { kind, outcome, otherName: nameOf(a) });
+  blast(screens, EV.STAGE_GREET, { kind, a, b });
+  // 回揮的那一方此時頭上已經有揮手圖示；先揮的那一方可能已經消失了，補上
+  stage.applyAction(a, kind, { force: true });
+  console.log(`[greet] ${nameOf(a)} × ${nameOf(b)}　${kind === 'WAVE' ? '互相揮手' : '碰杯'}`);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1374,7 +1417,13 @@ wss.on('connection', (ws) => {
       case EV.INPUT_ACTION: {
         if (ws.role !== 'controller') return;
         if (!ACTIONS.includes(msg.action)) return; // 白名單外的動作直接丟棄
-        stage.applyAction(ws.agentId, msg.action);
+        // 冷卻中不往下判定：否則連按揮手可以繞過冷卻狂發邀請
+        if (!stage.applyAction(ws.agentId, msg.action)) return;
+        if (msg.action === 'WAVE') {
+          handleWave(ws.agentId, typeof msg.target === 'string' ? msg.target : undefined);
+        } else if (msg.action === 'CHEERS') {
+          handleCheers(ws.agentId);
+        }
         break;
       }
 
@@ -1581,6 +1630,7 @@ const loop = startTicker({
   onTick(dt) {
     // 傳入社交圖譜：配對過的角色之間凝聚力較強，關係會表現為畫面上的群聚
     const zoneMoves = stage.tick(dt, graph);
+    greetings.prune(Date.now());
 
     // 分區進出。只在換區時送，不是每幀 ——
     // 每幀回報所在分區的話，30Hz × 10 人是每秒 300 則重複訊息。

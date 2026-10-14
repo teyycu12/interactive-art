@@ -12,7 +12,7 @@ import {
 } from '/shared/avatars.js';
 import {
   EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS, DIRECT_MESSAGE, MSG_ERRORS,
-  QUIZ_CHOICES, QUIZ_ERRORS,
+  QUIZ_CHOICES, QUIZ_ERRORS, GREET_OUTCOME,
 } from '/shared/protocol.js';
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
@@ -1530,6 +1530,14 @@ function handleMissionMessage(msg) {
   if (handleQuizMessage(msg)) return;
 
   switch (msg.type) {
+    case EV.GREET_INVITE:
+      showGreetInvite(msg.fromId, msg.fromName);
+      return;
+
+    case EV.GREET_RESULT:
+      showGreetResult(msg);
+      return;
+
     case EV.PAIR_CODE:
       myCode = msg.code;
       renderMission();
@@ -1876,6 +1884,61 @@ setInterval(() => {
   if (Date.now() - lastSentAt < INPUT_THROTTLE_MS / 2) return;
   sendInput();
 }, INPUT_THROTTLE_MS);
+
+// ── 揮手與乾杯的回應（server/greetings.js）─────────────────
+//
+// 揮手要對方回揮、乾杯要兩人一起按才算數。這裡只負責顯示：
+// 誰在跟你揮手、你揮出去了沒、碰杯成功沒。
+
+let greetFrom = null;
+let greetTimer = null;
+
+function showGreetInvite(fromId, fromName) {
+  greetFrom = fromId;
+  $('#greet-text').textContent = `${fromName || '有人'} 在跟你揮手`;
+  $('#greet-invite').hidden = false;
+  vibrate([60, 60, 60]);
+  clearTimeout(greetTimer);
+  // 與伺服器的 GREET.waveWindowMs 相同：過了這個時間回揮也不算數了
+  greetTimer = setTimeout(hideGreetInvite, 8000);
+}
+
+function hideGreetInvite() {
+  greetFrom = null;
+  $('#greet-invite').hidden = true;
+  clearTimeout(greetTimer);
+}
+
+$('#btn-wave-back').addEventListener('click', () => {
+  if (!greetFrom) return;
+  sendMsg(EV.INPUT_ACTION, { action: 'WAVE', target: greetFrom });
+  vibrate([30, 40, 30]);
+  hideGreetInvite();
+});
+
+const GREET_TEXT = {
+  WAVE: {
+    [GREET_OUTCOME.SENT]: (n) => `你向 ${n} 揮手了，等對方回揮`,
+    [GREET_OUTCOME.MUTUAL]: (n) => `你和 ${n} 打了招呼 👋`,
+    [GREET_OUTCOME.NOBODY]: () => '身邊沒有人，走近一點再揮手',
+  },
+  CHEERS: {
+    [GREET_OUTCOME.WAITING]: () => '找身邊的人一起按乾杯！3 秒內',
+    [GREET_OUTCOME.CLINK]: (n) => `和 ${n} 碰杯 🍻`,
+    [GREET_OUTCOME.NOBODY]: () => '身邊沒有人可以碰杯，走近一點',
+  },
+};
+
+function showGreetResult(msg) {
+  const text = GREET_TEXT[msg.kind]?.[msg.outcome];
+  if (!text) return;
+  const done = msg.outcome === GREET_OUTCOME.MUTUAL || msg.outcome === GREET_OUTCOME.CLINK;
+  if (done) {
+    hideGreetInvite();
+    vibrate([40, 30, 40, 30, 80]);
+  }
+  showToast(text(msg.otherName || '對方'), done ? 3200 : 2400);
+}
 
 $('#emotes').addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-action]');

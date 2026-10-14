@@ -174,6 +174,8 @@ let treasureHeat = null;
 
 /** 剛完成配對的連線特效，播完即丟 */
 const sparks = [];
+/** 揮手、碰杯的光束色（陶土橘）。與配對的青綠分開：一眼分得出「認識了」與「打了招呼」 */
+const GREET_SPARK_RGB = '217, 116, 74';
 const SPARK_MS = 1400;
 const PULSE_MS = 2600;
 
@@ -298,6 +300,13 @@ function connect() {
 
       case EV.STAGE_LINKS:
         links = Array.isArray(msg.edges) ? msg.edges : [];
+        break;
+
+      case EV.STAGE_GREET:
+        // 互相揮手／碰杯：同一道光束，暖色，不留常駐連線（那是配對的事，見 greetings.js）
+        if (typeof msg.a === 'string' && typeof msg.b === 'string') {
+          sparks.push({ a: msg.a, b: msg.b, at: performance.now(), rgb: GREET_SPARK_RGB });
+        }
         break;
 
       case EV.MISSION_ANNOUNCE:
@@ -554,7 +563,7 @@ function drawSparks(now) {
 
     ctx.save();
     ctx.lineCap = 'round';
-    ctx.strokeStyle = `rgba(42, 140, 128, ${0.9 * fade})`;
+    ctx.strokeStyle = `rgba(${sp.rgb ?? '42, 140, 128'}, ${0.9 * fade})`;
     ctx.lineWidth = 5 * scale;
     ctx.beginPath();
     ctx.moveTo(pa.x, pa.y);
