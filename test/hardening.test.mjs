@@ -53,6 +53,31 @@ describe('重連憑證', () => {
     assert.equal(stage.reattach(agent.id, 'x'.repeat(32)), null);
   });
 
+  // 換一個新角色（EV.CLIENT_RETIRE）：舊角色原本要以離線狀態多站 45 秒、佔名額
+  test('換新角色時，憑證正確即讓斷線中的舊角色立即離場', () => {
+    const stage = new Stage();
+    const agent = add(stage, '舊的我');
+    stage.markDisconnected(agent.id);
+    assert.equal(stage.retire(agent.id, agent.rejoinToken), true);
+    assert.equal(stage.get(agent.id), undefined);
+  });
+
+  test('換新角色：憑證錯誤不能請走別人的角色', () => {
+    const stage = new Stage();
+    const victim = add(stage, '別人');
+    stage.markDisconnected(victim.id);
+    assert.equal(stage.retire(victim.id, 'f'.repeat(32)), false);
+    assert.equal(stage.retire(victim.id, undefined), false);
+    assert.ok(stage.get(victim.id), '角色應仍在場上');
+  });
+
+  test('換新角色：還連著的角色不移除（另一條連線正在用）', () => {
+    const stage = new Stage();
+    const agent = add(stage, '使用中');
+    assert.equal(stage.retire(agent.id, agent.rejoinToken), false);
+    assert.ok(stage.get(agent.id));
+  });
+
   test('每個角色的憑證互不相同且長度足夠', () => {
     // 樣本數綁在 MAX_AGENTS 上而非寫死：這個測試驗的是憑證唯一性，
     // 不該因為場域人數上限調整就連帶失敗（曾寫死 50，上限降到 10 時整組壞掉）。

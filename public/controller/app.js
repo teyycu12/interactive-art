@@ -853,6 +853,27 @@ function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85) {
   return canvas.toDataURL('image/jpeg', quality);
 }
 
+/**
+ * 每 2 秒問一次自己排第幾，結果交給 onQueue（null 代表已經在生成）。
+ *
+ * 查不到（照片還在上傳、舊版伺服器沒有這個端點、網路抖一下）就維持原狀，
+ * 不當成錯誤 —— 這只是顯示用的，生成結果仍以 /api/generate 的回應為準。
+ */
+function pollQueue(ticket, onQueue) {
+  let stopped = false;
+  const poll = async () => {
+    try {
+      const res = await fetch(`/api/generate/status?ticket=${ticket}`);
+      const s = await res.json();
+      if (stopped || !s?.ok) return;
+      onQueue(s.state === 'queued' ? { ahead: s.ahead, etaSec: s.etaSec } : null);
+    } catch { /* 略 */ }
+  };
+  const timer = setInterval(poll, 2000);
+  setTimeout(poll, 600);   // 第一次稍等一下，讓照片先上傳完、排進隊伍
+  return () => { stopped = true; clearInterval(timer); };
+}
+
 /** 送出照片並走完生成流程。相機與上傳共用。 */
 async function submitScanImage(image) {
   // 凍結送出的那張照片留在取景框裡 —— 等待的 25 秒有東西可看，
@@ -863,13 +884,18 @@ async function submitScanImage(image) {
   $('.scan-stage')?.classList.remove('is-empty');
   showScanPhase('working');
 
-  const stopProgress = startScanProgress();
+  const progress = startScanProgress();
+  // 號碼牌：生成請求會一直掛著等結果，排第幾要另外問。
+  const ticket = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+    (b) => b.toString(16).padStart(2, '0')).join('');
+  const stopPolling = pollQueue(ticket, progress.setQueue);
+  const stopProgress = () => { stopPolling(); progress.stop(); };
 
   let body;
   try {
     const res = await fetch('/api/generate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Gen-Ticket': ticket },
       // sessionId：取景期間跨影格量到的身高比快門那一瞬間的單張估計可信，
       // 後端會優先採用它。相簿上傳沒有取景階段，因此是 null。
       // styleId：選單沒載入時是 null，後端會退回活動層級的預設風格。
@@ -944,7 +970,7 @@ function showScanFailure(message, hint = '', opts = {}) {
 
 /** 後端回報的錯誤碼 → 看得懂的說明 */
 const SCAN_ERRORS = {
-  too_busy: '現在同時生成的人太多。',
+  too_busy: '排隊的人太多了。',
   rate_limited: '太快連續拍照了，稍等一下。',
   photo_too_large: '照片檔案太大。',
   generation_timeout: '生成等太久逾時了。',
@@ -959,6 +985,12 @@ const SCAN_ERRORS = {
  *
  * 後端沒有回報真實進度，這裡是依實測耗時（約 25 秒）推進的估計值，
  * 因此刻意在 92% 前停住 —— 進度條先滿了卻還沒好，比沒有進度條更糟。
+ *
+ * 人多時會先排隊（server/generateQueue.js）。排隊期間進度條不動、改顯示
+ * 前面還有幾人；輪到時才從頭開始跑那 25 秒。排隊時照樣跑「約需 25 秒」
+ * 的話，排第 20 位的人會看著進度條停在 92% 好幾分鐘，以為系統壞了。
+ *
+ * @returns {{stop: () => void, setQueue: (q: {ahead: number, etaSec: number}|null) => void}}
  */
 function startScanProgress() {
   const STEPS = [
@@ -987,24 +1019,36 @@ function startScanProgress() {
   const elapsedEl = $('#scan-elapsed');
   const tipEl = $('#scan-tip');
   const tipTextEl = $('#scan-tip-text');
-  const t0 = Date.now();
+  const tStart = Date.now();   // 提示輪播用，排隊也算在內
+  let t0 = Date.now();         // 生成進度用，輪到時重設
+  /** @type {{ahead: number, etaSec: number}|null} */
+  let queue = null;
 
   // 從隨機一則開始，否則現場一整排手機會顯示同一句，看起來像罐頭
   let tipIndex = Math.floor(Math.random() * TIPS.length);
   let lastTipAt = 0;
 
   const tick = setInterval(() => {
-    const sec = (Date.now() - t0) / 1000;
-    const pct = Math.min(92, (sec / 25) * 100);
-    bar.style.width = `${pct}%`;
-    const step = STEPS.filter(([p]) => pct >= p).at(-1);
-    if (step) statusEl.textContent = step[1];
-    elapsedEl.textContent = sec < 30
-      ? `已等待 ${Math.floor(sec)} 秒　約需 25 秒`
-      : `已等待 ${Math.floor(sec)} 秒　比平常久一些，請再等等`;
+    if (queue) {
+      bar.style.width = '0%';
+      statusEl.textContent = queue.ahead === 0
+        ? '排隊中，下一個就是你'
+        : `排隊中，前面還有 ${queue.ahead} 人`;
+      elapsedEl.textContent = `預計約 ${Math.max(5, queue.etaSec)} 秒後開始生成`;
+    } else {
+      const sec = (Date.now() - t0) / 1000;
+      const pct = Math.min(92, (sec / 25) * 100);
+      bar.style.width = `${pct}%`;
+      const step = STEPS.filter(([p]) => pct >= p).at(-1);
+      if (step) statusEl.textContent = step[1];
+      elapsedEl.textContent = sec < 30
+        ? `已等待 ${Math.floor(sec)} 秒　約需 25 秒`
+        : `已等待 ${Math.floor(sec)} 秒　比平常久一些，請再等等`;
+    }
 
     // 3 秒後才出現：太早跳出來會蓋過「正在分析服裝特徵」那句，
     // 讓人以為系統要他做什麼才會繼續。之後每 6 秒換一則。
+    const sec = (Date.now() - tStart) / 1000;
     if (sec >= 3 && sec - lastTipAt >= (lastTipAt === 0 ? 0 : 6)) {
       if (tipEl) tipEl.hidden = false;
       if (tipTextEl) tipTextEl.textContent = TIPS[tipIndex % TIPS.length];
@@ -1013,11 +1057,17 @@ function startScanProgress() {
     }
   }, 250);
 
-  return () => {
-    clearInterval(tick);
-    bar.style.width = '100%';
-    // 收起提示，否則它會殘留到「確認角色」那一頁
-    if (tipEl) tipEl.hidden = true;
+  return {
+    stop() {
+      clearInterval(tick);
+      bar.style.width = '100%';
+      // 收起提示，否則它會殘留到「確認角色」那一頁
+      if (tipEl) tipEl.hidden = true;
+    },
+    setQueue(next) {
+      if (queue && !next) t0 = Date.now();   // 剛輪到：生成的 25 秒從現在開始算
+      queue = next;
+    },
   };
 }
 
@@ -1115,12 +1165,30 @@ $('#btn-new-character').addEventListener('click', () => {
   // 一定要清掉憑證：帶著舊憑證進場，伺服器會認領回舊角色、
   // 沿用舊的外觀，新拍的照片等於白拍
   try {
+    retireOldCharacter(localStorage.getItem(LS.userId), localStorage.getItem(LS.rejoinToken));
     localStorage.removeItem(LS.userId);
     localStorage.removeItem(LS.rejoinToken);
   } catch { /* 略 */ }
   showScreen('entry');
   syncStartButton();
 });
+
+/**
+ * 請舊角色離場。只清掉手機上的憑證的話，舊角色會以離線狀態在大螢幕上多站
+ * 45 秒、佔一個名額，新角色進場後場上還會同時有兩個同名的人。
+ *
+ * 這時還沒進場、沒有連線，所以開一條臨時連線送完就關。失敗不用處理 ——
+ * 最壞情況就是舊角色照原本的 45 秒回收。
+ */
+function retireOldCharacter(userId, rejoinToken) {
+  if (!userId || !rejoinToken) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const sock = new WebSocket(`${proto}//${location.host}`);
+  sock.addEventListener('open', () => {
+    sock.send(JSON.stringify({ type: EV.CLIENT_RETIRE, userId, rejoinToken }));
+    sock.close();
+  });
+}
 
 // ─────────────────────────────────────────────────────────────
 // WebSocket 連線

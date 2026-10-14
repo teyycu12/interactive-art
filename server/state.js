@@ -33,7 +33,7 @@ function spawnPoint() {
 }
 
 /** 定時安全比較，避免以回應時間差逐字元試出 token */
-function tokensMatch(a, b) {
+export function tokensMatch(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
   const bufA = Buffer.from(a, 'utf8');
   const bufB = Buffer.from(b, 'utf8');
@@ -205,6 +205,25 @@ export class Stage {
 
   removeAgent(id) {
     if (this.agents.delete(id)) this.rosterDirty = true;
+  }
+
+  /**
+   * 換新角色時讓舊角色立即離場（EV.CLIENT_RETIRE）。
+   *
+   * 頁面重新載入後選「換一個新角色」，舊角色原本會以離線狀態在場上多站
+   * AGENT_TTL_MS（45 秒）：佔一個名額，而且新角色進場後大螢幕上同時有兩個同名的人。
+   *
+   * 只收斷線中的角色 —— 還連著代表另一條連線正在用，不能從旁邊拔掉。
+   * 憑證驗證與 reattach 相同，失敗與不存在回傳相同結果。
+   *
+   * @returns {boolean} 是否移除
+   */
+  retire(id, rejoinToken) {
+    const agent = this.agents.get(id);
+    if (!agent || agent.disconnectedAt === null) return false;
+    if (!tokensMatch(agent.rejoinToken, rejoinToken)) return false;
+    this.removeAgent(id);
+    return true;
   }
 
   /**
