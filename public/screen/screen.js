@@ -1009,6 +1009,7 @@ function renderQuizOptions(revealed = null, counts = null) {
     const row = document.createElement('div');
     row.className = 'q-opt';
     row.style.background = QUIZ_CHOICES[i].color;
+    row.style.color = QUIZ_CHOICES[i].ink;
     if (revealed !== null) row.classList.add(i === revealed ? 'right' : 'dim');
 
     const g = document.createElement('span');

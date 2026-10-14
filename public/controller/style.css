@@ -657,6 +657,10 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
   box-shadow: inset 0 3px 0 rgba(58, 46, 39, .08);
 }
 #pair-input::placeholder { color: var(--line); }
+/* 送出後等待對方確認時是鎖住的（見 app.js 的 setPairSubmitting）。
+   不套通用的 disabled 樣式（.35 透明＋虛線）：那看起來像「壞了／不能按」，
+   而這裡要說的是「已經送出，正在等」。 */
+#btn-pair-submit:disabled { opacity: .75; border-style: solid; }
 
 .sheet-msg {
   margin: 0 0 12px; font-size: 13px; font-weight: 600;
@@ -722,7 +726,9 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 
 /* 得分浮標。刻意蓋在最上層並穿透點擊，任何畫面下加分都看得到 */
 .score-pop {
-  position: fixed; top: 54px; right: 16px; z-index: 120;
+  position: fixed; z-index: 120;
+  top: calc(54px + env(safe-area-inset-top));     /* 全螢幕模式下避開瀏海 */
+  right: calc(16px + env(safe-area-inset-right));
   background: var(--tag); color: var(--ink);
   border: 2.5px solid var(--ink);
   box-shadow: var(--drop-sm);
@@ -752,7 +758,12 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .quiz-inner {
   flex: 1; min-height: 0;
   display: flex; flex-direction: column;
-  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  /* 四邊都要避開安全區：加到主畫面後是全螢幕模式（manifest 的 fullscreen），
+     少了 top，倒數秒數會被瀏海／動態島蓋住 —— 而那是這個畫面最要緊的數字。 */
+  padding: calc(16px + env(safe-area-inset-top))
+           calc(16px + env(safe-area-inset-right))
+           calc(16px + env(safe-area-inset-bottom))
+           calc(16px + env(safe-area-inset-left));
   gap: 12px;
 }
 
@@ -1178,7 +1189,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 /* ── 非阻斷式通知 Toast ─────────────────────────────────────── */
 .toast {
   position: fixed;
-  top: 16px;
+  top: calc(16px + env(safe-area-inset-top));   /* 全螢幕模式下避開瀏海 */
   left: 50%;
   transform: translateX(-50%);
   max-width: 90vw;
@@ -1265,7 +1276,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .aim-lights li {
   font-size: 11px; font-weight: 700; letter-spacing: .04em;
   padding: 3px 8px; border-radius: 999px;
-  background: var(--sunk); color: var(--ink-faint);
+  background: var(--sunk); color: var(--ink-soft);
   border: 1px solid var(--line);
 }
 .aim-lights li.ok {

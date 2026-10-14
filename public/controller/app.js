@@ -1995,11 +1995,30 @@ function handleMissionMessage(msg) {
   }
 }
 
+/**
+ * 送出配對碼之後、結果回來之前，送出鍵是鎖住的。
+ *
+ * 沒鎖的話，按下去畫面上只換了一行小字，很多人會再按一次 —— 第二下撞上
+ * 伺服器 3 秒的防窮舉冷卻（PAIRING.claimCooldownMs），「等待對方確認…」
+ * 就被換成「太快了，休息一下再試」，看起來像配對失敗，其實對方手機上
+ * 的確認框還開著。
+ */
+let pairSubmitTimer = null;
+function setPairSubmitting(on) {
+  const btn = $('#btn-pair-submit');
+  btn.disabled = on;
+  btn.textContent = on ? '等待對方確認…' : '送出配對';
+  clearTimeout(pairSubmitTimer);
+  // 保險：對方逾時伺服器 30 秒會回 EXPIRED，但斷線時那則訊息不會來
+  if (on) pairSubmitTimer = setTimeout(() => setPairSubmitting(false), 35000);
+}
+
 function handlePairResult(msg) {
   if (msg.ok && msg.pending) {
     showPairMsg('已送出，等待對方確認…', true);
     return;
   }
+  setPairSubmitting(false);
   if (msg.ok) {
     for (const p of msg.missions ?? []) {
       const entry = missions.get(p.id);
@@ -2050,7 +2069,9 @@ pairInput.addEventListener('keydown', (e) => {
 $('#btn-pair-submit').addEventListener('click', () => {
   const code = pairInput.value.trim();
   if (code.length !== 4) { showPairMsg('請輸入 4 位數字。'); return; }
+  if ($('#btn-pair-submit').disabled) return;   // Enter 鍵也會走到這裡
   pairMsg.hidden = true;
+  setPairSubmitting(true);
   sendMsg(EV.PAIR_CLAIM, { code });
 });
 
@@ -2516,6 +2537,7 @@ function renderQuizOptions({ locked = false, revealed = null } = {}) {
     btn.className = 'quiz-opt';
     btn.style.background = QUIZ_CHOICES[i].color;
     btn.style.borderColor = QUIZ_CHOICES[i].color;
+    btn.style.color = QUIZ_CHOICES[i].ink;
 
     const g = document.createElement('span');
     g.className = 'g';
