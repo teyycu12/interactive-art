@@ -16,7 +16,10 @@ export function clientIp(req) {
   const direct = req.socket?.remoteAddress ?? 'unknown';
   if (!LOOPBACK.has(direct)) return direct;
   const forwarded = req.headers?.['x-forwarded-for'];
-  // 多層代理時是「原始, 代理1, 代理2」，最左邊是手機
-  const first = (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim();
-  return first || direct;
+  // 取**最右邊**那一段：那是本機代理（ngrok）親手加上的、它看到的連線來源。
+  // 最左邊是客戶端自己送來的標頭，代理只會往後接 —— 採信它的話，每次請求
+  // 換一個假值就能拿到新的限流額度，一支手機塞滿整個生成排隊。
+  const raw = Array.isArray(forwarded) ? forwarded.join(',') : forwarded;
+  const last = raw?.split(',').map((s) => s.trim()).filter(Boolean).at(-1);
+  return last || direct;
 }
