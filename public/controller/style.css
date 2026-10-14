@@ -1315,6 +1315,9 @@ canvas.portrait { image-rendering: pixelated; display: block; }
    不是需要立刻反應的事件 */
 .zone-chip {
   display: inline-block;
+  /* 直式的 #controller 是 flex 直排，子元素預設被拉滿整列寬 —— inline-block
+     在這裡不起作用，膠囊會變成一條橫跨畫面的長框。橫式由 justify-self 處理。 */
+  align-self: flex-start;
   margin: 0 0 10px;
   padding: 5px 12px;
   border-radius: 999px;
