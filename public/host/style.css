@@ -355,7 +355,10 @@ td.face .thumb {
 /* 沒有整張圖時（改版前生成的資產）以取樣色堆出可辨識的色塊 */
 td.face .swatch { display: block; width: 34px; height: 44px; border-radius: 4px; overflow: hidden; }
 td.face .swatch i { display: block; }
-td.num { font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+/* 數字與狀態不換行：td 預設 word-break: break-word，欄寬被長模型名稱擠窄時，
+   時間會折成「21:18:0／8」、「成功」變成一字一行。 */
+td.num { font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.status { white-space: nowrap; }
 td.act { text-align: right; }
 /* 生成紀錄的匯出欄：兩顆小按鈕並排，窄螢幕時換行 */
 td.export { white-space: nowrap; }

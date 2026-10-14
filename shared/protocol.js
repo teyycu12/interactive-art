@@ -12,6 +12,7 @@ export const EV = {
   INPUT_MOVE: 'INPUT_MOVE',         // 搖桿即時向量（節流 20Hz）
   INPUT_ACTION: 'INPUT_ACTION',     // 社交動作
   CLIENT_LEAVE: 'CLIENT_LEAVE',     // 主動退出，角色立即離場
+  CLIENT_RETIRE: 'CLIENT_RETIRE',   // 換新角色：憑舊憑證讓斷線中的舊角色立即離場（不必先進場）
   // Screen → Server
   SCREEN_HELLO: 'SCREEN_HELLO',     // 大螢幕註冊為顯示端
   // Server → Phone
@@ -362,6 +363,17 @@ export const WALK_THRESHOLD = 18;
 
 /** 角色渲染狀態，供 M3 決定是否播放彈跳步態（IDLE 為完全靜止） */
 export const AGENT_STATE = { IDLE: 'IDLE', WALK: 'WALK' };
+
+/**
+ * 角色朝向觀眾的哪一面：正面、背面、側面。
+ *
+ * 側面只有一張（朝右），朝左由 facing 鏡像得到。邏輯座標的 +y 是朝鏡頭
+ * 走近，所以往 +y 走是正面、往 −y 走是背面。
+ *
+ * STAGE_SYNC 只在不是正面時才帶這個欄位（絕大多數時間大家都站著看鏡頭），
+ * 渲染端讀到 undefined 一律當正面。
+ */
+export const AGENT_VIEW = { FRONT: 'front', BACK: 'back', SIDE: 'side' };
 
 /**
  * 控制模式。

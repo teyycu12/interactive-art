@@ -91,8 +91,11 @@ export function captureGuidanceText(features, readyText = '✓ 全身已入鏡')
     const edges = quality.clipped_edges || [];
     if (edges.includes('bottom')) return '腳太靠近畫面底部，請稍微後退';
     if (edges.includes('top')) return '頭頂被裁切，請稍微後退';
-    if (edges.includes('left')) return '身體碰到畫面右側，請往左移';
-    if (edges.includes('right')) return '身體碰到畫面左側，請往右移';
+    // edges 是原始影像的左右，而預覽與送出的影像都沒有鏡像，所以就是螢幕上看到的左右。
+    // 不說「往左／往右移」：後鏡頭時被拍的人面對鏡頭，他的左右與畫面相反，
+    // 只講方向，不管寫哪一邊都有人會走反。指向人形中央，兩個人都看得懂。
+    if (edges.includes('left')) return '身體碰到畫面左緣，請往人形中央靠';
+    if (edges.includes('right')) return '身體碰到畫面右緣，請往人形中央靠';
     return '身體碰到畫面邊緣，請稍微後退';
   }
   if (reason === 'align_with_guide') {

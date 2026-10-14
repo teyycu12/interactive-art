@@ -85,6 +85,18 @@
           </g>
         </svg>
         <div id="countdown-display" hidden></div>
+        <!-- 切換前後鏡頭。預設後鏡頭：拍全身要站到 2–3 公尺外，一定得有人拿著手機，
+             而「請旁邊的人幫我拍」正好是進場的第一次交談。只有自己一個人時，
+             才切到前鏡頭把手機立起來自拍。只有一顆鏡頭的裝置（筆電）不顯示。 -->
+        <button class="btn-flip" id="btn-flip" type="button" hidden
+                aria-label="切換前後鏡頭">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 9h3l1.5-2h7L17 9h3v10H4z"/>
+            <path d="M9.5 13.5a2.5 2.5 0 0 1 4.6-1.4M14.5 14.5a2.5 2.5 0 0 1-4.6 1.4"/>
+            <path d="M14.4 10.6v1.8h-1.8M9.6 17.4v-1.8h1.8"/>
+          </svg>
+        </button>
       </div>
 
       <!-- 右：隨階段替換 -->
@@ -92,7 +104,9 @@
 
         <!-- 階段 1：拍攝前的指引 -->
         <div class="scan-panel" data-phase="aim">
-          <h1><span class="who-name" id="aim-name"></span>拍一張照片</h1>
+          <!-- 標題隨鏡頭改寫（見 app.js 的 renderAimCopy）：後鏡頭時看螢幕的是
+               幫忙拍的人，前鏡頭時是本人。 -->
+          <h1><span id="aim-pre">幫</span><span class="who-name" id="aim-name"></span><span id="aim-post">拍一張全身照</span></h1>
           <!-- 風格名稱由 /api/styles 填入。寫死其中一種，另一種模式下就成了假訊息，
                與操控提示不寫死 IDLE_MOTION 是同一個理由。 -->
           <p class="lede" id="aim-lede">照片會被轉譯成你的角色。</p>
@@ -103,7 +117,7 @@
                  role="radiogroup" aria-label="生成風格"></div>
           </div>
           <ol class="tips">
-            <li><b>站遠 2–3 公尺</b>　對齊畫面裡的人形輪廓</li>
+            <li id="tip-who"><b>找人幫你拍</b>　手機交給旁邊的人，你退後 2–3 公尺</li>
             <li><b>光線充足</b>　背光或太暗會認不出服裝</li>
             <li><b>單人入鏡</b>　背景乾淨一點更好</li>
           </ol>
@@ -113,7 +127,8 @@
           <p class="note">
             按下拍照後會 <b>倒數 5 秒</b>，接著約需 <b>25 秒</b> 生成。
             生成完成會先讓你看過，不滿意可以重來。
-            不方便當場拍的話，也可以 <b>從相簿選一張全身照</b>。
+            <span id="note-solo">只有自己一個人的話，按取景框右上角的鍵改用 <b>前鏡頭自拍</b>，
+            或 <b>從相簿選一張全身照</b>。</span>
           </p>
           <div class="foot foot-main">
             <button class="btn-primary" id="btn-capture">拍照</button>

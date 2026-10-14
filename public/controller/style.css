@@ -50,6 +50,13 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* hidden 一律勝出。瀏覽器內建的 [hidden] 只是一條普通的 display:none，
+   任何寫了 display 的 class 都會把它蓋掉 —— 元素設了 .hidden 卻照樣顯示，
+   而且不會有任何錯誤訊息。這個坑在這裡踩過三次（分區標籤的空灰條、配對面板
+   的空色塊、生成服務沒起來時孤零零的「生成風格」標題），下方各處零散的
+   `X[hidden] { display: none }` 都是當時一個一個補的。 */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
@@ -889,6 +896,33 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   background: rgba(26, 23, 19, .28);
 }
 #countdown-display[hidden] { display: none; }
+
+/* 切換前後鏡頭：取景框右上角，與一般相機 App 同一個位置。
+   深色半透明圓底而不是紙色按鈕 —— 它浮在相機畫面上，亮底會在畫面裡跳出來。
+   不用 backdrop-filter（低階裝置限制，見檔頭）。 */
+.btn-flip {
+  position: absolute;
+  top: 10px; right: 10px;
+  z-index: 2;
+  width: 40px; height: 40px; padding: 0;
+  display: grid; place-items: center;
+  border: 2px solid rgba(255, 255, 255, .85);
+  border-radius: 50%;
+  background: rgba(26, 23, 19, .55);
+  color: #fff;
+  box-shadow: none;
+}
+.btn-flip[hidden] { display: none; }
+.btn-flip:disabled { opacity: .35; border-style: solid; }
+/* 視覺 40px，可觸範圍補到 44px（同 .btn-exit 的做法，見 UI-STYLING.md） */
+.btn-flip::after {
+  content: "";
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px; height: 44px;
+  border-radius: 50%;
+}
 /* 每秒重播一次，數字才有跳動感而不是靜靜地換字 */
 #countdown-display.tick { animation: count-tick .9s ease-out; }
 @keyframes count-tick {
@@ -1102,13 +1136,15 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   position: fixed;
   inset: 0;
   z-index: 9999;
-  background: rgba(26, 23, 19, 0.85);
+  /* 不用 backdrop-filter（檔頭的低階裝置限制）：底下的個人視角畫布每秒重畫
+     60 次，模糊也得跟著每幀重算 —— 等於在網路最不穩、手機最吃力的時候，
+     疊上全螢幕最貴的效果。不透明度拉高到 .9 取代模糊的遮蔽效果。 */
+  background: rgba(26, 23, 19, 0.9);
   color: #FAF8F5;
   display: grid;
   place-items: center;
   font-size: 20px;
   font-weight: 700;
-  backdrop-filter: blur(4px);
 }
 #reconnect-overlay[hidden] {
   display: none;
@@ -1281,6 +1317,9 @@ canvas.portrait { image-rendering: pixelated; display: block; }
    不是需要立刻反應的事件 */
 .zone-chip {
   display: inline-block;
+  /* 直式的 #controller 是 flex 直排，子元素預設被拉滿整列寬 —— inline-block
+     在這裡不起作用，膠囊會變成一條橫跨畫面的長框。橫式由 justify-self 處理。 */
+  align-self: flex-start;
   margin: 0 0 10px;
   padding: 5px 12px;
   border-radius: 999px;

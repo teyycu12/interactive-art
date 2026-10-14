@@ -151,6 +151,32 @@ def sample_fallback_colors(parts: Dict[str, PILImage.Image]) -> Dict[str, str]:
     }
 
 
+# 三視圖切出來的另外兩面（backend/turnaround.py）
+VIEW_PARTS = ("side", "back")
+
+
+def save_view(
+    png_b64: str,
+    asset_dir: str,
+    asset_id: str,
+    part: str,
+    url_prefix: str = "/assets/gen",
+) -> str:
+    """把側面或背面存成 <asset_id>/<part>.webp，回傳 URL。
+
+    與正面的 full.webp 走同一個 normalize()：三張都縮到同一個高度，
+    大螢幕以同一套「等比縮放、底部對齊」畫進同尺寸的畫布 —— 換面時
+    角色不會忽大忽小、腳底不會跳。不切片：切片只為正面存在。
+    """
+    if part not in VIEW_PARTS:
+        raise ValueError(f"unknown view part: {part}")
+    img = normalize(decode_png(png_b64))
+    out_dir = os.path.join(asset_dir, asset_id)
+    os.makedirs(out_dir, exist_ok=True)
+    img.save(os.path.join(out_dir, f"{part}.webp"), "WEBP", quality=92)
+    return f"{url_prefix}/{asset_id}/{part}.webp"
+
+
 def slice_character(
     png_b64: str,
     asset_dir: str,

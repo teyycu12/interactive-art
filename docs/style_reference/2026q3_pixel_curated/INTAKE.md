@@ -482,3 +482,14 @@ bash start.sh
 `pendingScanConfig`，所以大螢幕不知道該關掉平滑。要做的話是一整條
 「styleId → avatar → 伺服器 → 大螢幕 → `imageSmoothingEnabled = false`」的
 接線，屬於獨立一次改動，不要混進備圖這一步。
+
+## 2026-10-14：生成改成三視圖，這組圖暫不改
+
+像素風現在一次生成「正面｜右側｜背面」三視圖（見 GENERATION.md）。構圖由姿勢參考圖
+（`_canonical_pixel_turnaround`）決定，這組 sheet 仍只管「怎麼畫」，所以六張單一正面
+的圖暫時不動，prompt 也明寫 sheet 不是構圖。
+
+**什麼時候要補**：實測若常常只畫一個人，或側面、背面的像素畫法不穩（側臉、後腦勺
+畫成寫實或糊掉），就補 2～3 張**同一個角色的三視圖**。規格與現有六張相同
+（90 格高、`scripts/pixelize_reference.py` 洗過、通過閘門）。注意 sheet 的每格是
+直式 2:3（`_STYLE_SHEET_CELL_ASPECT`），三視圖放進去會很小 —— 補圖時要一起改排法。

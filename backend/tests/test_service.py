@@ -8,6 +8,7 @@ import base64
 import io
 import os
 import re
+import sys
 
 import numpy as np
 import pytest
@@ -33,6 +34,23 @@ def _photo_b64():
     buf = io.BytesIO()
     PILImage.new("RGB", (320, 480), (180, 140, 120)).save(buf, "JPEG")
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_history(tmp_path, monkeypatch):
+    # 生成紀錄一律導走。原本每跑一次就往正式的 backend/logs 寫十幾筆假紀錄
+    # （circuit_open、slice_failed: disk full…），主辦端的「角色生成紀錄」
+    # 與成功率會把它們當成真的現場失敗。autouse 是因為有幾則測試
+    # 不經 client fixture、自己建 test_client。
+    #
+    # 從 service 手上的函式反查模組，而不是 import backend.generation_history：
+    # service 以 `from generation_history import ...` 匯入，兩條路徑在 pytest
+    # 底下是兩個不同的模組物件，改錯那一個等於沒改（同 style_registry 的坑）。
+    if service._HISTORY:
+        history = sys.modules[service.start_run.__module__]
+        monkeypatch.setattr(history, "_DB_PATH", tmp_path / "history.sqlite3")
+        monkeypatch.setattr(history, "_OUTPUT_DIR", tmp_path / "history_generated")
+        monkeypatch.setattr(history, "_INPUT_DIR", tmp_path / "history_inputs")
 
 
 @pytest.fixture

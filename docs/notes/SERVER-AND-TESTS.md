@@ -179,11 +179,12 @@ PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 手機端的操控提示**不要寫死「放手後角色會漫遊」** —— 手機讀不到伺服器的
 `IDLE_MOTION`，寫死其中一種，另一種模式下就成了假訊息。
 
-### 場域人數上限刻意壓在 10
+### 場域人數上限：30（原本 10）
 
-`MAX_AGENTS = 10`（原本 120）。這是「少而精緻」的取捨：角色數降下來之後，
-每個人都負擔得起即時陰影、高解析度貼圖與後製效果，畫面質感遠勝過塞滿
-一百個扁平貼紙。3D 房間、bloom、vignette 都建立在這個前提上。
+`MAX_AGENTS = 30`。曾經壓在 10，是「少而精緻」的取捨 —— 3D 客廳要為每個角色跑
+即時陰影與後製。預設場景改成 2D 像素場景後那項成本消失，2026-09-23 提高到 30。
+實測數據與真正的瓶頸（入場生成佇列，不是互動層）見
+[FIELD-OPS.md「人數與延遲」](FIELD-OPS.md)。
 
 **測試不要寫死角色數量**。曾有三處測試硬寫 12 / 50 個角色，上限降到 10 時
 `addAgent` 開始回傳 null，整組測試以 `TypeError: Cannot set properties of null`
@@ -222,3 +223,19 @@ PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 新增家具型別時，`PROP_URLS` 的鍵必須與 `PROPS.type` 全集對齊
 （speaker / table / sofa / lowtable / plant）。
 
+
+### 顯示名稱過濾（server/nameFilter.js）
+
+名稱會投影在大螢幕上，`handleJoin` 在 `sanitizeName` 之後呼叫 `isBlockedName`，
+新入場與同連線改名兩條路徑都擋，回 `CLIENT_REJECT`（手機退回捏臉頁並跳出提示）。
+拒絕訊息刻意**不說是哪個字** —— 說了等於教人怎麼繞。
+
+詞表刻意只擋「明顯的」，兩個方向的錯代價不同：
+
+- **不要加單字「幹」「屌」「靠」**。「幹部」「能幹」「屌打」「靠譜」都是正常用語，
+  誤殺一個就是一位參與者進不了場，而且他不會知道為什麼。
+- **英文短字（ass、dick、sex…）只比整個字**，放進 `CONTAINS` 會擋掉
+  Cassie、Dickson、Essex。`test/name-filter.test.mjs` 兩個方向都有釘。
+
+先比對截斷到 `MAX_NAME_LENGTH` 之後的名稱 —— 擋的是「上螢幕的那幾個字」。
+真的鑽過去的，主辦端仍可 `HOST_KICK`；詞表是第一道，不是唯一一道。

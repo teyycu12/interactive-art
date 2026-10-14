@@ -20,8 +20,10 @@
  */
 
 import {
-  drawCharacter, drawNameplate, drawEmote, stepIndex, emoteIsPosed,
+  drawCharacter, drawNameplate, drawEmote, stepIndex, emoteIsPosed, gaitPhase,
+  measureNameplate, NAMEPLATE_DROP,
 } from '/shared/character.js';
+import { layoutNameplates } from '/shared/nameplateLayout.js';
 import { avatarImage } from '/shared/avatarSprite.js';
 import {
   sceneBackdrop, ORIGIN_X, ORIGIN_Y, ROOM_W, ROOM_H, BODY_UNITS, OUTSIDE,
@@ -61,6 +63,8 @@ export class AvatarRenderer {
   constructor(canvas, avatar) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    /** 名牌目前的位移，逐幀朝避讓結果內插（同大螢幕的 drawNameplates） */
+    this.plateOffset = new Map();
     this.sprite = avatar ? avatarImage(avatar) : null;
 
     // 背景網格的累積位移。角色不動，世界動。
@@ -106,7 +110,7 @@ export class AvatarRenderer {
     this._onFootstep = null;
 
     // 觸地偵測：步態相位過零時觸發。詳見 _detectFootstep。
-    this._prevPhaseSin = 0;
+    this._contactHalf = null;
 
     this._resize = this._resize.bind(this);
     this._tick = this._tick.bind(this);
@@ -210,7 +214,7 @@ export class AvatarRenderer {
         prev.dx = n.dx; prev.dy = n.dy;
         prev.fromAx = prev.x ?? ax; prev.fromAy = prev.y ?? ay;
         prev.ax = ax; prev.ay = ay;
-        prev.facing = n.facing; prev.heading = n.heading; prev.state = n.state; prev.emote = n.emote;
+        prev.facing = n.facing; prev.heading = n.heading; prev.view = n.view; prev.state = n.state; prev.emote = n.emote;
         prev.t = 0;
       } else {
         // 新出現的鄰居直接就位，不從畫面中心滑進來
@@ -221,7 +225,7 @@ export class AvatarRenderer {
       }
     }
     for (const id of this.neighbors.keys()) {
-      if (!seen.has(id)) this.neighbors.delete(id);
+      if (!seen.has(id)) { this.neighbors.delete(id); this.plateOffset.delete(id); }
     }
   }
 
@@ -283,6 +287,7 @@ export class AvatarRenderer {
       this.vx += (target.x - this.vx) * k;
       this.vy += (target.y - this.vy) * k;
       this.facing = this.serverSelf.facing;
+      this.view = this.serverSelf.view;
     } else if (this.serverSelf) {
       // 狀態過期（掉封包或斷線）：收斂到靜止，不外推位置。
       // 繼續以最後速度前進會讓角色一路飄出場外，與大螢幕徹底脫節。
@@ -341,14 +346,11 @@ export class AvatarRenderer {
   }
 
   /**
-   * 觸地偵測。
+   * 觸地偵測：震動與畫面上的腳步同一把尺。
    *
-   * shared/character.js 的彈跳是 |sin(phase)|，因此腳落地對應 |sin| 觸底，
-   * 也就是 sin **每一次**過零 —— 上行與下行都算，一個 sin 週期有兩步
-   * （左腳、右腳）。只抓單向變號會漏掉一半的腳步，震動聽起來像在跳而不是走。
-   *
-   * 這份相位計算與 character.js 的 cadence() 綁在一起：那邊改了步頻公式，
-   * 這裡的震動就會對不上腳步。兩者的耦合刻意留在註解裡。
+   * 捏臉的像素角色依走過的距離換腳（stepIndex）；拍照角色依 drawCharacter
+   * 累加的步伐相位（gaitPhase），一個循環左右腳各著地一次。兩條都直接讀畫面
+   * 用的那個數，不另算一份 —— 另算的話步頻公式一改，震動就與腳步錯開。
    */
   _detectFootstep(speed) {
     // 像素角色的換腳由走過的距離決定（shared/character.js 的 STEP_BODIES），
@@ -364,16 +366,18 @@ export class AvatarRenderer {
 
     // 門檻要高於 _update 低通濾波的殘量。濾波是指數收斂，速度會長時間
     // 停在 0 附近的極小值 —— 門檻壓太低會讓角色明明站著不動卻持續震動。
-    if (speed < FOOTSTEP_MIN_SPEED) { this._prevPhaseSin = 0; return; }
+    if (speed < FOOTSTEP_MIN_SPEED) { this._contactHalf = null; return; }
 
-    const cadence = 0.55 + 0.45 * Math.min(1, speed);
-    const phase = this.time * (0.2 * 60) * cadence;
-    const s = Math.sin(phase);
-    // 過零偵測（雙向）。_prevPhaseSin 為 0 代表剛從靜止起步，不算一次觸地。
-    if (this._prevPhaseSin !== 0 && Math.sign(s) !== Math.sign(this._prevPhaseSin)) {
-      this._onFootstep?.();
-    }
-    this._prevPhaseSin = s;
+    // 拍照角色：直接讀畫面上的步伐相位（shared/character.js 的 gaitPhase），
+    // 起伏最低點（相位 π/2、3π/2，兩腳張到最開、走路格的第 2、6 格）是腳著地。
+    // 不在這裡另算一份相位：步頻公式一改，震動就與畫面上的腳步錯開。
+    // _contactHalf 為 null 代表剛從靜止起步，不算一次觸地。
+    const phase = gaitPhase('self');
+    if (phase === null) return;
+    const TAU = Math.PI * 2;
+    const half = Math.floor((((phase - Math.PI / 2) % TAU) + TAU) % TAU / Math.PI);
+    if (this._contactHalf != null && half !== this._contactHalf) this._onFootstep?.();
+    this._contactHalf = half;
   }
 
   /**
@@ -434,12 +438,16 @@ export class AvatarRenderer {
       // 像素角色依 heading 選方向。用伺服器的值，手機與大螢幕才會面向同一邊；
       // 還沒收到同步時是 undefined，drawCharacter 會改用速度推算。
       heading: this.serverSelf?.heading,
+      // 拍照生成的角色依伺服器的 view 換面（正面／背面／側面）
+      view: this.view,
     };
 
     drawCharacter(ctx, agent, { x: w / 2, y: footY }, this.sprite, {
       time: this.time,
       maxSpeed: MAX_SPEED,
       height: CHARACTER_HEIGHT,
+      // 步伐相位以鍵區分（shared/character.js 的 stepPhase）；自己沒有 id
+      gaitKey: "self",
     });
   }
 
@@ -496,6 +504,8 @@ export class AvatarRenderer {
     const people = [...this.neighbors.values()].map((n) => ({ n, y: n.y }));
     people.push({ self: true, y: cam.y });
     people.sort((a, b) => a.y - b.y);
+    // 名牌等所有人畫完再一起排：配對時對方就站在旁邊，名牌最容易疊在一起
+    const plates = [];
 
     for (const p of people) {
       if (p.self) {
@@ -505,10 +515,14 @@ export class AvatarRenderer {
           vy: this.vy * MAX_SPEED,
           facing: this.facing,
           heading: this.serverSelf?.heading,
+          // 拍照生成的角色依伺服器的 view 換面
+          view: this.view,
           // 自己按下揮手／乾杯時，手機上的自己也要跟著做
           emote: this.serverSelf?.emote,
         }, { x: ax, y: ay }, this.sprite, {
           time: this.time, maxSpeed: MAX_SPEED, height, travel: this.travel,
+          // 步伐相位以鍵區分（shared/character.js 的 stepPhase）；自己沒有 id
+          gaitKey: 'self',
         });
         continue;
       }
@@ -516,16 +530,30 @@ export class AvatarRenderer {
       const pos = toScreen(n.x, n.y);
       if (pos.x < -height || pos.x > w + height || pos.y < -40 || pos.y > h + height) continue;
       drawCharacter(ctx,
-        { state: n.state, vx: n.vx, vy: n.vy, facing: n.facing ?? 1, heading: n.heading, emote: n.emote },
+        { id: n.id, state: n.state, vx: n.vx, vy: n.vy, facing: n.facing ?? 1, heading: n.heading, view: n.view, emote: n.emote },
         pos, this.looks.get(n.id)?.sprite ?? null,
         { time: this.time, maxSpeed: MAX_SPEED, height, travel: n.travel });
       this._hit(n.id, pos, height);
       // 名字：配對任務要「走向另一位參與者」，看不出誰是誰就無從找起
       const name = this.names.get(n.id);
-      if (name) drawNameplate(ctx, pos, name, { fontSize: Math.max(11, Math.round(height * 0.12)) });
+      if (name) {
+        const fontSize = Math.max(11, Math.round(height * 0.12));
+        const { w: pw, h: ph } = measureNameplate(ctx, name, { fontSize });
+        plates.push({ id: n.id, x: pos.x, y: pos.y + NAMEPLATE_DROP, w: pw, h: ph, pos, name, fontSize });
+      }
       if (n.emote && !emoteIsPosed(this.looks.get(n.id)?.sprite, n.emote)) {
         drawEmote(ctx, pos, EMOTE_GLYPH[n.emote] ?? '·', { height });
       }
+    }
+
+    const target = layoutNameplates(plates, { bottom: h });
+    for (const p of plates) {
+      const t = target.get(p.id);
+      let cur = this.plateOffset.get(p.id);
+      if (!cur) { cur = { dx: t.dx, dy: t.dy }; this.plateOffset.set(p.id, cur); }
+      cur.dx += (t.dx - cur.dx) * 0.2;
+      cur.dy += (t.dy - cur.dy) * 0.2;
+      drawNameplate(ctx, p.pos, p.name, { fontSize: p.fontSize, offset: cur });
     }
   }
 
@@ -562,7 +590,7 @@ export class AvatarRenderer {
       ctx.save();
       ctx.globalAlpha = 0.25 + fade * 0.55;
       drawCharacter(ctx,
-        { state: n.state, vx: 0, vy: 0, facing: n.facing ?? 1 },
+        { id: n.id, state: n.state, vx: 0, vy: 0, facing: n.facing ?? 1 },
         { x, y },
         null,   // 鄰居不載入貼圖：10 個人 × 3 張圖的流量不值得這點細節
         { time: this.time, maxSpeed: MAX_SPEED,

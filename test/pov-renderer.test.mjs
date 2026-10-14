@@ -30,6 +30,7 @@ function makeCanvasStub() {
 
 let AvatarRenderer;
 let STEP_BODIES;
+let gaitPhase;
 let rafCb = null;
 
 before(async () => {
@@ -46,7 +47,8 @@ before(async () => {
   globalThis.innerHeight = 700;
 
   ({ AvatarRenderer } = await import('../public/controller/avatarRenderer.js'));
-  ({ STEP_BODIES } = await import('../shared/character.js'));
+  ({ STEP_BODIES, gaitPhase } = await import('../shared/character.js'));
+  PIXEL_AVATAR = (await import('../shared/avatars.js')).randomAvatarConfig();
 });
 
 const AVATAR = {
@@ -66,19 +68,46 @@ function run(r, clock, frames) {
   return steps;
 }
 
-function makeRenderer() {
+/** 捏臉角色（模組外觀）：像素畫格，換腳依走過的距離。before() 裡隨機產生一組 */
+let PIXEL_AVATAR;
+
+function makeRenderer(avatar = AVATAR) {
   const clock = { t: 0 };
   globalThis.performance = { now: () => clock.t };
-  const r = new AvatarRenderer(makeCanvasStub(), AVATAR);
+  const r = new AvatarRenderer(makeCanvasStub(), avatar);
   r.start();
   return { r, clock };
 }
 
 describe('POV 畫布：觸地偵測', () => {
-  test('推滿搖桿時，每走 STEP_BODIES 個身高震一次（與畫面的換腳同一把尺）', () => {
-    // 拍照角色與捏臉角色一樣是像素畫格，換腳依走過的距離推進（shared/character.js）。
-    // 震動若改回以時間計算，腳踏下去的那一格與震動會錯開。
+  test('拍照角色：每次腳著地震一次（與畫面上的步伐同一個相位）', () => {
+    // 拍照角色走路的手腳擺動與起伏都跟著 drawCharacter 累加的步伐相位；
+    // 震動若另用一份相位計算，腳踏下去的那一格與震動會錯開。
     const { r, clock } = makeRenderer();
+    r.setInput({ x: 1, y: 0 }, 1);
+    let steps = 0;
+    let contacts = 0;
+    let prev = null;
+    r.onFootstep(() => steps++);
+    for (let i = 0; i < 180; i++) {   // 3 秒
+      clock.t += 1000 / 60;
+      rafCb(clock.t);
+      const p = gaitPhase('self');
+      if (p === null) continue;
+      const half = Math.floor((((p - Math.PI / 2) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) / Math.PI);
+      if (prev !== null && half !== prev) contacts++;
+      prev = half;
+    }
+    assert.ok(steps > 0, '全速走 3 秒卻一次都沒震');
+    // 偵測在畫之前、相位在畫的時候推進，允許差一步
+    assert.ok(Math.abs(steps - contacts) <= 1, `畫面上著地 ${contacts} 次，震了 ${steps} 次`);
+    r.stop();
+  });
+
+  test('捏臉角色：每走 STEP_BODIES 個身高震一次（與畫面的換腳同一把尺）', () => {
+    // 捏臉角色是像素畫格，換腳依走過的距離推進（shared/character.js）。
+    // 震動若改回以時間計算，腳踏下去的那一格與震動會錯開。
+    const { r, clock } = makeRenderer(PIXEL_AVATAR);
     r.setInput({ x: 1, y: 0 }, 1);
     const steps = run(r, clock, 180);   // 3 秒
     const expected = Math.floor(r.travel / STEP_BODIES);

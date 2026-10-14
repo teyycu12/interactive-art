@@ -257,3 +257,36 @@ describe('CV avatar：pixelParts（側面與背面的髮型、服裝）', () => 
     assert.equal(avatarPixelSpec(CV_AVATAR).parts.head, 'head_short_01');
   });
 });
+
+describe('CV avatar：三視圖的側面與背面（選用）', () => {
+  // 像素風一次生成三視圖，後端切成 full / side / back。舊角色、其他風格、
+  // 三視圖切不出三個人時都沒有這兩張 —— 缺了要照樣過，有了要照同一套規則驗。
+  const withViews = () => withCV((c) => {
+    c.textures.full = `/assets/gen/${ASSET}/full.webp`;
+    c.textures.side = `/assets/gen/${ASSET}/side.webp`;
+    c.textures.back = `/assets/gen/${ASSET}/back.webp`;
+  });
+
+  test('合法的 side、back 會被保留', () => {
+    const r = validateAvatarConfig(withViews());
+    assert.equal(r.ok, true);
+    assert.equal(r.value.textures.side, `/assets/gen/${ASSET}/side.webp`);
+    assert.equal(r.value.textures.back, `/assets/gen/${ASSET}/back.webp`);
+  });
+
+  test('只有其中一張也通過', () => {
+    const r = validateAvatarConfig(withCV((c) => { c.textures.back = `/assets/gen/${ASSET}/back.webp`; }));
+    assert.equal(r.ok, true);
+    assert.equal(r.value.textures.side, undefined);
+  });
+
+  test('拒絕：side 來自別人的資產目錄', () => {
+    const cfg = withCV((c) => { c.textures.side = `/assets/gen/${'b'.repeat(32)}/side.webp`; });
+    assert.equal(validateAvatarConfig(cfg).ok, false);
+  });
+
+  test('拒絕：back 指向別的部位檔名', () => {
+    const cfg = withCV((c) => { c.textures.back = `/assets/gen/${ASSET}/full.webp`; });
+    assert.equal(validateAvatarConfig(cfg).ok, false);
+  });
+});

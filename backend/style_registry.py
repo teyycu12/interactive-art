@@ -47,11 +47,39 @@ class GenerationStyle:
     # /health 報出來），但 list_styles()／has_style()／resolve_style_id()
     # 一律當它不存在。圖備齊之後把這一行拿掉就上線。
     ready: bool = True
+    # 人偶外框的寬高比上限（寬 / 高），超過就判為 too_wide。None = 不檢查。
+    #
+    # 必須跟著風格走：樂高的爪手讓正常的人偶就有 0.59–0.61，像素只有 0.35–0.49。
+    # 抓的是模型多畫了東西 —— 實測（2026-10-14）像素有一張在旁邊多畫了半個人，
+    # 兩個人在畫面上連在一起，連通性檢查看到的是單一一塊，照樣通過。
+    max_aspect: Optional[float] = None
+    # 一次生成三視圖（正面｜右側｜背面並排），後端切成三張。
+    #
+    # 這是 prompt、姿勢參考圖、輸出比例三件事的共同約定：只開這個旗標而
+    # prompt 仍要求單一正面，模型只會畫一個人；只改 prompt 而姿勢參考仍是
+    # 單一站姿，模型會在兩者之間自己挑（GENERATION.md「風格的四樣東西必須成套」）。
+    turnaround: bool = False
 
 
 _STYLES: Dict[str, GenerationStyle] = {}
 
-DEFAULT_STYLE_ID = "lego"
+# 預設風格，也是任何認不得的風格最後退回的地方。必須在 ENABLED_STYLES 裡。
+DEFAULT_STYLE_ID = "pixel"
+
+# 目前開放給參與者選的風格（2026-10-14 起只做像素）。
+#
+# 樂高與皮克斯的程式碼、prompt、參考圖都留著，只是選不到：get_style() 與
+# list_all_styles() 仍看得到它們，測試也照樣守著它們。要重新開放就在 .env
+# 設 ENABLED_STYLES=lego,pixar,pixel，不必改程式。
+#
+# 刻意不用 ready=False：那代表「參考圖還沒備好」，/health 的 degraded 會把它
+# 報成「尚未上線」—— 「刻意停用」與「還在準備」在現場必須分得出來。
+_DEFAULT_ENABLED = "pixel"
+
+
+def _enabled_ids() -> FrozenSet[str]:
+    raw = os.environ.get("ENABLED_STYLES", "").strip() or _DEFAULT_ENABLED
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
 
 
 def register_style(style: GenerationStyle) -> None:
@@ -64,7 +92,8 @@ def _ready_ids() -> FrozenSet[str]:
     尚未備妥參考圖的風格（``ready=False``）不算在內 —— 它已經接好線，
     但選了它只會得到一個沒有 sheet 撐著的風格。
     """
-    return frozenset(sid for sid, style in _STYLES.items() if style.ready)
+    enabled = _enabled_ids()
+    return frozenset(sid for sid, style in _STYLES.items() if style.ready and sid in enabled)
 
 
 def has_style(style_id: Any) -> bool:
@@ -80,10 +109,11 @@ def has_style(style_id: Any) -> bool:
 def list_styles() -> List[Dict[str, str]]:
     """可以被選的風格，供 /health 的 ``styles`` 與手機端選單使用。
 
-    不含 ``ready=False`` 的風格。要連未備妥的一起看（健康檢查、測試、
-    工具腳本）用 :func:`list_all_styles`。
+    不含 ``ready=False`` 與不在 ENABLED_STYLES 裡的風格。要連它們一起看
+    （健康檢查、測試、工具腳本）用 :func:`list_all_styles`。
     """
-    return [_style_row(style) for style in _STYLES.values() if style.ready]
+    ready = _ready_ids()
+    return [_style_row(style) for style in _STYLES.values() if style.style_id in ready]
 
 
 def list_all_styles() -> List[Dict[str, Any]]:
@@ -103,17 +133,32 @@ def _style_row(style: GenerationStyle) -> Dict[str, str]:
     }
 
 
+def _fallback_style_id() -> str:
+    """認不得的風格最後退回哪裡：DEFAULT_STYLE_ID，除非它被停用了。
+
+    ENABLED_STYLES 沒列像素時，退回像素就等於退回一個被停用的風格 ——
+    手機選單上沒有它，生出來的卻是它。這時改退回第一個啟用中的風格。
+    """
+    ready = _ready_ids()
+    if DEFAULT_STYLE_ID in ready or not ready:
+        return DEFAULT_STYLE_ID
+    return next(sid for sid in _STYLES if sid in ready)
+
+
 def get_style(style_id: str) -> GenerationStyle:
     if style_id in _STYLES:
         return _STYLES[style_id]
+    fallback = _fallback_style_id()
+    if fallback in _STYLES:
+        return _STYLES[fallback]
     if DEFAULT_STYLE_ID not in _STYLES:
-        raise RuntimeError("LEGO generation style has not been registered")
+        raise RuntimeError(f"default generation style {DEFAULT_STYLE_ID!r} has not been registered")
     return _STYLES[DEFAULT_STYLE_ID]
 
 
 def get_event_style_id() -> str:
     requested = os.environ.get("CHARACTER_STYLE", DEFAULT_STYLE_ID).strip().lower()
-    return requested if requested in _ready_ids() else DEFAULT_STYLE_ID
+    return requested if requested in _ready_ids() else _fallback_style_id()
 
 
 def resolve_style_id(requested: Any) -> str:

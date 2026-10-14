@@ -76,3 +76,6 @@ certs/
 
 # 3D 背景的參考原型（RoomScene.js 已從中提取所需邏輯，執行期不引用）
 background_repo/
+
+# ngrok 通道日誌（現場臨時開外網用）
+ngrok.log

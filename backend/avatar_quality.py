@@ -33,6 +33,9 @@ def add_transparent_margin(png_b64: Optional[str], margin_ratio: float = 0.04) -
         return png_b64
 
 
+BACKGROUND_LEFT_RATIO = 0.70
+
+
 def _lab_delta(a: np.ndarray, rgb: Optional[list]) -> Optional[float]:
     if rgb is None or len(rgb) != 3 or a.size == 0:
         return None
@@ -47,6 +50,7 @@ def validate_avatar_png(
     *,
     upper_rgb: Optional[list] = None,
     lower_rgb: Optional[list] = None,
+    max_aspect: Optional[float] = None,
 ) -> Dict[str, Any]:
     result: Dict[str, Any] = {"passed": False, "errors": [], "warnings": []}
     if not png_b64:
@@ -71,6 +75,13 @@ def validate_avatar_png(
     result["foreground_ratio"] = round(foreground_ratio, 4)
     if not 0.05 <= foreground_ratio <= 0.85:
         result["errors"].append("foreground_ratio")
+    # 去背只灌得進「連到畫面邊界的白」。模型若畫了方格紙、地板或任何非白底，
+    # 白色就被切成一格格封閉區塊，整片背景連同人偶被當成同一塊前景留下來，
+    # 角色會頂著一張方格紙上大螢幕。實測抓到過（2026-10-14，像素風格）：
+    # 那張的佔比 0.81，剛好擦過上面 0.85 的上限，其餘檢查全數通過。
+    # 三種風格 17 張正常輸出最高 0.57，門檻放在兩者中間。
+    if foreground_ratio > BACKGROUND_LEFT_RATIO:
+        result["errors"].append("background_left")
 
     border = np.concatenate((fg[:2, :].ravel(), fg[-2:, :].ravel(), fg[:, :2].ravel(), fg[:, -2:].ravel()))
     if border.any():
@@ -83,6 +94,16 @@ def validate_avatar_png(
     else:
         main_ratio = 0.0
     result["main_component_ratio"] = round(main_ratio, 4)
+
+    # 只量最大的那一塊：旁邊一小塊雜點不該讓正常的人偶被判太寬（那是
+    # fragmented_foreground 的事）。多畫的那個人是跟本體連在一起的，
+    # 所以照樣算在最大那塊裡。
+    if max_aspect is not None and labels_n > 1:
+        main = int(np.argmax(stats[1:, cv2.CC_STAT_AREA])) + 1
+        aspect = stats[main, cv2.CC_STAT_WIDTH] / float(stats[main, cv2.CC_STAT_HEIGHT])
+        result["aspect"] = round(float(aspect), 4)
+        if aspect > max_aspect:
+            result["errors"].append("too_wide")
     if main_ratio < 0.75:
         result["errors"].append("fragmented_foreground")
 
@@ -124,6 +145,17 @@ def correction_for_validation(validation: Dict[str, Any]) -> str:
         instructions.append("Both separate legs and both distinct shoes must be fully visible at the bottom.")
     if "touches_border" in errors or "foreground_ratio" in errors:
         instructions.append("Center the entire character with generous pure-white margin on every side.")
+    if "background_left" in errors:
+        instructions.append(
+            "The background must be one flat solid pure white (#FFFFFF) and nothing else: "
+            "no grid lines, no graph paper, no checkerboard, no floor, no shadow, no scenery."
+        )
+    if "too_wide" in errors:
+        # 多半是在旁邊多畫了一個人（或側面、背面），而且跟本體連在一起。
+        instructions.append(
+            "Draw EXACTLY ONE figure, standing alone in the centre: no second character, "
+            "no side or back view beside it. Keep both arms close to the body."
+        )
     if "fragmented_foreground" in errors:
         # 措辭刻意不提任何風格：這段會被接到當次生成的 prompt 後面，
         # 而那份 prompt 可能是樂高，也可能是皮克斯。
@@ -153,6 +185,11 @@ def guidance_for_validation(validation: Dict[str, Any]) -> str:
         return "生成角色的肢體出現分離；請上傳人物輪廓清楚、手腳未被遮擋的照片。"
     if "empty_foreground" in errors or "missing_image" in errors:
         return "生圖服務沒有產生可用角色，請重新上傳照片再試一次。"
+    if "too_wide" in errors:
+        return "生成時多畫了東西，請直接再送出一次。"
+    if "background_left" in errors:
+        # 這是模型畫錯，不是照片的問題 —— 不要叫參與者換一張照片。
+        return "生成的角色背景沒有去乾淨，請直接再送出一次。"
     if "decode_failed" in errors:
         return "生成圖片格式異常，請重新送出一次。"
     if "foreground_ratio" in errors:

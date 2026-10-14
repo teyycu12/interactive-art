@@ -2,8 +2,9 @@
  * 角色圖像組裝 —— 大螢幕與手機端 POV 共用。
  *
  * 兩種來源：
- *   掃描生成（source: 'CV'）  三張貼圖依 CV_CUTS 的比例疊回一張畫布；在場上時
- *                             正面縮成像素格子，側面與背面用像素畫法補上
+ *   掃描生成（source: 'CV'）  優先畫未切割的整張圖（缺它才把三張貼圖依 CV_CUTS
+ *                             疊回去）；側面與背面是生成的三視圖，掛在 views 上。
+ *                             縮成像素格子的 cvPixelSprite 只給縮圖 avatarPortrait 用
  *   模組捏臉（備援路徑）      像素角色，四方向 × 三格步態（shared/pixelAvatar.js）
  *
  * 與 shared/character.js 同理放在 shared/：手機畫的角色若與大螢幕不是
@@ -11,7 +12,7 @@
  * 只會出現「手機上的我」和「大螢幕上的我」長得不一樣。
  */
 
-import { avatarGrid, CV_CUTS, CV_PARTS, CV_FULL_PART } from './avatars.js';
+import { avatarGrid, CV_CUTS, CV_PARTS, CV_FULL_PART, CV_VIEW_PARTS } from './avatars.js';
 import { PIXEL_W, PIXEL_H, PIXEL_DIRS, PIXEL_FRAMES, PIXEL_POSES, OUTLINE } from './pixelAvatar.js';
 
 // 角色畫布的解析度。
@@ -73,6 +74,11 @@ export function cvAvatarImage(avatar, { enhance = false, onPaint = null } = {}) 
   // 先讓替身可被繪製；貼圖到齊後原地重畫，roster 不需要重新建立條目
   canvas.complete = true;
   canvas.naturalWidth = canvas.width;
+  // 供 spriteCache 判斷要不要重新推導側面／背面：替身階段不推導，
+  // 貼圖每畫一次版本就加一（見 shared/spriteCache.js）
+  canvas.spriteReady = false;
+  canvas.spriteVersion = 0;
+  const markDrawn = () => { canvas.spriteReady = true; canvas.spriteVersion++; };
 
   /**
    * 整張圖：等比縮放後底部對齊。
@@ -92,6 +98,7 @@ export function cvAvatarImage(avatar, { enhance = false, onPaint = null } = {}) 
     if (enhance) ctx.filter = 'contrast(1.15) saturate(1.15) brightness(1.05)';
     ctx.drawImage(img, (AVATAR_W - w) / 2, AVATAR_H - h, w, h);
     ctx.filter = 'none';
+    markDrawn();
     onPaint?.();
   };
 
@@ -121,6 +128,7 @@ export function cvAvatarImage(avatar, { enhance = false, onPaint = null } = {}) 
       ctx.drawImage(img, 0, AVATAR_H * top, AVATAR_W, AVATAR_H * (bottom - top));
     }
     ctx.filter = 'none';
+    markDrawn();
     onPaint?.();
   };
 
@@ -132,6 +140,32 @@ export function cvAvatarImage(avatar, { enhance = false, onPaint = null } = {}) 
       img.src = avatar.textures[part];
     }
   };
+
+  // 側面與背面（像素風的三視圖才有）。各自畫進一張與正面同尺寸的畫布、
+  // 用同一套「等比縮放、底部對齊」：三張都經過 slicer.normalize() 縮到同一個
+  // 高度，這樣換面時角色不會忽大忽小、腳底不會跳。
+  // 沒有或載入失敗就不掛 —— spriteView() 會退回正面，不會消失。
+  canvas.views = {};
+  for (const part of CV_VIEW_PARTS) {
+    const url = avatar.textures?.[part];
+    if (!url) continue;
+    const img = new Image();
+    img.addEventListener('load', () => {
+      const view = document.createElement('canvas');
+      view.width = AVATAR_W;
+      view.height = AVATAR_H;
+      const vctx = view.getContext('2d');
+      const scale = Math.min(AVATAR_W / img.naturalWidth, AVATAR_H / img.naturalHeight);
+      const w = img.naturalWidth * scale;
+      const h = img.naturalHeight * scale;
+      if (enhance) vctx.filter = 'contrast(1.15) saturate(1.15) brightness(1.05)';
+      vctx.drawImage(img, (AVATAR_W - w) / 2, AVATAR_H - h, w, h);
+      view.complete = true;
+      view.naturalWidth = view.width;
+      canvas.views[part] = view;
+    });
+    img.src = url;
+  }
 
   // 整張圖是選用的：改版前生成的資產目錄只有三張切片，那些角色仍在場上，
   // 把它列為必要會讓一次改版就把先前生成的人全部踢出場。
@@ -290,9 +324,14 @@ function cvFrontCells(front) {
   const scan = opaqueScanner(front);
   const box = scan.box();
   if (!box) return null;
-  // 在 CV_CUTS.head 的切線附近找肩膀；找不到就退回那條切線
+  // 在 CV_CUTS.head 的切線附近找肩膀；找不到就退回那條切線。
+  //
+  // 往下找到 52%（原本 44%）：大頭的像素角色下巴落在 44–47%（實測 2026-10-14，
+  // Flash 常見、Pro 也有），頭髮或帽子又比肩膀寬，原本的範圍裡寬度一路
+  // 變窄、找不到肩膀，就退回 30% —— 正好切在眼睛，上半顆頭被放大填滿整個
+  // 頭部，變成一朵香菇。
   const cut = CV_CUTS.head[1];
-  const neck = scan.neck(box.y + box.h * (cut - 0.04), box.y + box.h * (cut + 0.14)) ?? box.y + box.h * cut;
+  const neck = scan.neck(box.y + box.h * (cut - 0.04), box.y + box.h * (cut + 0.22)) ?? box.y + box.h * cut;
   const head = scan.box(box.y, neck) ?? box;
   const headH = neck - box.y;
   const bodyH = box.y + box.h - neck;
@@ -601,6 +640,11 @@ export function avatarPortrait(avatar, { dir = 'down', scale = 8 } = {}) {
 
 /** 依來源選用組裝方式。回傳物件皆帶有 complete / naturalWidth，可直接交給 drawCharacter。 */
 export function avatarImage(avatar, opts) {
-  if (avatar?.source === 'CV') return cvPixelSprite(avatar, opts);
+  // 拍照生成的角色在場上用生成的原圖：三視圖（正面、側面、背面）來自生成，
+  // 走路的手腳擺動由 shared/walkFrames.js 從每一面分析（drawCharacter）。
+  // cvPixelSprite（縮成捏臉的像素格子、側背面由正面推導）只留給縮圖
+  // avatarPortrait 用 —— 合併 fix/pixel-character-movement 時決定，生成角色的
+  // 樣子與走路以那邊為準（docs/notes/GENERATION.md）。
+  if (avatar?.source === 'CV') return cvAvatarImage(avatar, opts);
   return pixelAvatarImage(avatar);
 }

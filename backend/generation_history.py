@@ -214,6 +214,10 @@ def record_attempt(
     output_path = _save_generated_output(
         request_id, f"{phase}_{int(attempt_index)}", result.get("body_png")
     )
+    # 三視圖的整張原圖（像素風）：只存檔備查，不進主控臺列表
+    _save_generated_output(
+        request_id, f"{phase}_{int(attempt_index)}_sheet", result.get("turnaround_sheet_png")
+    )
     with _db(db_path) as connection:
         connection.execute(
             """

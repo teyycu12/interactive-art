@@ -35,6 +35,11 @@ except Exception:
     )
 
 try:
+    from backend.turnaround import fix_backward_feet, split_turnaround  # type: ignore
+except Exception:  # pragma: no cover - 直接以 backend/ 為工作目錄時
+    from turnaround import fix_backward_feet, split_turnaround  # type: ignore
+
+try:
     from openai import OpenAI  # type: ignore
     _HAS_OPENAI = True
 except ImportError:
@@ -1000,7 +1005,7 @@ def generate_full_character_png(
     outfit_data: Optional[Dict[str, Any]] = None,
     remove_bg: bool = True,
     regions: Optional[Dict[str, Any]] = None,
-    style_id: str = "lego",
+    style_id: str = "pixel",
     correction: Optional[str] = None,
     model_override: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -1076,10 +1081,33 @@ def generate_full_character_png(
         )
         out["api_usage"] = api_result.get("api_usage")
         b64 = api_result.get("image_b64")
+        views: Dict[str, str] = {}
+        if b64 and style.turnaround:
+            # 先切再去背：去背會丟掉不連在主體上的孤島，三個人並排時另外兩個
+            # 就是孤島（見 turnaround.py）。
+            split, count = split_turnaround(b64)
+            out["turnaround_figures"] = count
+            # 整張原圖只留在後端紀錄裡（generation_history 存成 *_sheet.png）
+            # 供事後對照；主控臺歷史與角色本身用的是切好、去背的正面
+            out["turnaround_sheet_png"] = b64
+            if split:
+                b64 = split["front"]
+                views = {k: v for k, v in split.items() if k != "front"}
+            print(f"[garment_gen] turnaround: found {count} figure(s), views={sorted(views)}")
         if b64:
             if remove_bg:
                 b64 = _remove_white_background(b64, shield_mask=shield_mask)
+                views = {k: _remove_white_background(v, shield_mask=None) for k, v in views.items()}
+                if "side" in views:
+                    # 模型偶爾把側面的鞋子畫反（人朝右、鞋尖朝左）。要在去背之後：
+                    # 判斷靠透明輪廓
+                    views["side"], flipped = fix_backward_feet(views["side"])
+                    if flipped:
+                        print("[garment_gen] turnaround: side-view feet were backwards, flipped")
             out["body_png"] = b64
+            # 側面（朝右）與背面：只有三視圖切出剛好三個人時才有
+            for name, png in views.items():
+                out[f"{name}_png"] = png
             out["body_bbox"] = [x1 / w, y1 / h, x2 / w, y2 / h]
             out["ok"] = True
             bg_note = "bg removed" if remove_bg else "raw (bg kept)"
@@ -1209,6 +1237,77 @@ def _canonical_pixel_pose(size: int = 1024) -> PILImage.Image:
     return img.resize((size, size), PILImage.NEAREST)
 
 
+# 三視圖姿勢參考的畫布：90 格高、16:9（與 image_config 的輸出比例一致）
+PIXEL_TURNAROUND_GRID_WIDTH = 160
+
+
+def _canonical_pixel_turnaround(size: int = 1024) -> PILImage.Image:
+    """The same neutral geometry as ``_canonical_pixel_pose``, drawn three times:
+    front, right-side profile (facing right), back -- the layout the prompt asks for.
+
+    The pose image is the one input that carries composition.  The curated sheet
+    shows single front-facing figures; if the pose image also showed one figure,
+    the only voice asking for three views would be the prompt, and the model
+    settles a two-against-one disagreement by drawing one figure.
+
+    Proportions are the front pose's (three heads tall, chin at 33%, collar 37%,
+    waist 62%, shoe tops 90%); every view shares the same baseline.
+    """
+    grid = PIXEL_ART_GRID_HEIGHT
+    cols = PIXEL_TURNAROUND_GRID_WIDTH
+    img = PILImage.new("RGB", (cols, grid), "white")
+    d = ImageDraw.Draw(img)
+    ink = (48, 42, 45)
+    body = (188, 190, 196)
+    skin = (226, 194, 162)
+    hair = (74, 60, 58)
+    shoe = (78, 78, 84)
+
+    def block(x0, y0, x1, y1, fill):
+        d.rectangle((x0, y0, x1 - 1, y1 - 1), fill=ink)
+        if x1 - x0 > 2 and y1 - y0 > 2:
+            d.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=fill)
+
+    def front_or_back(dx: int, face: bool) -> None:
+        # Coordinates are _canonical_pixel_pose's, shifted by dx.
+        block(31 + dx, 1, 59 + dx, 31, skin if face else hair)
+        if face:
+            d.rectangle((32 + dx, 2, 57 + dx, 9), fill=hair)
+        block(41 + dx, 28, 49 + dx, 35, skin)
+        block(33 + dx, 33, 57 + dx, 59, body)
+        block(27 + dx, 35, 34 + dx, 54, body)
+        block(56 + dx, 35, 63 + dx, 54, body)
+        block(26 + dx, 52, 34 + dx, 60, skin)
+        block(56 + dx, 52, 64 + dx, 60, skin)
+        block(36 + dx, 58, 44 + dx, 82, body)
+        block(46 + dx, 58, 54 + dx, 82, body)
+        block(34 + dx, 81, 44 + dx, 90, shoe)
+        block(46 + dx, 81, 56 + dx, 90, shoe)
+
+    def profile(c: int) -> None:
+        # Facing right: hair over the back (left) of the head, face and toes to the right.
+        block(c - 12, 1, c + 14, 31, skin)
+        d.rectangle((c - 11, 2, c + 12, 9), fill=hair)
+        d.rectangle((c - 11, 2, c + 1, 27), fill=hair)
+        block(c + 13, 17, c + 16, 22, skin)          # nose
+        d.rectangle((c + 7, 15, c + 9, 18), fill=ink)  # the one visible eye
+        block(c - 3, 28, c + 5, 35, skin)            # neck
+        block(c - 7, 33, c + 8, 59, body)            # torso: half as deep as wide
+        block(c - 7, 58, c + 1, 82, body)            # far leg, a little behind
+        block(c - 8, 81, c + 3, 90, shoe)
+        block(c, 58, c + 8, 82, body)                # near leg, a little ahead
+        block(c - 1, 81, c + 12, 90, shoe)           # toes point right
+        block(c - 2, 35, c + 5, 54, body)            # near arm over the torso
+        block(c - 2, 52, c + 5, 60, skin)
+
+    front_or_back(27 - 45, face=True)
+    profile(80)
+    front_or_back(133 - 45, face=False)
+
+    scale = size / grid
+    return img.resize((round(cols * scale), size), PILImage.NEAREST)
+
+
 _PIXEL_NEGATIVE = (
     "Strictly NO text, NO labels, NO numbers, NO measurement marks, NO arrows, "
     "NO design-sketch annotations, NO watermarks, NO signatures. "
@@ -1225,17 +1324,29 @@ _PIXEL_NEGATIVE = (
     "projector. "
     "The pixel grid must be UNIFORM: every cell the same size everywhere in the "
     "image, never smaller cells on the face and larger ones on the body. "
+    # 「grid」這個字在上面出現很多次，模型會照字面把格子畫出來。實測抓到過
+    # 一張整片方格紙背景（2026-10-14）：格線把白底切成封閉小格，去背灌不進去，
+    # 角色連同方格紙一起上了大螢幕。
+    "The grid is INVISIBLE - it only decides where colour changes. NEVER draw "
+    "the grid itself: NO grid lines, NO graph paper, NO lined or squared "
+    "background, NO cell borders across the background. "
     "NO realistic adult body proportions, NO 6-head, 7-head or 8-head figure, "
     "NO small head on a long body, NO slender elongated limbs, NO fashion-plate "
     "proportions - the head fills the top third of the figure. "
-    "NO side view, NO three-quarter angle, NO sitting pose, NO action pose, "
-    "NO twisted torso. Stand strictly straight, facing the viewer. "
-    "EXACTLY ONE single figure in the entire image. NO turnaround sheet, "
-    "NO character model sheet, NO multiple views, NO side/back/rear panels, "
-    "NO duplicate or smaller copies of the figure anywhere in the frame. "
+    # 這裡曾寫著「只能一個人、不准側面、不准三視圖」—— 三視圖上線時漏改，
+    # 和 prompt 開頭互相矛盾。模型兩邊都想滿足，結果畫成一張設計稿：三個人
+    # 照畫，再鋪滿格線、加黑框（2026-10-14 實測）。
+    "NO three-quarter angle, NO sitting pose, NO action pose, NO twisted torso. "
+    "Every view stands strictly straight. "
+    "EXACTLY THREE figures, the three views above - NO fourth figure, NO "
+    "duplicate or smaller copies, NO close-up of the face or details. "
+    "This is NOT a design document: NO grid lines, NO cell outlines, NO "
+    "graph-paper background, NO frame, NO border, NO black bars, NO panels or "
+    "boxes around the figures, NO captions. The pixel grid is only how the "
+    "figures are built; it is never drawn. "
     "ABSOLUTELY NO background: NO walls, NO floor, NO scenery, NO ground shadow, "
-    "NO contact shadow, NO reflection - every pixel outside the figure must be "
-    "pure solid white #FFFFFF, completely uniform. "
+    "NO contact shadow, NO reflection - every pixel outside the figures must be "
+    "pure solid white #FFFFFF, completely uniform, right up to the image edges. "
     "NEVER omit shoes — both feet must always wear visible shoes. "
     "The legs must NEVER merge into one solid column: keep a clear vertical gap "
     "of white background between them, unless a one-piece garment covers them. "
@@ -1248,8 +1359,27 @@ _PIXEL_NEGATIVE = (
 )
 
 _PIXEL_PROMPT_TEMPLATE = (
-    "Create a single pixel-art character sprite based on the person in this "
-    "photograph, drawn as a full-body standing sprite on a fixed pixel grid.\n\n"
+    "Create a pixel-art character TURNAROUND of the person in this photograph: "
+    "the SAME character drawn THREE times side by side in one image, as "
+    "full-body standing sprites on one fixed pixel grid.\n\n"
+
+    "### TURNAROUND LAYOUT (MANDATORY):\n"
+    "- Exactly THREE figures in one row, left to right: (1) FRONT view, "
+    "(2) RIGHT-SIDE PROFILE view, facing toward the RIGHT edge of the image, "
+    "(3) BACK view, seen from directly behind.\n"
+    "- All three are the same height, at the same scale, standing on the same "
+    "baseline: the soles of all three are on one horizontal line.\n"
+    "- Leave a wide band of pure white between neighbouring figures, at least "
+    "eight cells; no part of one figure may touch or overlap another.\n"
+    "- It is ONE character: identical outfit, colours, hair, accessories and "
+    "proportions in all three views. Only the viewing angle changes.\n"
+    "- PROFILE view: the head, nose and toes point to the right; one eye shows; "
+    "the hair covers the back of the head; the body is about as deep as the "
+    "front view's torso is wide divided by two; the near arm hangs in front of "
+    "the torso and the legs stand one slightly ahead of the other.\n"
+    "- BACK view: no face at all - the back of the head is hair (or the "
+    "person's head covering); show the back of every garment, with no front "
+    "fastenings, prints or pockets that belong to the front.\n\n"
 
     "### DETECTED CHARACTER ATTRIBUTES:\n"
     "{attrs}\n\n"
@@ -1261,8 +1391,8 @@ _PIXEL_PROMPT_TEMPLATE = (
     "roughly 1.1% of the figure's height. Every shape, every edge and every "
     "colour change snaps to a cell boundary. Nothing is ever drawn smaller than "
     "one whole cell.\n"
-    "2. **Proportions & Pose**: Strict front-facing view, perfectly centered and "
-    "symmetric. Neutral stance: arms relaxed about 15 degrees out from the sides, "
+    "2. **Proportions & Pose**: The FRONT view is strictly front-facing and "
+    "symmetric. Neutral stance in every view: arms relaxed about 15 degrees out from the sides, "
     "hands visible as distinct blocks at the wrists, legs straight and parallel.\n"
     "   **This is a deliberately cute, big-headed character, about THREE heads "
     "tall.** The head INCLUDING the hair fills the whole TOP THIRD of the figure: "
@@ -1320,8 +1450,8 @@ _PIXEL_PROMPT_TEMPLATE = (
     "- Prints, logos and stripes on a garment are drawn as whole cells in a flat "
     "colour. Anything that cannot be said in two or three cells is left out "
     "rather than smeared.\n"
-    "- Center the figure on a pure solid white background (#FFFFFF), with the "
-    "figure's cell grid aligned to the image edges. No text, no border lines.\n\n"
+    "- Spread the three figures evenly across a pure solid white background "
+    "(#FFFFFF). No text, no labels, no arrows, no grid lines, no border.\n\n"
     + _PIXEL_NEGATIVE
 )
 
@@ -1341,7 +1471,9 @@ _ROLE_STYLE_PIXEL = (
     "another separated by one cell. Where a design rule above and this sheet "
     "disagree about grid size, palette discipline, outline or garment "
     "construction, FOLLOW THE SHEET. Pose, body-part count and which garments the "
-    "figure wears are not the sheet's to decide."
+    "figure wears are not the sheet's to decide. The sheet shows single "
+    "front-facing figures; that is NOT the layout to copy - still draw the "
+    "three-view turnaround described above, front, right profile and back."
 )
 
 
@@ -1352,5 +1484,12 @@ register_style(GenerationStyle(
     supported_modes=frozenset({"full_character"}),
     reference_set="2026q3_pixel_curated",
     role_style_text=_ROLE_STYLE_PIXEL,
-    pose_builder=_canonical_pixel_pose,
+    pose_builder=_canonical_pixel_turnaround,
+    turnaround=True,
+    # 切好的正面：正常 0.35–0.49（16 張），多畫半個人那張 0.62，方格紙背景 1.0
+    max_aspect=0.56,
+    # 三個 3 頭身的角色並排約需 1.6:1，16:9 剛好；1344x768 時角色高約 700px、
+    # 一格約 7.8px，正是策展原圖自己的格距（INTAKE.md）。正方形的話三個人
+    # 擠在一起，每個人只剩約 600px 高。
+    generation_params={"full_character": {"extra_body": {"image_config": {"aspect_ratio": "16:9"}}}},
 ))

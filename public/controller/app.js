@@ -299,19 +299,21 @@ nameInput.addEventListener('keydown', (e) => {
 syncStartButton();
 
 /** 兩條入場路徑共用：確認名字、收鍵盤。回傳 false 表示名字還沒填 */
-const LEGO_PREFIXES = ['快樂的', '無敵', '魔法', '酷炫', '光速', '熱血', '創意', '宇宙', '調皮的', '神秘'];
-const LEGO_NOUNS = ['樂高', '工程師', '積木人', '拼裝者', '方塊', '大師', '探險家', '騎士', '魔法師', '小天才'];
+// 沒填名字時的隨機名。用詞跟著畫風走：現在只有像素風格，原本的
+// 「樂高」「積木人」「拼裝者」會讓人以為選錯了風格。
+const NAME_PREFIXES = ['快樂的', '無敵', '魔法', '酷炫', '光速', '熱血', '創意', '宇宙', '調皮的', '神秘'];
+const NAME_NOUNS = ['像素人', '小方塊', '玩家', '勇者', '大師', '探險家', '騎士', '魔法師', '小天才', '冒險者'];
 
-function generateLegoName() {
-  const p = LEGO_PREFIXES[Math.floor(Math.random() * LEGO_PREFIXES.length)];
-  const n = LEGO_NOUNS[Math.floor(Math.random() * LEGO_NOUNS.length)];
+function generateRandomName() {
+  const p = NAME_PREFIXES[Math.floor(Math.random() * NAME_PREFIXES.length)];
+  const n = NAME_NOUNS[Math.floor(Math.random() * NAME_NOUNS.length)];
   return p + n;
 }
 
 function commitName() {
   let name = nameInput.value.trim();
   if (!name) { 
-    name = generateLegoName();
+    name = generateRandomName();
     nameInput.value = name;
   }
   displayName = name;
@@ -377,6 +379,9 @@ function showScanPhase(phase) {
   for (const el of [$('#aim-name'), $('#done-name')]) {
     if (el) el.textContent = displayName || '';
   }
+  renderAimCopy();
+  // 切換鏡頭只在取景時有意義；生成中與成果階段相機已經關了
+  $('#btn-flip').hidden = !(canFlipCamera && phase === 'aim');
   // 輔助線只在取景時有意義，其餘階段會擋住成果圖。
   //
   // 這裡用 class 而不是 .hidden：`hidden` 是 HTMLElement 的屬性，
@@ -485,11 +490,25 @@ async function previewTick() {
 function startPreviewLoop() {
   stopPreviewLoop();
   previewSessionId = null;
-  if ($('#aim-guide')) $('#aim-guide').textContent = '請站遠一點，讓全身與雙腳入鏡';
+  if ($('#aim-guide')) {
+    $('#aim-guide').textContent = cameraFacing === 'user'
+      ? '請站遠一點，讓全身與雙腳入鏡'
+      : '請對方站遠一點，讓全身與雙腳入鏡';
+  }
   previewTimer = setInterval(previewTick, PREVIEW_INTERVAL_MS);
 }
 
+/**
+ * 每次開相機的序號。stopScanStream() 會遞增它，讓還在等 getUserMedia 的那一次作廢。
+ *
+ * 連點兩下切換鏡頭時，兩次 openCamera() 都會在對方的 getUserMedia 回來之前
+ * 執行 stopScanStream()，於是兩條串流都開成功，先回來的那條被覆寫掉、永遠沒人關 ——
+ * 相機一直被佔著，iOS 上下一次開啟會直接 NotReadableError（「開不起相機」）。
+ */
+let cameraOpenSeq = 0;
+
 function stopScanStream() {
+  cameraOpenSeq++;
   stopPreviewLoop();
   if (!scanStream) return;
   for (const track of scanStream.getTracks()) track.stop();
@@ -603,6 +622,46 @@ $('#btn-scan').addEventListener('click', async () => {
  */
 const SUBMIT_RATIO = 9 / 16;
 
+/**
+ * 目前用哪一顆鏡頭。預設後鏡頭：拍全身得站到 2–3 公尺外，一定要有人拿著手機，
+ * 而「請旁邊的人幫我拍」正好是進場的第一次交談（CLAUDE.md 新玩法第 3 條）。
+ * 前鏡頭留給只有自己一個人、要把手機立起來自拍的情況。
+ *
+ * 前鏡頭的預覽刻意**不**鏡像：站位指示（captureGuidanceText 的「往畫面左側移動」）
+ * 以送出的原始畫面為準，預覽一翻轉，指示就會跟畫面左右相反。
+ */
+let cameraFacing = 'environment';
+/** 有兩顆以上鏡頭才顯示切換鍵。筆電只有一顆，facingMode 兩個值拿到的是同一顆。 */
+let canFlipCamera = false;
+
+/** 取景階段的標題與提示。後鏡頭時看螢幕的是幫忙拍的人，前鏡頭時是本人。 */
+function renderAimCopy() {
+  const selfie = cameraFacing === 'user';
+  $('#aim-pre').textContent = !selfie && displayName ? '幫 ' : '';
+  $('#aim-post').textContent = selfie ? '自拍一張全身照' : '拍一張全身照';
+  // 以下皆為固定字串，沒有使用者輸入，可以直接寫 innerHTML
+  $('#tip-who').innerHTML = selfie
+    ? '<b>把手機立好</b>　靠在桌上或牆邊，你退後 2–3 公尺'
+    : '<b>找人幫你拍</b>　手機交給旁邊的人，你退後 2–3 公尺';
+  let solo;
+  if (!canFlipCamera) solo = '不方便當場拍的話，也可以 <b>從相簿選一張全身照</b>。';
+  else if (selfie) solo = '有人能幫忙的話，按取景框右上角的鍵切回 <b>後鏡頭</b>，畫質比較好。';
+  else solo = '只有自己一個人的話，按取景框右上角的鍵改用 <b>前鏡頭自拍</b>，或 <b>從相簿選一張全身照</b>。';
+  $('#note-solo').innerHTML = solo;
+}
+
+/** 權限取得之後 enumerateDevices 才會列出全部鏡頭，因此在相機開成功後才呼叫 */
+async function updateFlipAvailability() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    canFlipCamera = devices.filter((d) => d.kind === 'videoinput').length >= 2;
+  } catch {
+    canFlipCamera = false;
+  }
+  $('#btn-flip').hidden = !canFlipCamera;
+  renderAimCopy();
+}
+
 /** 開啟相機並回到取景階段。重拍會再次呼叫，因此不能寫在事件處理器裡。 */
 async function openCamera() {
   stopScanStream();
@@ -614,20 +673,32 @@ async function openCamera() {
   // 上一次若是相機失敗，取景框被藏起來了，重試時要收回來
   $('.scan-stage')?.classList.remove('is-empty', 'shutter', 'is-result', 'is-pixel');
   showScanPhase('aim');
+  const seq = cameraOpenSeq;
   try {
     // 兩軸都要 1280 而不是指定 720×1280：後者等於向瀏覽器要一個 9:16 的
     // 直式串流，但筆電鏡頭是橫式且感光元件不會轉向，瀏覽器只能從中央裁掉
     // 大半的左右視野再放大 —— 而那正是要把一個人塞進畫面所需要的視野。
     // 兩軸同值讀作「給我最接近這個大小的原生模式」，不暗示任何方向，
     // 筆電拿到完整的 16:9、手機拿到完整的直式，兩邊都是最大視野。
-    scanStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 1280 } },
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: cameraFacing, width: { ideal: 1280 }, height: { ideal: 1280 } },
       audio: false,
     });
+    // 等待期間又開了一次、或已經離開掃描頁：這條串流沒有人要了，立刻關掉
+    if (seq !== cameraOpenSeq) {
+      for (const track of stream.getTracks()) track.stop();
+      return false;
+    }
+    scanStream = stream;
     $('#scan-video').srcObject = scanStream;
     startPreviewLoop();
+    updateFlipAvailability();
     return true;
   } catch (err) {
+    // 已被後來的那一次取代：失敗畫面由後來那一次決定，這裡不要蓋上去
+    if (seq !== cameraOpenSeq) return false;
+    // 切到前鏡頭才失敗的話，重試要回到後鏡頭，否則「重新嘗試」會一直撞同一顆
+    cameraFacing = 'environment';
     // 不直接踢回捏臉：使用者可能只是誤按拒絕，或想去設定裡開啟。
     // 捏臉仍在，但那是「他選的」而不是「系統替他決定的」。
     const denied = err?.name === 'NotAllowedError';
@@ -643,6 +714,11 @@ async function openCamera() {
 }
 
 $('#btn-scan-back').addEventListener('click', () => fallbackToBuilder(null));
+$('#btn-flip').addEventListener('click', () => {
+  if (counting) return;   // 倒數中換鏡頭，拍下來的會是另一個方向
+  cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
+  openCamera();
+});
 // 捏臉頁的反向切換。名字在命名頁就存好了，直接走同一個入口
 $('#btn-to-scan').addEventListener('click', () => $('#btn-scan').click());
 
@@ -725,6 +801,7 @@ $('#btn-capture').addEventListener('click', async () => {
   countdownCancelled = false;
   display.hidden = false;
   $('#btn-scan-back').disabled = true;
+  $('#btn-flip').disabled = true;
 
   for (let i = 5; i > 0; i--) {
     display.textContent = i;
@@ -741,6 +818,7 @@ $('#btn-capture').addEventListener('click', async () => {
   display.classList.remove('tick');
   counting = false;
   $('#btn-scan-back').disabled = false;
+  $('#btn-flip').disabled = false;
   btn.textContent = '拍照';
 
   if (countdownCancelled) {
@@ -797,6 +875,27 @@ function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85) {
   return canvas.toDataURL('image/jpeg', quality);
 }
 
+/**
+ * 每 2 秒問一次自己排第幾，結果交給 onQueue（null 代表已經在生成）。
+ *
+ * 查不到（照片還在上傳、舊版伺服器沒有這個端點、網路抖一下）就維持原狀，
+ * 不當成錯誤 —— 這只是顯示用的，生成結果仍以 /api/generate 的回應為準。
+ */
+function pollQueue(ticket, onQueue) {
+  let stopped = false;
+  const poll = async () => {
+    try {
+      const res = await fetch(`/api/generate/status?ticket=${ticket}`);
+      const s = await res.json();
+      if (stopped || !s?.ok) return;
+      onQueue(s.state === 'queued' ? { ahead: s.ahead, etaSec: s.etaSec } : null);
+    } catch { /* 略 */ }
+  };
+  const timer = setInterval(poll, 2000);
+  setTimeout(poll, 600);   // 第一次稍等一下，讓照片先上傳完、排進隊伍
+  return () => { stopped = true; clearInterval(timer); };
+}
+
 /** 送出照片並走完生成流程。相機與上傳共用。 */
 async function submitScanImage(image) {
   // 凍結送出的那張照片留在取景框裡 —— 等待的 25 秒有東西可看，
@@ -808,13 +907,18 @@ async function submitScanImage(image) {
   showScanPhase('working');
   startPersonaDuringScan();
 
-  const stopProgress = startScanProgress();
+  const progress = startScanProgress();
+  // 號碼牌：生成請求會一直掛著等結果，排第幾要另外問。
+  const ticket = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+    (b) => b.toString(16).padStart(2, '0')).join('');
+  const stopPolling = pollQueue(ticket, progress.setQueue);
+  const stopProgress = () => { stopPolling(); progress.stop(); };
 
   let body;
   try {
     const res = await fetch('/api/generate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Gen-Ticket': ticket },
       // sessionId：取景期間跨影格量到的身高比快門那一瞬間的單張估計可信，
       // 後端會優先採用它。相簿上傳沒有取景階段，因此是 null。
       // styleId：選單沒載入時是 null，後端會退回活動層級的預設風格。
@@ -890,13 +994,15 @@ function showScanFailure(message, hint = '', opts = {}) {
 
 /** 後端回報的錯誤碼 → 看得懂的說明 */
 const SCAN_ERRORS = {
-  too_busy: '現在同時生成的人太多。',
+  too_busy: '排隊的人太多了。',
   rate_limited: '太快連續拍照了，稍等一下。',
   photo_too_large: '照片檔案太大。',
   generation_timeout: '生成等太久逾時了。',
   vision_service_unavailable: '生成服務連不上。',
   imagegen_unavailable: '生成服務尚未就緒。',
   circuit_open: '生成服務暫時過載。',
+  // 402：等一下不會好，要有人去儲值。寫明「通知工作人員」，現場才不會一直重拍
+  insufficient_credits: '生成額度用完了，請通知工作人員。',
   no_person: '照片裡沒有偵測到人。',
 };
 
@@ -905,13 +1011,21 @@ const SCAN_ERRORS = {
  *
  * 後端沒有回報真實進度，這裡是依實測耗時（約 25 秒）推進的估計值，
  * 因此刻意在 92% 前停住 —— 進度條先滿了卻還沒好，比沒有進度條更糟。
+ *
+ * 人多時會先排隊（server/generateQueue.js）。排隊期間進度條不動、改顯示
+ * 前面還有幾人；輪到時才從頭開始跑那 25 秒。排隊時照樣跑「約需 25 秒」
+ * 的話，排第 20 位的人會看著進度條停在 92% 好幾分鐘，以為系統壞了。
+ *
+ * @returns {{stop: () => void, setQueue: (q: {ahead: number, etaSec: number}|null) => void}}
  */
 function startScanProgress() {
   const STEPS = [
     [0, '正在分析服裝特徵…'],
     [22, '正在辨識臉部特徵…'],
-    [45, 'AI 正在挑選樂高積木…'],
-    [68, '積木拼裝與上色中…'],
+    // 不提任何特定風格：參與者可能選了像素或皮克斯，寫「樂高積木」
+    // 會讓人以為自己的選擇沒被採用。
+    [45, 'AI 正在畫出你的角色…'],
+    [68, '上色與細節修飾中…'],
     [86, '即將完成，準備登場…'],
   ];
   // 等待時的提示。每一則的通關路徑上都有「跟另一個人講話」這一步 ——
@@ -931,24 +1045,36 @@ function startScanProgress() {
   const elapsedEl = $('#scan-elapsed');
   const tipEl = $('#scan-tip');
   const tipTextEl = $('#scan-tip-text');
-  const t0 = Date.now();
+  const tStart = Date.now();   // 提示輪播用，排隊也算在內
+  let t0 = Date.now();         // 生成進度用，輪到時重設
+  /** @type {{ahead: number, etaSec: number}|null} */
+  let queue = null;
 
   // 從隨機一則開始，否則現場一整排手機會顯示同一句，看起來像罐頭
   let tipIndex = Math.floor(Math.random() * TIPS.length);
   let lastTipAt = 0;
 
   const tick = setInterval(() => {
-    const sec = (Date.now() - t0) / 1000;
-    const pct = Math.min(92, (sec / 25) * 100);
-    bar.style.width = `${pct}%`;
-    const step = STEPS.filter(([p]) => pct >= p).at(-1);
-    if (step) statusEl.textContent = step[1];
-    elapsedEl.textContent = sec < 30
-      ? `已等待 ${Math.floor(sec)} 秒　約需 25 秒`
-      : `已等待 ${Math.floor(sec)} 秒　比平常久一些，請再等等`;
+    if (queue) {
+      bar.style.width = '0%';
+      statusEl.textContent = queue.ahead === 0
+        ? '排隊中，下一個就是你'
+        : `排隊中，前面還有 ${queue.ahead} 人`;
+      elapsedEl.textContent = `預計約 ${Math.max(5, queue.etaSec)} 秒後開始生成`;
+    } else {
+      const sec = (Date.now() - t0) / 1000;
+      const pct = Math.min(92, (sec / 25) * 100);
+      bar.style.width = `${pct}%`;
+      const step = STEPS.filter(([p]) => pct >= p).at(-1);
+      if (step) statusEl.textContent = step[1];
+      elapsedEl.textContent = sec < 30
+        ? `已等待 ${Math.floor(sec)} 秒　約需 25 秒`
+        : `已等待 ${Math.floor(sec)} 秒　比平常久一些，請再等等`;
+    }
 
     // 3 秒後才出現：太早跳出來會蓋過「正在分析服裝特徵」那句，
     // 讓人以為系統要他做什麼才會繼續。之後每 6 秒換一則。
+    const sec = (Date.now() - tStart) / 1000;
     // 問卷在作答時不出提示：兩個都要人看，疊在一起反而都不看
     if (!personaScanActive && sec >= 3 && sec - lastTipAt >= (lastTipAt === 0 ? 0 : 6)) {
       if (tipEl) tipEl.hidden = false;
@@ -958,11 +1084,17 @@ function startScanProgress() {
     }
   }, 250);
 
-  return () => {
-    clearInterval(tick);
-    bar.style.width = '100%';
-    // 收起提示，否則它會殘留到「確認角色」那一頁
-    if (tipEl) tipEl.hidden = true;
+  return {
+    stop() {
+      clearInterval(tick);
+      bar.style.width = '100%';
+      // 收起提示，否則它會殘留到「確認角色」那一頁
+      if (tipEl) tipEl.hidden = true;
+    },
+    setQueue(next) {
+      if (queue && !next) t0 = Date.now();   // 剛輪到：生成的 25 秒從現在開始算
+      queue = next;
+    },
   };
 }
 
@@ -1061,12 +1193,30 @@ $('#btn-new-character').addEventListener('click', () => {
   // 一定要清掉憑證：帶著舊憑證進場，伺服器會認領回舊角色、
   // 沿用舊的外觀，新拍的照片等於白拍
   try {
+    retireOldCharacter(localStorage.getItem(LS.userId), localStorage.getItem(LS.rejoinToken));
     localStorage.removeItem(LS.userId);
     localStorage.removeItem(LS.rejoinToken);
   } catch { /* 略 */ }
   showScreen('entry');
   syncStartButton();
 });
+
+/**
+ * 請舊角色離場。只清掉手機上的憑證的話，舊角色會以離線狀態在大螢幕上多站
+ * 45 秒、佔一個名額，新角色進場後場上還會同時有兩個同名的人。
+ *
+ * 這時還沒進場、沒有連線，所以開一條臨時連線送完就關。失敗不用處理 ——
+ * 最壞情況就是舊角色照原本的 45 秒回收。
+ */
+function retireOldCharacter(userId, rejoinToken) {
+  if (!userId || !rejoinToken) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const sock = new WebSocket(`${proto}//${location.host}`);
+  sock.addEventListener('open', () => {
+    sock.send(JSON.stringify({ type: EV.CLIENT_RETIRE, userId, rejoinToken }));
+    sock.close();
+  });
+}
 
 // ─────────────────────────────────────────────────────────────
 // WebSocket 連線

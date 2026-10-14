@@ -22,29 +22,79 @@ class StyleRegistryTests(unittest.TestCase):
         self.assertEqual(get_style("lego").style_id, "lego")
         self.assertEqual(get_style("pixar").style_id, "pixar")
         self.assertEqual(get_style("pixel").style_id, "pixel")
-        self.assertEqual({s["id"] for s in list_styles()}, {"lego", "pixar", "pixel"},
+        self.assertEqual({s["id"] for s in list_styles()}, {"pixel"},
                          "可選的風格清單變了 —— 手機端選單直接吃這一份")
 
     def test_unknown_style_falls_back_on_the_generation_path(self):
         """生成路徑刻意寬容：現場不該因為一個字串錯掉就生不出角色。"""
-        self.assertEqual(get_style("future-style").style_id, "lego")
+        self.assertEqual(get_style("future-style").style_id, "pixel")
         with patch.dict(os.environ, {"CHARACTER_STYLE": "future-style"}):
-            self.assertEqual(get_event_style_id(), "lego")
+            self.assertEqual(get_event_style_id(), "pixel")
 
     def test_api_boundary_can_tell_unknown_from_known(self):
         """但邊界要分得出來，否則手機端送錯風格會拿到樂高卻以為選到別的。"""
-        self.assertTrue(has_style("pixar"))
+        self.assertTrue(has_style("pixel"))
         self.assertFalse(has_style("future-style"))
         self.assertFalse(has_style(None))
         self.assertFalse(has_style(123))
 
+    @patch.dict(os.environ, {"ENABLED_STYLES": "lego,pixar,pixel"})
     def test_resolve_prefers_the_request_then_the_event_default(self):
         self.assertEqual(resolve_style_id("pixar"), "pixar")
         self.assertEqual(resolve_style_id("PIXAR  "), "pixar", "大小寫與空白不該讓選擇失效")
-        self.assertEqual(resolve_style_id(None), "lego")
-        self.assertEqual(resolve_style_id("future-style"), "lego")
+        self.assertEqual(resolve_style_id(None), "pixel")
+        self.assertEqual(resolve_style_id("future-style"), "pixel")
         with patch.dict(os.environ, {"CHARACTER_STYLE": "pixar"}):
             self.assertEqual(resolve_style_id(None), "pixar")
+
+
+class AspectGateTests(unittest.TestCase):
+    """寬高比上限跟著風格走：像素有，樂高不能有（爪手讓正常人偶就有 0.6）。"""
+
+    def test_pixel_has_a_width_gate_between_normal_and_two_figures(self):
+        gate = get_style("pixel").max_aspect
+        self.assertIsNotNone(gate)
+        self.assertTrue(0.49 < gate < 0.62, "正常像素人偶最寬 0.49，多畫半個人 0.62")
+
+    def test_lego_has_no_width_gate(self):
+        self.assertIsNone(get_style("lego").max_aspect)
+
+
+class DisabledStyleTests(unittest.TestCase):
+    """2026-10-14 起只做像素：樂高與皮克斯留在註冊表，但選不到。
+
+    選得到的話，手機選單會出現它們，而且預設（原本是樂高）會讓沒選的人
+    全部生成樂高 —— 生成不會失敗，只是整場的畫風不對。
+    """
+
+    def test_disabled_styles_are_registered_but_not_selectable(self):
+        for sid in ("lego", "pixar"):
+            self.assertEqual(get_style(sid).style_id, sid, "程式碼要留著，日後可重新開放")
+            self.assertIn(sid, {s["id"] for s in list_all_styles()})
+            self.assertNotIn(sid, {s["id"] for s in list_styles()}, "不能出現在手機選單")
+            self.assertFalse(has_style(sid))
+            self.assertEqual(resolve_style_id(sid), "pixel", "手機送舊的風格 id 也要退回像素")
+
+    def test_event_default_cannot_point_at_a_disabled_style(self):
+        with patch.dict(os.environ, {"CHARACTER_STYLE": "lego"}):
+            self.assertEqual(get_event_style_id(), "pixel")
+
+    def test_disabled_style_is_not_reported_as_pending(self):
+        """停用與「參考圖還沒備好」必須分得出來 —— 後者是進行中的工作。"""
+        rows = {s["id"]: s for s in list_all_styles()}
+        self.assertTrue(rows["lego"]["ready"])
+        self.assertTrue(rows["pixar"]["ready"])
+
+    def test_fallback_never_lands_on_a_disabled_style(self):
+        with patch.dict(os.environ, {"ENABLED_STYLES": "lego"}):
+            self.assertEqual(resolve_style_id(None), "lego")
+            self.assertEqual(resolve_style_id("pixel"), "lego")
+            self.assertEqual(get_style("future-style").style_id, "lego")
+
+    def test_env_reopens_them_without_code_changes(self):
+        with patch.dict(os.environ, {"ENABLED_STYLES": "lego,pixar,pixel"}):
+            self.assertEqual({s["id"] for s in list_styles()}, {"lego", "pixar", "pixel"})
+            self.assertEqual(resolve_style_id("lego"), "lego")
 
 
 class SingleRegistryInstanceTests(unittest.TestCase):
@@ -67,11 +117,11 @@ class SingleRegistryInstanceTests(unittest.TestCase):
     def test_both_import_paths_share_the_registered_styles(self):
         import style_registry as via_bare
         self.assertEqual(
-            {s["id"] for s in via_bare.list_styles()},
+            {s["id"] for s in via_bare.list_all_styles()},
             {"lego", "pixar", "pixel"},
             "bare import 看不到已註冊的風格 —— 註冊表被拆成兩份了",
         )
-        self.assertEqual(via_bare.resolve_style_id("pixar"), "pixar")
+        self.assertEqual(via_bare.resolve_style_id("pixel"), "pixel")
 
 
 class StyleAssetsTests(unittest.TestCase):
@@ -159,9 +209,9 @@ class PendingStyleTests(unittest.TestCase):
         self.assertEqual(get_style(self.PROBE_ID).style_id, self.PROBE_ID, "線要是接著的")
         self.assertFalse(get_style(self.PROBE_ID).ready)
         self.assertFalse(has_style(self.PROBE_ID), "API 邊界要擋掉")
-        self.assertEqual(resolve_style_id(self.PROBE_ID), "lego")
+        self.assertEqual(resolve_style_id(self.PROBE_ID), "pixel")
         with patch.dict(os.environ, {"CHARACTER_STYLE": self.PROBE_ID}):
-            self.assertEqual(get_event_style_id(), "lego",
+            self.assertEqual(get_event_style_id(), "pixel",
                              "活動預設也不能指到還沒備妥的風格")
 
     def test_pending_style_is_absent_from_the_phone_menu(self):
