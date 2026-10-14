@@ -64,8 +64,22 @@ export function captureIndicators(features) {
  * @param {object} features
  * @param {string} readyText 全部就緒時要顯示的話 —— 兩個入口的操作方式不同
  *   （鍵盤 Enter vs 觸控自動倒數），只有這一句需要各自決定。
+ * @param {{mirrored?: boolean}} [opts] 預覽是否鏡像顯示（前鏡頭自拍）。
+ *   偵測結果是原始影像的左右；預覽一鏡像，「畫面左側」在螢幕上就成了右側，
+ *   因此提到畫面左右的句子要對調。「左腳／右腳」是身體的左右，不受鏡像影響。
  */
-export function captureGuidanceText(features, readyText = '✓ 全身已入鏡') {
+export function captureGuidanceText(features, readyText = '✓ 全身已入鏡', { mirrored = false } = {}) {
+  const text = guidanceText(features, readyText);
+  return mirrored ? swapScreenSides(text) : text;
+}
+
+/** 只對調「畫面左／右（緣、側）」，不碰「左腳／右腳」 */
+function swapScreenSides(text) {
+  return text.replace(/畫面(左|右)/g, (_, side) => `畫面${side === '左' ? '右' : '左'}`)
+    .replace(/身體偏(左|右)/g, (_, side) => `身體偏${side === '左' ? '右' : '左'}`);
+}
+
+function guidanceText(features, readyText) {
   const reason = features?.guidance_reason || 'person_not_detected';
   const quality = features?.capture_quality || {};
 
@@ -91,23 +105,25 @@ export function captureGuidanceText(features, readyText = '✓ 全身已入鏡')
     const edges = quality.clipped_edges || [];
     if (edges.includes('bottom')) return '腳太靠近畫面底部，請稍微後退';
     if (edges.includes('top')) return '頭頂被裁切，請稍微後退';
-    // edges 是原始影像的左右，而預覽與送出的影像都沒有鏡像，所以就是螢幕上看到的左右。
+    // edges 是原始影像的左右。後鏡頭的預覽沒有鏡像，就是螢幕上看到的左右；
+    // 前鏡頭自拍的預覽是鏡像的，由 captureGuidanceText 的 mirrored 對調。
     // 不說「往左／往右移」：後鏡頭時被拍的人面對鏡頭，他的左右與畫面相反，
-    // 只講方向，不管寫哪一邊都有人會走反。指向人形中央，兩個人都看得懂。
-    if (edges.includes('left')) return '身體碰到畫面左緣，請往人形中央靠';
-    if (edges.includes('right')) return '身體碰到畫面右緣，請往人形中央靠';
+    // 只講方向，不管寫哪一邊都有人會走反。指向畫面中央，兩個人都看得懂。
+    // （取景框不再畫人形輔助線，所以一律以「畫面」為準。）
+    if (edges.includes('left')) return '身體碰到畫面左緣，請往畫面中央靠';
+    if (edges.includes('right')) return '身體碰到畫面右緣，請往畫面中央靠';
     return '身體碰到畫面邊緣，請稍微後退';
   }
   if (reason === 'align_with_guide') {
     const issues = quality.alignment_issues || [];
     if (issues.includes('move_screen_left')) return '身體偏右，請往畫面左側移動';
     if (issues.includes('move_screen_right')) return '身體偏左，請往畫面右側移動';
-    if (issues.includes('feet_too_high')) return '雙腳位置太高，請向前一步對齊人形腳部';
+    if (issues.includes('feet_too_high')) return '雙腳位置太高，請向前一步';
     if (issues.includes('feet_too_low')) return '雙腳太靠近底部，請稍微後退';
     if (issues.includes('shoulders_too_high')) return '肩膀位置太高，請稍微後退';
-    if (issues.includes('shoulders_too_low')) return '請讓肩膀對齊人形肩線';
+    if (issues.includes('shoulders_too_low')) return '人有點小，請向前一步';
     if (issues.includes('face_camera')) return '請面向鏡頭並自然站直';
-    return '請讓肩膀、髖部與雙腳對齊人形';
+    return '請站在畫面中央，讓全身與雙腳入鏡';
   }
   if (reason === 'pose_incomplete') {
     const labels = {
@@ -118,7 +134,7 @@ export function captureGuidanceText(features, readyText = '✓ 全身已入鏡')
     const joints = (quality.low_visibility_joints || []).map((item) => labels[item] || item);
     return joints.length ? `${joints.join('、')}辨識不穩，請面向鏡頭` : '肢體偵測不完整，請面向鏡頭';
   }
-  if (reason === 'move_inside_guide') return '請將身體移到人形中央';
+  if (reason === 'move_inside_guide') return '請將身體移到畫面中央';
   if (reason === 'show_full_body') return '請保持全身與雙腳入鏡';
   return '尚未偵測到人物';
 }

@@ -64,6 +64,8 @@
     <div class="flow-head">
       <h1>拍照生成</h1>
       <span class="sub" id="scan-step-label">1 / 3　拍照</span>
+      <!-- 回命名畫面。捏臉備援仍在：命名畫面的「改用捏臉」與生成失敗頁的「改用捏臉」 -->
+      <button class="btn-link" id="btn-scan-back" type="button">回前一頁</button>
     </div>
     <div class="steps" id="scan-steps">
       <i class="on"></i><i></i><i></i>
@@ -74,20 +76,19 @@
       <div class="scan-stage">
         <video id="scan-video" playsinline muted autoplay></video>
         <img id="scan-result" alt="生成的角色" hidden>
-        <!-- 人形輔助線：站到剛好填滿輪廓，全身就會入鏡 -->
-        <svg id="scan-guide" viewBox="0 0 90 160" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-          <g fill="none" stroke="rgba(255,255,255,.55)" stroke-width="2"
-             stroke-linecap="round" stroke-dasharray="5 4">
-            <circle cx="45" cy="26" r="13"/>
-            <path d="M45 39 v46"/>
-            <path d="M24 54 L45 45 L66 54"/>
-            <path d="M45 85 L31 132 M45 85 L59 132"/>
-          </g>
-        </svg>
+        <!-- 原本這裡有一個虛線人形輔助線，已拿掉：站位改由下方的站位引導文字即時告知，
+             全部通過時取景框外框轉綠（.is-ready）。 -->
         <div id="countdown-display" hidden></div>
         <!-- 切換前後鏡頭。預設後鏡頭：拍全身要站到 2–3 公尺外，一定得有人拿著手機，
              而「請旁邊的人幫我拍」正好是進場的第一次交談。只有自己一個人時，
              才切到前鏡頭把手機立起來自拍。只有一顆鏡頭的裝置（筆電）不顯示。 -->
+        <!-- 鏡頭縮放：快捷鍵＋雙指捏合（app.js 的 setZoom）。只能放大，回不到比 1× 更廣 ——
+             網頁切不到手機的超廣角鏡頭 -->
+        <div class="zoom-pick" id="zoom-pick" role="group" aria-label="鏡頭縮放" hidden>
+          <button type="button" data-zoom="1" aria-pressed="true">1×</button>
+          <button type="button" data-zoom="1.5" aria-pressed="false">1.5×</button>
+          <button type="button" data-zoom="2" aria-pressed="false">2×</button>
+        </div>
         <button class="btn-flip" id="btn-flip" type="button" hidden
                 aria-label="切換前後鏡頭">
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none"
@@ -107,35 +108,20 @@
           <!-- 標題隨鏡頭改寫（見 app.js 的 renderAimCopy）：後鏡頭時看螢幕的是
                幫忙拍的人，前鏡頭時是本人。 -->
           <h1><span id="aim-pre">幫</span><span class="who-name" id="aim-name"></span><span id="aim-post">拍一張全身照</span></h1>
-          <!-- 風格名稱由 /api/styles 填入。寫死其中一種，另一種模式下就成了假訊息，
-               與操控提示不寫死 IDLE_MOTION 是同一個理由。 -->
-          <p class="lede" id="aim-lede">照片會被轉譯成你的角色。</p>
           <!-- 只有兩種以上風格可選時才顯示（見 app.js 的 loadStyles） -->
           <div class="style-pick" id="style-pick" hidden>
             <p class="style-pick-label">生成風格</p>
             <div class="style-pick-options" id="style-pick-options"
                  role="radiogroup" aria-label="生成風格"></div>
           </div>
-          <ol class="tips">
-            <li id="tip-who"><b>找人幫你拍</b>　手機交給旁邊的人，你退後 2–3 公尺</li>
-            <li><b>光線充足</b>　背光或太暗會認不出服裝</li>
-            <li><b>單人入鏡</b>　背景乾淨一點更好</li>
-          </ol>
           <!-- 站位引導：輔助線說明「該站成什麼樣」，這裡說明「現在站對了沒有」 -->
           <p class="aim-guide" id="aim-guide"></p>
           <ul class="aim-lights" id="aim-lights"></ul>
-          <p class="note">
-            按下拍照後會 <b>倒數 5 秒</b>，接著約需 <b>25 秒</b> 生成。
-            生成完成會先讓你看過，不滿意可以重來。
-            <span id="note-solo">只有自己一個人的話，按取景框右上角的鍵改用 <b>前鏡頭自拍</b>，
-            或 <b>從相簿選一張全身照</b>。</span>
-          </p>
+          <!-- 拍攝提示與倒數說明的固定文字已拿掉：手機直拿時它們把取景框擠小、又要捲動才看得完。
+               「現在站對了沒」由上面的站位引導即時回饋，不需要再讀一段說明。 -->
           <div class="foot foot-main">
             <button class="btn-primary" id="btn-capture">拍照</button>
             <button class="btn-ghost" id="btn-upload">從相簿選</button>
-          </div>
-          <div class="foot">
-            <button class="btn-ghost" id="btn-scan-back">改用捏臉</button>
           </div>
         </div>
 
@@ -159,6 +145,8 @@
         <!-- 階段 3：完成，讓本人決定要不要用 -->
         <div class="scan-panel" data-phase="done" hidden>
           <h1>這是 <span class="who-name" id="done-name"></span>的角色</h1>
+          <!-- 問卷的結果：答完不另外停一頁，直接帶到這裡 -->
+          <p class="pq-done" id="done-persona" hidden></p>
           <p class="lede">確認後就會出現在大螢幕上，不滿意可以重拍一次。</p>
           <div class="foot foot-main">
             <button class="btn-primary" id="btn-accept">就是他，進場</button>
@@ -193,7 +181,7 @@
     <div class="flow-head">
       <h1>捏一個你</h1>
       <span class="sub" id="step-label">1 / 3　髮型與膚色</span>
-      <!-- 反方向的切換：拍照頁有「改用捏臉」，這裡對應放「改用拍照」 -->
+      <!-- 改走拍照路徑（拍照頁右上角是「回前一頁」，回命名畫面再選） -->
       <button class="btn-link" id="btn-to-scan" type="button">改用拍照</button>
     </div>
     <div class="steps" id="builder-steps">
@@ -286,13 +274,14 @@
     </button>
 
     <div class="agency-row">
-      <div class="agency" id="agency">推動搖桿即可操控你的角色</div>
+      <div class="agency" id="agency">推動搖桿移動・點別人的角色可以傳訊息</div>
       <!-- 震動開關。iOS 不支援 navigator.vibrate，該裝置上此鍵會隱藏。 -->
       <button class="btn-haptics" id="btn-haptics" hidden
               aria-pressed="false" aria-label="腳步震動">震動</button>
     </div>
 
-    <div id="joystick-zone"><span class="hint">按住並拖曳來移動・點別人的角色可以傳訊息</span></div>
+    <!-- 搖桿區不放說明文字：手機上那行字會被切掉又擋住場景。操作說明在上方的 #agency -->
+    <div id="joystick-zone"></div>
 
     <div id="emotes">
       <button data-action="CHEERS"><em>🍻</em>乾杯</button>

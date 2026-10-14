@@ -429,21 +429,6 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   min-height: 0;
   touch-action: none; /* 必要：否則 iOS 會把推桿手勢解讀為頁面捲動 */
 }
-/* 提示貼在搖桿正上方（搖桿位置見 app.js 的 joystickPosition），
-   不再放在區域正中 —— 那裡現在站著自己的角色。
-   底下是場景畫面，改用實心小牌而非文字光暈，深色牆面上也讀得清楚。 */
-#joystick-zone .hint {
-  position: absolute;
-  left: 50%; bottom: 158px;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  font-size: 12px; color: var(--ink); font-weight: 700; pointer-events: none;
-  background: rgba(247, 241, 227, .92);
-  border: 2px solid var(--ink);
-  border-radius: var(--r-sm);
-  padding: 3px 9px;
-}
-
 /* 畫布現在是場景畫面，搖桿區的虛線框只剩「這一塊可以推」的提示，壓淡 */
 #controller #joystick-zone { border-color: rgba(247, 241, 227, .35); }
 
@@ -873,15 +858,6 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 
 .scan-stage video[hidden],
 .scan-stage img[hidden] { display: none; }
-#scan-guide {
-  position: absolute;
-  inset: 8% 0;
-  width: 100%;
-  height: 84%;
-  pointer-events: none;
-}
-/* SVG 不支援 hidden 屬性，因此用 class 控制（見 app.js 的 showScanPhase） */
-#scan-guide.is-off { display: none; }
 
 #countdown-display {
   position: absolute;
@@ -1226,7 +1202,7 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 
 
 /* ── 站位引導 ─────────────────────────────────────────────
-   人形輔助線只說「該站成什麼樣」，這兩塊說「現在站對了沒有」。 */
+   即時告訴參與者「現在站對了沒有」；全部通過時取景框外框轉綠（.scan-stage.is-ready）。 */
 .aim-guide {
   margin: 10px 0 6px;
   font-size: 14px; font-weight: 700; line-height: 1.4;
@@ -1249,7 +1225,7 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 
 /* 六項全通過時輔助線轉綠：參與者的視線在取景框上，餘光就能判斷，
    不必把視線移到右邊的文字。 */
-.scan-stage.is-ready #scan-guide g { stroke: rgba(80, 220, 130, .95); }
+.scan-stage.is-ready { border-color: #3FAE6A; box-shadow: 0 0 0 3px rgba(63, 174, 106, .45); }
 /* COLOR_HUNT：要找的顏色。放在任務說明下方，是面板上最顯眼的一行 */
 .color-chip {
   display: block;
@@ -1393,7 +1369,6 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   .bar svg { height: 34px; }
   .agency { padding: 6px; }
 
-  #joystick-zone .hint { left: 96px; bottom: 170px; }
 }
 
 /* ── 捏臉與拍照：同一套版面 ──────────────────────────────
@@ -1402,6 +1377,9 @@ canvas.portrait { image-rendering: pixelated; display: block; }
    直式時上下堆疊。主要按鈕列（.foot-main）在操作區捲動時黏在底部，
    內容再長也不會把「拍照」推到畫面外。 */
 .scan-side .foot { background: var(--paper); }
+/* 按鈕的陰影（--drop，往下 4px）會凸出按鈕列。按鈕列貼在可捲動的 .scan-side 最底緣時，
+   凸出去的那段被 overflow 裁掉，看起來像按鈕少了一截。底部留內距把陰影包在裡面 */
+.scan-side .foot { padding-bottom: 8px; }
 .scan-panel > .foot-main {
   position: sticky;
   bottom: 0;
@@ -1525,7 +1503,9 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   color: var(--ink); background: #FFFDF8; border: 2px solid var(--line); border-radius: 12px; cursor: pointer;
 }
 .pq-option:active, .pq-option:hover { border-color: var(--ink); }
-.pq-skip { display: block; margin: 10px 0 0 auto; }
+.pq-foot { display: flex; align-items: center; margin-top: 10px; }
+.pq-foot .btn-link { margin-left: 0; }
+.pq-foot .pq-skip.btn-link { margin-left: auto; }
 .pq-result { text-align: center; }
 .pq-emoji { display: block; font-size: 52px; line-height: 1.1; margin-bottom: 4px; }
 .pq-result h2 { margin: 0 0 6px; font-size: 19px; color: var(--ink); }
@@ -1538,3 +1518,60 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 .msg-blocked p { margin: 0 0 10px; font-size: 14px; color: var(--ink); line-height: 1.6; }
 .msg-blocked button { width: 100%; }
 #msg-field[hidden], #btn-msg-send[hidden] { display: none; }
+.pq-done { margin: 6px 0 4px; padding: 8px 12px; border-radius: 10px; background: var(--wall-tint); font-size: 14px; font-weight: 600; color: var(--ink); line-height: 1.5; }
+.pq-done[hidden] { display: none; }
+
+/* ── 直式（手機直拿）的拍照頁：依階段調整取景框 ──────────────
+   原本三個階段都固定 36dvh（上限 300px）：拍照時人在框裡很小，
+   生成中照片又把問卷擠到畫面外，要自己往下滑。
+   階段由 app.js 的 showScanPhase 寫到 #scan[data-phase]。 */
+@media (max-aspect-ratio: 1/1) {
+  #scan[data-phase="aim"] .scan-stage { height: min(58dvh, 560px); }
+  /* 取景下方只剩標題、站位引導與兩顆按鈕。面板撐滿剩下的高度，
+     「拍照／從相簿選」固定貼在畫面最底部（.foot 的 margin-top: auto） */
+  /* 拍照（第一步）與確認角色（第三步）共用：面板撐滿剩下的高度、按鈕貼底、不用捲動 */
+  #scan[data-phase="aim"] .scan-side,
+  #scan[data-phase="done"] .scan-side { display: flex; flex-direction: column; }
+  #scan[data-phase="aim"] .scan-panel,
+  #scan[data-phase="done"] .scan-panel { flex: 1; margin-block: 0; gap: 14px; }
+  #scan[data-phase="aim"] .scan-panel > .foot,
+  #scan[data-phase="done"] .scan-panel > .foot { margin-top: auto; padding-top: 4px; }
+  #scan[data-phase="aim"] .aim-guide { margin: 2px 0 0; }
+  #scan[data-phase="aim"] .aim-lights { margin: 0; }
+  /* 底部那 8px 陰影內距要從某處讓出來，否則第一步剛好多 3px 要捲 */
+  #scan[data-phase="aim"] .scan-panel > .foot { padding-top: 0; }
+  #scan[data-phase="done"] .scan-stage { height: min(44dvh, 420px); }
+  #scan[data-phase="done"] .pq-done { margin: 0; }
+  #scan[data-phase="done"] .scan-panel > .lede { margin: 0; }
+  /* 問卷作答中：照片縮成小縮圖，標題與等待秒數先收起來，題目一頁看得完 */
+  #scan.quiz-on[data-phase="working"] .scan-stage { height: min(15dvh, 130px); }
+  #scan.quiz-on[data-phase="working"] .scan-panel > h1,
+  #scan.quiz-on #scan-elapsed { display: none; }
+  #scan.quiz-on .scan-panel { gap: 8px; }
+  #scan.quiz-on .persona-quiz { margin-top: 2px; padding: 12px; }
+  #scan.quiz-on .pq-question { font-size: 17px; margin-bottom: 8px; }
+  #scan.quiz-on .pq-options { gap: 6px; }
+  #scan.quiz-on .pq-option { min-height: 44px; padding: 8px 12px; }
+}
+
+/* 取景的數位放大（--zoom，見 app.js 的 setZoom）與前鏡頭自拍的鏡像。
+   以中心放大，與 cropToPortraitJpeg 從中央裁切的範圍一致；鏡像只翻顯示，送出的影像不翻 */
+.scan-stage video { transform: scale(var(--zoom, 1)); transform-origin: center; }
+.scan-stage.is-selfie video { transform: scale(calc(-1 * var(--zoom, 1)), var(--zoom, 1)); }
+/* 雙指捏合要由頁面自己處理，不能讓瀏覽器縮放整頁 */
+.scan-stage { touch-action: none; }
+
+.zoom-pick {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 3;
+  display: flex; gap: 4px; padding: 4px; border-radius: 999px; background: rgba(35, 30, 26, .55);
+}
+.zoom-pick[hidden] { display: none; }
+.zoom-pick button {
+  min-width: 44px; min-height: 36px; padding: 0 10px; border: none; border-radius: 999px;
+  background: transparent; color: #F7F1E3; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+  box-shadow: none;
+}
+.zoom-pick button[aria-pressed="true"] { background: #F7F1E3; color: var(--ink); }
+.zoom-pick button:disabled { opacity: .5; }
+/* 生成中與確認頁看的是定格的照片與角色，不需要縮放 */
+#scan:not([data-phase="aim"]) .zoom-pick { display: none; }

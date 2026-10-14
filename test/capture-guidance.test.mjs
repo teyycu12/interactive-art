@@ -27,10 +27,10 @@ describe('引導文案', () => {
     ['body_clipped', { clipped_edges: ['bottom'] }, '腳太靠近畫面底部，請稍微後退'],
     ['body_clipped', { clipped_edges: ['top'] }, '頭頂被裁切，請稍微後退'],
     // 曾經左右寫反（碰到左緣卻說「碰到右側，請往左移」，照做會被裁得更多）
-    ['body_clipped', { clipped_edges: ['left'] }, '身體碰到畫面左緣，請往人形中央靠'],
-    ['body_clipped', { clipped_edges: ['right'] }, '身體碰到畫面右緣，請往人形中央靠'],
+    ['body_clipped', { clipped_edges: ['left'] }, '身體碰到畫面左緣，請往畫面中央靠'],
+    ['body_clipped', { clipped_edges: ['right'] }, '身體碰到畫面右緣，請往畫面中央靠'],
     ['align_with_guide', { alignment_issues: ['face_camera'] }, '請面向鏡頭並自然站直'],
-    ['move_inside_guide', {}, '請將身體移到人形中央'],
+    ['move_inside_guide', {}, '請將身體移到畫面中央'],
     ['show_full_body', {}, '請保持全身與雙腳入鏡'],
   ];
   for (const [reason, quality, expected] of cases) {
@@ -87,4 +87,25 @@ describe('指示燈', () => {
     assert.equal(heightStationPassed({ foot_baseline_offset: 0.05, height_station_tolerance: 0.10 }), true);
     assert.equal(heightStationPassed({ foot_baseline_offset: 0.20, height_station_tolerance: 0.10 }), false);
   });
+});
+
+test('自拍鏡像時，提到畫面左右的引導會對調，身體的左右腳不變', () => {
+  const left = { guidance_reason: 'align_with_guide', capture_quality: { alignment_issues: ['move_screen_left'] } };
+  assert.equal(captureGuidanceText(left), '身體偏右，請往畫面左側移動');
+  assert.equal(captureGuidanceText(left, undefined, { mirrored: true }), '身體偏左，請往畫面右側移動');
+  const edge = { guidance_reason: 'body_clipped', capture_quality: { clipped_edges: ['right'] } };
+  assert.equal(captureGuidanceText(edge, undefined, { mirrored: true }), '身體碰到畫面左緣，請往畫面中央靠');
+  const foot = { guidance_reason: 'show_feet', capture_quality: { missing_foot_sides: ['left'] } };
+  assert.equal(captureGuidanceText(foot, undefined, { mirrored: true }), captureGuidanceText(foot), '左腳是身體的左，不隨鏡像改變');
+});
+
+test('取景框不再畫人形，引導文字不能再提「人形」', () => {
+  const cases = [
+    { guidance_reason: 'body_clipped', capture_quality: { clipped_edges: ['left'] } },
+    { guidance_reason: 'align_with_guide', capture_quality: { alignment_issues: ['feet_too_high'] } },
+    { guidance_reason: 'align_with_guide', capture_quality: { alignment_issues: ['shoulders_too_low'] } },
+    { guidance_reason: 'align_with_guide', capture_quality: { alignment_issues: [] } },
+    { guidance_reason: 'move_inside_guide' },
+  ];
+  for (const f of cases) assert.doesNotMatch(captureGuidanceText(f), /人形/, JSON.stringify(f));
 });

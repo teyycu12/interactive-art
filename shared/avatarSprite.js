@@ -622,6 +622,9 @@ function cvPixelSprite(avatar, opts = {}) {
  * @returns {Promise<HTMLCanvasElement>}
  */
 export function avatarPortrait(avatar, { dir = 'down', scale = 8 } = {}) {
+  // 拍照角色在場上畫的是生成的原圖（見 avatarImage），肖像也要用同一張、同樣的 enhance ——
+  // 用 cvPixelSprite 縮成兩頭身格子的話，確認頁與縮圖會和大螢幕上的角色長得不一樣
+  if (avatar?.source === 'CV') return cvPortrait(avatar);
   return new Promise((resolve) => {
     const done = (frames) => {
       const c = document.createElement('canvas');
@@ -635,6 +638,16 @@ export function avatarPortrait(avatar, { dir = 'down', scale = 8 } = {}) {
     if (avatar?.source !== 'CV') { done(pixelAvatarImage(avatar).pixelFrames); return; }
     const sprite = cvPixelSprite(avatar, { onReady: () => done(sprite.pixelFrames) });
     setTimeout(() => done(sprite.pixelFrames), 4000);
+  });
+}
+
+/** 拍照角色的肖像：大螢幕同一張正面生成圖（含 enhance）。最多等 4 秒，逾時就用取色替身 */
+function cvPortrait(avatar) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(front); } };
+    const front = cvAvatarImage(avatar, { enhance: true, onPaint: done });
+    setTimeout(done, 4000);
   });
 }
 

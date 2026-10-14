@@ -363,6 +363,11 @@ const SCAN_STEPS = {
 };
 
 function showScanPhase(phase) {
+  if (phase === 'done') renderDonePersona();
+  // 直式版面依階段調整取景框大小（style.css 的 #scan[data-phase]）
+  $('#scan').dataset.phase = phase;
+  // 生成中不給回前一頁：生成還在跑，離開了結果也沒地方放
+  $('#btn-scan-back').hidden = phase === 'working';
   for (const el of document.querySelectorAll('#scan .scan-panel')) {
     el.hidden = el.dataset.phase !== phase;
   }
@@ -387,15 +392,14 @@ function showScanPhase(phase) {
   // 這裡用 class 而不是 .hidden：`hidden` 是 HTMLElement 的屬性，
   // SVGElement 沒有 —— `svg.hidden = true` 會靜默失敗（屬性根本沒設上去，
   // 也不會拋錯），輔助線就一路留在成果圖上面。
-  $('#scan-guide')?.classList.toggle('is-off', phase !== 'aim');
   // 引導只在取景階段有意義；生成中與成果階段畫面已經定格。
   if (phase !== 'aim') stopPreviewLoop();
 }
 
 // ── 站位引導 ──────────────────────────────────────────────
 //
-// 人形輔助線只告訴參與者「該站成什麼樣」，不會告訴他「現在站對了沒有」。
-// 這裡每 250ms 送一張縮圖到 /api/preview，回來的是還差哪一項。
+// 告訴參與者「現在站對了沒有」：每 250ms 送一張縮圖到 /api/preview，回來的是還差哪一項。
+// （取景框原本還有一個虛線人形，已拿掉；引導文字一律以「畫面」為準，不再提人形。）
 // 只跑 CV，不呼叫任何付費 API，因此可以一直跑；錢只花在快門那一次。
 //
 // 送出的影格必須與實際拍攝走同一套裁切（cropToPortraitJpeg 的 9:16），
@@ -426,7 +430,9 @@ function stopPreviewLoop() {
 
 function renderAimGuide(features) {
   const text = $('#aim-guide');
-  if (text) text.textContent = captureGuidanceText(features, '✓ 全身已入鏡，可以按拍照了');
+  if (text) {
+    text.textContent = captureGuidanceText(features, '✓ 全身已入鏡，可以按拍照了', { mirrored: cameraFacing === 'user' });
+  }
   const list = $('#aim-lights');
   if (!list) return;
   list.replaceChildren();
@@ -456,7 +462,7 @@ async function previewTick() {
   previewInFlight = true;
   try {
     const image = cropToPortraitJpeg(video, video.videoWidth, video.videoHeight,
-                                     PREVIEW_MAX_EDGE, 0.6);
+                                     PREVIEW_MAX_EDGE, 0.6, digitalZoom);
     const res = await fetch('/api/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -477,7 +483,7 @@ async function previewTick() {
 
     renderAimGuide(features);
     // 就緒只是「可以按了」的提示，不自動拍 —— 何時按下快門由參與者決定，
-    // 那是這個流程刻意保留的控制權（見拍照鍵的 5 秒倒數）。
+    // 那是這個流程刻意保留的控制權（見拍照鍵的倒數，CAPTURE_COUNTDOWN_SEC）。
     document.querySelector('.scan-stage')
       ?.classList.toggle('is-ready', allCaptureIndicatorsPassed(features));
   } catch {
@@ -576,16 +582,11 @@ async function loadStyles() {
 
 function selectStyle(styleId) {
   selectedStyleId = styleId;
-  let label = '';
   for (const btn of $('#style-pick-options').children) {
     const on = btn.dataset.styleId === styleId;
     btn.classList.toggle('is-on', on);
     btn.setAttribute('aria-checked', String(on));
-    if (on) label = btn.textContent;
   }
-  $('#aim-lede').textContent = label
-    ? `照片會被轉譯成你的${label}角色。`
-    : '照片會被轉譯成你的角色。';
 }
 
 $('#btn-scan').addEventListener('click', async () => {
@@ -621,14 +622,17 @@ $('#btn-scan').addEventListener('click', async () => {
  * 就是會送出的。改動任一邊都要同時改另一邊。
  */
 const SUBMIT_RATIO = 9 / 16;
+/** 按下拍照後倒數幾秒。原本 5 秒，改成 3 秒：站好位之後多等的那兩秒只會讓人動來動去 */
+const CAPTURE_COUNTDOWN_SEC = 3;
 
 /**
  * 目前用哪一顆鏡頭。預設後鏡頭：拍全身得站到 2–3 公尺外，一定要有人拿著手機，
  * 而「請旁邊的人幫我拍」正好是進場的第一次交談（CLAUDE.md 新玩法第 3 條）。
  * 前鏡頭留給只有自己一個人、要把手機立起來自拍的情況。
  *
- * 前鏡頭的預覽刻意**不**鏡像：站位指示（captureGuidanceText 的「往畫面左側移動」）
- * 以送出的原始畫面為準，預覽一翻轉，指示就會跟畫面左右相反。
+ * 前鏡頭的預覽鏡像顯示（像照鏡子，自拍時才找得到自己往哪邊站）；送出的照片仍是原始影像。
+ * 站位指示提到「畫面左右」的句子會依鏡像對調（captureGuidanceText 的 mirrored），
+ * 否則畫面一翻轉，指示就跟眼睛看到的左右相反。
  */
 let cameraFacing = 'environment';
 /** 有兩顆以上鏡頭才顯示切換鍵。筆電只有一顆，facingMode 兩個值拿到的是同一顆。 */
@@ -639,15 +643,6 @@ function renderAimCopy() {
   const selfie = cameraFacing === 'user';
   $('#aim-pre').textContent = !selfie && displayName ? '幫 ' : '';
   $('#aim-post').textContent = selfie ? '自拍一張全身照' : '拍一張全身照';
-  // 以下皆為固定字串，沒有使用者輸入，可以直接寫 innerHTML
-  $('#tip-who').innerHTML = selfie
-    ? '<b>把手機立好</b>　靠在桌上或牆邊，你退後 2–3 公尺'
-    : '<b>找人幫你拍</b>　手機交給旁邊的人，你退後 2–3 公尺';
-  let solo;
-  if (!canFlipCamera) solo = '不方便當場拍的話，也可以 <b>從相簿選一張全身照</b>。';
-  else if (selfie) solo = '有人能幫忙的話，按取景框右上角的鍵切回 <b>後鏡頭</b>，畫質比較好。';
-  else solo = '只有自己一個人的話，按取景框右上角的鍵改用 <b>前鏡頭自拍</b>，或 <b>從相簿選一張全身照</b>。';
-  $('#note-solo').innerHTML = solo;
 }
 
 /** 權限取得之後 enumerateDevices 才會列出全部鏡頭，因此在相機開成功後才呼叫 */
@@ -691,6 +686,9 @@ async function openCamera() {
     }
     scanStream = stream;
     $('#scan-video').srcObject = scanStream;
+    initZoom(stream);
+    // 自拍預覽鏡像（style.css 的 .is-selfie）。只翻顯示，不翻送出的影像
+    $('.scan-stage')?.classList.toggle('is-selfie', cameraFacing === 'user');
     startPreviewLoop();
     updateFlipAvailability();
     return true;
@@ -713,7 +711,12 @@ async function openCamera() {
   }
 }
 
-$('#btn-scan-back').addEventListener('click', () => fallbackToBuilder(null));
+// 右上角「回前一頁」：關掉相機回命名畫面（名字還留著，可以改走捏臉或重新拍照）
+$('#btn-scan-back').addEventListener('click', () => {
+  stopScanStream();
+  stopPersonaDuringScan();
+  showScreen('entry');
+});
 $('#btn-flip').addEventListener('click', () => {
   if (counting) return;   // 倒數中換鏡頭，拍下來的會是另一個方向
   cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
@@ -802,8 +805,9 @@ $('#btn-capture').addEventListener('click', async () => {
   display.hidden = false;
   $('#btn-scan-back').disabled = true;
   $('#btn-flip').disabled = true;
+  setZoomLocked(true);
 
-  for (let i = 5; i > 0; i--) {
+  for (let i = CAPTURE_COUNTDOWN_SEC; i > 0; i--) {
     display.textContent = i;
     // 每一秒重播一次縮放動畫，讓數字有「跳動」感而不是靜止著換數字
     display.classList.remove('tick');
@@ -819,6 +823,7 @@ $('#btn-capture').addEventListener('click', async () => {
   counting = false;
   $('#btn-scan-back').disabled = false;
   $('#btn-flip').disabled = false;
+  setZoomLocked(false);
   btn.textContent = '拍照';
 
   if (countdownCancelled) {
@@ -834,7 +839,7 @@ $('#btn-capture').addEventListener('click', async () => {
   void stage.offsetWidth;
   stage.classList.add('shutter');
 
-  const image = cropToPortraitJpeg(video, video.videoWidth, video.videoHeight);
+  const image = cropToPortraitJpeg(video, video.videoWidth, video.videoHeight, undefined, undefined, digitalZoom);
 
   stopScanStream();
   await submitScanImage(image);
@@ -851,7 +856,7 @@ $('#btn-capture').addEventListener('click', async () => {
  * 理由只有「聚焦人物、少傳無用背景」，而且它砍的是左右、完整保留上下，
  * 所以不會讓全身入不了鏡。取景框上的裁切範圍框畫的就是這一塊。
  */
-function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85) {
+function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85, zoom = 1) {
   const TARGET_RATIO = SUBMIT_RATIO;
   let sx = 0, sy = 0, sw = sw0, sh = sh0;
 
@@ -861,6 +866,13 @@ function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85) {
   } else {
     sh = sw0 / TARGET_RATIO;
     sy = (sh0 - sh) / 2;
+  }
+  // 數位放大：取景框以中心放大（CSS scale），這裡就從同一塊 9:16 的中央再裁一圈 ——
+  // 送出的與站位偵測看到的，都必須是框裡看得到的那一塊
+  if (zoom > 1) {
+    const zw = sw / zoom, zh = sh / zoom;
+    sx += (sw - zw) / 2; sy += (sh - zh) / 2;
+    sw = zw; sh = zh;
   }
 
   // 長邊限制在 maxEdge（拍攝 1280），再大只是讓上傳變慢，生圖模型看到的
@@ -1790,15 +1802,16 @@ function initRenderer() {
 }
 
 /**
- * 搖桿擺在哪裡。原本在搖桿區正中央，而角色也站在那裡 —— 推桿的手指與搖桿
- * 底座正好蓋住自己的臉。改成放在角色下方（直式）或左下角（橫式，右手留給
- * 右側那一欄的表情鍵），兩者都離開角色的上半身。
+ * 搖桿擺在哪裡：直式、橫式都在左下角。
+ * 原本在搖桿區正中央，而角色也站在那裡 —— 推桿的手指與搖桿底座正好蓋住自己的臉。
+ * 直式曾經放在正中間下方，但手機直拿時那仍在畫面正中、擋住角色腳下與前方的路；
+ * 左下角則是左手拇指自然的位置，右手留給表情鍵（直式在下方一排、橫式在右側一欄）。
  */
 const landscapeQuery = matchMedia('(orientation: landscape)');
 function joystickPosition() {
   return landscapeQuery.matches
     ? { left: '96px', top: 'calc(100% - 96px)' }
-    : { left: '50%', top: 'calc(100% - 84px)' };
+    : { left: '84px', top: 'calc(100% - 84px)' };
 }
 // 轉向時重建：nipplejs 的 static 位置在建立時就固定了
 landscapeQuery.addEventListener('change', () => {
@@ -1941,7 +1954,7 @@ setInterval(() => {
   if (fresh && serverMode === 'STAGED') {
     el.textContent = '正在拍大合照，請看大螢幕';
   } else {
-    el.textContent = active ? '你正在操控' : '推動搖桿即可操控你的角色';
+    el.textContent = active ? '你正在操控' : '推動搖桿移動・點別人的角色可以傳訊息';
   }
 }, 200);
 
@@ -2558,7 +2571,7 @@ const personaAnsweredCurrent = () => !!(personaQuiz && personaAnswers?.version =
  * @param {{onFinish: (result: object|null) => void, finishLabel?: string}} opts
  *   onFinish 在按下結果卡的按鈕、或略過時呼叫；略過時 result 為 null
  */
-function runPersonaQuiz(box, { onFinish, finishLabel = '繼續' }) {
+function runPersonaQuiz(box, { onFinish, finishLabel = '繼續', autoFinish = false }) {
   const { quiz, version } = personaQuiz;
   const answers = [];
 
@@ -2586,13 +2599,27 @@ function runPersonaQuiz(box, { onFinish, finishLabel = '繼續' }) {
       });
       list.append(b);
     });
+    const foot = document.createElement('div');
+    foot.className = 'pq-foot';
+    // 上一題：按錯了可以回去改，不必整份略過或答完再重答
+    if (i > 0) {
+      const back = document.createElement('button');
+      back.type = 'button';
+      back.className = 'btn-link pq-back';
+      back.textContent = '← 上一題';
+      back.addEventListener('click', () => { answers.pop(); renderQuestion(); });
+      foot.append(back);
+    }
     const skip = document.createElement('button');
     skip.type = 'button';
     skip.className = 'btn-link pq-skip';
     skip.textContent = '略過問卷';
     skip.addEventListener('click', () => onFinish(null));
-    box.append(head, title, list, skip);
+    foot.append(skip);
+    box.append(head, title, list, foot);
     list.querySelector('button')?.focus({ preventScroll: true });
+    // 小螢幕上問卷可能落在畫面下緣之外：換題時把整份題目捲進畫面
+    box.scrollIntoView({ block: 'nearest' });
   };
 
   const finish = () => {
@@ -2611,6 +2638,13 @@ function runPersonaQuiz(box, { onFinish, finishLabel = '繼續' }) {
     name.textContent = `你是${result.name}（${result.style}）`;
     const strengths = document.createElement('p');
     strengths.textContent = result.strengths;
+    // 拍照路徑不放按鈕：答完直接交給呼叫端（角色好了就進確認頁，還沒好就留著結果陪他等）
+    if (autoFinish) {
+      card.append(emoji, name, strengths);
+      box.append(card);
+      onFinish(result);
+      return;
+    }
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn-primary pq-continue';
@@ -2664,18 +2698,14 @@ function runPersonaInScan(box) {
   personaScanActive = true;
   $('#scan-tip').hidden = true;
   box.hidden = false;
-  box.addEventListener('persona-result', () => {
-    personaScanActive = false;
-    // 角色還在生成：結果卡留著陪他等，按鈕先停用
-    const btn = box.querySelector('.pq-continue');
-    if (btn && !scanReady) { btn.disabled = true; btn.textContent = '角色生成中…'; }
-  }, { once: true });
   runPersonaQuiz(box, {
-    finishLabel: '看我的角色',
-    onFinish: () => {
+    autoFinish: true,
+    onFinish: (result) => {
       personaScanActive = false;
-      box.hidden = true;
-      if (scanReady) showScanPhase('done');
+      // 角色已經好了：直接進確認頁（類型顯示在那一頁）。
+      // 還沒好：結果卡留在這裡陪他等，showScanDone 會自動換頁。略過（result 為 null）就收起來。
+      if (scanReady) { box.hidden = true; showScanPhase('done'); }
+      else if (!result) box.hidden = true;
     },
   });
 }
@@ -2690,12 +2720,7 @@ function showScanDone() {
   scanReady = true;
   const box = $('#persona-scan');
   // 沒有在作答（沒出題、只顯示結果小卡，或已答完在等）就直接換到確認頁
-  if (box.hidden || (!personaScanActive && !box.querySelector('.pq-continue'))) { box.hidden = true; showScanPhase('done'); return; }
-  const btn = box.querySelector('.pq-continue');
-  if (btn) {
-    // 已經在看結果卡：直接讓他按「看我的角色」
-    btn.disabled = false; btn.textContent = '看我的角色';
-  }
+  if (!personaScanActive) { box.hidden = true; showScanPhase('done'); return; }
   $('#scan-status').textContent = '角色已經好了！答完就能看到';
 }
 
@@ -2711,4 +2736,90 @@ async function askPersonaThen(next) {
     finishLabel: '進入現場',
     onFinish: () => { close(); next(); },
   });
+}
+
+/** 確認頁上的類型。只顯示「現在這份題目」答出來的結果 */
+function renderDonePersona() {
+  const el = $('#done-persona');
+  const result = personaAnsweredCurrent() ? PERSONA_RESULT_MAP[personaAnswers.resultId] : null;
+  el.hidden = !result;
+  if (result) el.textContent = `${result.emoji} 你是${result.name}（${result.style}）：${result.strengths}`;
+}
+
+// 問卷出現時，直式版面把生成中的照片縮成小縮圖，讓題目不必捲動就看得完（style.css 的 .quiz-on）
+new MutationObserver(() => {
+  $('#scan').classList.toggle('quiz-on', !$('#persona-scan').hidden);
+}).observe($('#persona-scan'), { attributes: true, attributeFilter: ['hidden'] });
+
+// ─────────────────────────────────────────────────────────────
+// 鏡頭縮放（取景時）
+// ─────────────────────────────────────────────────────────────
+// 支援變焦的鏡頭（多數 Android）用硬體縮放：串流本身就放大了，畫質好，裁切照舊。
+// 不支援的（iPhone 的網頁大多是）用數位放大：取景框以中心 CSS 放大，送出與站位偵測時
+// cropToPortraitJpeg 從中央裁同一塊 —— 框裡看到的就是送出的。
+// 只能放大：網頁切不到超廣角鏡頭，比 1× 更廣做不到。
+
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 3;
+let zoomTrack = null;        // 支援硬體變焦時的那條 video track
+let zoomHw = null;           // 硬體變焦的 {min, max}
+let zoomLevel = 1;           // 目前倍率（相對於 1×）
+let digitalZoom = 1;         // 數位放大倍率；用硬體縮放時恆為 1
+let zoomLocked = false;      // 倒數中不給縮放：拍下來的要是倒數開始時看到的畫面
+
+function initZoom(stream) {
+  zoomTrack = null;
+  zoomHw = null;
+  const track = stream.getVideoTracks()[0];
+  const caps = track?.getCapabilities?.();
+  if (caps?.zoom && caps.zoom.max > caps.zoom.min) {
+    zoomTrack = track;
+    zoomHw = { min: caps.zoom.min, max: caps.zoom.max };
+  }
+  $('#zoom-pick').hidden = false;
+  setZoom(1);
+}
+
+function setZoom(level) {
+  if (zoomLocked) return;
+  zoomLevel = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, level));
+  if (zoomTrack && zoomHw) {
+    // 硬體倍率以鏡頭的最小值為 1×，上限取兩者較小者
+    const hw = Math.min(zoomHw.max, zoomHw.min * zoomLevel);
+    zoomTrack.applyConstraints({ advanced: [{ zoom: hw }] }).catch(() => {});
+    digitalZoom = 1;
+  } else {
+    digitalZoom = zoomLevel;
+  }
+  $('.scan-stage')?.style.setProperty('--zoom', String(digitalZoom));
+  for (const b of $('#zoom-pick').children) {
+    b.setAttribute('aria-pressed', String(Math.abs(Number(b.dataset.zoom) - zoomLevel) < 0.05));
+  }
+}
+
+function setZoomLocked(locked) {
+  zoomLocked = locked;
+  for (const b of $('#zoom-pick').children) b.disabled = locked;
+}
+
+$('#zoom-pick').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-zoom]');
+  if (b) setZoom(Number(b.dataset.zoom));
+});
+
+// 雙指捏合：以開始捏時的倍率為基準，依兩指距離的比例縮放
+{
+  const stageEl = $('.scan-stage');
+  let pinch = null;
+  const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  stageEl.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 2 || $('#scan-video').hidden) return;
+    pinch = { d0: dist(e.touches), z0: zoomLevel };
+  }, { passive: true });
+  stageEl.addEventListener('touchmove', (e) => {
+    if (!pinch || e.touches.length !== 2) return;
+    e.preventDefault();   // 不讓瀏覽器把它當成整頁縮放
+    setZoom(pinch.z0 * (dist(e.touches) / pinch.d0));
+  }, { passive: false });
+  stageEl.addEventListener('touchend', (e) => { if (e.touches.length < 2) pinch = null; });
 }
