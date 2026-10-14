@@ -47,6 +47,12 @@ class GenerationStyle:
     # /health 報出來），但 list_styles()／has_style()／resolve_style_id()
     # 一律當它不存在。圖備齊之後把這一行拿掉就上線。
     ready: bool = True
+    # 人偶外框的寬高比上限（寬 / 高），超過就判為 too_wide。None = 不檢查。
+    #
+    # 必須跟著風格走：樂高的爪手讓正常的人偶就有 0.59–0.61，像素只有 0.35–0.49。
+    # 抓的是模型多畫了東西 —— 實測（2026-10-14）像素有一張在旁邊多畫了半個人，
+    # 兩個人在畫面上連在一起，連通性檢查看到的是單一一塊，照樣通過。
+    max_aspect: Optional[float] = None
 
 
 _STYLES: Dict[str, GenerationStyle] = {}
@@ -121,9 +127,24 @@ def _style_row(style: GenerationStyle) -> Dict[str, str]:
     }
 
 
+def _fallback_style_id() -> str:
+    """認不得的風格最後退回哪裡：DEFAULT_STYLE_ID，除非它被停用了。
+
+    ENABLED_STYLES 沒列像素時，退回像素就等於退回一個被停用的風格 ——
+    手機選單上沒有它，生出來的卻是它。這時改退回第一個啟用中的風格。
+    """
+    ready = _ready_ids()
+    if DEFAULT_STYLE_ID in ready or not ready:
+        return DEFAULT_STYLE_ID
+    return next(sid for sid in _STYLES if sid in ready)
+
+
 def get_style(style_id: str) -> GenerationStyle:
     if style_id in _STYLES:
         return _STYLES[style_id]
+    fallback = _fallback_style_id()
+    if fallback in _STYLES:
+        return _STYLES[fallback]
     if DEFAULT_STYLE_ID not in _STYLES:
         raise RuntimeError(f"default generation style {DEFAULT_STYLE_ID!r} has not been registered")
     return _STYLES[DEFAULT_STYLE_ID]
@@ -131,7 +152,7 @@ def get_style(style_id: str) -> GenerationStyle:
 
 def get_event_style_id() -> str:
     requested = os.environ.get("CHARACTER_STYLE", DEFAULT_STYLE_ID).strip().lower()
-    return requested if requested in _ready_ids() else DEFAULT_STYLE_ID
+    return requested if requested in _ready_ids() else _fallback_style_id()
 
 
 def resolve_style_id(requested: Any) -> str:

@@ -104,10 +104,11 @@ except Exception as _e:
     _PREVIEW = False
 
 try:
-    from style_registry import get_event_style_id, list_styles, resolve_style_id
+    from style_registry import get_event_style_id, get_style, list_styles, resolve_style_id
 except Exception as _e:
     _degraded("style_registry（生成風格註冊表）", _e)
     get_event_style_id = lambda: "pixel"
+    get_style = lambda style_id: None
     list_styles = lambda: []
     resolve_style_id = lambda requested: "pixel"
 
@@ -572,6 +573,7 @@ def _generate():
             return {"passed": False, "errors": [out.get("error", "generation_failed")], "warnings": []}
         return validate_avatar_png(
             out.get("body_png"),
+            max_aspect=getattr(get_style(style_id), "max_aspect", None),
             upper_rgb=(cv_result.get("upper") or {}).get("rgb"),
             lower_rgb=(cv_result.get("lower") or {}).get("rgb"),
         )

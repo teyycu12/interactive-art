@@ -75,6 +75,40 @@ class AvatarValidatorTests(unittest.TestCase):
         self.assertIn("grid lines", correction_for_validation(result))
         self.assertIn("再送出", guidance_for_validation(result))
 
+    def test_too_wide_only_when_the_style_asks(self):
+        """旁邊多畫了半個人、而且連在一起：連通性看到的是一塊，只有寬度露餡。
+
+        門檻跟著風格走（樂高的爪手讓正常人偶就有 0.6），不給就不檢查。
+        """
+        def two_figures(d):
+            _normal(d, color=(40, 40, 40, 255))
+            d.rectangle((150, 30, 190, 185), fill=(40, 40, 40, 255))   # 貼在旁邊的第二個人
+
+        png = _png(two_figures)
+        self.assertNotIn("too_wide", validate_avatar_png(png)["errors"])
+        result = validate_avatar_png(png, max_aspect=0.56)
+        self.assertIn("too_wide", result["errors"], result)
+        self.assertIn("EXACTLY ONE figure", correction_for_validation(result))
+        self.assertIn("再送出", guidance_for_validation(result))
+
+    def test_stray_fragment_does_not_make_a_normal_figure_too_wide(self):
+        def slim_with_speck(d):
+            d.ellipse((80, 10, 120, 50), fill="black")
+            d.rectangle((75, 50, 125, 120), fill="black")
+            d.rectangle((78, 118, 97, 185), fill="black")
+            d.rectangle((103, 118, 122, 185), fill="black")
+            d.rectangle((180, 100, 184, 104), fill="black")   # 遠處一小塊雜點
+        result = validate_avatar_png(_png(slim_with_speck), max_aspect=0.56)
+        self.assertNotIn("too_wide", result["errors"], result)
+
+    def test_normal_figure_is_not_too_wide(self):
+        def slim(d):
+            d.ellipse((80, 10, 120, 50), fill="black")
+            d.rectangle((75, 50, 125, 120), fill="black")
+            d.rectangle((78, 118, 97, 185), fill="black")
+            d.rectangle((103, 118, 122, 185), fill="black")
+        self.assertNotIn("too_wide", validate_avatar_png(_png(slim), max_aspect=0.56)["errors"])
+
     def test_invalid_base64_fails_without_exception(self):
         self.assertEqual(validate_avatar_png("not-a-png")["errors"], ["decode_failed"])
 

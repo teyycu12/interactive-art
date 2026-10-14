@@ -48,6 +48,18 @@ class StyleRegistryTests(unittest.TestCase):
             self.assertEqual(resolve_style_id(None), "pixar")
 
 
+class AspectGateTests(unittest.TestCase):
+    """寬高比上限跟著風格走：像素有，樂高不能有（爪手讓正常人偶就有 0.6）。"""
+
+    def test_pixel_has_a_width_gate_between_normal_and_two_figures(self):
+        gate = get_style("pixel").max_aspect
+        self.assertIsNotNone(gate)
+        self.assertTrue(0.49 < gate < 0.62, "正常像素人偶最寬 0.49，多畫半個人 0.62")
+
+    def test_lego_has_no_width_gate(self):
+        self.assertIsNone(get_style("lego").max_aspect)
+
+
 class DisabledStyleTests(unittest.TestCase):
     """2026-10-14 起只做像素：樂高與皮克斯留在註冊表，但選不到。
 
@@ -72,6 +84,12 @@ class DisabledStyleTests(unittest.TestCase):
         rows = {s["id"]: s for s in list_all_styles()}
         self.assertTrue(rows["lego"]["ready"])
         self.assertTrue(rows["pixar"]["ready"])
+
+    def test_fallback_never_lands_on_a_disabled_style(self):
+        with patch.dict(os.environ, {"ENABLED_STYLES": "lego"}):
+            self.assertEqual(resolve_style_id(None), "lego")
+            self.assertEqual(resolve_style_id("pixel"), "lego")
+            self.assertEqual(get_style("future-style").style_id, "lego")
 
     def test_env_reopens_them_without_code_changes(self):
         with patch.dict(os.environ, {"ENABLED_STYLES": "lego,pixar,pixel"}):

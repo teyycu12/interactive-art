@@ -1360,4 +1360,6 @@ register_style(GenerationStyle(
     reference_set="2026q3_pixel_curated",
     role_style_text=_ROLE_STYLE_PIXEL,
     pose_builder=_canonical_pixel_pose,
+    # 正常輸出 0.35–0.49（16 張），多畫半個人那張 0.62，方格紙背景 1.0
+    max_aspect=0.56,
 ))
