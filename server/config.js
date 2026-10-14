@@ -199,7 +199,7 @@ export const TREASURE = {
    * 場域是 1920×1080，對角線約 2200。最遠一級刻意涵蓋大半個場地，
    * 讓「結冰」真的代表方向錯了，而不是每個人都一直看到結冰。
    */
-  heatThresholds: [70, 220, 480, 900],
+  heatThresholds: TREASURE_HEAT,
 
   /** 藏寶點與場邊的最小距離，避免藏在角色難以貼近的邊角 */
   edgeMargin: 160,
@@ -212,7 +212,7 @@ export const TREASURE = {
    * 先知一句話都還沒說這一輪就結束了（e2e 偶發失敗就是這樣抓到的）。
    * 人多到找不到這麼遠的點時，退而挑「離最近的人最遠」的候選點。
    */
-  minStartDistance: 480,
+  minStartDistance: TREASURE_HEAT[2],
 
   /** 找到寶藏的得分。高於一次配對（20），因為它需要整隊合作 */
   points: 80,

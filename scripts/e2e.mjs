@@ -15,6 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { CLIENT_SYNC_RADIUS, STAGE, MAX_SPEED } from '../shared/protocol.js';
+import { DOORWAYS } from '../shared/scene.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 3199;
@@ -977,6 +978,15 @@ await sleep(300);
   //
   // 這裡改成依起始距離估算所需時間再乘 3 倍餘裕（繞道具、α 爬升、
   // 對齊誤差都會讓實際路徑長於直線），並保留上限避免真的壞掉時無限空轉。
+  //
+  // **隔著牆要先走到門口。** 場景左右各有一道牆，只有門走得過去；藏寶點可能
+  // 落在室外。直直往寶藏推的話會頂在牆上：以伺服器的物理模擬 500 輪，
+  // 同一側 430/430 踩中，隔牆 70 輪只踩中 7 輪 —— 這正是 e2e 約兩成機率
+  // 「未踩中」、一次帶垮四條斷言的原因。先走到門外 60px 再轉向寶藏後 500/500。
+  const doorFor = (me) => DOORWAYS.find((dw) => {
+    const wx = dw.x + dw.w / 2;
+    return (me.x - wx) * (spot.x - wx) < 0;   // 這道牆正好隔在我與寶藏之間
+  });
   {
     const start = live().find((a) => a.id === ben.welcome.userId);
     const startDist = Math.hypot(spot.x - start.x, spot.y - start.y);
@@ -987,8 +997,15 @@ await sleep(300);
     for (; ticks < maxTicks && !ben.treasureFound; ticks++) {
       const me = live().find((a) => a.id === ben.welcome.userId);
       if (!me) break;
-      const dx = spot.x - me.x;
-      const dy = spot.y - me.y;
+      let tx = spot.x;
+      let ty = spot.y;
+      const door = doorFor(me);
+      if (door) {
+        tx = door.x + door.w / 2 + Math.sign(spot.x - me.x) * 60;
+        ty = door.y + door.h / 2;
+      }
+      const dx = tx - me.x;
+      const dy = ty - me.y;
       const d = Math.hypot(dx, dy) || 1;
       nudge(ben, dx / d, dy / d);
       await sleep(40);
