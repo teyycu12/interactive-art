@@ -169,11 +169,17 @@ export const QUIZ = {
  * 「大螢幕顯示題目與符號，手機只按顏色」，任何一端對不上，
  * 參與者就會按錯。這是共用而非各自定義的唯一理由。
  */
+/*
+ * ink 是壓在 color 上的文字顏色，逐一挑對比較高的那個（test/readable-fills.test.mjs 驗證）。
+ * 原本一律白字：C 的黃底只有 1.67:1，四個答案裡有一個在現場燈光下幾乎讀不出來，
+ * 手機全螢幕問答與大螢幕投影都是。不改底色是因為「黃色那格」本身就是參與者
+ * 認選項的依據，大螢幕與口頭說明都靠它。
+ */
 export const QUIZ_CHOICES = [
-  { glyph: '▲', color: '#E76F51', label: 'A' },
-  { glyph: '◆', color: '#457B9D', label: 'B' },
-  { glyph: '●', color: '#E9C46A', label: 'C' },
-  { glyph: '■', color: '#2A8C80', label: 'D' },
+  { glyph: '▲', color: '#E76F51', ink: '#2F2A26', label: 'A' },
+  { glyph: '◆', color: '#457B9D', ink: '#FFFFFF', label: 'B' },
+  { glyph: '●', color: '#E9C46A', ink: '#2F2A26', label: 'C' },
+  { glyph: '■', color: '#2A8C80', ink: '#FFFFFF', label: 'D' },
 ];
 
 /** 問答階段。ASKING 期間正解絕不離開伺服器。 */

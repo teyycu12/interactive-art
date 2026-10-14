@@ -13,12 +13,16 @@
  * 用文字而非距離數字，是因為先知要用「喊」的：
  * 「溫！」比「還有 430」好喊得多，也不會讓參與者去心算座標。
  */
+/*
+ * ink 是壓在 color 上的文字顏色。冷熱字是先知唯一的資訊來源，原本一律白字，
+ * 「冷／溫／熱」三格只有 1.7～2.6:1（test/readable-fills.test.mjs 驗證）。
+ */
 export const HEAT_LEVELS = [
-  { id: 'FREEZING', label: '結冰', glyph: '🧊', color: '#457B9D' },
-  { id: 'COLD',     label: '冷',   glyph: '❄️', color: '#6FA8C7' },
-  { id: 'WARM',     label: '溫',   glyph: '🌤', color: '#E9C46A' },
-  { id: 'HOT',      label: '熱',   glyph: '🔥', color: '#F4845F' },
-  { id: 'BURNING',  label: '燙',   glyph: '🌋', color: '#E63946' },
+  { id: 'FREEZING', label: '結冰', glyph: '🧊', color: '#457B9D', ink: '#FFFFFF' },
+  { id: 'COLD',     label: '冷',   glyph: '❄️', color: '#6FA8C7', ink: '#2F2A26' },
+  { id: 'WARM',     label: '溫',   glyph: '🌤', color: '#E9C46A', ink: '#2F2A26' },
+  { id: 'HOT',      label: '熱',   glyph: '🔥', color: '#F4845F', ink: '#2F2A26' },
+  { id: 'BURNING',  label: '燙',   glyph: '🌋', color: '#E63946', ink: '#FFFFFF' },
 ];
 
 export const HEAT_MAP = Object.fromEntries(HEAT_LEVELS.map((h) => [h.id, h]));
