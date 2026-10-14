@@ -220,3 +220,19 @@ PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 新增家具型別時，`PROP_URLS` 的鍵必須與 `PROPS.type` 全集對齊
 （speaker / table / sofa / lowtable / plant）。
 
+
+### 顯示名稱過濾（server/nameFilter.js）
+
+名稱會投影在大螢幕上，`handleJoin` 在 `sanitizeName` 之後呼叫 `isBlockedName`，
+新入場與同連線改名兩條路徑都擋，回 `CLIENT_REJECT`（手機退回捏臉頁並跳出提示）。
+拒絕訊息刻意**不說是哪個字** —— 說了等於教人怎麼繞。
+
+詞表刻意只擋「明顯的」，兩個方向的錯代價不同：
+
+- **不要加單字「幹」「屌」「靠」**。「幹部」「能幹」「屌打」「靠譜」都是正常用語，
+  誤殺一個就是一位參與者進不了場，而且他不會知道為什麼。
+- **英文短字（ass、dick、sex…）只比整個字**，放進 `CONTAINS` 會擋掉
+  Cassie、Dickson、Essex。`test/name-filter.test.mjs` 兩個方向都有釘。
+
+先比對截斷到 `MAX_NAME_LENGTH` 之後的名稱 —— 擋的是「上螢幕的那幾個字」。
+真的鑽過去的，主辦端仍可 `HOST_KICK`；詞表是第一道，不是唯一一道。
