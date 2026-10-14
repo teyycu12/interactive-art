@@ -31,6 +31,21 @@ describe('顯示名稱過濾', () => {
     }
   });
 
+  test('不誤殺拼音與日文名字（英文髒字不做子字串比對）', () => {
+    for (const name of [
+      'Chen Shi Ting', 'Lin Shi Tao', 'Shi Tao', 'Shiting', 'Fu Kai', 'Fukuda', 'Yoshitaka',
+      'Cun Ting', 'Scunthorpe', 'Hsu Shih-Ting', 'Shitake', 'Pussycat', 'Sussex', 'Cockburn',
+    ]) {
+      assert.equal(isBlockedName(name), false, name);
+    }
+  });
+
+  test('擋下黏在別的字前面的明顯髒話與常見變形', () => {
+    for (const name of ['fuckyou', 'FuckingCool', 'bitchass', 'motherfucker', 'shitty', 'bull shit', 'a55']) {
+      assert.equal(isBlockedName(name), true, name);
+    }
+  });
+
   test('不誤殺含「幹」「屌」「靠」的正常用語與一般名字', () => {
     for (const name of ['幹部小王', '能幹的人', '屌打全場', '靠譜', '阿賓', '小明', 'Amy520', '王小明', '🐱貓貓']) {
       assert.equal(isBlockedName(name), false, name);
