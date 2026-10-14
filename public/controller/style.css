@@ -50,6 +50,13 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* hidden 一律勝出。瀏覽器內建的 [hidden] 只是一條普通的 display:none，
+   任何寫了 display 的 class 都會把它蓋掉 —— 元素設了 .hidden 卻照樣顯示，
+   而且不會有任何錯誤訊息。這個坑在這裡踩過三次（分區標籤的空灰條、配對面板
+   的空色塊、生成服務沒起來時孤零零的「生成風格」標題），下方各處零散的
+   `X[hidden] { display: none }` 都是當時一個一個補的。 */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;
