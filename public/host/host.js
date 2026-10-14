@@ -46,6 +46,9 @@ function connect(key) {
 
   ws.addEventListener('close', () => {
     if (!authed) return;
+    // 送出中斷線：不知道伺服器收到沒有。重連的補送不能當成存檔回覆，
+    // 草稿維持未存，讓主持人自己再按一次
+    personaSaveRejected();
     setConn('連線中斷，重試中…', true);
     setTimeout(() => connect(key), 1500);
   });
@@ -75,6 +78,7 @@ function handle(msg, key) {
       if (!authed) { showAuthError(msg.reason ?? '通行密鑰錯誤'); ws.close(); }
       else {
         undoRunSheetStep();
+        if (lastAction === 'persona') personaSaveRejected();
         showError(msg.reason ?? '操作失敗');
       }
       break;
@@ -1946,10 +1950,25 @@ function renderPersonaSpread(spread) {
 let personaServer = null;   // 伺服器上的題目
 let personaDraft = null;    // 編輯中的草稿
 let personaDirty = false;
+/**
+ * 已送出、還沒等到伺服器回覆。
+ *
+ * 原本按下儲存就把 personaDirty 清掉、按鈕鎖住。伺服器拒絕（例如有選項沒填）時，
+ * 草稿已經不受保護、按鈕也按不了 —— 主持人得隨便改一個字才能重送；這段期間
+ * 任何一則 HOST_PERSONA_QUIZ（另一位主持人存檔、重連補送）都會用伺服器上的舊版
+ * 把草稿蓋掉，而且沒有任何提示。現在等伺服器真的收下（廣播回 HOST_PERSONA_QUIZ）
+ * 才算存好。
+ */
+let personaSaving = false;
 
 function receivePersonaQuiz(view) {
   personaServer = view;
   $('#persona-default-badge').hidden = !view.isDefault;
+  // 伺服器只在接受之後才廣播，所以送出中收到這則就是「存好了」
+  if (personaSaving) {
+    personaSaving = false;
+    personaDirty = false;
+  }
   if (!personaDirty) {
     personaDraft = structuredClone(view.quiz);
     renderPersonaEditor();
@@ -1958,7 +1977,14 @@ function receivePersonaQuiz(view) {
 
 function markPersonaDirty() {
   personaDirty = true;
-  $('#btn-persona-save').disabled = false;
+  if (!personaSaving) $('#btn-persona-save').disabled = false;
+}
+
+/** 伺服器拒絕：草稿仍是未存的，讓主持人改完直接再按一次儲存 */
+function personaSaveRejected() {
+  if (!personaSaving) return;
+  personaSaving = false;
+  $('#btn-persona-save').disabled = !personaDirty;
 }
 
 const TYPE_LABEL = Object.fromEntries(Object.values(PERSONA_TYPES).map((t) => [t.key, `${t.emoji} ${t.name}`]));
@@ -2046,9 +2072,9 @@ $('#btn-persona-add-q').addEventListener('click', () => {
 
 $('#btn-persona-save').addEventListener('click', () => {
   lastAction = 'persona';
-  // 送出後先當作已存；伺服器拒絕時 HOST_REJECT 會把錯誤顯示在面板上，草稿保留讓主持人改
+  // 不先當作已存：等伺服器廣播回 HOST_PERSONA_QUIZ 才清掉 dirty（見 personaSaving）
   ws?.send(JSON.stringify({ type: EV.HOST_SET_PERSONA_QUIZ, quiz: personaDraft }));
-  personaDirty = false;
+  personaSaving = true;
   $('#btn-persona-save').disabled = true;
 });
 
@@ -2056,5 +2082,6 @@ $('#btn-persona-reset').addEventListener('click', () => {
   if (!confirm('確定要恢復成預設題目嗎？目前的修改會消失。')) return;
   lastAction = 'persona';
   personaDirty = false;
+  personaSaving = false;
   ws?.send(JSON.stringify({ type: EV.HOST_SET_PERSONA_QUIZ, quiz: null }));
 });
