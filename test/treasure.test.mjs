@@ -12,7 +12,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TreasureHunt, heatOf } from '../server/treasure.js';
+import { TreasureHunt, heatOf, pickSpot } from '../server/treasure.js';
 import { HEAT_LEVELS, HEAT_MAP, TREASURE_RADIUS } from '../shared/heat.js';
 import { TREASURE } from '../server/config.js';
 import { OBSTACLES, obstacleDistance } from '../shared/scene.js';
@@ -230,5 +230,41 @@ describe('現場會發生的中斷情況', () => {
     const t = new TreasureHunt();
     t.resendHeat();
     assert.equal(t.isActive, false);
+  });
+});
+
+// 原本挑點完全不看人站哪：藏到某人腳邊時開局下一個 tick 就被踩中，
+// 先知一句話都還沒說這一輪就結束了（e2e 約每幾輪偶發失敗一次就是這個）。
+describe('藏寶點避開開局時的人', () => {
+  const nearest = (spot, people) => Math.min(...people.map((p) => Math.hypot(p.x - spot.x, p.y - spot.y)));
+
+  test('人不多時，離每個人都至少 minStartDistance', () => {
+    const people = [{ x: 400, y: 400 }, { x: 1500, y: 700 }];
+    for (let i = 0; i < 200; i++) {
+      assert.ok(nearest(pickSpot(people), people) >= TREASURE.minStartDistance);
+    }
+  });
+
+  test('30 人散滿全場時，至少不會開局就被踩中', () => {
+    // 6×5 格平均散開：找不到離每個人 480 的點，退而求其次
+    const people = [];
+    for (let c = 0; c < 6; c++) for (let r = 0; r < 5; r++) {
+      people.push({ x: 200 + c * 300, y: 150 + r * 200 });
+    }
+    for (let i = 0; i < 200; i++) {
+      assert.ok(nearest(pickSpot(people), people) > TREASURE.claimRadius * 2);
+    }
+  });
+
+  test('start() 帶入位置時，開局的 check() 不會立刻有人找到', () => {
+    for (let i = 0; i < 100; i++) {
+      const agents = agentsOf([['p', 960, 540], ['a', 300, 300], ['b', 1600, 800]]);
+      const t = new TreasureHunt();
+      t.start([...agents.keys()], {
+        prophetId: 'p',
+        avoid: [...agents.values()].map((a) => ({ x: a.x, y: a.y })),
+      });
+      assert.equal(t.check(agents), null);
+    }
   });
 });

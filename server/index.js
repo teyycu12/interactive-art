@@ -1002,6 +1002,7 @@ function handleHostMessage(ws, msg) {
     case EV.HOST_START_TREASURE: {
       const result = treasure.start([...stage.agents.keys()], {
         prophetId: msg.prophetId ?? null,
+        avoid: [...stage.agents.values()].map((a) => ({ x: a.x, y: a.y })),
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       const view = treasure.publicView();
