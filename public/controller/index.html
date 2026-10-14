@@ -137,6 +137,8 @@
             <span class="wait-tip-label">等待中，不如</span>
             <p class="wait-tip-text" id="scan-tip-text"></p>
           </div>
+          <!-- 進場問卷：利用生成的等待時間答幾題，結果用來分組（shared/persona.js） -->
+          <div class="persona-quiz" id="persona-scan" hidden></div>
         </div>
 
         <!-- 階段 3：完成，讓本人決定要不要用 -->
@@ -275,7 +277,7 @@
               aria-pressed="false" aria-label="腳步震動">震動</button>
     </div>
 
-    <div id="joystick-zone"><span class="hint">按住並拖曳來移動</span></div>
+    <div id="joystick-zone"><span class="hint">按住並拖曳來移動・點別人的角色可以傳訊息</span></div>
 
     <div id="emotes">
       <button data-action="CHEERS"><em>🍻</em>乾杯</button>
@@ -352,6 +354,67 @@
     <p class="sheet-msg" id="pair-msg" hidden role="alert" aria-live="assertive"></p>
     <button class="btn-primary" id="btn-pair-submit">送出配對</button>
     <p class="sheet-prog" id="pair-progress">—</p>
+  </div>
+</div>
+
+<!-- ── 私訊：寫給某位參與者 ───────────────────────────────
+     點手機畫面上別人的角色開啟。訊息只有對方看得到，最多 60 字。 -->
+<div class="sheet" id="msg-sheet" hidden>
+  <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="msg-title">
+    <button class="sheet-close" id="btn-msg-close" aria-label="關閉">✕</button>
+    <div class="msg-who">
+      <div class="msg-avatar" id="msg-avatar" aria-hidden="true"></div>
+      <div>
+        <h2 id="msg-title">傳訊息</h2>
+        <p class="sheet-brief">只有對方看得到。約好了就走過去當面聊吧！</p>
+      </div>
+    </div>
+    <!-- 點到自己封鎖過的人：要先解除封鎖才能傳 -->
+    <div class="msg-blocked" id="msg-blocked" hidden>
+      <p id="msg-blocked-text">你已封鎖這個人。解除封鎖後才能傳訊息給他，也會重新收到他的訊息。</p>
+      <button class="btn-ghost" id="btn-msg-unblock">解除封鎖</button>
+    </div>
+    <label class="sheet-field" id="msg-field">
+      <span>訊息 <small id="msg-count">0 / 60</small></span>
+      <textarea id="msg-input" rows="2" autocomplete="off" placeholder="例：我在籃球架旁邊，要不要一起組隊？"></textarea>
+    </label>
+    <p class="sheet-msg" id="msg-error" hidden role="alert" aria-live="assertive"></p>
+    <button class="btn-primary" id="btn-msg-send">送出</button>
+  </div>
+</div>
+
+<!-- 收到私訊。一次顯示一則，其餘排隊 -->
+<div class="overlay" id="msg-inbox" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="inbox-title">
+    <div class="msg-who">
+      <div class="msg-avatar" id="inbox-avatar" aria-hidden="true"></div>
+      <h2 id="inbox-title">有人傳訊息給你</h2>
+    </div>
+    <p class="msg-bubble" id="inbox-text"></p>
+    <!-- 直接在這裡回應：原訊息留在上方，不必跳到另一個面板、也不會忘了對方說什麼 -->
+    <label class="sheet-field msg-reply">
+      <span>回應 <small id="reply-count">0 / 60</small></span>
+      <textarea id="reply-input" rows="2" autocomplete="off" placeholder="例：好啊，我馬上過去！"></textarea>
+    </label>
+    <p class="sheet-msg" id="reply-error" hidden role="alert" aria-live="assertive"></p>
+    <p class="msg-more" id="inbox-more" hidden></p>
+    <div class="dialog-actions">
+      <button class="btn-ghost" id="btn-inbox-close">知道了</button>
+      <button class="btn-primary" id="btn-inbox-reply" disabled>送出回應</button>
+    </div>
+    <!-- 封鎖與檢舉刻意做成小的文字鍵、放在主要按鈕下面：要找得到，但不能在
+         按「知道了」時誤觸 -->
+    <div class="msg-safety">
+      <button class="btn-link" id="btn-inbox-block">封鎖這個人</button>
+      <button class="btn-link" id="btn-inbox-report">檢舉這則訊息</button>
+    </div>
+  </div>
+</div>
+
+<!-- 進場問卷（捏臉路徑）。拍照路徑是嵌在「生成中」那一頁，捏臉沒有等待時間，改在進場前跳出 -->
+<div class="overlay" id="persona-overlay" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-label="進場問卷">
+    <div class="persona-quiz" id="persona-builder"></div>
   </div>
 </div>
 

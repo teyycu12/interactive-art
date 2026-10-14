@@ -109,10 +109,27 @@ export const EV = {
   // ── 活動設定與大螢幕控制 ─────────────────────────────
   HOST_SETUP_EVENT: 'HOST_SETUP_EVENT',       // Host → Server：選定場景並為活動命名（進入活動編排前必填）
   STAGE_EVENT: 'STAGE_EVENT',                 // Server → Screen/Host：目前的活動名稱（尚未設定時為 null）
-  HOST_SCREEN_CMD: 'HOST_SCREEN_CMD',         // Host → Server：操作大螢幕（光線、清除效果、重置視角、除錯、截圖）
-  SCREEN_SETTINGS: 'SCREEN_SETTINGS',         // Server → Screen/Host：大螢幕的持續性設定（光線、除錯視圖）
-  SCREEN_CMD: 'SCREEN_CMD',                   // Server → Screen：一次性的動作（清除效果、重置視角）
+  HOST_SCREEN_CMD: 'HOST_SCREEN_CMD',         // Host → Server：操作大螢幕（清除效果、除錯視圖、截圖）
+  SCREEN_SETTINGS: 'SCREEN_SETTINGS',         // Server → Screen/Host：大螢幕的持續性設定（除錯視圖）
+  SCREEN_CMD: 'SCREEN_CMD',                   // Server → Screen：一次性的動作（清除效果）
   HOST_SCREEN_SHOT: 'HOST_SCREEN_SHOT',       // Server → Host：「儲存畫面」的截圖
+
+  // ── 私訊（點手機畫面上的角色傳文字）──────────────────
+  MSG_SEND: 'MSG_SEND',                       // Phone → Server：傳訊息給某位參與者 {to, text}
+  MSG_RESULT: 'MSG_RESULT',                   // Server → Phone：送出結果 {ok, to, reason?}
+  MSG_RECEIVE: 'MSG_RECEIVE',                 // Server → Phone：收到訊息 {message}
+  MSG_BLOCK: 'MSG_BLOCK',                     // Phone → Server：封鎖某人，之後不再收到他的訊息
+  MSG_UNBLOCK: 'MSG_UNBLOCK',                 // Phone → Server：解除封鎖
+  MSG_BLOCKS: 'MSG_BLOCKS',                   // Server → Phone：自己封鎖了哪些人（進場時補送、變動時更新）
+  MSG_REPORT: 'MSG_REPORT',                   // Phone → Server：檢舉一則收到的訊息
+  HOST_MSG_REPORTS: 'HOST_MSG_REPORTS',       // Server → Host：被檢舉的訊息清單（連線時補送、變動時廣播）
+  HOST_DISMISS_REPORT: 'HOST_DISMISS_REPORT', // Host → Server：處理完一則檢舉，從清單移除
+
+  // ── 進場人格問卷（shared/persona.js）─────────────────
+  // 題目本身由手機在進場前以 GET /api/persona-quiz 取得（那時還沒有 WebSocket），
+  // 作答隨 CLIENT_JOIN 的 persona 欄位送出。
+  HOST_SET_PERSONA_QUIZ: 'HOST_SET_PERSONA_QUIZ', // Host → Server：修改題目（quiz: null 代表恢復預設）
+  HOST_PERSONA_QUIZ: 'HOST_PERSONA_QUIZ',         // Server → Host：目前的題目（連線時補送、修改後廣播）
 
   // ── 活動報告 ─────────────────────────────────────────
   HOST_REQUEST_REPORT: 'HOST_REQUEST_REPORT', // Host → Server：要一份整場的活動報告
@@ -125,12 +142,23 @@ export const EV = {
  */
 export const EVENT_INFO = { maxNameLength: 20, maxSubtitleLength: 40 };
 
-/** 大螢幕的光線。主辦端渲染按鈕、伺服器驗證、場景套用，三端同一份 */
-export const SCREEN_LIGHTS = [
-  { id: 'day', label: '日光' },
-  { id: 'evening', label: '黃昏' },
-  { id: 'night', label: '夜晚' },
-];
+/**
+ * 私訊的格式限制。手機 UI 據此設 maxlength，伺服器據此驗證（不能信任客戶端）。
+ * 60 字：夠約人、打招呼、說「我在籃球架旁邊」，又短到不會變成在手機上長聊 ——
+ * 這件作品要的是轉頭講話（見 INTERACTION-DESIGN），訊息只是開場。
+ */
+export const DIRECT_MESSAGE = { maxLength: 60 };
+
+/** 私訊被拒的原因。手機端對照成看得懂的句子 */
+export const MSG_ERRORS = {
+  EMPTY: 'EMPTY',             // 沒有內容
+  TOO_LONG: 'TOO_LONG',       // 超過字數上限
+  NOT_FOUND: 'NOT_FOUND',     // 對方不在場上（已離場或被移除）
+  OFFLINE: 'OFFLINE',         // 對方的手機目前沒連線
+  SELF: 'SELF',               // 傳給自己
+  RATE_LIMITED: 'RATE_LIMITED', // 傳太快
+  BLOCKED: 'BLOCKED',         // 你封鎖了對方：要先解除封鎖才能傳
+};
 
 /**
  * 任務的時間限制（毫秒）。0 代表不限時、由主辦端手動結算。

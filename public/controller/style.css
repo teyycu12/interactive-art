@@ -1447,3 +1447,55 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 /* 歡迎回來：角色預覽 */
 .return-avatar { width: 132px; margin: 14px auto 6px; }
 .return-avatar svg, .return-avatar img { display: block; width: 100%; height: auto; }
+
+/* ── 私訊 ───────────────────────────────────────────────
+   寫信面板沿用 .sheet，收件沿用 .overlay/.dialog。文字一律走 --ink 系列（UI-STYLING）。 */
+.msg-who { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.msg-who h2 { margin: 0; }
+.msg-who .sheet-brief { margin: 2px 0 0; }
+.msg-avatar { flex: none; width: 52px; height: 64px; border-radius: 10px; background: var(--wall-tint); overflow: hidden; display: grid; place-items: end center; }
+.msg-avatar canvas.portrait { height: 60px; width: auto; }
+#msg-input, #reply-input {
+  width: 100%; resize: none; font: inherit; font-size: 16px; line-height: 1.5;
+  padding: 10px 12px; border: 2px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink);
+}
+#msg-input:focus, #reply-input:focus { outline: none; border-color: var(--ink); }
+#msg-count, #reply-count { font-weight: 500; color: var(--ink-soft); margin-left: 6px; }
+#msg-inbox .dialog { text-align: left; }
+.msg-bubble {
+  margin: 0 0 10px !important; padding: 12px 14px; border-radius: 14px; background: var(--wall-tint);
+  font-size: 17px !important; color: var(--ink) !important; line-height: 1.6; overflow-wrap: anywhere;
+}
+.msg-more { margin: 0 0 12px !important; font-size: 13px !important; color: var(--ink-soft); }
+.msg-more[hidden] { display: none; }
+.msg-safety { display: flex; justify-content: space-between; margin-top: 14px; }
+.msg-safety .btn-link { margin-left: 0; font-size: 13px; color: var(--ink-soft); }
+#btn-msg-send { width: 100%; }
+.msg-reply { margin: 0 0 10px; }
+
+/* ── 進場問卷 ───────────────────────────────────────────
+   選項是大按鈕（≥44px）、一次一題：在等待生成的二十幾秒裡用拇指點完。 */
+.persona-quiz { margin-top: 14px; padding: 14px; border: 2px solid var(--line); border-radius: 14px; background: var(--paper); }
+.persona-quiz[hidden] { display: none; }
+#persona-overlay .persona-quiz { margin: 0; padding: 0; border: none; background: none; }
+.pq-head { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+.pq-question { margin: 0 0 12px; font-size: 18px; line-height: 1.45; color: var(--ink); }
+.pq-options { display: grid; gap: 8px; }
+.pq-option {
+  min-height: 46px; padding: 10px 14px; text-align: left; font: inherit; font-size: 15px; font-weight: 600;
+  color: var(--ink); background: #FFFDF8; border: 2px solid var(--line); border-radius: 12px; cursor: pointer;
+}
+.pq-option:active, .pq-option:hover { border-color: var(--ink); }
+.pq-skip { display: block; margin: 10px 0 0 auto; }
+.pq-result { text-align: center; }
+.pq-emoji { display: block; font-size: 52px; line-height: 1.1; margin-bottom: 4px; }
+.pq-result h2 { margin: 0 0 6px; font-size: 19px; color: var(--ink); }
+.pq-result p { margin: 0 0 14px; font-size: 14px; color: var(--ink-soft); line-height: 1.6; }
+.pq-continue { width: 100%; }
+.pq-summary { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; color: var(--ink); }
+.pq-summary .btn-link { font-size: 13px; }
+.msg-blocked { margin: 0 0 12px; padding: 12px 14px; border-radius: 12px; background: var(--wall-tint); }
+.msg-blocked[hidden] { display: none; }
+.msg-blocked p { margin: 0 0 10px; font-size: 14px; color: var(--ink); line-height: 1.6; }
+.msg-blocked button { width: 100%; }
+#msg-field[hidden], #btn-msg-send[hidden] { display: none; }

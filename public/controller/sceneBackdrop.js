@@ -16,8 +16,9 @@ import {
 } from '../screen/scenes/pixelKit.js';
 import { KitchenScene } from '../screen/scenes/KitchenScene.js';
 import { OfficeScene } from '../screen/scenes/OfficeScene.js';
+import { GymScene } from '../screen/scenes/GymScene.js';
 
-const PIXEL_SCENES = { kitchen: KitchenScene, office: OfficeScene };
+const PIXEL_SCENES = { kitchen: KitchenScene, office: OfficeScene, gym: GymScene };
 
 /**
  * 場域邏輯座標 → 底圖座標的原點（與 PixelScene.projectToScreen 的 GX/GY 相同）。

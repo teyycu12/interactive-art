@@ -132,12 +132,9 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 /* ── 大螢幕面板 ─────────────────────────────────────────── */
 .screen-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .screen-row > .btn-ghost { width: auto; flex: 1 1 auto; min-height: 44px; }
-.screen-label { font-size: 13px; font-weight: 700; color: var(--ink-soft); min-width: 3em; }
-.seg { display: flex; gap: 6px; flex: 1; }
-.seg button { flex: 1; min-height: 44px; padding: 6px 10px; border-width: 2px; border-color: var(--line); color: var(--ink-soft); }
-.seg button[aria-pressed="true"], #btn-screen-debug[aria-pressed="true"] {
-  border-color: var(--ink); color: var(--ink); background: var(--sunk);
-}
+#btn-screen-debug { width: auto; min-height: 44px; padding: 8px 16px; }
+/* 開著時要很顯眼：全場都看得到除錯圖層，主辦者得一眼知道它還沒關 */
+#btn-screen-debug[aria-pressed="true"] { border-color: var(--danger); color: var(--danger); background: #FBEDEB; }
 
 /* ── 控制台 ───────────────────────────────────────────── */
 #console { max-width: 1240px; margin: 0 auto; padding: 26px 24px 64px; }
@@ -568,6 +565,9 @@ td.export { white-space: nowrap; }
 }
 .projector-banner[hidden] { display: none; }
 .projector .btn-kick,
+.projector .reports-panel,
+.projector .persona-editor,
+.projector .report-dot,
 .projector #tab-btn-system,
 .projector .quiz-editor,
 .projector .bank-load { display: none; }
@@ -630,3 +630,44 @@ td.export { white-space: nowrap; }
 .runsheet { margin-bottom: 18px; }
 /* 不能沿用 .ev-empty：pushFeed 會把那個 class 當成佔位字刪掉 */
 .feed .ev-plan { color: var(--ink-soft); }
+
+/* ── 被檢舉的私訊 ───────────────────────────────────────────
+   放在參與者分頁最上面、紅框：這是要主辦者處理的事，不是一般資訊。
+   文字用 --ink 系列與 --danger（對紙底 5.2:1），不用亮色寫字。 */
+.reports-panel { border-color: var(--danger); }
+.reports-panel .count.warn { color: var(--danger); }
+.reports { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.reports li { border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
+.rp-head { margin: 0 0 6px; font-size: 13px; color: var(--ink-soft); }
+.rp-head b { color: var(--ink); }
+.rp-text { margin: 0 0 10px; padding: 8px 10px; border-left: 4px solid var(--danger); background: var(--sunk);
+  font-size: 15px; color: var(--ink); overflow-wrap: anywhere; }
+.rp-actions { display: flex; gap: 8px; }
+.rp-actions button { width: auto; min-height: 40px; padding: 6px 14px; font-size: 13px; }
+.rp-actions .btn-kick[disabled] { opacity: .55; cursor: default; }
+/* 分頁上的紅點：有新檢舉、但主辦者不在參與者分頁時 */
+.report-dot { display: inline-block; width: 9px; height: 9px; margin-left: 6px; border-radius: 50%;
+  background: var(--danger); vertical-align: middle; }
+.report-dot[hidden] { display: none; }
+
+/* ── 進場問卷・團隊分類 ─────────────────────────────────────
+   長條用 --teal 填色（裝飾），文字一律 --ink 系列與 --teal-ink（UI-STYLING）。 */
+.persona-spread { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 10px; }
+.ps-head { display: flex; align-items: baseline; gap: 8px; font-size: 14px; }
+.ps-head b { color: var(--ink); }
+.ps-style { font-size: 12px; color: var(--teal-ink); font-weight: 700; }
+.ps-count { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 700; }
+.ps-track { height: 8px; margin: 4px 0; border-radius: 5px; background: var(--sunk); overflow: hidden; }
+.ps-track i { display: block; height: 100%; background: var(--teal); transition: width .3s ease; }
+.ps-desc { margin: 0; font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+.persona-editor { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.persona-editor summary { cursor: pointer; font-weight: 700; font-size: 14px; }
+.persona-editor summary .badge-off[hidden] { display: none; }
+.pq-edit { border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+.pq-edit legend { font-size: 12px; font-weight: 700; color: var(--ink-soft); padding: 0 4px; }
+.pq-edit > input { margin-bottom: 8px; }
+.pq-edit-opt { display: grid; grid-template-columns: 1fr 130px auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+.pq-edit-opt input, .pq-edit-opt select { padding: 7px 10px; }
+.pq-edit-foot { display: flex; justify-content: space-between; margin-top: 4px; }
+.pq-edit .btn-link[disabled] { opacity: .4; cursor: default; text-decoration: none; }
+.persona-actions { flex-wrap: wrap; }

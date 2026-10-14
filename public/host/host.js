@@ -7,12 +7,13 @@
  */
 
 import {
-  EV, MISSION_TYPES, MISSION_DURATIONS, QUIZ, QUIZ_CHOICES, QUIZ_PHASE, EVENT_INFO, SCREEN_LIGHTS,
+  EV, MISSION_TYPES, MISSION_DURATIONS, QUIZ, QUIZ_CHOICES, QUIZ_PHASE, EVENT_INFO,
 } from '/shared/protocol.js';
 import { renderAvatarSVG, CV_FULL_PART } from '/shared/avatars.js';
 import { COLOR_FAMILIES } from '/shared/colorFamily.js';
 import { HEAT_LEVELS } from '/shared/heat.js';
-import { THEMES, THEME_MAP } from '/shared/themes.js';
+import { SELECTABLE_THEMES as THEMES, THEME_MAP } from '/shared/themes.js';
+import { PERSONA_TYPES, PERSONA_RESULT_MAP, PERSONA_LIMITS } from '/shared/persona.js';
 import { surveysForTheme, SURVEY_BANK_MAP } from '/shared/surveys.js';
 import { propLabel } from '/screen/scenes/registry.js';
 
@@ -96,6 +97,14 @@ function handle(msg, key) {
 
     case EV.HOST_SCREEN_SHOT:
       receiveScreenShot(msg);
+      break;
+
+    case EV.HOST_PERSONA_QUIZ:
+      receivePersonaQuiz(msg);
+      break;
+
+    case EV.HOST_MSG_REPORTS:
+      renderReports(Array.isArray(msg.reports) ? msg.reports : []);
       break;
 
     case EV.SURVEY_QUESTION:
@@ -254,6 +263,7 @@ function showAuthError(text) {
 
 /** 各面板的錯誤欄位。lastAction 決定訊息落在哪一格 */
 const ERR_SLOT = {
+  persona: '#persona-err',
   setup: '#setup-err',
   screen: '#screen-err',
   survey: '#survey-err',
@@ -438,32 +448,21 @@ $('#setup-themes').addEventListener('keydown', (e) => {
 // ─────────────────────────────────────────────────────────────
 // 大螢幕：原本是投影畫面上的按鈕與鍵盤快捷鍵
 // ─────────────────────────────────────────────────────────────
-// 光線與除錯視圖的按下狀態只由 SCREEN_SETTINGS 決定（伺服器在 HOST_AUTH 時補送），
-// 不樂觀切換：兩台主辦端同時開著時，畫面上亮的才會是大螢幕真正的狀態。
+// 除錯視圖（在「系統」分頁）的開關狀態只由 SCREEN_SETTINGS 決定（伺服器在 HOST_AUTH 時補送），
+// 不樂觀切換：兩台主辦端同時開著時，畫面上顯示的才會是大螢幕真正的狀態。
 const sendScreen = (cmd, value) => {
   lastAction = 'screen';
   ws?.send(JSON.stringify({ type: EV.HOST_SCREEN_CMD, cmd, value }));
 };
 
-for (const l of SCREEN_LIGHTS) {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.dataset.light = l.id;
-  b.textContent = l.label;
-  b.setAttribute('aria-pressed', 'false');
-  b.addEventListener('click', () => sendScreen('light', l.id));
-  $('#light-list').append(b);
-}
-
 let screenDebug = false;
 
 function renderScreenSettings(settings) {
   if (!settings) return;
-  for (const b of $('#light-list').children) {
-    b.setAttribute('aria-pressed', String(b.dataset.light === settings.light));
-  }
   screenDebug = settings.debug === true;
-  $('#btn-screen-debug').setAttribute('aria-pressed', String(screenDebug));
+  const btn = $('#btn-screen-debug');
+  btn.setAttribute('aria-pressed', String(screenDebug));
+  btn.textContent = screenDebug ? '除錯視圖：開（按一下關閉）' : '除錯視圖：關';
 }
 
 let screenStatusTimer = null;
@@ -476,13 +475,65 @@ function screenStatus(text) {
 }
 
 $('#btn-screen-clear').addEventListener('click', () => { sendScreen('clear'); screenStatus('已清除大螢幕上的效果'); });
-$('#btn-screen-reset').addEventListener('click', () => { sendScreen('reset'); screenStatus('已重置視角'); });
 $('#btn-screen-debug').addEventListener('click', () => sendScreen('debug', !screenDebug));
 $('#btn-screen-shot').addEventListener('click', () => {
   $('#btn-screen-shot').disabled = true;
   screenStatus('向大螢幕要畫面中…');
   sendScreen('capture');
 });
+
+// ─────────────────────────────────────────────────────────────
+// 被檢舉的私訊
+// ─────────────────────────────────────────────────────────────
+// 清單只由 HOST_MSG_REPORTS 驅動（伺服器在 HOST_AUTH 時補送）。
+// 主辦端看不到一般私訊 —— 這裡只有參與者自己按了「檢舉」的那幾則。
+let knownReportIds = null;
+
+function renderReports(reports) {
+  $('#reports-panel').hidden = reports.length === 0;
+  $('#reports-count').textContent = reports.length;
+  // 第一次收到（登入、重整）是補送，不算新檢舉；之後多出來的才亮紅點、進現場動態
+  const fresh = knownReportIds ? reports.filter((r) => !knownReportIds.has(r.messageId)) : [];
+  knownReportIds = new Set(reports.map((r) => r.messageId));
+  for (const r of fresh) pushFeed(`收到檢舉：${r.toName || '參與者'} 檢舉了 ${r.fromName || '某人'} 的訊息`, 'ev-mission');
+  if (fresh.length && activeTab !== 'people') $('#report-dot').hidden = false;
+  if (!reports.length) $('#report-dot').hidden = true;
+
+  const list = $('#reports-list');
+  list.replaceChildren();
+  for (const r of reports) {
+    const li = document.createElement('li');
+    const head = document.createElement('p');
+    head.className = 'rp-head';
+    const who = document.createElement('b');
+    who.textContent = r.fromName || '（已離場）';
+    const meta = document.createElement('span');
+    meta.textContent = ` → ${r.toName || '參與者'}　${new Date(r.at).toLocaleTimeString('zh-TW', { hour12: false })}`;
+    head.append(who, meta);
+    // 內容一律 textContent：檢舉的就是參與者自由輸入的文字
+    const text = document.createElement('blockquote');
+    text.className = 'rp-text';
+    text.textContent = r.text;
+    const actions = document.createElement('div');
+    actions.className = 'rp-actions';
+    const kick = document.createElement('button');
+    kick.className = 'btn-kick';
+    kick.textContent = r.fromPresent ? `移除 ${r.fromName}` : '寄件人已不在場';
+    kick.disabled = !r.fromPresent;
+    kick.addEventListener('click', () => {
+      if (!confirm(`確定要將「${r.fromName}」移出現場嗎？`)) return;
+      ws?.send(JSON.stringify({ type: EV.HOST_KICK, agentId: r.from }));
+      pushFeed(`移除參與者 ${r.fromName}（因檢舉）`, 'ev-mission');
+    });
+    const done = document.createElement('button');
+    done.className = 'btn-ghost';
+    done.textContent = '已處理';
+    done.addEventListener('click', () => ws?.send(JSON.stringify({ type: EV.HOST_DISMISS_REPORT, messageId: r.messageId })));
+    actions.append(kick, done);
+    li.append(head, text, actions);
+    list.append(li);
+  }
+}
 
 function receiveScreenShot(msg) {
   $('#btn-screen-shot').disabled = false;
@@ -899,6 +950,7 @@ $('#btn-treasure-stop').addEventListener('click', () => {
 
 function renderState(state) {
   roster = state.agents ?? [];
+  if (state.personaSpread) renderPersonaSpread(state.personaSpread);
   syncProphetOptions();
   $('#stat-people').textContent = state.agents.length;
   $('#stat-edges').textContent = state.graphEdges;
@@ -1195,6 +1247,7 @@ let activeTab = 'play';
 
 function selectTab(id, focus = false) {
   activeTab = id;
+  if (id === 'people') $('#report-dot').hidden = true;
   for (const t of TABS) {
     const btn = $(`#tab-btn-${t}`);
     const on = t === id;
@@ -1837,3 +1890,161 @@ function renderReport(format, report) {
 
 renderRunSheet();
 try { if (localStorage.getItem(PROJ_KEY) === '1') setProjector(true); } catch { /* 略 */ }
+
+// ─────────────────────────────────────────────────────────────
+// 進場問卷・團隊分類
+// ─────────────────────────────────────────────────────────────
+// 分佈跟著 HOST_STATE；題目只由 HOST_PERSONA_QUIZ 驅動（認證時補送）。
+// 編輯中的草稿與伺服器上的題目分開：別台主辦端存了新題目時，
+// 這台正在改的內容不能被蓋掉。
+
+function renderPersonaSpread(spread) {
+  const list = $('#persona-spread');
+  list.replaceChildren();
+  const total = spread.counts.reduce((a, c) => a + c.count, 0);
+  for (const { id, count } of spread.counts) {
+    const t = PERSONA_RESULT_MAP[id];
+    if (!t) continue;
+    const li = document.createElement('li');
+    const head = document.createElement('div');
+    head.className = 'ps-head';
+    const name = document.createElement('b');
+    name.textContent = `${t.emoji} ${t.name}`;
+    const style = document.createElement('span');
+    style.className = 'ps-style';
+    style.textContent = t.style;
+    const n = document.createElement('span');
+    n.className = 'ps-count';
+    n.textContent = `${count} 人`;
+    head.append(name, style, n);
+    const bar = document.createElement('div');
+    bar.className = 'ps-track';
+    const fill = document.createElement('i');
+    fill.style.width = total ? `${(count / total) * 100}%` : '0%';
+    bar.append(fill);
+    const desc = document.createElement('p');
+    desc.className = 'ps-desc';
+    desc.textContent = `${t.strengths}；需留意：${t.cautions}`;
+    li.append(head, bar, desc);
+    list.append(li);
+  }
+  $('#persona-unanswered').textContent = spread.unanswered
+    ? `另有 ${spread.unanswered} 人沒有作答（略過問卷，或在題目修改前進場）`
+    : '';
+}
+
+let personaServer = null;   // 伺服器上的題目
+let personaDraft = null;    // 編輯中的草稿
+let personaDirty = false;
+
+function receivePersonaQuiz(view) {
+  personaServer = view;
+  $('#persona-default-badge').hidden = !view.isDefault;
+  if (!personaDirty) {
+    personaDraft = structuredClone(view.quiz);
+    renderPersonaEditor();
+  }
+}
+
+function markPersonaDirty() {
+  personaDirty = true;
+  $('#btn-persona-save').disabled = false;
+}
+
+const TYPE_LABEL = Object.fromEntries(Object.values(PERSONA_TYPES).map((t) => [t.key, `${t.emoji} ${t.name}`]));
+
+function renderPersonaEditor() {
+  const root = $('#persona-questions');
+  root.replaceChildren();
+  if (!personaDraft) return;
+  const L = PERSONA_LIMITS;
+  personaDraft.questions.forEach((q, qi) => {
+    const box = document.createElement('fieldset');
+    box.className = 'pq-edit';
+    const legend = document.createElement('legend');
+    legend.textContent = `第 ${qi + 1} 題`;
+    const text = document.createElement('input');
+    text.value = q.text;
+    text.maxLength = L.maxQuestionLength;
+    text.setAttribute('aria-label', `第 ${qi + 1} 題題目`);
+    text.addEventListener('input', () => { q.text = text.value; markPersonaDirty(); });
+    box.append(legend, text);
+
+    q.options.forEach((o, oi) => {
+      const row = document.createElement('div');
+      row.className = 'pq-edit-opt';
+      const label = document.createElement('input');
+      label.value = o.label;
+      label.maxLength = L.maxOptionLength;
+      label.setAttribute('aria-label', `第 ${qi + 1} 題選項 ${oi + 1}`);
+      label.addEventListener('input', () => { o.label = label.value; markPersonaDirty(); });
+      const type = document.createElement('select');
+      type.setAttribute('aria-label', `選項 ${oi + 1} 對應的類型`);
+      for (const [key, text] of Object.entries(TYPE_LABEL)) {
+        const opt = document.createElement('option');
+        opt.value = key; opt.textContent = text;
+        type.append(opt);
+      }
+      type.value = o.type;
+      type.addEventListener('change', () => { o.type = type.value; markPersonaDirty(); });
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'btn-link';
+      del.textContent = '刪除';
+      del.disabled = q.options.length <= L.minOptions;
+      del.addEventListener('click', () => { q.options.splice(oi, 1); markPersonaDirty(); renderPersonaEditor(); });
+      row.append(label, type, del);
+      box.append(row);
+    });
+
+    const foot = document.createElement('div');
+    foot.className = 'pq-edit-foot';
+    const addOpt = document.createElement('button');
+    addOpt.type = 'button';
+    addOpt.className = 'btn-link';
+    addOpt.textContent = '＋ 選項';
+    addOpt.disabled = q.options.length >= L.maxOptions;
+    addOpt.addEventListener('click', () => {
+      // 預設對應目前這題還沒用到的類型，省得主持人每次都要改
+      const used = new Set(q.options.map((x) => x.type));
+      const type = Object.keys(PERSONA_TYPES).find((k) => !used.has(k)) ?? 'D';
+      q.options.push({ label: '', type });
+      markPersonaDirty(); renderPersonaEditor();
+    });
+    const delQ = document.createElement('button');
+    delQ.type = 'button';
+    delQ.className = 'btn-link';
+    delQ.textContent = '刪除這題';
+    delQ.disabled = personaDraft.questions.length <= L.minQuestions;
+    delQ.addEventListener('click', () => { personaDraft.questions.splice(qi, 1); markPersonaDirty(); renderPersonaEditor(); });
+    foot.append(addOpt, delQ);
+    box.append(foot);
+    root.append(box);
+  });
+  $('#btn-persona-add-q').disabled = personaDraft.questions.length >= L.maxQuestions;
+}
+
+$('#btn-persona-add-q').addEventListener('click', () => {
+  if (!personaDraft || personaDraft.questions.length >= PERSONA_LIMITS.maxQuestions) return;
+  personaDraft.questions.push({
+    text: '',
+    options: Object.keys(PERSONA_TYPES).map((type) => ({ label: '', type })),
+  });
+  markPersonaDirty();
+  renderPersonaEditor();
+});
+
+$('#btn-persona-save').addEventListener('click', () => {
+  lastAction = 'persona';
+  // 送出後先當作已存；伺服器拒絕時 HOST_REJECT 會把錯誤顯示在面板上，草稿保留讓主持人改
+  ws?.send(JSON.stringify({ type: EV.HOST_SET_PERSONA_QUIZ, quiz: personaDraft }));
+  personaDirty = false;
+  $('#btn-persona-save').disabled = true;
+});
+
+$('#btn-persona-reset').addEventListener('click', () => {
+  if (!confirm('確定要恢復成預設題目嗎？目前的修改會消失。')) return;
+  lastAction = 'persona';
+  personaDirty = false;
+  ws?.send(JSON.stringify({ type: EV.HOST_SET_PERSONA_QUIZ, quiz: null }));
+});

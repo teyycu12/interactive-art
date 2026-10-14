@@ -82,7 +82,7 @@
 
   <nav class="tabs" role="tablist" aria-label="控制台分頁">
     <button role="tab" id="tab-btn-play" aria-controls="tab-play" aria-selected="true">帶活動<i class="live-dot" id="play-live-dot" hidden></i></button>
-    <button role="tab" id="tab-btn-people" aria-controls="tab-people" aria-selected="false" tabindex="-1">參與者 <span class="count" id="tab-people-count">0</span></button>
+    <button role="tab" id="tab-btn-people" aria-controls="tab-people" aria-selected="false" tabindex="-1">參與者 <span class="count" id="tab-people-count">0</span><i class="report-dot" id="report-dot" hidden title="有新的檢舉"></i></button>
     <button role="tab" id="tab-btn-stage" aria-controls="tab-stage" aria-selected="false" tabindex="-1">場景與合照</button>
     <button role="tab" id="tab-btn-system" class="tab-quiet" aria-controls="tab-system" aria-selected="false" tabindex="-1">系統</button>
   </nav>
@@ -342,6 +342,32 @@
 
     <!-- ═══ 參與者 ═══ -->
     <div role="tabpanel" id="tab-people" aria-labelledby="tab-btn-people" hidden>
+    <!-- 被檢舉的私訊。主辦端看不到一般私訊，只看得到參與者按了「檢舉」的那幾則。
+         投影模式下整塊隱藏：檢舉內容可能不雅，也不該被投到全場。 -->
+    <div class="panel reports-panel" id="reports-panel" hidden>
+      <h2>被檢舉的訊息 <span class="count warn" id="reports-count">0</span></h2>
+      <p class="hint">參與者在手機上檢舉了收到的私訊。確認後可以把寄件人移出現場；處理完按「已處理」。</p>
+      <ul class="reports" id="reports-list"></ul>
+    </div>
+    <!-- 進場問卷：參與者在生成角色時作答，依結果分成五型，作為分組依據（shared/persona.js） -->
+    <div class="panel persona-panel">
+      <h2>進場問卷・團隊分類</h2>
+      <p class="hint">參與者在生成角色時順便作答，依結果分成五型。下方名冊的「標籤」欄看得到每個人是哪一型。</p>
+      <ul class="persona-spread" id="persona-spread"></ul>
+      <p class="hint tiny" id="persona-unanswered"></p>
+      <details class="persona-editor" id="persona-editor">
+        <summary>修改題目 <span class="badge-off" id="persona-default-badge">預設題目</span></summary>
+        <p class="hint tiny">3～5 題，每題 2～4 個選項，每個選項對應一種類型（變色龍不是選項：沒有明顯偏向的人會被判為變色龍）。
+          儲存後，之後進場的人看到新題目；已經答過的人結果不變。</p>
+        <div id="persona-questions"></div>
+        <div class="row-actions persona-actions">
+          <button class="btn-ghost" id="btn-persona-add-q">＋ 新增題目</button>
+          <button class="btn-ghost" id="btn-persona-reset">恢復預設</button>
+          <button class="btn-primary" id="btn-persona-save" disabled>儲存題目</button>
+        </div>
+        <p class="err" id="persona-err" hidden></p>
+      </details>
+    </div>
     <div class="panel">
       <h2>參與者 <span class="count" id="people-count">0</span></h2>
       <div class="table-wrap" id="people-wrap" hidden>
@@ -371,21 +397,15 @@
     <!-- ═══ 場景與合照 ═══ -->
     <div role="tabpanel" id="tab-stage" aria-labelledby="tab-btn-stage" hidden>
     <div class="stage-grid">
-    <!-- 大螢幕：原本在投影畫面右上角的按鈕與鍵盤快捷鍵，全部收到這裡。
-         場景在「活動設定」選定，一場活動只用一個場景，所以這裡不能切換。 -->
+    <!-- 大螢幕：原本在投影畫面右上角的按鈕收到這裡，只留現場會用的兩顆。
+         場景在「活動設定」選定，一場活動只用一個場景，所以這裡不能切換。
+         除錯視圖會把技術資訊投到全場，放在「系統」分頁，不和這兩顆擺在一起免得誤按。 -->
     <div class="panel">
       <h2>大螢幕</h2>
       <p class="hint">場景：<b id="screen-scene"></b>（要換場景請按上方「修改活動設定」）</p>
       <div class="screen-row">
-        <span class="screen-label" id="light-label">光線</span>
-        <div class="seg" id="light-list" role="group" aria-labelledby="light-label"></div>
-      </div>
-      <div class="screen-row">
         <button class="btn-ghost" id="btn-screen-clear" title="清掉場景物件被點擊或靠近時的小動畫">清除效果</button>
-        <button class="btn-ghost" id="btn-screen-reset" title="3D 客廳的鏡頭回到預設角度">重置視角</button>
-        <button class="btn-ghost" id="btn-screen-shot">儲存畫面</button>
-        <button class="btn-ghost" id="btn-screen-debug" aria-pressed="false"
-                title="在大螢幕上顯示 α 權重、避障半徑與速度向量">除錯視圖</button>
+        <button class="btn-ghost" id="btn-screen-shot" title="把大螢幕當下的場景與角色存成 PNG">儲存畫面</button>
       </div>
       <p class="hint" id="screen-status" hidden role="status"></p>
       <p class="err" id="screen-err" hidden></p>
@@ -411,6 +431,14 @@
 
     <!-- ═══ 系統：給技術人員，現場主持用不到 ═══ -->
     <div role="tabpanel" id="tab-system" aria-labelledby="tab-btn-system" hidden>
+    <!-- 大螢幕除錯：給技術人員現場排查用。打開後全場都看得到，所以不放在「場景與合照」 -->
+    <div class="panel">
+      <h2>大螢幕除錯</h2>
+      <p class="hint">在大螢幕上疊出 α 權重、避障半徑與速度向量，排查角色移動問題用。
+        <b>打開後全場都看得到</b>，查完記得關掉。伺服器重開後會自動關閉。</p>
+      <button class="btn-ghost" id="btn-screen-debug" aria-pressed="false">除錯視圖：關</button>
+      <p class="err" id="debug-err" hidden></p>
+    </div>
     <div class="panel">
       <div class="panel-head">
         <h2>角色生成紀錄 <span class="count" id="history-count">0</span></h2>

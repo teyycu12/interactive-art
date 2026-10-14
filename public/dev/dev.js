@@ -22,7 +22,7 @@
 
 import { EV, EMOTE_GLYPH, ACTIONS } from '/shared/protocol.js';
 import { PROPS } from '/shared/scene.js';
-import { THEMES, THEME_MAP, DEFAULT_THEME } from '/shared/themes.js';
+import { SELECTABLE_THEMES as THEMES, THEME_MAP, DEFAULT_THEME } from '/shared/themes.js';
 import { propLabel } from '../screen/scenes/registry.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);

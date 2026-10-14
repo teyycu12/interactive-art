@@ -25,11 +25,11 @@ import { randomBytes, timingSafeEqual, X509Certificate } from 'node:crypto';
 import {
   EV, ACTIONS, STAGE, SYNC_FPS, PAIR_ERRORS, MISSION_TYPES,
   CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS,
-  SCORE_SOURCES, EVENT_INFO, SCREEN_LIGHTS,
+  SCORE_SOURCES, EVENT_INFO,
 } from '../shared/protocol.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
 import { avatarMatchesFamily } from '../shared/colorFamily.js';
-import { DEFAULT_THEME, isThemeId, THEME_MAP } from '../shared/themes.js';
+import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
   PERSISTENCE, TREASURE, VISION_HOST, VISION_PORT,
@@ -46,6 +46,10 @@ import { SocialGraph } from './socialgraph.js';
 import { PairingSession } from './pairing.js';
 import { QuizSession } from './quiz.js';
 import { SurveySession } from './survey.js';
+import { MessageRelay } from './messages.js';
+import {
+  DEFAULT_PERSONA_QUIZ, PERSONA_TRAIT_KEY, PERSONA_RESULTS, validatePersonaQuiz, scorePersona, personaQuizVersion,
+} from '../shared/persona.js';
 import { ScoreBoard } from './scores.js';
 import { SnapshotStore, Directory } from './persistence.js';
 import { createHttpLayer } from './httplayer.js';
@@ -66,6 +70,8 @@ const quiz = new QuizSession();
 /** 轉場問卷：沒有正解的題目，答案留成參與者身上的標籤 */
 const survey = new SurveySession();
 const scores = new ScoreBoard();
+/** 私訊：點手機畫面上的角色傳文字。只在記憶體，不寫快照（見 messages.js） */
+const messages = new MessageRelay();
 
 // ─────────────────────────────────────────────────────────────
 // 狀態還原
@@ -97,7 +103,8 @@ if (snapshot) {
  * 大螢幕目前的場景主題。落地進快照：伺服器在活動中途重開時，
  * 投影畫面不能自己跳回預設主題，主辦端也不會記得要再選一次。
  */
-let stageTheme = isThemeId(snapshot?.theme) ? snapshot.theme : DEFAULT_THEME;
+// 快照裡若是已停用的場景（例如 3D 客廳），重開後退回預設，不再沿用
+let stageTheme = isSelectableTheme(snapshot?.theme) ? snapshot.theme : DEFAULT_THEME;
 
 /**
  * 活動名稱，取代大螢幕左上角的場景名。null 代表還沒設定 ——
@@ -107,14 +114,26 @@ let stageTheme = isThemeId(snapshot?.theme) ? snapshot.theme : DEFAULT_THEME;
 let eventInfo = parseEventInfo(snapshot?.event);
 
 /**
- * 大螢幕的持續性設定。原本是投影畫面右上角的按鈕，已全部收進主辦端 ——
+ * 大螢幕的持續性設定。原本投影畫面右上角的按鈕已收進主辦端 ——
  * 投影畫面上的按鈕現場沒人點得到，而且會被投出去。
- * 光線落地（重開後投影不該自己變回白天），除錯視圖不落地（那是臨時檢查用的）。
+ * 光線與重置視角已拿掉（光線現場用不到；重置視角只對已停用的 3D 客廳有意義），
+ * 剩下的除錯視圖不落地：那是臨時檢查用的，重開後不該還開著。
  */
-const screenSettings = {
-  light: SCREEN_LIGHTS.some((l) => l.id === snapshot?.screenLight) ? snapshot.screenLight : 'day',
-  debug: false,
-};
+const screenSettings = { debug: false };
+
+/**
+ * 進場人格問卷的題目。主持人可在主辦端修改，落地進快照 ——
+ * 活動中途重開伺服器，不能悄悄換回預設題目（已經答過的人與之後答的人會是兩套標準）。
+ * 快照裡的題目一樣要驗：檔案可能被手動改過。
+ */
+let personaQuiz = (snapshot?.personaQuiz && validatePersonaQuiz(snapshot.personaQuiz).ok)
+  ? validatePersonaQuiz(snapshot.personaQuiz).value
+  : DEFAULT_PERSONA_QUIZ;
+const personaView = () => ({
+  quiz: personaQuiz,
+  version: personaQuizVersion(personaQuiz),
+  isDefault: personaQuiz === DEFAULT_PERSONA_QUIZ,
+});
 
 /** 快照內容。集中在一處，新增要落地的東西時只改這裡與還原段。 */
 const snapshotData = () => ({
@@ -129,7 +148,8 @@ const snapshotData = () => ({
   directory: directory.export(),
   theme: stageTheme,
   event: eventInfo,
-  screenLight: screenSettings.light,
+  // 預設題目不存：之後改版預設題目時，沒改過的活動才會跟著用新版
+  personaQuiz: personaQuiz === DEFAULT_PERSONA_QUIZ ? null : personaQuiz,
 });
 
 /** 狀態有變動，等下一次自動存檔 */
@@ -252,6 +272,7 @@ const { handleRequest } = createHttpLayer({
   publicDir: PUBLIC_DIR,
   keyMatches,
   onScreenCapture: resolveScreenCapture,
+  getPersonaQuiz: () => personaView(),
 });
 
 const server = tlsOptions
@@ -336,7 +357,31 @@ function hostState() {
     survey: survey.publicView(),
     quizReveal: quiz.revealView(),
     leaderboard: scores.leaderboard(SCORING.leaderboardSize, nameOf, isPresent),
+    personaSpread: personaSpread(),
   };
+}
+
+/** 在場者的人格類型分佈（含還沒答的人數），依 PERSONA_RESULTS 的順序 */
+function personaSpread() {
+  const counts = survey.spread(PERSONA_TRAIT_KEY, isPresent);
+  const answered = [...counts.values()].reduce((a, b) => a + b, 0);
+  return {
+    counts: PERSONA_RESULTS.map((t) => ({ id: t.id, count: counts.get(t.id) ?? 0 })),
+    unanswered: Math.max(0, stage.agents.size - answered),
+  };
+}
+
+/**
+ * 依進場時帶來的作答，記下這個人的類型。
+ * 作答必須是針對「現在這份題目」—— 主持人在他答題期間改了題目的話，
+ * 舊答案對應不到新題目，與其判錯不如不判（主辦端會看到「未作答」）。
+ */
+function applyPersona(agentId, raw) {
+  if (!raw || raw.version !== personaQuizVersion(personaQuiz)) return;
+  const result = scorePersona(personaQuiz, raw.answers);
+  if (!result) return;
+  survey.setTrait(agentId, PERSONA_TRAIT_KEY, { value: result.id, label: `${result.emoji} ${result.name}`, at: Date.now() });
+  markDirty();
 }
 
 const pushHostState = () => blast(hosts, EV.HOST_STATE, hostState());
@@ -537,6 +582,8 @@ function handleJoin(ws, msg) {
       // 而他正是所有人都在等著聽他喊話的那一個。
       sendTreasureCatchUp(ws, existing.id);
       sendSurveyCatchUp(ws, existing.id);
+      // 封鎖名單只在伺服器：手機重整後要靠這則才知道點到的人是不是被自己封鎖了
+      send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(existing.id) });
       sendHarvestCatchUp(ws, existing.id);
       return;
     }
@@ -587,6 +634,7 @@ function handleJoin(ws, msg) {
   controllers.set(agent.id, ws);
   // 記進身分目錄，讓這個人在伺服器重開後還認得回自己的角色與分數
   directory.remember(agent);
+  applyPersona(agent.id, msg.persona);
   markDirty();
 
   // rejoinToken 只在此處單獨回傳給角色本人，不會出現在任何廣播訊息中
@@ -615,6 +663,7 @@ function handleJoin(ws, msg) {
   // 補送給手機的東西一樣不能夾帶答案。
   sendTreasureCatchUp(ws, agent.id);
   sendSurveyCatchUp(ws, agent.id);
+  send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(agent.id) });
   sendHarvestCatchUp(ws, agent.id);
   send(ws, EV.SCORE_SELF, {
     score: scores.totalOf(agent.id),
@@ -646,6 +695,7 @@ function detachAgent(agentId, { forget = false } = {}) {
     // 問卷標籤是「這個人是誰」，主動離場或被請出場時要一起忘掉；
     // 單純斷線則保留 —— 那個人多半還會用原憑證接回同一個角色。
     survey.forget(agentId);
+    messages.forget(agentId);
     markDirty();
   }
 }
@@ -904,6 +954,52 @@ function handleQuizAnswer(ws, msg) {
   quizTallyDirty = true;
 }
 
+// ─────────────────────────────────────────────────────────────
+// 私訊
+// ─────────────────────────────────────────────────────────────
+/** 收件人在不在場、手機有沒有連著。私訊只送給連線中的手機，不替離線的人存信 */
+const messagePresence = {
+  exists: (id) => stage.agents.has(id),
+  online: (id) => {
+    const sock = controllers.get(id);
+    return !!sock && sock.readyState === sock.OPEN;
+  },
+};
+
+function handleDirectMessage(ws, msg) {
+  const from = ws.agentId;
+  const result = messages.send(from, msg.to, msg.text, messagePresence);
+  if (!result.ok) {
+    send(ws, EV.MSG_RESULT, { ok: false, to: msg.to ?? null, reason: result.reason });
+    return;
+  }
+  // 被封鎖時一樣回報成功（理由見 messages.js 開頭），只是不轉送
+  send(ws, EV.MSG_RESULT, { ok: true, to: msg.to });
+  if (!result.delivered) return;
+  const { message } = result;
+  // 只送給收件人。不廣播、不進大螢幕、不給主辦端 —— 一般私訊只有兩個當事人看得到
+  sendToAgent(message.to, EV.MSG_RECEIVE, {
+    message: { id: message.id, from: message.from, fromName: nameOf(message.from), text: message.text, at: message.at },
+  });
+}
+
+function handleMessageReport(ws, msg) {
+  const entry = messages.report(ws.agentId, msg.messageId);
+  if (!entry) return;
+  // 名字在檢舉當下記下來：寄件人之後若被移除，主辦端仍要知道是誰
+  entry.fromName = nameOf(entry.from);
+  entry.toName = nameOf(entry.to);
+  console.log(`[report] ${entry.toName} 檢舉了 ${entry.fromName} 的私訊`);
+  pushMessageReports();
+}
+
+const pushMessageReports = () => blast(hosts, EV.HOST_MSG_REPORTS, { reports: messageReports() });
+
+/** 主辦端的檢舉清單。帶上寄件人是否仍在場，主辦端才知道「移除」按了有沒有意義 */
+function messageReports() {
+  return messages.reports.map((r) => ({ ...r, fromPresent: isPresent(r.from) }));
+}
+
 /** 切換場景主題。HOST_SET_THEME 與活動設定共用 */
 function setStageTheme(theme) {
   if (theme === stageTheme) return;
@@ -917,25 +1013,17 @@ function setStageTheme(theme) {
 /**
  * 大螢幕操作（原本是投影畫面上的按鈕與鍵盤快捷鍵）。
  *
- * 光線與除錯視圖是「狀態」，由伺服器保存並廣播 SCREEN_SETTINGS ——
- * 投影機中途重開、或同時接了兩台螢幕，畫面才會一致，主辦端的按鈕也才知道目前選哪個。
- * 清除效果、重置視角是一次性動作，只轉發給大螢幕。
+ * 除錯視圖是「狀態」，由伺服器保存並廣播 SCREEN_SETTINGS ——
+ * 投影機中途重開、或同時接了兩台螢幕，畫面才會一致，主辦端的按鈕也才知道目前是開是關。
+ * 清除效果是一次性動作，只轉發給大螢幕。
  */
 function handleScreenCommand(ws, msg) {
   switch (msg.cmd) {
-    case 'light':
-      if (!SCREEN_LIGHTS.some((l) => l.id === msg.value)) return;
-      if (screenSettings.light === msg.value) return;
-      screenSettings.light = msg.value;
-      markDirty();
-      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
-      break;
     case 'debug':
       screenSettings.debug = msg.value === true;
       blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
       break;
     case 'clear':
-    case 'reset':
       blast(screens, EV.SCREEN_CMD, { cmd: msg.cmd });
       break;
     case 'capture':
@@ -1063,7 +1151,7 @@ function handleHostMessage(ws, msg) {
       break;
 
     case EV.HOST_SET_THEME: {
-      if (!isThemeId(msg.theme)) { send(ws, EV.HOST_REJECT, { reason: '沒有這個場景主題' }); return; }
+      if (!isSelectableTheme(msg.theme)) { send(ws, EV.HOST_REJECT, { reason: '沒有這個場景主題' }); return; }
       setStageTheme(msg.theme);
       break;
     }
@@ -1071,7 +1159,7 @@ function handleHostMessage(ws, msg) {
     case EV.HOST_SETUP_EVENT: {
       // 場景與名稱一起驗證、一起生效：只套用一半的話，大螢幕會出現
       // 「新名稱配舊場景」，而主辦端以為設定失敗、其實場景已經換了
-      if (!isThemeId(msg.theme)) { send(ws, EV.HOST_REJECT, { reason: '請先選擇一個場景' }); return; }
+      if (!isSelectableTheme(msg.theme)) { send(ws, EV.HOST_REJECT, { reason: '請先選擇一個場景' }); return; }
       const info = parseEventInfo(msg);
       if (!info) {
         send(ws, EV.HOST_REJECT, {
@@ -1089,6 +1177,24 @@ function handleHostMessage(ws, msg) {
 
     case EV.HOST_SCREEN_CMD:
       handleScreenCommand(ws, msg);
+      break;
+
+    case EV.HOST_SET_PERSONA_QUIZ: {
+      if (msg.quiz === null) {
+        personaQuiz = DEFAULT_PERSONA_QUIZ;
+      } else {
+        const r = validatePersonaQuiz(msg.quiz);
+        if (!r.ok) { send(ws, EV.HOST_REJECT, { reason: r.reason }); return; }
+        personaQuiz = r.value;
+      }
+      console.log(`[persona] 進場問卷${personaQuiz === DEFAULT_PERSONA_QUIZ ? '恢復預設' : '已修改'}　${personaQuiz.questions.length} 題`);
+      markDirty();
+      blast(hosts, EV.HOST_PERSONA_QUIZ, personaView());
+      break;
+    }
+
+    case EV.HOST_DISMISS_REPORT:
+      if (messages.dismissReport(msg.messageId)) pushMessageReports();
       break;
 
     case EV.HOST_CLOSE_MISSION:
@@ -1154,6 +1260,7 @@ function handleHostMessage(ws, msg) {
         sock.role = null;
       }
       pushHostState();
+      if (messages.reports.some((r) => r.from === target.id)) pushMessageReports();
       break;
     }
   }
@@ -1291,6 +1398,28 @@ wss.on('connection', (ws) => {
         handleSurveyAnswer(ws, msg);
         break;
 
+      case EV.MSG_SEND:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleDirectMessage(ws, msg);
+        break;
+
+      case EV.MSG_BLOCK:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        if (messages.block(ws.agentId, msg.userId)) console.log(`[block] ${nameOf(ws.agentId)} 封鎖了 ${nameOf(msg.userId) || msg.userId}`);
+        send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(ws.agentId) });
+        break;
+
+      case EV.MSG_UNBLOCK:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        if (messages.unblock(ws.agentId, msg.userId)) console.log(`[block] ${nameOf(ws.agentId)} 解除封鎖 ${nameOf(msg.userId) || msg.userId}`);
+        send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(ws.agentId) });
+        break;
+
+      case EV.MSG_REPORT:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleMessageReport(ws, msg);
+        break;
+
       case EV.HARVEST_TAKE:
       case EV.HARVEST_DROP:
         if (ws.role !== 'controller' || !ws.agentId) return;
@@ -1325,6 +1454,9 @@ wss.on('connection', (ws) => {
         // 主辦端據此決定先進「活動設定」還是直接進控制台，所以排在主題之後
         //（設定頁要用目前的主題預選場景卡）
         send(ws, EV.STAGE_EVENT, { event: eventInfo });
+        // 檢舉清單只由 HOST_MSG_REPORTS 驅動，重整後的主辦端要靠這則才看得到
+        send(ws, EV.HOST_MSG_REPORTS, { reports: messageReports() });
+        send(ws, EV.HOST_PERSONA_QUIZ, personaView());
         // 補送進行中的尋寶。HOST_STATE 不含尋寶（見 hostState），而主辦端的
         // 尋寶面板只由 TREASURE_* 事件驅動 —— 少了這裡，中途重整或斷線重連的
         // 主辦端會停在「開始尋寶」那一頁，#treasure-live 永遠是 hidden，
@@ -1360,6 +1492,8 @@ wss.on('connection', (ws) => {
       case EV.HOST_SET_THEME:
       case EV.HOST_SETUP_EVENT:
       case EV.HOST_SCREEN_CMD:
+      case EV.HOST_DISMISS_REPORT:
+      case EV.HOST_SET_PERSONA_QUIZ:
       case EV.HOST_START_SURVEY:
       case EV.HOST_CLOSE_SURVEY:
       case EV.HOST_REQUEST_REPORT:

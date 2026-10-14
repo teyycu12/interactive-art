@@ -86,6 +86,19 @@ export const SURVEY_BANK = [
     ],
   },
   {
+    id: 'sport_role',
+    key: 'sport_role',
+    theme: 'gym',
+    question: '在球隊裡，你是哪一種人？',
+    // 同上，四個地點散在四個角落：籃球架（上）、跑步機（左）、休息長椅（右）、頒獎台（下）
+    options: [
+      { value: 'scorer', label: '得分王', spot: 'k_island' },
+      { value: 'grinder', label: '默默苦練的', spot: 'tbl_1' },
+      { value: 'cheer', label: '場邊加油的', spot: 'sofa_2' },
+      { value: 'captain', label: '帶隊的隊長', spot: 'k_dining' },
+    ],
+  },
+  {
     id: 'chrono',
     key: 'chrono',
     theme: null,

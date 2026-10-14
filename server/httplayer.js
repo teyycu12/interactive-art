@@ -27,10 +27,11 @@ import { VISION_HOST, VISION_PORT } from './config.js';
  * @param {string} deps.publicDir     靜態站台根目錄
  * @param {(input: string) => boolean} deps.keyMatches  主辦端密鑰比對（歷史代理用）
  * @param {(requestId: string, image: string|null) => boolean} deps.onScreenCapture
+ * @param {() => object} [deps.getPersonaQuiz] 進場問卷的題目（手機進場前讀取）
  *        大螢幕回傳合照底圖。回傳 false 表示 requestId 認不得。
  * @returns {{handleRequest: (req, res) => void, resolveStatic: (p: string) => string|null}}
  */
-export function createHttpLayer({ root, publicDir, keyMatches, onScreenCapture }) {
+export function createHttpLayer({ root, publicDir, keyMatches, onScreenCapture, getPersonaQuiz = () => null }) {
 const ROOT = root;
 const PUBLIC_DIR = publicDir;
 
@@ -569,6 +570,15 @@ function handleRequest(req, res) {
 
   if (urlPath === '/api/preview') {
     proxyPreview(req, res);
+    return;
+  }
+
+  // 進場問卷的題目。手機在生成角色的等待時間作答，那時還沒有 WebSocket，所以走 HTTP。
+  // 公開讀取：題目本來就是要給每個參與者看的，裡面沒有任何人的資料。
+  if (urlPath === '/api/persona-quiz') {
+    if (req.method !== 'GET') { sendJSON(res, 405, { ok: false, error: 'method_not_allowed' }); return; }
+    const view = getPersonaQuiz();
+    sendJSON(res, 200, view ? { ok: true, ...view } : { ok: false });
     return;
   }
 

@@ -1,6 +1,7 @@
 import { DEFAULT_THEME, isThemeId } from '/shared/themes.js';
 import { KitchenScene } from './KitchenScene.js';
 import { OfficeScene } from './OfficeScene.js';
+import { GymScene } from './GymScene.js';
 
 // Each scene owns its visuals and local interactions; participant state stays upstream.
 // Layout variants must use the server's shared/scene.js, never a browser-only layout.
@@ -8,6 +9,7 @@ import { OfficeScene } from './OfficeScene.js';
 export const SCENES = Object.freeze({
   kitchen: { create: (host, props) => new KitchenScene(host, props) },
   office: { create: (host, props) => new OfficeScene(host, props) },
+  gym: { create: (host, props) => new GymScene(host, props) },
   room: { async create(host, props) {
     const { RoomScene, populateProps } = await import('../3d/RoomScene.js');
     const scene = new RoomScene(host);
@@ -24,7 +26,7 @@ export const SCENES = Object.freeze({
  * 而症狀是「主辦端說湯鍋、大螢幕寫洗手台」且兩邊都不報錯。
  * 3D 客廳沒有自己的道具名稱，回傳道具 id 本身。
  */
-const NAMED_SCENES = { kitchen: KitchenScene, office: OfficeScene };
+const NAMED_SCENES = { kitchen: KitchenScene, office: OfficeScene, gym: GymScene };
 
 export function propLabel(themeId, propId) {
   if (!propId) return null;

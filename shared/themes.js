@@ -29,11 +29,22 @@ export const THEMES = [
     spots: { tbl_1: '1號桌', tbl_2: '2號桌', tbl_3: '3號桌', k_dining: '4號桌', ctbl_1: '5號桌' },
   },
   {
+    id: 'gym',
+    label: '活力體育館',
+    occasion: '運動會・體育課・社團迎新',
+    brief: '木地板球場、暖身區與看台，室外有跑道，適合動態的團體活動。',
+    // 號碼牌給集合任務用：暖身區三台器材當「站」，頒獎台與飲料桶各一個集合點
+    spots: { tbl_1: '1號站', tbl_2: '2號站', tbl_3: '3號站', k_dining: '集合點', ctbl_1: '補給站' },
+  },
+  {
     id: 'room',
     label: '原始客廳（3D）',
     occasion: '展演備援',
     brief: '最初的 3D 客廳場景。需要 WebGL，較吃投影電腦效能。',
     spots: {},
+    // 不是正式場景：主辦端選不到、伺服器也不接受。程式碼保留給 ?scene=room 開發預覽，
+    // 以及 registry.js 的載入失敗備援 —— 所以不能直接從 THEMES 刪掉。
+    selectable: false,
   },
 ];
 
@@ -42,3 +53,8 @@ export const DEFAULT_THEME = 'kitchen';
 export const THEME_MAP = Object.fromEntries(THEMES.map((t) => [t.id, t]));
 
 export const isThemeId = (id) => typeof id === 'string' && Object.hasOwn(THEME_MAP, id);
+
+/** 主辦端可以選、伺服器會接受的主題（排除 selectable: false 的開發用場景） */
+export const SELECTABLE_THEMES = THEMES.filter((t) => t.selectable !== false);
+
+export const isSelectableTheme = (id) => isThemeId(id) && THEME_MAP[id].selectable !== false;

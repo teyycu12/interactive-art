@@ -154,6 +154,15 @@ export const PAIRING = {
   confirmTimeoutMs: 30000, // 對方未回應即作廢
 };
 
+// ── 私訊（見 server/messages.js）──────────────────────────
+export const DIRECT_MESSAGES = {
+  minIntervalMs: 2000,    // 同一人兩則之間至少隔 2 秒：擋連按送出，也擋洗版
+  perMinute: 10,          // 每分鐘最多 10 則
+  keepForReportMs: 30 * 60 * 1000, // 訊息留 30 分鐘供檢舉；只在記憶體，不寫快照
+  keepMax: 500,           // 保留則數上限，超過就丟最舊的
+  reportsMax: 50,         // 主辦端檢舉清單上限
+};
+
 /**
  * 尋寶任務（先知模式，見 server/treasure.js）
  */

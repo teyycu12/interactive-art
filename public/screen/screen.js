@@ -6,8 +6,8 @@
  *   角色　　　由 shared/character.js 逐幀以變換矩陣算出步態（手機端 POV 共用同一份）
  *
  * 除錯視圖保留自 M2 開發期，用於檢查 α 權重、避障半徑與速度向量。
- * 它與光線、清除效果、重置視角、儲存畫面一樣，都由主辦端的「大螢幕」面板操作
- *（SCREEN_SETTINGS / SCREEN_CMD）；投影畫面上不留任何按鈕或快捷鍵。
+ * 它與清除效果、儲存畫面一樣由主辦端操作（SCREEN_SETTINGS / SCREEN_CMD；除錯視圖在「系統」分頁），
+ * 投影畫面上不留任何按鈕或快捷鍵。
  */
 
 import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protocol.js';
@@ -35,22 +35,15 @@ const COLOR_SWARM = '#457B9D';
 const CHARACTER_HEIGHT = 150;   // 邏輯座標下的角色高度
 
 let debug = false;
-/** 目前光線。由伺服器的 SCREEN_SETTINGS 決定，換場景後要重新套用到新場景上 */
-let light = 'day';
 
 function applySettings(settings) {
   if (!settings) return;
   debug = settings.debug === true;
   document.getElementById('hud').hidden = !debug;
-  if (typeof settings.light === 'string') {
-    light = settings.light;
-    activeScene?.applyLight(light);
-  }
 }
 
 function runCommand(cmd) {
   if (cmd === 'clear') activeScene?.clearEffects?.();
-  if (cmd === 'reset') activeScene?.resetCamera();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -124,7 +117,6 @@ async function switchScene(id) {
   // 載入期間又切了一次：丟掉這個過期的場景，不然兩張畫布會疊在一起
   if (token !== sceneToken) { next.dispose?.(); return; }
   activeScene = next;
-  activeScene.applyLight(light);
   renderEventCard();
 }
 

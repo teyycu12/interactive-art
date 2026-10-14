@@ -5,12 +5,13 @@
  * 素材目錄與協定常數皆由 /shared/ 載入，與伺服器共用同一份定義。
  */
 
+import { scorePersona, PERSONA_RESULT_MAP } from '/shared/persona.js';
 import {
   HEADS, FACES, BODIES, SKIN_TONES, ACCENT_COLORS,
   renderAvatarSVG, randomAvatarConfig,
 } from '/shared/avatars.js';
 import {
-  EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS,
+  EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS, DIRECT_MESSAGE, MSG_ERRORS,
   QUIZ_CHOICES, QUIZ_ERRORS,
 } from '/shared/protocol.js';
 import {
@@ -805,6 +806,7 @@ async function submitScanImage(image) {
   $('#scan-result').hidden = false;
   $('.scan-stage')?.classList.remove('is-empty');
   showScanPhase('working');
+  startPersonaDuringScan();
 
   const stopProgress = startScanProgress();
 
@@ -858,7 +860,7 @@ async function submitScanImage(image) {
     $('#scan-result').src = c.toDataURL();
     $('.scan-stage')?.classList.add('is-pixel');
   });
-  showScanPhase('done');
+  showScanDone();
 }
 
 /**
@@ -869,6 +871,7 @@ async function submitScanImage(image) {
  * 挫折感遠大於再按一次重拍。
  */
 function showScanFailure(message, hint = '', opts = {}) {
+  stopPersonaDuringScan();
   // 相機開不起來時左邊沒有東西可看，留一個空黑框只是佔位。
   // 生成失敗則相反 —— 剛拍的那張照片正是使用者要判斷「哪裡不對」的依據。
   $('.scan-stage')?.classList.toggle('is-empty', !!opts.emptyStage);
@@ -946,7 +949,8 @@ function startScanProgress() {
 
     // 3 秒後才出現：太早跳出來會蓋過「正在分析服裝特徵」那句，
     // 讓人以為系統要他做什麼才會繼續。之後每 6 秒換一則。
-    if (sec >= 3 && sec - lastTipAt >= (lastTipAt === 0 ? 0 : 6)) {
+    // 問卷在作答時不出提示：兩個都要人看，疊在一起反而都不看
+    if (!personaScanActive && sec >= 3 && sec - lastTipAt >= (lastTipAt === 0 ? 0 : 6)) {
       if (tipEl) tipEl.hidden = false;
       if (tipTextEl) tipTextEl.textContent = TIPS[tipIndex % TIPS.length];
       tipIndex += 1;
@@ -1023,7 +1027,8 @@ $('#btn-prev').addEventListener('click', () => {
 $('#btn-next').addEventListener('click', () => {
   if (step < 3) { showStep(step + 1); return; }
   try { localStorage.setItem(LS.avatar, JSON.stringify(config)); } catch { /* 略 */ }
-  enterStage();
+  // 捏臉沒有生成的等待時間，問卷改在進場前跳出（答過、略過或題目讀不到就直接進場）
+  askPersonaThen(enterStage);
 });
 
 refresh();
@@ -1116,7 +1121,11 @@ function connect() {
       userId = localStorage.getItem(LS.userId);
       rejoinToken = localStorage.getItem(LS.rejoinToken);
     } catch { /* 略 */ }
-    sendMsg(EV.CLIENT_JOIN, { userId, rejoinToken, name: displayName, avatar: config });
+    sendMsg(EV.CLIENT_JOIN, {
+      userId, rejoinToken, name: displayName, avatar: config,
+      // 進場問卷的作答（沒答或略過就不帶）。伺服器依目前題目判定類型，見 server/index.js 的 applyPersona
+      ...(personaAnswers && { persona: { version: personaAnswers.version, answers: personaAnswers.answers } }),
+    });
   });
 
   ws.addEventListener('message', (e) => {
@@ -1378,6 +1387,18 @@ function handleMissionMessage(msg) {
 
     case EV.PAIR_CONFIRM_REQ:
       openConfirmPair(msg);
+      break;
+
+    case EV.MSG_RESULT:
+      onMessageResult(msg);
+      break;
+
+    case EV.MSG_RECEIVE:
+      if (msg.message) receiveMessage(msg.message);
+      break;
+
+    case EV.MSG_BLOCKS:
+      setBlocked(msg.userIds);
       break;
 
     case EV.PAIR_RESULT:
@@ -2109,4 +2130,435 @@ function handleQuizMessage(msg) {
     default:
       return false;
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// 私訊：點手機畫面上別人的角色，傳一句話給對方
+// ─────────────────────────────────────────────────────────────
+// 畫布本身是 pointer-events:none 的背景層，蓋在上面的是搖桿區 —— 而搖桿是 static 模式，
+// 搖桿區裡任何一點按下去都會被 nipplejs 接走、角色朝那個方向衝一下。
+// 因此在捕獲階段先攔：點到角色就自己處理並擋下事件，沒點到才放行給搖桿。
+// 三種事件都要擋：nipplejs 依瀏覽器支援挑 pointer / touch / mouse 其中一種來聽，
+// 而觸控裝置上同一下會先後觸發 pointerdown 與 touchstart。
+
+/** 搖桿底座附近不判定點人：想走路的手指落在角色上時，走路優先 */
+const JOYSTICK_GUARD_PX = 85;
+let lastPickAt = 0;
+
+function pickTarget(e) {
+  if (!renderer || $('#controller').hidden) return null;
+  // 只攔落在搖桿區（畫布的可點區）上的觸控；按鈕、橫幅等照常運作
+  if (!e.target.closest?.('#joystick-zone') || e.target.closest('button')) return null;
+  const pt = e.touches?.[0] ?? e;
+  const base = document.querySelector('#joystick-zone .back')?.getBoundingClientRect();
+  if (base && Math.hypot(pt.clientX - (base.left + base.width / 2), pt.clientY - (base.top + base.height / 2)) < JOYSTICK_GUARD_PX) {
+    return null;
+  }
+  return renderer.pickAt(pt.clientX, pt.clientY);
+}
+
+for (const type of ['pointerdown', 'touchstart', 'mousedown']) {
+  $('#controller').addEventListener(type, (e) => {
+    const id = pickTarget(e);
+    if (!id) return;
+    e.stopPropagation();
+    if (e.cancelable && type !== 'pointerdown') e.preventDefault();
+    // 同一下觸控會依序來 pointerdown → touchstart（→ mousedown），只開一次
+    if (Date.now() - lastPickAt < 600) return;
+    lastPickAt = Date.now();
+    openComposer(id);
+  }, { capture: true, passive: false });
+}
+
+const msgSheet = $('#msg-sheet');
+const msgInput = $('#msg-input');
+msgInput.maxLength = DIRECT_MESSAGE.maxLength;
+/** 正在寫給誰 */
+let composeTo = null;
+let composeSending = false;
+
+const lookOf = (id) => rosterAgents.find((a) => a.id === id) ?? null;
+
+function openComposer(id, { restoreTo } = {}) {
+  const who = lookOf(id);
+  if (!who) return;
+  composeTo = id;
+  composeSending = false;
+  $('#msg-title').textContent = `傳訊息給 ${who.name}`;   // 自填的名字，一律 textContent
+  showPortrait($('#msg-avatar'), who.look);
+  msgInput.value = '';
+  updateMsgCount();
+  $('#msg-error').hidden = true;
+  $('#btn-msg-send').disabled = true;
+  msgSheet.hidden = false;
+  pushOverlay(msgSheet, { onEscape: closeComposer, restoreTo });
+  renderComposerBlockState();
+}
+
+/** 寫信面板依「對方是否被我封鎖」切換：封鎖中只顯示解除封鎖，不給輸入框 */
+function renderComposerBlockState() {
+  if (!composeTo) return;
+  const blocked = blockedHere.has(composeTo);
+  $('#msg-blocked').hidden = !blocked;
+  $('#msg-field').hidden = blocked;
+  $('#btn-msg-send').hidden = blocked;
+  if (blocked) {
+    $('#msg-blocked-text').textContent =
+      `你已封鎖 ${lookOf(composeTo)?.name ?? '這個人'}。解除封鎖後才能傳訊息給他，也會重新收到他的訊息。`;
+    $('#btn-msg-unblock').disabled = false;
+    $('#btn-msg-unblock').focus();
+  } else {
+    msgInput.focus();
+  }
+}
+
+$('#btn-msg-unblock').addEventListener('click', () => {
+  if (!composeTo) return;
+  $('#btn-msg-unblock').disabled = true;
+  sendMsg(EV.MSG_UNBLOCK, { userId: composeTo });
+  // 畫面等伺服器回 MSG_BLOCKS 才切換，與伺服器的名單保持一致
+});
+
+/** 伺服器的封鎖名單（MSG_BLOCKS）是唯一來源 */
+function setBlocked(userIds) {
+  const before = new Set(blockedHere);
+  blockedHere.clear();
+  for (const id of Array.isArray(userIds) ? userIds : []) blockedHere.add(id);
+  if (composeTo && before.has(composeTo) && !blockedHere.has(composeTo)) {
+    showToast(`已解除封鎖 ${lookOf(composeTo)?.name ?? ''}`.trim());
+  }
+  if (!msgSheet.hidden) renderComposerBlockState();
+}
+
+function closeComposer() {
+  if (msgSheet.hidden) return;
+  msgSheet.hidden = true;
+  composeTo = null;
+  popOverlay(msgSheet);
+  // 寫信期間收到的訊息先排著，寫完（或取消）才接著顯示
+  if (inboxQueue.length && !showing) showNextMessage();
+}
+
+function updateMsgCount() {
+  const n = [...msgInput.value].length;
+  $('#msg-count').textContent = `${n} / ${DIRECT_MESSAGE.maxLength}`;
+  $('#btn-msg-send').disabled = composeSending || msgInput.value.trim().length === 0;
+}
+
+msgInput.addEventListener('input', updateMsgCount);
+// Enter 送出、Shift+Enter 不換行（伺服器本來就會把換行剝掉，單行比較誠實）
+msgInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('#btn-msg-send').click(); }
+});
+$('#btn-msg-close').addEventListener('click', closeComposer);
+$('#btn-msg-send').addEventListener('click', () => {
+  const text = msgInput.value.trim();
+  if (!composeTo || !text || composeSending) return;
+  composeSending = true;
+  sendingFrom = 'composer';
+  $('#btn-msg-send').disabled = true;
+  sendMsg(EV.MSG_SEND, { to: composeTo, text });
+});
+
+const MSG_ERROR_TEXT = {
+  [MSG_ERRORS.EMPTY]: '寫點什麼再送出吧。',
+  [MSG_ERRORS.TOO_LONG]: `訊息最多 ${DIRECT_MESSAGE.maxLength} 個字。`,
+  [MSG_ERRORS.NOT_FOUND]: '對方已經離開現場了。',
+  [MSG_ERRORS.OFFLINE]: '對方的手機目前沒有連線，晚點再試，或直接走過去找他。',
+  [MSG_ERRORS.SELF]: '那是你自己喔。',
+  [MSG_ERRORS.RATE_LIMITED]: '傳太快了，等幾秒再送。',
+  [MSG_ERRORS.BLOCKED]: '你封鎖了對方，要先解除封鎖才能傳訊息。',
+};
+
+/** 剛送出的那則是從哪裡送的：'composer'（點角色寫的）或 'reply'（收件畫面上的回應） */
+let sendingFrom = null;
+
+function onMessageResult(msg) {
+  const from = sendingFrom;
+  sendingFrom = null;
+  composeSending = false;
+  replySending = false;
+  if (msg.ok) {
+    showToast('訊息已送出');
+    if (from === 'reply') showNextMessage();
+    else if (msg.to === composeTo) closeComposer();
+    return;
+  }
+  const text = MSG_ERROR_TEXT[msg.reason] ?? '訊息沒有送出，請再試一次。';
+  const el = $(from === 'reply' ? '#reply-error' : '#msg-error');
+  el.textContent = text;
+  el.hidden = false;
+  updateMsgCount();
+  updateReplyCount();
+}
+
+// ── 收件 ──────────────────────────────────────────────────
+const inbox = $('#msg-inbox');
+/** 還沒看的訊息，依收到順序 */
+const inboxQueue = [];
+let showing = null;
+/** 自己封鎖了哪些人。由伺服器的 MSG_BLOCKS 同步（進場時補送），手機重整也不會忘 */
+const blockedHere = new Set();
+
+function receiveMessage(m) {
+  if (blockedHere.has(m.from)) return;
+  inboxQueue.push(m);
+  vibrate([20, 60, 20]);
+  // 正在打字時不跳出來打斷，只震動；送出或取消後才顯示
+  if (!showing && msgSheet.hidden) showNextMessage();
+  else updateInboxMore();
+}
+
+function showNextMessage() {
+  showing = inboxQueue.shift() ?? null;
+  if (!showing) {
+    if (!inbox.hidden) { inbox.hidden = true; popOverlay(inbox); }
+    return;
+  }
+  $('#inbox-title').textContent = `${showing.fromName || '有人'} 傳訊息給你`;
+  $('#inbox-text').textContent = showing.text;   // 對方自由輸入的文字，一律 textContent
+  showPortrait($('#inbox-avatar'), lookOf(showing.from)?.look ?? null);
+  replyInput.value = '';
+  $('#reply-error').hidden = true;
+  updateReplyCount();
+  updateInboxMore();
+  if (inbox.hidden) {
+    inbox.hidden = false;
+    pushOverlay(inbox, { onEscape: () => showNextMessage() });
+  }
+  // 焦點放在「知道了」而不是回應框：直接聚焦輸入框會在手機上立刻彈出鍵盤，
+  // 蓋住對方的訊息，而多數時候人只是想看一眼
+  $('#btn-inbox-close').focus();
+}
+
+function updateInboxMore() {
+  const more = $('#inbox-more');
+  more.hidden = inboxQueue.length === 0;
+  more.textContent = `還有 ${inboxQueue.length} 則訊息`;
+}
+
+$('#btn-inbox-close').addEventListener('click', () => showNextMessage());
+const replyInput = $('#reply-input');
+replyInput.maxLength = DIRECT_MESSAGE.maxLength;
+let replySending = false;
+
+function updateReplyCount() {
+  $('#reply-count').textContent = `${[...replyInput.value].length} / ${DIRECT_MESSAGE.maxLength}`;
+  $('#btn-inbox-reply').disabled = replySending || replyInput.value.trim().length === 0;
+}
+replyInput.addEventListener('input', updateReplyCount);
+replyInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('#btn-inbox-reply').click(); }
+});
+$('#btn-inbox-reply').addEventListener('click', () => {
+  const text = replyInput.value.trim();
+  if (!showing || !text || replySending) return;
+  replySending = true;
+  sendingFrom = 'reply';
+  $('#btn-inbox-reply').disabled = true;
+  // 回應直接送給寄件人。不需要他還在名冊上 —— 伺服器會判斷他還在不在場、手機有沒有連線
+  sendMsg(EV.MSG_SEND, { to: showing.from, text });
+});
+$('#btn-inbox-block').addEventListener('click', () => {
+  if (!showing) return;
+  const { from, fromName } = showing;
+  sendMsg(EV.MSG_BLOCK, { userId: from });
+  blockedHere.add(from);
+  for (let i = inboxQueue.length - 1; i >= 0; i--) if (inboxQueue[i].from === from) inboxQueue.splice(i, 1);
+  showToast(`已封鎖 ${fromName || '對方'}，不會再收到他的訊息`);
+  showNextMessage();
+});
+$('#btn-inbox-report').addEventListener('click', () => {
+  if (!showing) return;
+  sendMsg(EV.MSG_REPORT, { messageId: showing.id });
+  showToast('已檢舉給主辦方，謝謝你告訴我們');
+  showNextMessage();
+});
+
+// ─────────────────────────────────────────────────────────────
+// 進場問卷（團隊分類用，見 shared/persona.js）
+// ─────────────────────────────────────────────────────────────
+// 拍照路徑：嵌在「生成中」那一頁，利用二十幾秒的等待作答。
+// 捏臉路徑：沒有等待，按「完成，進入現場」後跳出同一份題目。
+// 一律可以略過 —— 掃描失敗都不擋人進場了，一份問卷更不該擋。
+
+const PERSONA_LS = 'pf.persona';
+/** 主辦端設定的題目 {quiz, version}；讀不到時是 null，整個問卷就不出現 */
+let personaQuiz = null;
+/** 這支手機的作答 {version, answers, resultId}。跟著 CLIENT_JOIN 送出 */
+let personaAnswers = null;
+try { personaAnswers = JSON.parse(localStorage.getItem(PERSONA_LS) ?? 'null'); } catch { personaAnswers = null; }
+
+async function loadPersonaQuiz() {
+  try {
+    const res = await fetch('/api/persona-quiz', { cache: 'no-store' });
+    const body = await res.json();
+    if (body?.ok && body.quiz?.questions?.length) personaQuiz = { quiz: body.quiz, version: body.version };
+  } catch { /* 讀不到就不問，不影響進場 */ }
+  return personaQuiz;
+}
+loadPersonaQuiz();
+
+/** 已經答過「現在這份」題目了嗎（主持人改了題目的話要重答） */
+const personaAnsweredCurrent = () => !!(personaQuiz && personaAnswers?.version === personaQuiz.version);
+
+/**
+ * 在容器裡跑一輪問卷。
+ * @param {HTMLElement} box
+ * @param {{onFinish: (result: object|null) => void, finishLabel?: string}} opts
+ *   onFinish 在按下結果卡的按鈕、或略過時呼叫；略過時 result 為 null
+ */
+function runPersonaQuiz(box, { onFinish, finishLabel = '繼續' }) {
+  const { quiz, version } = personaQuiz;
+  const answers = [];
+
+  const renderQuestion = () => {
+    const i = answers.length;
+    const q = quiz.questions[i];
+    box.replaceChildren();
+    const head = document.createElement('p');
+    head.className = 'pq-head';
+    head.textContent = `順便答 ${quiz.questions.length} 題，幫你找到合適的隊友　${i + 1} / ${quiz.questions.length}`;
+    const title = document.createElement('h2');
+    title.className = 'pq-question';
+    title.textContent = q.text;   // 主持人輸入的文字，一律 textContent
+    const list = document.createElement('div');
+    list.className = 'pq-options';
+    q.options.forEach((o, j) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pq-option';
+      b.textContent = o.label;
+      b.addEventListener('click', () => {
+        answers.push(j);
+        if (answers.length < quiz.questions.length) renderQuestion();
+        else finish();
+      });
+      list.append(b);
+    });
+    const skip = document.createElement('button');
+    skip.type = 'button';
+    skip.className = 'btn-link pq-skip';
+    skip.textContent = '略過問卷';
+    skip.addEventListener('click', () => onFinish(null));
+    box.append(head, title, list, skip);
+    list.querySelector('button')?.focus({ preventScroll: true });
+  };
+
+  const finish = () => {
+    const result = scorePersona(quiz, answers);
+    if (!result) { onFinish(null); return; }
+    personaAnswers = { version, answers, resultId: result.id };
+    try { localStorage.setItem(PERSONA_LS, JSON.stringify(personaAnswers)); } catch { /* 略 */ }
+    box.replaceChildren();
+    const card = document.createElement('div');
+    card.className = 'pq-result';
+    const emoji = document.createElement('span');
+    emoji.className = 'pq-emoji';
+    emoji.setAttribute('aria-hidden', 'true');
+    emoji.textContent = result.emoji;
+    const name = document.createElement('h2');
+    name.textContent = `你是${result.name}（${result.style}）`;
+    const strengths = document.createElement('p');
+    strengths.textContent = result.strengths;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-primary pq-continue';
+    btn.textContent = finishLabel;
+    btn.addEventListener('click', () => onFinish(result));
+    card.append(emoji, name, strengths, btn);
+    box.append(card);
+    btn.focus({ preventScroll: true });
+    box.dispatchEvent(new CustomEvent('persona-result', { detail: result }));
+  };
+
+  renderQuestion();
+}
+
+// ── 拍照路徑：嵌在生成中 ────────────────────────────────────
+let personaScanActive = false;   // 題目還在作答中（結果卡出現後就算答完）
+let scanReady = false;           // 角色已生成好，等問卷答完才顯示
+
+async function startPersonaDuringScan() {
+  scanReady = false;
+  const box = $('#persona-scan');
+  box.hidden = true;
+  // 頁面載入時沒讀到題目（例如剛好碰上伺服器重啟）就在這裡再讀一次 ——
+  // 只在載入時讀一次的話，那支手機之後每次生成都不會出現問卷
+  if (!personaQuiz) await loadPersonaQuiz();
+  if (!personaQuiz || $('#scan .scan-panel[data-phase="working"]').hidden) return;
+  // 答過現在這份題目：不再整份重問，但要讓人看得到自己的結果、想改可以重答。
+  // 整個不顯示的話，看起來就像問卷壞掉了
+  if (personaAnsweredCurrent()) { showPersonaSummary(box); return; }
+  runPersonaInScan(box);
+}
+
+function showPersonaSummary(box) {
+  const result = PERSONA_RESULT_MAP[personaAnswers.resultId];
+  if (!result) { runPersonaInScan(box); return; }
+  box.replaceChildren();
+  const line = document.createElement('p');
+  line.className = 'pq-summary';
+  line.textContent = `${result.emoji} 你是${result.name}（${result.style}）`;
+  const redo = document.createElement('button');
+  redo.type = 'button';
+  redo.className = 'btn-link';
+  redo.textContent = '重新作答';
+  redo.addEventListener('click', () => runPersonaInScan(box));
+  line.append(redo);
+  box.append(line);
+  box.hidden = false;
+}
+
+function runPersonaInScan(box) {
+  personaScanActive = true;
+  $('#scan-tip').hidden = true;
+  box.hidden = false;
+  box.addEventListener('persona-result', () => {
+    personaScanActive = false;
+    // 角色還在生成：結果卡留著陪他等，按鈕先停用
+    const btn = box.querySelector('.pq-continue');
+    if (btn && !scanReady) { btn.disabled = true; btn.textContent = '角色生成中…'; }
+  }, { once: true });
+  runPersonaQuiz(box, {
+    finishLabel: '看我的角色',
+    onFinish: () => {
+      personaScanActive = false;
+      box.hidden = true;
+      if (scanReady) showScanPhase('done');
+    },
+  });
+}
+
+function stopPersonaDuringScan() {
+  personaScanActive = false;
+  $('#persona-scan').hidden = true;
+}
+
+/** 生成完成。問卷還在作答就先等，答完（或略過）才換到確認頁 */
+function showScanDone() {
+  scanReady = true;
+  const box = $('#persona-scan');
+  // 沒有在作答（沒出題、只顯示結果小卡，或已答完在等）就直接換到確認頁
+  if (box.hidden || (!personaScanActive && !box.querySelector('.pq-continue'))) { box.hidden = true; showScanPhase('done'); return; }
+  const btn = box.querySelector('.pq-continue');
+  if (btn) {
+    // 已經在看結果卡：直接讓他按「看我的角色」
+    btn.disabled = false; btn.textContent = '看我的角色';
+  }
+  $('#scan-status').textContent = '角色已經好了！答完就能看到';
+}
+
+// ── 捏臉路徑：進場前跳出 ────────────────────────────────────
+async function askPersonaThen(next) {
+  if (!personaQuiz) await loadPersonaQuiz();
+  if (!personaQuiz || personaAnsweredCurrent()) { next(); return; }
+  const overlay = $('#persona-overlay');
+  overlay.hidden = false;
+  const close = () => { overlay.hidden = true; popOverlay(overlay); };
+  pushOverlay(overlay, { onEscape: () => { close(); next(); } });
+  runPersonaQuiz($('#persona-builder'), {
+    finishLabel: '進入現場',
+    onFinish: () => { close(); next(); },
+  });
 }

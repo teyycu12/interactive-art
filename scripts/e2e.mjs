@@ -440,6 +440,11 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
   await sleep(200);
   check('不存在的主題被拒絕', hostRejects.length === rejectsBefore + 1 && !screenThemes.includes('../../etc/passwd'));
 
+  const rejectsBeforeRoom = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'room' }));
+  await sleep(200);
+  check('不開放的 3D 客廳被拒絕', hostRejects.length === rejectsBeforeRoom + 1 && !screenThemes.includes('room'));
+
   host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'office' }));
   await sleep(300);
   check('切換主題後大螢幕收到 STAGE_THEME', screenThemes.at(-1) === 'office', JSON.stringify(screenThemes));
@@ -506,8 +511,8 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
 }
 
 // ── 大螢幕控制 ────────────────────────────────────────────
-// 原本在投影畫面上的按鈕（光線、清除效果、重置視角、除錯）全部改由主辦端操作。
-// 光線是狀態（由伺服器保存、連線時補送），清除與重置是一次性動作。
+// 原本在投影畫面上的按鈕改由主辦端操作：清除效果（一次性動作）與除錯視圖（狀態，連線時補送）。
+// 光線與重置視角已拿掉。
 {
   const settings = [];
   const cmds = [];
@@ -517,25 +522,25 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
     if (m.type === 'SCREEN_CMD') cmds.push(m.cmd);
   });
 
-  badHost.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'light', value: 'night' }));
+  badHost.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'debug', value: true }));
   badHost.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'clear' }));
   await sleep(200);
   check('未認證連線無法操作大螢幕', settings.length === 0 && cmds.length === 0);
 
-  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'light', value: 'sunset<script>' }));
-  await sleep(150);
-  check('不存在的光線被忽略', settings.length === 0, JSON.stringify(settings));
-
-  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'light', value: 'evening' }));
-  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'clear' }));
+  // 已移除的指令不能還有作用（舊版主辦端頁面可能還會送）
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'light', value: 'night' }));
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'reset' }));
+  await sleep(150);
+  check('已移除的光線與重置視角指令被忽略', settings.length === 0 && cmds.length === 0,
+    JSON.stringify({ settings, cmds }));
+
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'clear' }));
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'debug', value: true }));
   await sleep(300);
-  check('主辦端切換光線後大螢幕收到 SCREEN_SETTINGS', settings.some((x) => x.light === 'evening'), JSON.stringify(settings));
-  check('清除效果與重置視角轉發給大螢幕', cmds.includes('clear') && cmds.includes('reset'), JSON.stringify(cmds));
+  check('清除效果轉發給大螢幕', cmds.includes('clear'), JSON.stringify(cmds));
   check('除錯視圖可由主辦端打開', settings.at(-1)?.debug === true);
 
-  // 投影機中途重開：要接回目前的光線，不能自己變回白天
+  // 投影機中途重開：要接回除錯視圖的狀態與活動名稱
   const reScreen = new WebSocket(URL);
   let reSettings = null;
   let reEvent;
@@ -546,12 +551,91 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
     if (m.type === 'STAGE_EVENT') reEvent = m.event;
   });
   await sleep(300);
-  check('大螢幕重新連線時接回目前的光線與活動名稱',
-    reSettings?.light === 'evening' && reEvent?.name === '新生交流夜', JSON.stringify({ reSettings, reEvent }));
+  check('大螢幕重新連線時接回除錯視圖狀態與活動名稱',
+    reSettings?.debug === true && reEvent?.name === '新生交流夜', JSON.stringify({ reSettings, reEvent }));
   reScreen.close();
 
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'debug', value: false }));
   await sleep(100);
+}
+
+// ── 進場人格問卷（團隊分類）────────────────────────────────
+// 手機在生成角色時先以 HTTP 讀題目（還沒有 WebSocket），作答隨 CLIENT_JOIN 送出，
+// 伺服器判定類型並記成 persona 標籤；主持人可以改題目。
+async function getJson(pathname) {
+  return new Promise((resolve) => {
+    http.get({ host: '127.0.0.1', port: PORT, path: pathname }, (res) => {
+      const out = []; res.on('data', (c) => out.push(c));
+      res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(out).toString())); } catch { resolve(null); } });
+    }).on('error', () => resolve(null));
+  });
+}
+const personaQuizMsgs = [];
+host.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'HOST_PERSONA_QUIZ') personaQuizMsgs.push(m); });
+{
+  const first = await getJson('/api/persona-quiz');
+  check('手機進場前讀得到進場問卷（預設 4 題）',
+    first?.ok === true && first.quiz?.questions?.length === 4 && typeof first.version === 'string' && first.isDefault === true,
+    JSON.stringify(first)?.slice(0, 120));
+
+  // 依預設題目選 D, D, D, I → 老虎
+  const joinWith = async (name, persona) => {
+    const ws = new WebSocket(URL);
+    let welcome = null;
+    ws.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'CLIENT_WELCOME') welcome = m; });
+    await new Promise((r) => ws.on('open', r));
+    ws.send(JSON.stringify({ type: 'CLIENT_JOIN', name, avatar: AVATAR, persona }));
+    await sleep(300);
+    return { ws, id: welcome?.userId };
+  };
+  const tiger = await joinWith('老虎測試', { version: first.version, answers: [0, 0, 0, 1] });
+  const stale = await joinWith('舊題目', { version: 'old-version', answers: [0, 0, 0, 0] });
+  const junk = await joinWith('亂答', { version: first.version, answers: [9, 9, 9, 9] });
+  await sleep(300);
+  const agentOf = (id) => hostStates.at(-1)?.agents?.find((a) => a.id === id);
+  check('作答隨進場送出，伺服器判定類型並記成標籤',
+    agentOf(tiger.id)?.traits?.persona?.value === 'tiger' && agentOf(tiger.id)?.traits?.persona?.label === '🐯 老虎',
+    JSON.stringify(agentOf(tiger.id)?.traits));
+  check('答的是舊版題目或答案不合格時不判定（不給亂猜的標籤）',
+    !agentOf(stale.id)?.traits?.persona && !agentOf(junk.id)?.traits?.persona);
+  const spread = hostStates.at(-1)?.personaSpread;
+  check('主辦端拿到五型分佈與未作答人數',
+    spread?.counts?.length === 5 && spread.counts.find((c) => c.id === 'tiger')?.count === 1 && spread.unanswered >= 2,
+    JSON.stringify(spread));
+  for (const p of [tiger, stale, junk]) host.send(JSON.stringify({ type: 'HOST_KICK', agentId: p.id }));
+  for (const p of [tiger, stale, junk]) p.ws.close();
+  await sleep(200);
+
+  // 主持人改題目
+  const custom = { questions: [
+    { text: '週末最想做什麼？', options: [{ label: '挑戰新事物', type: 'D' }, { label: '揪朋友聚會', type: 'I' }] },
+    { text: '分組報告你會？', options: [{ label: '帶頭分工', type: 'D' }, { label: '整理資料', type: 'C' }] },
+    { text: '旅行前你會？', options: [{ label: '排好行程', type: 'C' }, { label: '隨遇而安', type: 'S' }] },
+  ] };
+  badHost.send(JSON.stringify({ type: 'HOST_SET_PERSONA_QUIZ', quiz: custom }));
+  await sleep(200);
+  check('未認證連線不能改進場問卷', (await getJson('/api/persona-quiz'))?.quiz?.questions?.length === 4);
+
+  let rejectsBefore = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_SET_PERSONA_QUIZ', quiz: { questions: custom.questions.slice(0, 2) } }));
+  await sleep(200);
+  check('少於 3 題的問卷被拒絕', hostRejects.length === rejectsBefore + 1, hostRejects.at(-1)?.reason);
+
+  host.send(JSON.stringify({ type: 'HOST_SET_PERSONA_QUIZ', quiz: custom }));
+  await sleep(300);
+  const after = await getJson('/api/persona-quiz');
+  check('主持人改題目後，手機讀到的是新題目、版本也變了',
+    after?.quiz?.questions?.[0]?.text === '週末最想做什麼？' && after.version !== first.version && after.isDefault === false);
+  check('改題目後其他主辦端收到 HOST_PERSONA_QUIZ', personaQuizMsgs.at(-1)?.quiz?.questions?.length === 3);
+
+  const rehost = new WebSocket(URL);
+  let reQuiz = null;
+  rehost.on('open', () => rehost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY })));
+  rehost.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'HOST_PERSONA_QUIZ') reQuiz = m.quiz; });
+  await sleep(300);
+  check('主辦端重新登入時補送目前的題目', reQuiz?.questions?.length === 3);
+  rehost.close();
+  // 自訂題目留著，給下面「重開伺服器後題目還在」的檢查
 }
 
 // ── 轉場問卷 ──────────────────────────────────────────────
@@ -951,11 +1035,114 @@ await sleep(300);
   await sleep(200);
 }
 
+// ── 私訊 ──────────────────────────────────────────────────
+// 點手機畫面上的角色傳文字。只送給收件人；封鎖靜默丟棄；檢舉的那一則才進主辦端。
+const dmReports = [];
+let hostSawPrivateMessage = false;
+host.on('message', (d) => {
+  const m = JSON.parse(d);
+  if (m.type === 'HOST_MSG_REPORTS') dmReports.push(m.reports);
+  if (m.type === 'MSG_RECEIVE') hostSawPrivateMessage = true;
+});
+{
+  const inboxA = []; const inboxB = []; const resA = []; const resB = []; const benBlocks = [];
+  ben.ws.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'MSG_BLOCKS') benBlocks.push(m.userIds); });
+  for (const [phone, inbox, res] of [[amy, inboxA, resA], [ben, inboxB, resB]]) {
+    phone.ws.on('message', (d) => {
+      const m = JSON.parse(d);
+      if (m.type === 'MSG_RECEIVE') inbox.push(m.message);
+      if (m.type === 'MSG_RESULT') res.push(m);
+    });
+  }
+  const aId = amy.welcome.userId;
+  const bId = ben.welcome.userId;
+  const dm = (phone, to, text) => phone.ws.send(JSON.stringify({ type: 'MSG_SEND', to, text }));
+
+  dm(amy, bId, ' 我在\n籃球架旁邊 ');
+  await sleep(300);
+  check('私訊送到收件人（剝除換行與頭尾空白）',
+    inboxB[0]?.text === '我在籃球架旁邊' && inboxB[0]?.fromName === '小美' && inboxB[0]?.from === aId,
+    JSON.stringify(inboxB));
+  check('寄件人收到送出成功', resA[0]?.ok === true && resA[0]?.to === bId, JSON.stringify(resA));
+  check('私訊不會送到寄件人自己或主辦端', inboxA.length === 0 && !hostSawPrivateMessage && dmReports.length <= 1);
+
+  dm(amy, aId, '自言自語');
+  dm(amy, bId, '長'.repeat(61));
+  dm(amy, 'usr_ghost', '在嗎');
+  await sleep(300);
+  check('傳給自己、超過 60 字、對象不存在都被拒絕',
+    resA.slice(1).map((r) => r.reason).join() === 'SELF,TOO_LONG,NOT_FOUND', JSON.stringify(resA.slice(1)));
+
+  await sleep(2100);
+  dm(amy, bId, '第二則');
+  dm(amy, bId, '第三則（太快）');
+  await sleep(300);
+  check('連續送出會被頻率限制擋下', resA.at(-2)?.ok === true && resA.at(-1)?.reason === 'RATE_LIMITED',
+    JSON.stringify(resA.slice(-2)));
+
+  screen.send(JSON.stringify({ type: 'MSG_SEND', to: bId, text: '我是大螢幕' }));
+  await sleep(200);
+  check('大螢幕連線不能傳私訊', !inboxB.some((m) => m.text === '我是大螢幕'));
+
+  // 檢舉：只有收件人能檢舉，主辦端拿到原文與名字
+  amy.ws.send(JSON.stringify({ type: 'MSG_REPORT', messageId: inboxB[0].id }));
+  await sleep(200);
+  check('寄件人不能檢舉自己送出的訊息', !dmReports.some((list) => list.length > 0));
+  ben.ws.send(JSON.stringify({ type: 'MSG_REPORT', messageId: inboxB[0].id }));
+  await sleep(300);
+  const reported = dmReports.at(-1)?.[0];
+  check('收件人檢舉後，主辦端收到那一則的原文與雙方名字',
+    reported?.text === '我在籃球架旁邊' && reported?.fromName === '小美' && reported?.toName === '阿賓' && reported?.fromPresent === true,
+    JSON.stringify(reported));
+
+  // 主辦端重整：檢舉清單只由事件驅動，認證時要補送（SERVER-AND-TESTS「主辦端的面板狀態只由事件驅動」）
+  const rehost = new WebSocket(URL);
+  let reReports = null;
+  rehost.on('open', () => rehost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY })));
+  rehost.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'HOST_MSG_REPORTS') reReports = m.reports; });
+  await sleep(300);
+  check('主辦端重新登入時補送檢舉清單', reReports?.length === 1, JSON.stringify(reReports));
+  rehost.close();
+
+  host.send(JSON.stringify({ type: 'HOST_DISMISS_REPORT', messageId: inboxB[0].id }));
+  await sleep(200);
+  check('主辦端按「已處理」後檢舉從清單移除', dmReports.at(-1)?.length === 0);
+
+  // 封鎖：之後的訊息靜默丟棄，寄件人看到的仍是成功；封鎖是單向的
+  ben.ws.send(JSON.stringify({ type: 'MSG_BLOCK', userId: aId }));
+  await sleep(2100);
+  const before = inboxB.length;
+  dm(amy, bId, '被封鎖後還在傳');
+  await sleep(300);
+  check('被封鎖後訊息不再送達，但寄件人看到的仍是送出成功',
+    inboxB.length === before && resA.at(-1)?.ok === true, JSON.stringify({ got: inboxB.length - before, last: resA.at(-1) }));
+  check('封鎖後伺服器把封鎖名單同步給封鎖者的手機', benBlocks.at(-1)?.join() === aId, JSON.stringify(benBlocks));
+  dm(ben, aId, '封鎖中還想傳');
+  await sleep(300);
+  check('封鎖的人自己也不能傳給對方（要先解除封鎖）', resB.at(-1)?.reason === 'BLOCKED' && !inboxA.some((m) => m.text === '封鎖中還想傳'),
+    JSON.stringify(resB.at(-1)));
+
+  ben.ws.send(JSON.stringify({ type: 'MSG_UNBLOCK', userId: aId }));
+  await sleep(300);
+  check('解除封鎖後名單同步清空', benBlocks.at(-1)?.length === 0, JSON.stringify(benBlocks.at(-1)));
+  dm(ben, aId, '我還是可以傳給你');
+  await sleep(300);
+  check('解除封鎖後可以再傳給對方', inboxA.at(-1)?.text === '我還是可以傳給你');
+
+  // 留一則檢舉給下面的踢人測試：被踢之後 fromPresent 要變成 false
+  dm(amy, bId, '');   // 空訊息不送出、不吃額度
+  inboxA.length && amy.ws.send(JSON.stringify({ type: 'MSG_REPORT', messageId: inboxA.at(-1).id }));
+  await sleep(300);
+}
+
 // ── 主辦端踢人 ────────────────────────────────────────────
 const benId = ben.welcome.userId;
 host.send(JSON.stringify({ type: 'HOST_KICK', agentId: benId }));
 await sleep(500);
 check('主辦端可移除參與者', !live().some((a) => a.id === benId), `場上 ${live().length} 人`);
+check('被檢舉的人被移除後，檢舉清單標示寄件人已不在場',
+  dmReports.at(-1)?.[0]?.fromName === '阿賓' && dmReports.at(-1)?.[0]?.fromPresent === false,
+  JSON.stringify(dmReports.at(-1)));
 
 // ── 結算任務 ──────────────────────────────────────────────
 host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
@@ -1040,6 +1227,12 @@ check('重開後終端機顯示已接續上次的活動資料',
   reScreen.close();
 }
 
+// 活動中途重開，主持人改過的進場問卷不能悄悄換回預設
+{
+  const q = await getJson('/api/persona-quiz');
+  check('重開後主持人改過的進場問卷還在', q?.quiz?.questions?.[0]?.text === '週末最想做什麼？' && q.isDefault === false);
+}
+
 // 活動中途重開，主辦端不能被趕回設定頁、投影的標題與光線也不能跳掉
 {
   const reHost = new WebSocket(URL);
@@ -1053,7 +1246,7 @@ check('重開後終端機顯示已接續上次的活動資料',
   });
   await sleep(400);
   check('重開後活動名稱還在，主辦端直接進控制台', reEvent?.name === '新生交流夜', JSON.stringify(reEvent));
-  check('重開後大螢幕光線維持上次的設定', reSettings?.light === 'evening', JSON.stringify(reSettings));
+  check('重開後除錯視圖自動關閉', reSettings?.debug === false, JSON.stringify(reSettings));
   reHost.close();
 }
 

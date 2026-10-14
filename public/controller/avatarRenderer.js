@@ -90,6 +90,8 @@ export class AvatarRenderer {
     this.backdrop = null;
     /** 自己在場域上的顯示位置（平滑過的伺服器座標），鏡頭中心 */
     this.selfPos = null;
+    /** 這一幀鄰居的點擊框（見 pickAt） */
+    this.hitboxes = [];
     /** 累計走過的距離（身高數）。步伐換腳與腳步震動都以它為準。 */
     this.travel = 0;
     this._lastStep = null;
@@ -374,7 +376,36 @@ export class AvatarRenderer {
     this._prevPhaseSin = s;
   }
 
+  /**
+   * 點擊判定：手機畫面上的某一點落在哪個鄰居身上（私訊用）。
+   *
+   * 框在每一幀畫的時候記下來（_hit），與畫面上的位置完全一致，不另外重算一套投影。
+   * 由後往前找：後畫的人站得比較前面、蓋在上面，手指點到的應該是他。
+   * @returns {string|null} 鄰居的 id；沒點到人（或點到自己）回 null
+   */
+  pickAt(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    for (let i = this.hitboxes.length - 1; i >= 0; i--) {
+      const b = this.hitboxes[i];
+      if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) return b.id;
+    }
+    return null;
+  }
+
+  /**
+   * 記下一個鄰居的點擊框（腳底在 pos、身高 height 的角色）。
+   * 小於 44px 的一律撐到 44px —— 遠處的人在手機上只有二十幾 px 高，照實際大小根本點不到。
+   */
+  _hit(id, pos, height) {
+    const w = Math.max(44, height * 0.64);
+    const h = Math.max(44, height + 10);
+    this.hitboxes.push({ id, x0: pos.x - w / 2, x1: pos.x + w / 2, y0: pos.y + 10 - h, y1: pos.y + 10 });
+  }
+
   _draw() {
+    this.hitboxes = [];
     if (this.backdrop) { this._drawScene(); return; }
     const { ctx, w, h } = this;
     const horizon = h * HORIZON_RATIO;
@@ -488,6 +519,7 @@ export class AvatarRenderer {
         { state: n.state, vx: n.vx, vy: n.vy, facing: n.facing ?? 1, heading: n.heading, emote: n.emote },
         pos, this.looks.get(n.id)?.sprite ?? null,
         { time: this.time, maxSpeed: MAX_SPEED, height, travel: n.travel });
+      this._hit(n.id, pos, height);
       // 名字：配對任務要「走向另一位參與者」，看不出誰是誰就無從找起
       const name = this.names.get(n.id);
       if (name) drawNameplate(ctx, pos, name, { fontSize: Math.max(11, Math.round(height * 0.12)) });
@@ -536,6 +568,7 @@ export class AvatarRenderer {
         { time: this.time, maxSpeed: MAX_SPEED,
           height: CHARACTER_HEIGHT * NEIGHBOR_SCALE * (0.8 + fade * 0.2) });
       ctx.restore();
+      this._hit(n.id, { x, y }, CHARACTER_HEIGHT * NEIGHBOR_SCALE * (0.8 + fade * 0.2));
 
       // 名字：配對任務要「走向另一位參與者」，看不出誰是誰就無從找起。
       // 太遠的不畫 —— 小字疊在一起反而比沒有更難讀。
