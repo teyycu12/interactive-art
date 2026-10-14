@@ -117,7 +117,7 @@ export const EV = {
 
   // ── 私訊（點手機畫面上的角色傳文字）──────────────────
   MSG_SEND: 'MSG_SEND',                       // Phone → Server：傳訊息給某位參與者 {to, text}
-  MSG_RESULT: 'MSG_RESULT',                   // Server → Phone：送出結果 {ok, to, reason?}
+  MSG_RESULT: 'MSG_RESULT',                   // Server → Phone：送出結果 {ok, to, reason?, ref?}（ref 為 MSG_SEND 帶來的請求編號）
   MSG_RECEIVE: 'MSG_RECEIVE',                 // Server → Phone：收到訊息 {message}
   MSG_BLOCK: 'MSG_BLOCK',                     // Phone → Server：封鎖某人，之後不再收到他的訊息
   MSG_UNBLOCK: 'MSG_UNBLOCK',                 // Phone → Server：解除封鎖

@@ -179,7 +179,11 @@ export const DIRECT_MESSAGES = {
   keepForReportMs: 30 * 60 * 1000, // 訊息留 30 分鐘供檢舉；只在記憶體，不寫快照
   keepMax: 500,           // 保留則數上限，超過就丟最舊的
   reportsMax: 50,         // 主辦端檢舉清單上限
+  maxBlocks: 100,         // 每人最多封鎖幾個人（場上最多 30 人，這個上限只擋捏造的 id）
 };
+
+/** 尋寶的冷熱門檻（說明見 TREASURE.heatThresholds）。抽出來是為了讓 minStartDistance 跟著它走 */
+const TREASURE_HEAT = [70, 220, 480, 900];
 
 /**
  * 尋寶任務（先知模式，見 server/treasure.js）
