@@ -21,9 +21,9 @@ import {
   IDLE_THRESHOLD_MS, ALPHA_RAMP_UP_MS, ALPHA_DECAY_MS,
   DISCONNECT_GRACE_MS, MAX_SPEED, WALK_THRESHOLD,
   ARRIVE, HEADING_TURN_RATE, IDLE_MOTION, FACING_FLIP_SPEED, FACING_DWELL_MS,
-  MANUAL_SMOOTH_TAU,
+  MANUAL_SMOOTH_TAU, VIEW_SIDE_RATIO, VIEW_RETURN_FRONT_MS,
 } from './config.js';
-import { STAGE, AGENT_STATE, AGENT_MODE } from '../shared/protocol.js';
+import { STAGE, AGENT_STATE, AGENT_MODE, AGENT_VIEW } from '../shared/protocol.js';
 import { integrateBoids, resolveObstacleOverlap, obstacleAvoidance } from './boids.js';
 
 /**
@@ -253,6 +253,8 @@ export function stepAgent(agent, agents, dt, now, affinity = null) {
   updateHeading(agent, dt);
 
   updateFacing(agent, dt);
+
+  updateView(agent, dt);
 }
 
 /**
@@ -292,5 +294,59 @@ function updateFacing(agent, dt) {
     agent.facing = want;
     agent.facingPendingDir = null;
     agent.facingPendingMs = 0;
+  }
+}
+
+/**
+ * 更新正面／背面／側面（AGENT_VIEW）。
+ *
+ * 換一面等於換一張圖，與翻面同樣醒目，所以沿用 updateFacing 的兩道防抖：
+ * 速度門檻 FACING_FLIP_SPEED 與停留時間 FACING_DWELL_MS。另外兩件事：
+ *
+ *   1. 側面與正／背面之間有遲滯（VIEW_SIDE_RATIO），斜走時不會來回跳。
+ *   2. 停下滿 VIEW_RETURN_FRONT_MS 才轉回正面 —— 停下來的人要讓觀眾
+ *      認得出來；但不能一停就轉，走走停停時會閃。
+ *
+ * 由伺服器算而不是渲染端各自算，與 heading 同一個理由：大螢幕、手機、
+ * 合照三個畫面必須是同一面。
+ */
+function updateView(agent, dt) {
+  const ms = dt * 1000;
+  const speed = Math.hypot(agent.vx, agent.vy);
+
+  if (speed <= FACING_FLIP_SPEED) {
+    agent.viewPending = null;
+    agent.viewPendingMs = 0;
+    // 還在減速（介於行走門檻與翻面門檻之間）就維持原樣，真的停下才計時
+    if (agent.view === AGENT_VIEW.FRONT || speed > WALK_THRESHOLD) return;
+    agent.viewIdleMs += ms;
+    if (agent.viewIdleMs >= VIEW_RETURN_FRONT_MS) {
+      agent.view = AGENT_VIEW.FRONT;
+      agent.viewIdleMs = 0;
+    }
+    return;
+  }
+  agent.viewIdleMs = 0;
+
+  const ratio = agent.view === AGENT_VIEW.SIDE ? 1 / VIEW_SIDE_RATIO : VIEW_SIDE_RATIO;
+  let want;
+  if (Math.abs(agent.vx) > Math.abs(agent.vy) * ratio) want = AGENT_VIEW.SIDE;
+  else want = agent.vy < 0 ? AGENT_VIEW.BACK : AGENT_VIEW.FRONT;
+
+  if (want === agent.view) {
+    agent.viewPending = null;
+    agent.viewPendingMs = 0;
+    return;
+  }
+  if (agent.viewPending === want) {
+    agent.viewPendingMs += ms;
+  } else {
+    agent.viewPending = want;
+    agent.viewPendingMs = ms;
+  }
+  if (agent.viewPendingMs >= FACING_DWELL_MS) {
+    agent.view = want;
+    agent.viewPending = null;
+    agent.viewPendingMs = 0;
   }
 }

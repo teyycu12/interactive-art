@@ -7,8 +7,9 @@
  * 與 slicer.py / avatars.js 的切片比例是同一類跨檔案耦合。兩端一律 import 此檔。
  *
  * 兩種畫法：
- *   - 掃描生成的角色只有一張正面貼圖，走路、擺動、左右翻面全部由變換矩陣
- *     即時算出（drawCharacter 的主體）。
+ *   - 掃描生成的角色：三個面是生成的三視圖，走路時整張圖輕微起伏，手腳擺動由
+ *     程式從每一面分析出部位再變形（shared/walkFrames.js）。沒有人畫走路動畫，
+ *     新增一種髮型、一種衣服不需要重畫任何一格。
  *   - 捏臉角色是像素圖，四個方向各有三格步態，改用換格（drawPixelCharacter）。
  *     畫格由 shared/pixelAvatar.js 程序產生，新增一種髮型同樣不必手繪任何一格。
  *
@@ -18,15 +19,26 @@
  * 此處全部改為時間基準，並以 60fps 換算出等價常數，維持文件指定的觀感。
  */
 
-import { WALK_THRESHOLD } from '/shared/protocol.js';
+import { WALK_THRESHOLD, AGENT_VIEW } from '/shared/protocol.js';
 import { dirFromHeading, PIXEL_W, PIXEL_H, PIXEL_POSES } from '/shared/pixelAvatar.js';
+import { spriteView, walkSprite, walkFrameIndex } from '/shared/spriteCache.js';
 
 const INK = '#2F2A26';
 
-// 技術文件：ω = 0.2 rad/frame。以 60fps 換算 → 12 rad/s
-const BOB_OMEGA = 0.2 * 60;
-const BOB_AMPLITUDE = 6;        // 文件：A = 6px
-const WOBBLE_DEGREES = 5;       // 文件：±5°
+/**
+ * 起伏的角頻率：一個循環 2π 起伏兩次（cos²），最高速時約每秒 1.9 次，
+ * 接近正常步行的步頻。
+ */
+const STEP_OMEGA = 6;
+
+// 身體起伏（角色高的比例）。只有一點點 —— 舊版整張圖上下跳 6px 加左右轉
+// ±5°，現場回報「人在抖」；之後試過把手腳拆開各自擺（紙娃娃），現場回報
+// 看起來很詭異。現在只剩整張圖的輕微起伏
+const BODY_BOB = 0.012;
+
+// 步態強度高過這個才換走路格（手腳擺動）。低速時整格位移一格一格跳，
+// 看起來像在抽動；起伏照樣隨速度連續淡出
+const WALK_FRAME_GAIT = 0.5;
 
 /**
  * 步態淡出的速度基準：直接沿用協定層的行走門檻。
@@ -46,17 +58,51 @@ function cadence(speed, maxSpeed) {
 }
 
 /**
- * 繪製單一角色。
+ * 每個角色自己的步伐相位。
  *
- * 變換順序（由外而內）：
- *   平移到腳底位置 → 畫地面投影 → 垂直彈跳 → 左右擺動 → 轉向鏡像
- * 投影必須在彈跳之前繪製，它屬於地面而非角色；
- * 擺動的旋轉樞紐設在腳底附近，否則角色會看起來像在原地打轉。
+ * 不能用 time × 步頻 直接算：步頻隨速度變（cadence），而 time 是開頁到
+ * 現在的秒數 —— 速度一變（轉彎時會減速再加速），相位就整段跳動，
+ * 實測轉彎時步伐變得飛快。改成每幀以當下的步頻累加，速度怎麼變都是連續的。
+ * 以 agent.id 為鍵（手機端的自己沒有 id，由 opts.gaitKey 指定）。
+ */
+const gaits = new Map();
+let lastPruneAt = 0;
+
+/**
+ * 某個角色目前的步伐相位（還沒畫過是 null）。手機的腳步震動用它對齊畫面：
+ * 起伏 cos²(相位) 降到 0 的那一刻（相位 π/2、3π/2）是腳著地。
+ */
+export function gaitPhase(key) {
+  return gaits.get(key)?.phase ?? null;
+}
+
+function stepPhase(key, time, rate) {
+  let g = gaits.get(key);
+  if (!g) { g = { phase: 0, at: time }; gaits.set(key, g); }
+  // 上限 0.1 秒：分頁切回來的第一幀不要一口氣跨好幾步
+  const dt = Math.min(0.1, Math.max(0, time - g.at));
+  g.phase = (g.phase + rate * dt) % (Math.PI * 2);
+  g.at = time;
+  // 久未出現的角色（離場）清掉
+  if (time - lastPruneAt > 10) {
+    lastPruneAt = time;
+    for (const [k, v] of gaits) if (time - v.at > 10) gaits.delete(k);
+  }
+  return g.phase;
+}
+
+/**
+ * 繪製單一角色（完全平面）。
+ *
+ * 四面：伺服器的 updateView 決定正面、背面或側面；側面圖朝右，往左走時依
+ * facing 鏡像。三面都是生成的圖（像素風的三視圖），沒有的面退回正面。
+ * 走路時：整張圖輕微上下起伏，手腳依 shared/walkFrames.js 從那一面分析出來的
+ * 部位變形擺動（只有三視圖的角色；其他角色只有起伏）。
  *
  * @param {CanvasRenderingContext2D} ctx
  * @param {object} agent   STAGE_SYNC 的角色狀態
  * @param {{x:number,y:number}} pos  內插後的顯示座標（邏輯空間）
- * @param {HTMLImageElement|null} sprite  組裝好的捏臉圖像
+ * @param {HTMLImageElement|HTMLCanvasElement|null} sprite  組裝好的角色圖像
  * @param {object} opts
  */
 export function drawCharacter(ctx, agent, pos, sprite, opts) {
@@ -65,29 +111,17 @@ export function drawCharacter(ctx, agent, pos, sprite, opts) {
   const speed = Math.hypot(agent.vx, agent.vy);
 
   // 步態強度：不用 state === 'WALK' 這個布林開關，改為隨速度連續淡出。
-  //
-  // 開關式的寫法會在停下的瞬間把擺動硬切成 0，而 sin(phase/2) 當下是任意
-  // 值 —— 最壞情況角色正傾到滿幅 ±5°，卻在一幀之內被扳正，看起來就是
-  // 「停下來時突然左右擺一下」。同理，速度在門檻附近來回時 state 會反覆
-  // 翻轉，角色會持續抽動。
-  //
-  // 以 WALK_THRESHOLD 為終點線性淡出，擺動幅度隨速度一起歸零，
-  // 停下時自然收束到直立，不需要任何額外的過渡狀態。
+  // 開關式的寫法會在停下的瞬間把起伏硬切成 0；速度在門檻附近來回時
+  // state 會反覆翻轉，角色會持續抽動。以 WALK_THRESHOLD 為終點線性淡出。
   const gait = Math.min(1, speed / GAIT_FADE_SPEED);
-
-  // ── 垂直彈跳：Y_offset = -|sin(t·ω)| · A ──
-  const phase = time * BOB_OMEGA * cadence(speed, maxSpeed);
-  const lift = Math.abs(Math.sin(phase)) * BOB_AMPLITUDE * gait;
-
-  // ── 左右擺動：Rotation = sin(t·ω/2) · 5° ──
-  const wobble = Math.sin(phase / 2) * WOBBLE_DEGREES * (Math.PI / 180) * gait;
+  const phase = stepPhase(opts.gaitKey ?? agent.id ?? 'self', time, STEP_OMEGA * cadence(speed, maxSpeed));
+  const lift = Math.cos(phase) ** 2 * BODY_BOB * height * gait;
 
   // 靜止時不做任何動畫。
   //
   // 原本這裡有「呼吸待機」：垂直比例在 0.98~1.02 之間緩慢縮放。單看一個
   // 角色是細微的，但場上多人各自以不同相位縮放時，整片畫面會持續蠕動 ——
   // 觀眾的視線被那個動態一直拉走，反而看不出誰真的在移動。
-  // 角色是貼圖而非骨架，縮放也會讓邊緣輕微抖動。
 
   const w = height * 0.77;   // 捏臉 SVG 的 viewBox 為 200×260
   const h = height;
@@ -95,22 +129,40 @@ export function drawCharacter(ctx, agent, pos, sprite, opts) {
   ctx.save();
   ctx.translate(pos.x, pos.y);
 
-  // ── 動態投影：角色躍起時，陰影同步縮小並變淡 ──
-  const liftRatio = lift / BOB_AMPLITUDE;
+  // ── 地面投影：身體升起時略為縮小變淡 ──
+  const liftRatio = lift / (BODY_BOB * height || 1);
   ctx.beginPath();
-  ctx.ellipse(0, 4, w * 0.34 * (1 - liftRatio * 0.28), h * 0.045 * (1 - liftRatio * 0.28),
+  ctx.ellipse(0, 4, w * 0.34 * (1 - liftRatio * 0.12), h * 0.045 * (1 - liftRatio * 0.12),
     0, 0, Math.PI * 2);
-  ctx.fillStyle = `rgba(47, 42, 38, ${0.16 * (1 - liftRatio * 0.45)})`;
+  ctx.fillStyle = `rgba(47, 42, 38, ${0.16 * (1 - liftRatio * 0.2)})`;
   ctx.fill();
 
-  // ── 角色本體 ──
-  ctx.translate(0, -lift);
-  ctx.rotate(wobble);
-  // 轉向鏡像：Vx > 0 → ScaleX = 1；Vx < 0 → ScaleX = -1
-  ctx.scale(agent.facing, 1);
+  // 體素 3D 角色（大螢幕 ?voxel=1 才有）：動作與轉身都在 3D 裡做完，
+  // 這裡只把圖集那一格貼到腳底
+  if (opts.voxel) {
+    const v = opts.voxel;
+    const size = h / v.heightV;
+    ctx.drawImage(v.canvas, v.sx, v.sy, v.size, v.size, -v.footU * size, -v.footV * size, size, size);
+    ctx.restore();
+    return;
+  }
 
-  if (sprite?.complete && sprite.naturalWidth) {
-    ctx.drawImage(sprite, -w / 2, -h, w, h);
+  // 正面／背面／側面（伺服器的 updateView 決定；沒帶欄位就是正面）。
+  //
+  // 只有真的側面圖依 facing 鏡像 —— 側面圖朝右，往左走翻過來。
+  // 正面與背面不翻：正面再翻只會讓衣服上的字、旁分的瀏海在橫向微調方向時
+  // 左右跳。沒有側面圖的角色（spriteView 退回正面）同理不翻。
+  const view = agent.view ?? AGENT_VIEW.FRONT;
+  const img = spriteView(sprite, view);
+  if (view === AGENT_VIEW.SIDE && img !== sprite) ctx.scale(agent.facing, 1);
+
+  ctx.translate(0, -lift);
+  // 走路格：與起伏同一個相位（兩腳併攏時身體最高）。還沒算好或不適用時是 null
+  const frame = gait > WALK_FRAME_GAIT ? walkSprite(sprite, view, walkFrameIndex(phase), time) : null;
+  if (frame) {
+    ctx.drawImage(frame.canvas, -w / 2 + frame.x * w, -h + frame.y * h, frame.w * w, frame.h * h);
+  } else if (img?.complete && img.naturalWidth) {
+    ctx.drawImage(img, -w / 2, -h, w, h);
   } else {
     // 圖像尚未解碼完成時的替身，避免角色在畫面上憑空消失
     ctx.beginPath();

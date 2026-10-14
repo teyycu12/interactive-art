@@ -104,3 +104,44 @@ class TestRaiseOnFailure(unittest.TestCase):
         for _ in range(5):
             self.breaker.call(failing, "img", max_retries=0, fallback=None)
         self.assertEqual(self.breaker.state, CircuitBreaker.STATE_CLOSED)
+
+
+class TestRealFailureReason(unittest.TestCase):
+    """熔斷器不可把真正的失敗原因換成 circuit_open。
+
+    2026-10-14 現場：OpenRouter 餘額不足（402），garment_gen 已經回報
+    insufficient_credits，卻被熔斷器的 fallback 換成 circuit_open，手機寫
+    「生成服務暫時過載」—— 現場以為等一下就好，其實要去儲值。
+    """
+
+    def setUp(self):
+        self.breaker = CircuitBreaker("imagegen_test", failure_threshold=2, recovery_timeout=60)
+
+    def test_failed_call_returns_its_own_result(self):
+        failing = lambda _: {"ok": False, "error": "insufficient_credits"}
+        out = self.breaker.call(_raise_on_failure, failing, "img",
+                                max_retries=0, fallback={"ok": False, "error": "circuit_open"})
+        self.assertEqual(out["error"], "insufficient_credits")
+
+    def test_open_breaker_still_names_the_cause(self):
+        from backend.service import _open_fallback
+        failing = lambda _: {"ok": False, "error": "insufficient_credits"}
+        for _ in range(2):
+            self.breaker.call(_raise_on_failure, failing, "img",
+                              max_retries=0, fallback=_open_fallback(self.breaker))
+        self.assertEqual(self.breaker.state, CircuitBreaker.STATE_OPEN)
+        # 熔斷中：根本沒有呼叫，但仍要說出是額度用完
+        called = []
+        out = self.breaker.call(lambda: called.append(1), max_retries=0,
+                                fallback=_open_fallback(self.breaker))
+        self.assertEqual(called, [])
+        self.assertEqual(out["error"], "insufficient_credits")
+
+    def test_open_breaker_for_other_reasons_is_circuit_open(self):
+        from backend.service import _open_fallback
+        failing = lambda _: {"ok": False, "error": "APITimeoutError"}
+        for _ in range(2):
+            self.breaker.call(_raise_on_failure, failing, "img",
+                              max_retries=0, fallback=_open_fallback(self.breaker))
+        out = self.breaker.call(lambda: None, max_retries=0, fallback=_open_fallback(self.breaker))
+        self.assertEqual(out["error"], "circuit_open")

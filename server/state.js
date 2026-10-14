@@ -8,7 +8,7 @@
  */
 
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
-import { STAGE, AGENT_STATE, AGENT_MODE } from '../shared/protocol.js';
+import { STAGE, AGENT_STATE, AGENT_MODE, AGENT_VIEW } from '../shared/protocol.js';
 import { OBSTACLES, obstacleDistance, zoneAt } from '../shared/scene.js';
 import { avatarLook } from '../shared/avatars.js';
 import {
@@ -120,6 +120,11 @@ export class Stage {
       // 翻面防抖：累積中的反向與其持續時間（見 arbiter.js 的 updateFacing）
       facingPendingDir: null,
       facingPendingMs: 0,
+      // 正面／背面／側面與其防抖（見 arbiter.js 的 updateView）
+      view: AGENT_VIEW.FRONT,
+      viewPending: null,
+      viewPendingMs: 0,
+      viewIdleMs: 0,
       emote: null,
       lastEmoteAt: 0,
       // 行為 Log（WP-C 數據收集 / M4 活躍度加權的原始資料）
@@ -378,7 +383,7 @@ export class Stage {
       facing: a.facing,
       offline: a.offline,
       emote: a.emote ? a.emote.action : null,
-      // 以下兩欄只在有意義時才送。它們絕大多數時間都是預設值，
+      // 以下幾欄只在有意義時才送。它們絕大多數時間都是預設值，
       // 而這是每秒 30 次 × 30 人的廣播 —— 與捏臉外觀不放進 STAGE_SYNC
       // 是同一個理由。渲染端讀到 undefined 與讀到預設值等價。
       ...(a.emote && {
@@ -389,6 +394,7 @@ export class Stage {
       }),
       // 定位鎖定時才有意義，供合照流程判斷是否可以拍
       ...(a.arrived && { arrived: true }),
+      ...(a.view !== AGENT_VIEW.FRONT && { view: a.view }),
     }));
   }
 
@@ -427,6 +433,8 @@ export class Stage {
         facing: a.facing,
         // 像素角色依它選上下左右，手機上的鄰居才會面向與大螢幕相同的方向
         heading: round3(a.heading),
+        // 拍照生成的角色依它換面；正面不帶，與 snapshot() 相同
+        ...(a.view !== AGENT_VIEW.FRONT && { view: a.view }),
         state: a.state,
         // 有社交動作時才帶，與 snapshot() 同一個省頻寬的理由
         ...(a.emote && { emote: a.emote.action }),
@@ -447,6 +455,7 @@ export class Stage {
         facing: me.facing,
         // 自己的揮手／乾杯：手機 POV 上的自己也要做出動作
         ...(me.emote && { emote: me.emote.action }),
+        view: me.view,
         // 所在分區。手機端據此顯示「你在暢飲區」，與 ZONE_SELF 的
         // 進出事件互補：這個是狀態，那個是事件（重連時只有狀態拿得到）
         zone: me.zone,

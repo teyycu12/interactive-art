@@ -18,6 +18,20 @@ class CircuitBreakerOpenException(Exception):
     pass
 
 
+class CallFailed(RuntimeError):
+    """呼叫失敗，且帶著那次呼叫自己的結果（例如 {ok: False, error: ...}）。
+
+    熔斷器記下失敗後會回傳 .result，而不是 fallback。fallback 只代表
+    「熔斷中、根本沒有呼叫」；把真的呼叫過、有明確原因的失敗也換成
+    fallback，原因就被蓋掉了 —— 2026-10-14 現場額度用完（402），手機與
+    生成紀錄卻一律寫 circuit_open「過載」，查了好一陣子才找到真正原因。
+    """
+
+    def __init__(self, message: str, result: Any = None):
+        super().__init__(message)
+        self.result = result
+
+
 class CircuitBreaker:
     STATE_CLOSED = "CLOSED"        # 正常運作
     STATE_OPEN = "OPEN"            # 熔斷中，阻斷請求
@@ -40,6 +54,9 @@ class CircuitBreaker:
         self._last_failure_time = 0.0
         self._last_state_change = time.time()
         self._lock = threading.Lock()
+        # 最近一次失敗的原因（例外訊息）。熔斷中快速失敗時，呼叫端可以據此
+        # 說出「為什麼熔斷」，而不是只說「熔斷了」
+        self.last_error: Optional[str] = None
 
     @property
     def state(self) -> str:
@@ -62,6 +79,8 @@ class CircuitBreaker:
 
     def record_failure(self, exception: Optional[Exception] = None) -> None:
         with self._lock:
+            if exception is not None:
+                self.last_error = str(exception)
             self._failure_count += 1
             self._last_failure_time = time.time()
 
@@ -113,6 +132,14 @@ class CircuitBreaker:
                     time.sleep(delay)
                 else:
                     self.record_failure(e)
+                    # 真的呼叫過、帶著自己結果的失敗：回傳那份結果（見 CallFailed）。
+                    # 看屬性而不是 isinstance：backend/ 有兩條匯入路徑
+                    # （circuit_breaker 與 backend.circuit_breaker），兩條都成立時
+                    # 會是兩個不同的 CallFailed 類別，isinstance 會默默判成 False
+                    # （與 style_registry 同一個陷阱，見 GENERATION.md）
+                    result = getattr(e, "result", None)
+                    if isinstance(result, dict):
+                        return result
                     if fallback is not None:
                         return fallback(*args, **kwargs) if callable(fallback) else fallback
                     raise e

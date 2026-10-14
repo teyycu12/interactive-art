@@ -105,8 +105,20 @@ export const CV_PARTS = ['head', 'torso', 'legs'];
  */
 export const CV_FULL_PART = 'full';
 
+/**
+ * 側面（朝右）與背面的整張圖：像素風改成一次生成三視圖之後才有
+ * （backend/turnaround.py 把一張三視圖切成三個人）。
+ *
+ * 一樣是選用：舊角色、其他風格、三視圖切不出三個人時都沒有，
+ * 那些角色往側面、背面走時就畫正面。左側由大螢幕把側面鏡像得到。
+ */
+export const CV_VIEW_PARTS = ['side', 'back'];
+
+/** 選用的整張圖：有才驗，驗法與必要部位相同 */
+const OPTIONAL_PARTS = [CV_FULL_PART, ...CV_VIEW_PARTS];
+
 /** 貼圖 URL：路徑形狀完全鎖死，杜絕路徑穿越與任意檔案讀取 */
-const TEXTURE_URL_RE = /^\/assets\/gen\/([0-9a-f]{32})\/(head|torso|legs|full)\.webp$/;
+const TEXTURE_URL_RE = /^\/assets\/gen\/([0-9a-f]{32})\/(head|torso|legs|full|side|back)\.webp$/;
 const TEXTURE_PARTS = CV_PARTS;
 
 /**
@@ -144,17 +156,18 @@ function validateCVAvatar(cfg) {
     cleanTextures[part] = url;
   }
 
-  // 整張圖：有才驗，沒有就當這是改版前生成的資產，走三張切片那條路。
+  // 整張圖與側面／背面：有才驗，沒有就當這是改版前生成的資產。
   // 驗法與必要部位完全相同，包含「必須同屬一個資產目錄」——
   // 少了那一條，就等於允許把別人的整張圖拼進自己的角色。
-  if (textures[CV_FULL_PART] !== undefined) {
-    const url = textures[CV_FULL_PART];
-    if (typeof url !== 'string') return { ok: false, reason: 'textures.full 必須是字串' };
+  for (const part of OPTIONAL_PARTS) {
+    if (textures[part] === undefined) continue;
+    const url = textures[part];
+    if (typeof url !== 'string') return { ok: false, reason: `textures.${part} 必須是字串` };
     const m = TEXTURE_URL_RE.exec(url);
-    if (!m) return { ok: false, reason: 'textures.full 不是合法的貼圖路徑' };
-    if (m[2] !== CV_FULL_PART) return { ok: false, reason: 'textures.full 的檔名與部位不符' };
+    if (!m) return { ok: false, reason: `textures.${part} 不是合法的貼圖路徑` };
+    if (m[2] !== part) return { ok: false, reason: `textures.${part} 的檔名與部位不符` };
     if (m[1] !== assetId) return { ok: false, reason: 'textures 混用了不同的資產目錄' };
-    cleanTextures[CV_FULL_PART] = url;
+    cleanTextures[part] = url;
   }
 
   if (!fallbackColors || typeof fallbackColors !== 'object') {

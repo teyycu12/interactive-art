@@ -24,6 +24,7 @@ import {
 } from '/shared/character.js';
 import { layoutNameplates } from '/shared/nameplateLayout.js';
 import { stageViewport, setStageTopInset, onStageViewportChange } from './stageViewport.js';
+import { VoxelCharacters } from './voxelCharacters.js';
 
 let activeScene = null;
 
@@ -286,6 +287,7 @@ function connect() {
           if (!firstRoster) toast(`${roster.get(id).name} 離開了`);
           roster.delete(id); view.delete(id); pulse.delete(id); arrivals.delete(id);
           plateOffset.delete(id);
+          voxels?.dispose(id);
         }
         break;
       }
@@ -468,15 +470,25 @@ const toScreen = (v) => {
 const CHARACTER_WORLD_HEIGHT = 2.1;
 
 /**
+ * 角色整體放大倍率，所有場景一起套用。
+ *
+ * 2026-10-08 現場看過：比起周圍的家具，角色小了一截（要大 10~15%）。
+ * 放在這裡而不是改 CHARACTER_WORLD_HEIGHT：像素場景的 scaleAt 不吃世界
+ * 高度的實際意義（height × 57 × zoom），改那個數字兩種場景放大的比例不同。
+ * 名牌、箭頭、表情都以角色高度為準，會跟著一起放大。
+ */
+const CHARACTER_SCALE = 1.12;
+
+/**
  * 角色在該座標處應有的螢幕高度。
  *
  * 走 3D 投影而非固定值：同一個人走到房間深處就該變小，走近就該變大。
  * activeScene 還沒建好時退回原本的等比縮放，畫面不會空掉。
  */
 function characterHeightAt(v) {
-  if (!activeScene || !v) return CHARACTER_HEIGHT * scale;
+  if (!activeScene || !v) return CHARACTER_HEIGHT * scale * CHARACTER_SCALE;
   const px = activeScene.scaleAt(v.x, v.y, CHARACTER_WORLD_HEIGHT);
-  return px > 1 ? px : CHARACTER_HEIGHT * scale;
+  return (px > 1 ? px : CHARACTER_HEIGHT * scale) * CHARACTER_SCALE;
 }
 
 /** 新建立的邊會亮著這麼久，之後淡成常駐細線 */
@@ -659,8 +671,16 @@ function drawTreasure(now) {
   ctx.restore();
 }
 
+// 體素 3D 角色：預設關閉。場景是 2D 的，角色維持平面紙娃娃（shared/character.js）；
+// ?voxel=1 才開，留作比較與實驗。WebGL 不能用時 ok 為 false，照舊畫 2D。
+const voxels = new URLSearchParams(location.search).get('voxel') === '1' ? new VoxelCharacters() : null;
+let lastFrameAt = 0;
+
 function render(now) {
   const time = now / 1000;
+  // 上限 0.1 秒：分頁切回來時的第一幀不要讓角色一口氣轉好幾圈
+  const dt = lastFrameAt ? Math.min(0.1, (now - lastFrameAt) / 1000) : 0;
+  lastFrameAt = now;
 
   // 場景與透明角色圖層在同一個動畫影格內繪製
   ctx.clearRect(0, 0, innerWidth, innerHeight);
@@ -701,6 +721,16 @@ function render(now) {
   const sorted = [...latest].sort((p, q) => p.y - q.y);
   // 名牌收集起來，等全部角色畫完再一起排（見 drawNameplates）
   const plates = [];
+
+  // 體素角色先全部畫進圖集，下面的迴圈再一個個貼回來 ——
+  // 這樣名牌、箭頭與前後遮擋的順序與 2D 時完全相同
+  if (voxels?.ok) {
+    const list = [];
+    for (const a of sorted) {
+      if (voxels.ensure(a.id, roster.get(a.id)?.img)) list.push({ id: a.id, agent: a });
+    }
+    voxels.render(list, { time, maxSpeed: MAX_SPEED, dt });
+  }
 
   for (const a of sorted) {
     const v = view.get(a.id);
@@ -763,7 +793,8 @@ function render(now) {
 
     if (debug) drawDebugOverlay(a, pos);
 
-    drawCharacter(ctx, a, pos, entry?.img, { time, maxSpeed: MAX_SPEED, height });
+    drawCharacter(ctx, a, pos, entry?.img,
+      { time, maxSpeed: MAX_SPEED, height, voxel: voxels?.tile(a.id) });
     // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
     const name = entry?.name ?? a.id;
     const fontSize = Math.max(10, height * 0.12);
