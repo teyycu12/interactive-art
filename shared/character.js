@@ -203,30 +203,57 @@ function drawPixelCharacter(ctx, agent, pos, sprite, opts) {
   ctx.restore();
 }
 
+const nameplateFont = (fontSize) => `700 ${fontSize}px "Noto Sans TC", "PingFang TC", system-ui, sans-serif`;
+const NAMEPLATE_PAD_X = 9;
+/** 名牌上緣與腳底的距離。緊貼腳底：隔太遠時，人多的地方會看不出哪個名字屬於哪個角色 */
+export const NAMEPLATE_DROP = 3;
+
+/** 名牌的寬高，供避讓排版使用（見 shared/nameplateLayout.js）。字型必須與 drawNameplate 一致 */
+export function measureNameplate(ctx, name, { fontSize = 17 } = {}) {
+  ctx.save();
+  ctx.font = nameplateFont(fontSize);
+  const w = ctx.measureText(name).width + NAMEPLATE_PAD_X * 2;
+  ctx.restore();
+  return { w, h: fontSize + 9 };
+}
+
 /**
  * 名牌。與角色分開繪製，因此不受彈跳與擺動影響 ——
  * 跟著角色一起晃動的文字會非常難讀。
+ *
+ * offset 是避讓排版算出的位移。離開原位時從腳底拉一條細線到名牌，
+ * 否則人擠在一起時看不出被挪開的名牌是誰的。
  */
-export function drawNameplate(ctx, pos, name, { fontSize = 17 } = {}) {
+export function drawNameplate(ctx, pos, name, { fontSize = 17, offset = null } = {}) {
+  const dx = offset?.dx ?? 0;
+  const dy = offset?.dy ?? 0;
   ctx.save();
-  ctx.font = `700 ${fontSize}px "Noto Sans TC", "PingFang TC", system-ui, sans-serif`;
+  ctx.font = nameplateFont(fontSize);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
 
-  const padX = 9;
-  const w = ctx.measureText(name).width + padX * 2;
+  const w = ctx.measureText(name).width + NAMEPLATE_PAD_X * 2;
   const h = fontSize + 9;
-  // 緊貼腳底：隔太遠時，人多的地方會看不出哪個名字屬於哪個角色
-  const y = pos.y + 3;
+  const x = pos.x + dx;
+  const y = pos.y + NAMEPLATE_DROP + dy;
+
+  if (Math.abs(dx) > 1 || dy > 1) {
+    ctx.beginPath();
+    ctx.moveTo(pos.x, pos.y);
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = 'rgba(47, 42, 38, .55)';
+    ctx.lineWidth = Math.max(1, fontSize / 12);
+    ctx.stroke();
+  }
 
   // 米白底襯，確保名字在任何分區色塊上都讀得清楚
   ctx.fillStyle = 'rgba(250, 248, 245, .84)';
   ctx.beginPath();
-  ctx.roundRect(pos.x - w / 2, y, w, h, 7);
+  ctx.roundRect(x - w / 2, y, w, h, 7);
   ctx.fill();
 
   ctx.fillStyle = INK;
-  ctx.fillText(name, pos.x, y + 4);
+  ctx.fillText(name, x, y + 4);
   ctx.restore();
 }
 

@@ -20,7 +20,9 @@ import { createScene, pinnedSceneId, propLabel } from './scenes/registry.js';
 import { DEFAULT_THEME, isThemeId, THEME_MAP } from '/shared/themes.js';
 import {
   drawCharacter, drawNameplate, drawEmote, drawOffline, emoteIsPosed,
+  measureNameplate, NAMEPLATE_DROP,
 } from '/shared/character.js';
+import { layoutNameplates } from '/shared/nameplateLayout.js';
 import { stageViewport, setStageTopInset, onStageViewportChange } from './stageViewport.js';
 
 let activeScene = null;
@@ -145,6 +147,8 @@ switchScene(pinnedSceneId() ?? (isThemeId(savedTheme) ? savedTheme : DEFAULT_THE
 const roster = new Map();
 /** 內插後的顯示座標：伺服器 30Hz，畫面 60Hz，直接套用會有階梯感 */
 const view = new Map();
+/** 名牌目前畫在哪（相對原位的位移）。逐幀朝避讓結果內插，人走動時名牌滑過去而不是跳過去 */
+const plateOffset = new Map();
 /** 剛完成配對的角色，用於畫面上的短暫強調 */
 const pulse = new Map();
 
@@ -281,6 +285,7 @@ function connect() {
           // 首次名冊同樣不報（那只是本機還沒有名冊，不是有人離場）。
           if (!firstRoster) toast(`${roster.get(id).name} 離開了`);
           roster.delete(id); view.delete(id); pulse.delete(id); arrivals.delete(id);
+          plateOffset.delete(id);
         }
         break;
       }
@@ -694,6 +699,8 @@ function render(now) {
 
   // 依 Y 軸排序，讓視覺上較近（偏下）的角色蓋住較遠的（§6 風險 2）
   const sorted = [...latest].sort((p, q) => p.y - q.y);
+  // 名牌收集起來，等全部角色畫完再一起排（見 drawNameplates）
+  const plates = [];
 
   for (const a of sorted) {
     const v = view.get(a.id);
@@ -758,18 +765,47 @@ function render(now) {
 
     drawCharacter(ctx, a, pos, entry?.img, { time, maxSpeed: MAX_SPEED, height });
     // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
-    drawNameplate(ctx, pos, entry?.name ?? a.id, { fontSize: Math.max(10, height * 0.12) });
+    const name = entry?.name ?? a.id;
+    const fontSize = Math.max(10, height * 0.12);
+    const { w, h } = measureNameplate(ctx, name, { fontSize });
+    plates.push({ id: a.id, x: pos.x, y: pos.y + NAMEPLATE_DROP, w, h, pos, name, fontSize });
     drawPendingMark(a, pos, height);
     drawHarvestMark(a, pos, height);
     if (a.emote && !emoteIsPosed(entry?.img, a.emote)) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }
 
+  drawNameplates(plates);
+
   drawSurveySpots(now);
   drawHarvestSpots();
 
   if (debug) updateHud();
   requestAnimationFrame(render);
+}
+
+/**
+ * 名牌在所有角色之後統一排版、統一繪製。
+ *
+ * 原本名牌跟著各自的角色一起畫，30 人時有兩個問題：站在前面的角色會蓋掉後面那人
+ * 的名牌，兩個人站近時名牌直接疊在一起 —— 偏偏配對任務就是要兩個人站在一起。
+ * 「看著大螢幕找到自己」是這件作品的前提，讀不出名字就找不到人。
+ * 排版規則見 shared/nameplateLayout.js。
+ */
+function drawNameplates(plates) {
+  const target = layoutNameplates(plates, { bottom: innerHeight });
+  for (const p of plates) {
+    const t = target.get(p.id);
+    let cur = plateOffset.get(p.id);
+    if (!cur) {
+      // 第一次出現直接放到位，不要從原位滑過去
+      cur = { dx: t.dx, dy: t.dy };
+      plateOffset.set(p.id, cur);
+    }
+    cur.dx += (t.dx - cur.dx) * 0.2;
+    cur.dy += (t.dy - cur.dy) * 0.2;
+    drawNameplate(ctx, p.pos, p.name, { fontSize: p.fontSize, offset: cur });
+  }
 }
 
 /**
