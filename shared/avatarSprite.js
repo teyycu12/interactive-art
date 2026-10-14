@@ -290,9 +290,14 @@ function cvFrontCells(front) {
   const scan = opaqueScanner(front);
   const box = scan.box();
   if (!box) return null;
-  // 在 CV_CUTS.head 的切線附近找肩膀；找不到就退回那條切線
+  // 在 CV_CUTS.head 的切線附近找肩膀；找不到就退回那條切線。
+  //
+  // 往下找到 52%（原本 44%）：大頭的像素角色下巴落在 44–47%（實測 2026-10-14，
+  // Flash 常見、Pro 也有），頭髮或帽子又比肩膀寬，原本的範圍裡寬度一路
+  // 變窄、找不到肩膀，就退回 30% —— 正好切在眼睛，上半顆頭被放大填滿整個
+  // 頭部，變成一朵香菇。
   const cut = CV_CUTS.head[1];
-  const neck = scan.neck(box.y + box.h * (cut - 0.04), box.y + box.h * (cut + 0.14)) ?? box.y + box.h * cut;
+  const neck = scan.neck(box.y + box.h * (cut - 0.04), box.y + box.h * (cut + 0.22)) ?? box.y + box.h * cut;
   const head = scan.box(box.y, neck) ?? box;
   const headH = neck - box.y;
   const bodyH = box.y + box.h - neck;
