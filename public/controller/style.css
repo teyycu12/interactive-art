@@ -1136,13 +1136,15 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   position: fixed;
   inset: 0;
   z-index: 9999;
-  background: rgba(26, 23, 19, 0.85);
+  /* 不用 backdrop-filter（檔頭的低階裝置限制）：底下的個人視角畫布每秒重畫
+     60 次，模糊也得跟著每幀重算 —— 等於在網路最不穩、手機最吃力的時候，
+     疊上全螢幕最貴的效果。不透明度拉高到 .9 取代模糊的遮蔽效果。 */
+  background: rgba(26, 23, 19, 0.9);
   color: #FAF8F5;
   display: grid;
   place-items: center;
   font-size: 20px;
   font-weight: 700;
-  backdrop-filter: blur(4px);
 }
 #reconnect-overlay[hidden] {
   display: none;
