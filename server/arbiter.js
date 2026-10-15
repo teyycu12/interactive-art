@@ -21,7 +21,7 @@ import {
   IDLE_THRESHOLD_MS, ALPHA_RAMP_UP_MS, ALPHA_DECAY_MS,
   DISCONNECT_GRACE_MS, MAX_SPEED, WALK_THRESHOLD,
   ARRIVE, HEADING_TURN_RATE, IDLE_MOTION, FACING_FLIP_SPEED, FACING_DWELL_MS,
-  MANUAL_SMOOTH_TAU, VIEW_SIDE_RATIO, VIEW_RETURN_FRONT_MS,
+  MANUAL_SMOOTH_TAU, VIEW_SIDE_RATIO, VIEW_RETURN_FRONT_MS, PERSONAL_SPACE,
 } from './config.js';
 import { STAGE, AGENT_STATE, AGENT_MODE, AGENT_VIEW } from '../shared/protocol.js';
 import { integrateBoids, resolveObstacleOverlap, obstacleAvoidance } from './boids.js';
@@ -233,8 +233,11 @@ export function stepAgent(agent, agents, dt, now, affinity = null) {
   agent.vx = vx;
   agent.vy = vy;
 
-  agent.x += agent.vx * dt;
-  agent.y += agent.vy * dt;
+  // 個人空間只在靜止模式補上：wander／flock 的 Boids 本來就有分離力，疊兩份會推太兇
+  const [nudgeX, nudgeY] = still ? personalSpaceNudge(agent, agents) : [0, 0];
+
+  agent.x += (agent.vx + nudgeX) * dt;
+  agent.y += (agent.vy + nudgeY) * dt;
 
   // 硬夾限：邊界回推力是柔性的，這裡作為最後保險，確保角色絕不離開畫面
   agent.x = Math.max(0, Math.min(STAGE.width, agent.x));
@@ -244,8 +247,8 @@ export function stepAgent(agent, agents, dt, now, affinity = null) {
   // 使用者體感是沿著道具邊緣滑過去，而不是被系統奪走控制權。
   resolveObstacleOverlap(agent);
 
-  // 供渲染端使用的提示
-  const speed = Math.hypot(agent.vx, agent.vy);
+  // 供渲染端使用的提示。被挪開時也要算進去，否則角色是站著滑過去，看不出在走
+  const speed = Math.hypot(agent.vx + nudgeX, agent.vy + nudgeY);
   agent.state = speed > WALK_THRESHOLD ? AGENT_STATE.WALK : AGENT_STATE.IDLE;
   if (agent.lockAlpha >= 0.5) agent.mode = AGENT_MODE.STAGED;
   else agent.mode = a >= 0.5 ? AGENT_MODE.ACTIVE : AGENT_MODE.SWARM;
@@ -255,6 +258,46 @@ export function stepAgent(agent, agents, dt, now, affinity = null) {
   updateFacing(agent, dt);
 
   updateView(agent, dt);
+}
+
+/**
+ * 個人空間的推開速度（見 config.js 的 PERSONAL_SPACE）。
+ *
+ * 不寫進 agent.vx：靜止模式的煞停是拿上一幀的 vx 當起點做餘弦衰減，
+ * 推開的速度混進去的話，被挪一步之後會再滑行一段才停。
+ *
+ * @returns {[number, number]}
+ */
+function personalSpaceNudge(agent, agents) {
+  // 推桿中、或正被合照定位帶著走的人不推
+  if (agent.inputIntensity > 0 || agent.targetX !== null) return [0, 0];
+  const D = PERSONAL_SPACE.distance;
+  let fx = 0;
+  let fy = 0;
+  for (const other of agents) {
+    if (other === agent) continue;
+    let dx = agent.x - other.x;
+    let dy = agent.y - other.y;
+    const d = Math.hypot(dx, dy);
+    // 留 2 的停止帶：推力與重疊深度成正比，沒有停止帶的話會無限逼近卻永遠停不下來，
+    // 一直有極小的位移（靜止模式承諾的是「閒置時完全不動」）
+    if (d >= D - 2) continue;
+    if (d < 1e-3) {
+      // 完全疊在同一點時沒有方向可推。依 id 決定往左或往右，兩人才會往相反方向分開
+      dx = agent.id < other.id ? -1 : 1;
+      dy = 0;
+    } else {
+      dx /= d;
+      dy /= d;
+    }
+    const push = (D - d) / D;   // 疊得愈深推得愈快
+    fx += dx * push;
+    fy += dy * push;
+  }
+  const mag = Math.hypot(fx, fy);
+  if (mag === 0) return [0, 0];
+  const k = (Math.min(mag, 1) * PERSONAL_SPACE.maxSpeed) / mag;
+  return [fx * k, fy * k];
 }
 
 /**

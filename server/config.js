@@ -115,6 +115,21 @@ export const BOIDS = {
   affinityBonus: 1.5,
 };
 
+/**
+ * 個人空間：停下來的角色會被慢慢推開，不再疊在同一格。
+ *
+ * 預設的 IDLE_MOTION = 'still' 關掉了 Boids 三力（含分離），角色之間原本完全
+ * 沒有碰撞 —— 30 人走向同一點，最後全部擠在半徑 4 以內，大螢幕上看起來只有一個人。
+ * 這裡只推「手指已離開搖桿」的角色：推桿中的人不被擋，走過人群時是別人讓開，
+ * 不會覺得被卡住（同「剛體修正不奪走控制權」的原則）。
+ *
+ * distance 大約是一個像素角色的身寬；maxSpeed 低於 MAX_SPEED，看起來是挪一步而不是被彈開。
+ */
+export const PERSONAL_SPACE = {
+  distance: 90,
+  maxSpeed: 120,
+};
+
 // 障礙推力權重。必須高於凝聚力，否則角色會被人群拉著穿過沙發。
 export const OBSTACLE_WEIGHT = 3.0;
 

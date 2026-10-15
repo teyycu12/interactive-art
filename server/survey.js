@@ -181,15 +181,12 @@ export class SurveySession {
     const s = this.current;
     if (!s || !s.requireArrival) return [];
     const changed = [];
+    const hereNow = this.#arrivalsByChain(s, positionOf);
     for (const [agentId, a] of s.answers) {
-      const spot = s.options[a.choice]?.spot;
-      const prop = spot ? PROP_BY_ID.get(spot) : null;
-      const pos = prop ? positionOf(agentId) : null;
       // 查不到座標（人已離場）時維持原狀而不是判成離開：那一瞬間的閃爍
       // 會讓大螢幕的到位數跳動，而現場會以為是自己走錯了
-      if (!pos) continue;
-      const reach = (prop.r ?? 0) + SURVEY.arriveRadius;
-      const here = Math.hypot(pos.x - prop.x, pos.y - prop.y) <= reach;
+      if (!hereNow.has(agentId)) continue;
+      const here = hereNow.get(agentId);
       if (here === a.arrived) continue;
       a.arrived = here;
       // arrivedAt 只記第一次：它是「這個人完成過這題」的證據，
@@ -202,6 +199,41 @@ export class SurveySession {
       changed.push(agentId);
     }
     return changed;
+  }
+
+  /**
+   * 這一拍誰到位了：先算站進圈裡的，再一圈一圈接上貼著他們站、選同一個答案的人
+   * （SURVEY.chainGap，理由見 shared/surveys.js）。
+   * @returns {Map<string, boolean>} 查不到座標的人不在裡面
+   */
+  #arrivalsByChain(s, positionOf) {
+    const out = new Map();
+    // 依答案分組：只有同一個答案的人互相接得上
+    const groups = new Map();
+    for (const [agentId, a] of s.answers) {
+      const spot = s.options[a.choice]?.spot;
+      const prop = spot ? PROP_BY_ID.get(spot) : null;
+      const pos = prop ? positionOf(agentId) : null;
+      if (!pos) continue;
+      const dist = Math.hypot(pos.x - prop.x, pos.y - prop.y) - (prop.r ?? 0);
+      if (!groups.has(a.choice)) groups.set(a.choice, []);
+      groups.get(a.choice).push({ id: agentId, x: pos.x, y: pos.y, dist });
+      out.set(agentId, false);
+    }
+    for (const people of groups.values()) {
+      const queue = people.filter((p) => p.dist <= SURVEY.arriveRadius);
+      for (const p of queue) out.set(p.id, true);
+      while (queue.length) {
+        const from = queue.pop();
+        for (const p of people) {
+          if (out.get(p.id) || p.dist > SURVEY.chainReach) continue;
+          if (Math.hypot(p.x - from.x, p.y - from.y) > SURVEY.chainGap) continue;
+          out.set(p.id, true);
+          queue.push(p);
+        }
+      }
+    }
+    return out;
   }
 
   /** 某個人在這一題是否正站在自己選的地點旁 */

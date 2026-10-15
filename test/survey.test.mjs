@@ -278,3 +278,62 @@ test('不要求到場的題目沒有 pending —— 那個記號在這種題目�
   s.answer('amy', 0);
   assert.deepEqual(s.distribution().pending, []);
 });
+
+// ── 排在已到位的人旁邊也算（SURVEY.chainGap）───────────────────
+// 角色有個人空間之後，一圈只站得下五、六個人；不接龍的話一半的人永遠到不了位
+test('貼著已到位、選同一個答案的人站，也算到位；一圈一圈往外接', () => {
+  const s = new SurveySession();
+  s.start({ bankId: 'kitchen_role' });
+  const spot = propAt('tbl_3');
+  const edge = spot.r + SURVEY.arriveRadius - 1;
+  // 從圈邊往右排一列，每人相隔略小於 chainGap
+  const step = SURVEY.chainGap - 5;
+  const pos = new Map();
+  for (const [i, id] of ['p0', 'p1', 'p2'].entries()) {
+    s.answer(id, 0);
+    pos.set(id, { x: spot.x + edge + i * step, y: spot.y });
+  }
+  s.syncArrivals((id) => pos.get(id));
+  assert.deepEqual(['p0', 'p1', 'p2'].map((id) => s.isArrived(id)), [true, true, true]);
+
+  // 前面的人走掉，後面的就接不上了
+  pos.set('p0', { x: spot.x + 900, y: spot.y + 300 });
+  s.syncArrivals((id) => pos.get(id));
+  assert.deepEqual(['p0', 'p1', 'p2'].map((id) => s.isArrived(id)), [false, false, false]);
+});
+
+test('選別的答案的人接不上，站錯群不會被帶進去', () => {
+  const s = new SurveySession();
+  s.start({ bankId: 'kitchen_role' });
+  const spot = propAt('tbl_3');
+  s.answer('in', 0);
+  s.answer('other', 1);
+  const pos = new Map([
+    ['in', { x: spot.x + spot.r + 10, y: spot.y }],
+    ['other', { x: spot.x + spot.r + 10 + SURVEY.chainGap - 20, y: spot.y }],
+  ]);
+  s.syncArrivals((id) => pos.get(id));
+  assert.equal(s.isArrived('in'), true);
+  assert.equal(s.isArrived('other'), false);
+});
+
+test('接龍有上限，不會沿著一排人一路接到房間另一頭', () => {
+  const s = new SurveySession();
+  s.start({ bankId: 'kitchen_role' });
+  const spot = propAt('tbl_3');
+  const step = SURVEY.chainGap - 5;
+  const ids = Array.from({ length: 12 }, (_, i) => `p${i}`);
+  const pos = new Map();
+  for (const [i, id] of ids.entries()) {
+    s.answer(id, 0);
+    pos.set(id, { x: spot.x - spot.r - 10 - i * step, y: spot.y });
+  }
+  s.syncArrivals((id) => pos.get(id));
+  for (const id of ids) {
+    const p = pos.get(id);
+    const fromEdge = Math.hypot(p.x - spot.x, p.y - spot.y) - spot.r;
+    if (fromEdge > SURVEY.chainReach) assert.equal(s.isArrived(id), false, `${id} 離圈 ${Math.round(fromEdge)} 不該算`);
+  }
+  assert.equal(s.isArrived('p0'), true);
+});
+
