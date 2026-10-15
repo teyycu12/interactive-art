@@ -11,10 +11,12 @@ export const INK = '#302a2d';
 /**
  * 角色身高換算：scaleAt(x, y, h) = h × CHARACTER_SCALE × zoom。
  * 原本是 57，角色只和盆栽差不多高，與流理台、冰箱比起來像小人國；
- * 76 讓 Q 版角色約到流理台的高度。手機 POV（controller/sceneBackdrop.js）
- * 也用這個值，兩邊的角色與道具比例才一致。
+ * 76 讓 3 頭身的 Q 版角色約到流理台的高度。2026-10-15 參考圖換成約 2.2 頭身，
+ * 同樣身高下頭大一圈、整個人顯得大，現場回報「人物比場景大」，三個場景並排
+ * 截圖比過 76／64／56 後取 64。廚房、辦公室、體育館都走這裡，手機 POV
+ * （controller/sceneBackdrop.js）也用這個值，兩邊的角色與道具比例才一致。
  */
-export const CHARACTER_SCALE = 76;
+export const CHARACTER_SCALE = 64;
 
 export function brush(c) {
   const rect = (x,y,w,h,color) => { c.fillStyle=color; c.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h)); };
