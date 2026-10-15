@@ -111,14 +111,14 @@ screen.on('message', (d) => {
   if (m.type === 'QUIZ_ENDED') screenQuiz = null;
   if (m.type === 'SCORE_BOARD') scoreBoard = m;
   if (m.type === 'STAGE_THEME') screenThemes.push(m.theme);
-  if (m.type === 'SURVEY_QUESTION') screenSurvey = m.survey;
-  if (m.type === 'SURVEY_STATE') screenSurveyState = m.state;
-  if (m.type === 'SURVEY_CLOSED') screenSurveyClosed = m.result;
+  if (m.type === 'WORDCLOUD_QUESTION') screenCloudQ = m.cloud;
+  if (m.type === 'WORDCLOUD_STATE') screenCloud = m.cloud;
+  if (m.type === 'WORDCLOUD_CLOSED') screenCloudClosed = m.result;
 });
 let screenThemes = [];
-let screenSurvey = null;
-let screenSurveyState = null;
-let screenSurveyClosed = null;
+let screenCloudQ = null;
+let screenCloud = null;
+let screenCloudClosed = null;
 let screenQuiz = null;
 let screenReveal = null;
 let scoreBoard = null;
@@ -668,18 +668,18 @@ host.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'HOST_PERSON
   // 自訂題目留著，給下面「重開伺服器後題目還在」的檢查
 }
 
-// ── 轉場問卷 ──────────────────────────────────────────────
-// 沒有正解的題目。答案留成參與者身上的標籤，供後續任務當條件使用。
-// 這一段在參與者進場前先驗「未認證不得出題」，其餘在兩人進場後補。
+// ── 文字雲（參與者進場前的部分）────────────────────────────
+// 主持人提問、參與者用手機輸入、大螢幕即時呈現。這一段先驗「未認證不得出題」
+// 與題目驗證，完整流程在兩人進場後。
 {
-  badHost.send(JSON.stringify({ type: 'HOST_START_SURVEY', bankId: 'chrono' }));
+  badHost.send(JSON.stringify({ type: 'HOST_START_WORDCLOUD', question: '入侵者的題目' }));
   await sleep(200);
-  check('未認證連線無法出問卷', screenSurvey === null);
+  check('未認證連線無法出文字雲題目', screenCloudQ === null);
 
   const rejectsBefore = hostRejects.length;
-  host.send(JSON.stringify({ type: 'HOST_START_SURVEY', bankId: '不存在的題目' }));
+  host.send(JSON.stringify({ type: 'HOST_START_WORDCLOUD', question: '   ' }));
   await sleep(200);
-  check('題庫裡沒有的題目被拒絕', hostRejects.length === rejectsBefore + 1, hostRejects.at(-1)?.reason);
+  check('空白的文字雲題目被拒絕', hostRejects.length === rejectsBefore + 1 && screenCloudQ === null, hostRejects.at(-1)?.reason);
 }
 
 // ── 兩位參與者進場 ────────────────────────────────────────
@@ -688,8 +688,7 @@ function joinPhone(name) {
   const box = {
     ws, name, welcome: null, code: null, mission: null, results: [], confirmReq: null,
     quiz: null, acks: [], quizResult: null, scores: [],
-    treasureStart: null, heats: [], treasureFound: null, raw: [],
-    survey: null, surveyAcks: [], surveyClosed: null, social: null,
+    cloudQ: null, cloudAcks: [], cloudClosed: null, social: null,
   };
   ws.on('open', () => ws.send(JSON.stringify({ type: 'CLIENT_JOIN', name, avatar: AVATAR })));
   ws.on('message', (d) => {
@@ -703,15 +702,10 @@ function joinPhone(name) {
     if (m.type === 'QUIZ_ACK') box.acks.push(m);
     if (m.type === 'QUIZ_RESULT') box.quizResult = m;
     if (m.type === 'SCORE_SELF') box.scores.push(m);
-    if (m.type === 'TREASURE_START') box.treasureStart = m;
-    if (m.type === 'TREASURE_HEAT') box.heats.push(m);
-    if (m.type === 'TREASURE_FOUND') box.treasureFound = m;
-    if (m.type === 'SURVEY_QUESTION') box.survey = m.survey;
-    if (m.type === 'SURVEY_ACK') box.surveyAcks.push(m);
-    if (m.type === 'SURVEY_CLOSED') box.surveyClosed = m.result;
+    if (m.type === 'WORDCLOUD_QUESTION') box.cloudQ = m.cloud;
+    if (m.type === 'WORDCLOUD_ACK') box.cloudAcks.push(m);
+    if (m.type === 'WORDCLOUD_CLOSED') box.cloudClosed = m.result;
     if (m.type === 'SOCIAL_SELF') box.social = m;
-    // 保留原始字串，供「座標絕不外洩到手機」的檢查
-    if (m.type?.startsWith('TREASURE')) box.raw.push(d.toString());
   });
   return box;
 }
@@ -885,214 +879,100 @@ await sleep(300);
   await sleep(300);
 }
 
-// 問卷的完整流程：出題 → 手機作答 → 改答案 → 收題 → 標籤留在身上
+// 文字雲的完整流程：出題 → 手機作答（彙整、上限、不雅字）→ 主持人隱藏 → 補送 → 收題
 {
-  host.send(JSON.stringify({ type: 'HOST_START_SURVEY', bankId: 'kitchen_role', durationMs: 8000 }));
+  const words = () => (screenCloud?.words ?? []).map((w) => `${w.text}:${w.count}`).join(',');
+  const say = (phone, text) => phone.ws.send(JSON.stringify({ type: 'WORDCLOUD_ANSWER', text }));
+
+  host.send(JSON.stringify({ type: 'HOST_START_WORDCLOUD', question: '用一個詞形容今天' }));
   await sleep(350);
-  check('手機收到問卷題目', amy.survey?.key === 'kitchen_role', amy.survey?.question);
-  check('大螢幕收到問卷題目', screenSurvey?.id === amy.survey?.id);
-  check('問卷選項帶地點，供之後的集合任務使用',
-    screenSurvey?.options?.[0]?.spot === 'tbl_3', JSON.stringify(screenSurvey?.options?.[0]));
+  check('手機與大螢幕都收到文字雲題目',
+    amy.cloudQ?.question === '用一個詞形容今天' && screenCloudQ?.id === amy.cloudQ?.id, amy.cloudQ?.question);
 
-  amy.ws.send(JSON.stringify({ type: 'SURVEY_ANSWER', choice: 0 }));
-  ben.ws.send(JSON.stringify({ type: 'SURVEY_ANSWER', choice: 2 }));
-  await sleep(400);
-  check('作答後手機收到自己的標籤文字', amy.surveyAcks.at(-1)?.label === '負責煮', JSON.stringify(amy.surveyAcks.at(-1)));
-  check('大螢幕收到即時分佈', screenSurveyState?.totalAnswers === 2, JSON.stringify(screenSurveyState?.counts));
+  say(amy, '開心');
+  say(ben, '開心！');   // 不同寫法要彙整成同一個詞
+  await sleep(150);
+  say(amy, '期待');
+  await sleep(500);
+  check('同一個詞的不同寫法彙整，大螢幕即時收到票數', words() === '開心:2,期待:1', words());
+  check('手機收到自己送過的答案', amy.cloudAcks.at(-1)?.mine?.join() === '開心,期待', JSON.stringify(amy.cloudAcks.at(-1)));
+  check('大螢幕的雲不帶是誰寫的', !JSON.stringify(screenCloud).includes(amy.welcome.userId));
 
-  // 問卷沒有速度分，改答案不影響任何人 —— 按錯卻不能改，標籤就會一直是錯的
-  amy.ws.send(JSON.stringify({ type: 'SURVEY_ANSWER', choice: 1 }));
-  await sleep(400);
-  check('問卷可以改答案', amy.surveyAcks.at(-1)?.label === '負責洗');
-  check('改答案不會多算一票', screenSurveyState?.totalAnswers === 2, JSON.stringify(screenSurveyState?.counts));
+  say(amy, '幹你娘');
+  await sleep(300);
+  check('不雅字被擋下，不會出現在大螢幕', amy.cloudAcks.at(-1)?.reason === 'BLOCKED' && !words().includes('幹'),
+    JSON.stringify(amy.cloudAcks.at(-1)));
 
-  // 主辦端重整：問卷面板只由 SURVEY_* 事件驅動，認證時要補送題目與分佈
+  say(amy, '好玩');
+  await sleep(150);
+  say(amy, '第四個');
+  await sleep(300);
+  check('每人最多 3 個答案', amy.cloudAcks.at(-1)?.reason === 'LIMIT' && amy.cloudAcks.at(-2)?.ok === true);
+
+  amy.ws.send(JSON.stringify({ type: 'HOST_HIDE_WORD', word: '期待' }));
+  await sleep(200);
+  check('手機不能隱藏詞', words().includes('期待'));
+  host.send(JSON.stringify({ type: 'HOST_HIDE_WORD', word: '期待' }));
+  await sleep(200);
+  check('主持人隱藏的詞立刻從大螢幕消失', !words().includes('期待'), words());
+  say(ben, '期待');
+  await sleep(450);
+  check('被隱藏的詞之後有人再送也不會出現', !words().includes('期待') && ben.cloudAcks.at(-1)?.ok === true, words());
+
+  // 主辦端重整：文字雲面板只由 WORDCLOUD_* 事件驅動，認證時要補送題目與雲
   const rehost = new WebSocket(URL);
   const reMsgs = [];
   await new Promise((res) => rehost.on('open', res));
   rehost.on('message', (d) => reMsgs.push(JSON.parse(d)));
   rehost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
   await sleep(400);
-  check('主辦端重連後補送進行中的問卷',
-    reMsgs.some((m) => m.type === 'SURVEY_QUESTION') && reMsgs.some((m) => m.type === 'SURVEY_STATE'));
+  check('主辦端重連後補送進行中的文字雲',
+    reMsgs.some((m) => m.type === 'WORDCLOUD_QUESTION') && reMsgs.find((m) => m.type === 'WORDCLOUD_STATE')?.cloud?.words?.length > 0);
   rehost.close();
 
-  host.send(JSON.stringify({ type: 'HOST_CLOSE_SURVEY' }));
-  await sleep(350);
-  check('收題後全場收到最終分佈', amy.surveyClosed?.totalAnswers === 2 && screenSurveyClosed !== null);
+  // 大螢幕重開：要接回題目與雲
+  const reScreen = new WebSocket(URL);
+  const reScreenMsgs = [];
+  reScreen.on('open', () => reScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
+  reScreen.on('message', (d) => reScreenMsgs.push(JSON.parse(d)));
+  await sleep(400);
+  check('大螢幕重連後補送進行中的文字雲', reScreenMsgs.some((m) => m.type === 'WORDCLOUD_STATE'));
+  reScreen.close();
 
-  // 標籤留在身上，才可能有「答某個選項的人到某張桌子集合」這種任務
-  const tagged = hostStates.at(-1)?.agents?.find((a) => a.name === '小美');
-  check('收題後標籤留在參與者身上', tagged?.traits?.kitchen_role?.value === 'wash',
-    JSON.stringify(tagged?.traits));
+  // 節目單接著出下一題：上一題自動收掉，不會卡在「上一題還沒收」
+  const rejectsBefore = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_START_WORDCLOUD', question: '今天最難忘的一刻？' }));
+  await sleep(400);
+  check('出新題時上一題自動收掉', amy.cloudClosed?.question === '用一個詞形容今天' && hostRejects.length === rejectsBefore,
+    JSON.stringify(amy.cloudClosed));
+  check('收題時帶著最終的詞（給大螢幕停留與活動報告）', amy.cloudClosed?.words?.[0]?.text === '開心');
+  check('新題目送到手機', amy.cloudQ?.question === '今天最難忘的一刻？');
+
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_WORDCLOUD' }));
+  await sleep(300);
+  check('收題後大螢幕與手機都收到結束', screenCloudClosed?.question === '今天最難忘的一刻？' && amy.cloudClosed?.question === '今天最難忘的一刻？');
+  say(amy, '太晚了');
+  await sleep(200);
+  check('收題後送答案被拒', amy.cloudAcks.at(-1)?.reason === 'NO_ROUND');
 }
 
-// ── 尋寶（先知模式）────────────────────────────────────────
+// ── 清場：只留小美與阿賓 ────────────────────────────────────
 //
-// 這個玩法完全建立在資訊不對稱上，而「座標有沒有外洩到手機」
-// 是單元測試看不到的 —— 它取決於伺服器實際送出的封包內容。
+// 前面的安全性測試（偽造憑證、角色轉換）留下了幾個角色，而**關掉 socket
+// 不等於角色離場** —— 那是刻意的設計（賓客關分頁角色仍留 AGENT_TTL_MS＝45 秒），
+// 遠長於整套 e2e。後面的任務、私訊、賓果都假設場上只有這兩位，在這裡明確清場。
+// （原本這一步寫在已移除的尋寶測試開頭。）
 {
-  // 先收掉進行中的任務，避免與尋寶的公告互相干擾
   host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
   await sleep(300);
-
-  // 場上只留小美與阿賓。
-  //
-  // 前面的安全性測試（偽造憑證、角色轉換）留下了幾個角色，而**關掉 socket
-  // 不等於角色離場** —— 那是刻意的設計（賓客關分頁角色仍留 AGENT_TTL_MS＝45 秒，
-  // 見 CLAUDE.md），遠長於整套 e2e。
-  //
-  // 而 `treasure.check()` 掃的是場上**所有**非先知角色，不管有沒有連線。
-  // 於是藏寶點若隨機落在那個殘留角色附近，它會在阿賓走到之前就「找到」寶藏，
-  // 一次讓四條測試同時失敗（找到者不是阿賓、阿賓沒拿到分數、
-  // 冷熱因本輪已結束而一則都沒送出）。實測抓到的兇手正是叫「攻擊者」的那一個。
-  //
-  // 這是測試的前置條件沒清乾淨，不是伺服器的錯 —— 因此在這裡明確清場，
-  // 而不是把 TTL 調短或讓尋寶忽略離線角色（後者會改掉現場真正想要的行為）。
   const keep = new Set([amy.welcome.userId, ben.welcome.userId]);
   for (const a of hostStates.at(-1)?.agents ?? []) {
     if (!keep.has(a.id)) host.send(JSON.stringify({ type: 'HOST_KICK', agentId: a.id }));
   }
   await sleep(300);
-  check('尋寶開始前場上只剩兩位參與者',
+  check('清場後場上只剩兩位參與者',
     (hostStates.at(-1)?.agents ?? []).length === 2,
     (hostStates.at(-1)?.agents ?? []).map((a) => a.name).join(', '));
-
-  const treasureHostMsgs = [];
-  const onHost = (d) => {
-    const m = JSON.parse(d);
-    if (m.type?.startsWith('TREASURE')) treasureHostMsgs.push(m);
-  };
-  host.on('message', onHost);
-
-  // 指定小美當先知
-  host.send(JSON.stringify({
-    type: 'HOST_START_TREASURE', prophetId: amy.welcome.userId,
-  }));
-  await sleep(500);
-
-  check('尋寶開始後兩支手機都收到通知',
-    !!amy.treasureStart && !!ben.treasureStart);
-  check('手機知道誰是先知',
-    amy.treasureStart?.round?.prophetId === amy.welcome.userId);
-
-  // 最關鍵的一條：座標絕不能出現在手機收到的任何一則訊息裡。
-  // 手機端只要拿得到座標，開發者工具就能直接看到答案。
-  const spot = treasureHostMsgs.find((m) => m.type === 'TREASURE_START')?.spot;
-  check('主辦端拿得到藏寶座標', Number.isFinite(spot?.x) && Number.isFinite(spot?.y));
-  // TREASURE_FOUND 例外：本輪已經結束，那時公布座標是刻意的
-  // （見 CLAUDE.md「中止尋寶不公布座標，找到才公布」）。少了這個排除，
-  // 這條檢查會在阿賓踩中得夠快時誤判「正確行為」為外洩。
-  const phoneSawCoords = [...amy.raw, ...ben.raw].some((raw) => {
-    const m = JSON.parse(raw);
-    if (m.type === 'TREASURE_FOUND') return false;
-    return m.round?.x !== undefined || m.spot !== undefined;
-  });
-  check('藏寶座標不會外洩給手機', !phoneSawCoords);
-
-  // 主辦端中途重整／斷線重連，必須補送進行中的那一輪。
-  // HOST_STATE 不含尋寶，而主辦端的尋寶面板只由 TREASURE_* 事件驅動：
-  // 少了補送，重整後的畫面會停在「開始尋寶」，#treasure-live 仍是 hidden，
-  // 「中止本輪」按鈕根本不在畫面上 —— 本輪就再也停不掉了，
-  // 而現場只會看到「這個按鈕壞了」。
-  {
-    const rehost = new WebSocket(URL);
-    const reMsgs = [];
-    await new Promise((res) => rehost.on('open', res));
-    rehost.on('message', (d) => reMsgs.push(JSON.parse(d)));
-    rehost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
-    await sleep(400);
-    const caught = reMsgs.find((m) => m.type === 'TREASURE_START');
-    check('主辦端重連後補送進行中的尋寶', !!caught,
-      caught ? `先知 ${caught.round?.prophetId}` : '沒收到 TREASURE_START');
-    check('補送給主辦端的尋寶帶座標（主辦端是公開畫面）',
-      Number.isFinite(caught?.spot?.x) && Number.isFinite(caught?.spot?.y));
-    rehost.close();
-    await sleep(150);
-  }
-
-  // 把阿賓推到寶藏上：先知（小美）應收到冷熱，阿賓不該收到
-  // ⚠ payload 形狀必須是 {vector:{x,y}}：伺服器讀的是
-  //   `msg.vector ?? {x: msg.vx, y: msg.vy}`，寫成裸的 {x,y} 會兩邊都拿到
-  //   undefined，角色完全不動 —— 而這條測試仍然會過（它斷言的是先知收到
-  //   冷熱，那與角色有沒有移動無關），所以錯了也看不出來。
-  const nudge = (box, x, y) => box.ws.send(JSON.stringify({
-    type: 'INPUT_MOVE', vector: { x, y }, intensity: 1,
-  }));
-  // 一路把阿賓推向寶藏，直到踩中為止。
-  //
-  // 圈數必須由「實際還要走多遠」算出，不能寫死。原本寫死 120 圈 × 40ms＝4.8 秒，
-  // 而 MAX_SPEED 是 190 px/s，等於最遠只走得了約 912px —— 但藏寶點是在
-  // 1920×1080（對角線約 2200px）裡隨機挑的，且要繞開道具。
-  // 於是這條測試實際上是在擲骰子：藏寶點剛好落在附近才過得了，
-  // 落在對角就必然「未踩中」，一次帶垮四條斷言。
-  //
-  // 這裡改成依起始距離估算所需時間再乘 3 倍餘裕（繞道具、α 爬升、
-  // 對齊誤差都會讓實際路徑長於直線），並保留上限避免真的壞掉時無限空轉。
-  //
-  // **隔著牆要先走到門口。** 場景左右各有一道牆，只有門走得過去；藏寶點可能
-  // 落在室外。直直往寶藏推的話會頂在牆上：以伺服器的物理模擬 500 輪，
-  // 同一側 430/430 踩中，隔牆 70 輪只踩中 7 輪 —— 這正是 e2e 約兩成機率
-  // 「未踩中」、一次帶垮四條斷言的原因。先走到門外 60px 再轉向寶藏後 500/500。
-  const doorFor = (me) => DOORWAYS.find((dw) => {
-    const wx = dw.x + dw.w / 2;
-    return (me.x - wx) * (spot.x - wx) < 0;   // 這道牆正好隔在我與寶藏之間
-  });
-  {
-    const start = live().find((a) => a.id === ben.welcome.userId);
-    const startDist = Math.hypot(spot.x - start.x, spot.y - start.y);
-    const needMs = (startDist / MAX_SPEED) * 1000 * 3 + 2000;
-    const maxTicks = Math.min(600, Math.ceil(needMs / 40));
-
-    let ticks = 0;
-    for (; ticks < maxTicks && !ben.treasureFound; ticks++) {
-      const me = live().find((a) => a.id === ben.welcome.userId);
-      if (!me) break;
-      let tx = spot.x;
-      let ty = spot.y;
-      const door = doorFor(me);
-      if (door) {
-        tx = door.x + door.w / 2 + Math.sign(spot.x - me.x) * 60;
-        ty = door.y + door.h / 2;
-      }
-      const dx = tx - me.x;
-      const dy = ty - me.y;
-      const d = Math.hypot(dx, dy) || 1;
-      nudge(ben, dx / d, dy / d);
-      await sleep(40);
-    }
-    // 沒踩到時要說得出「差多遠」，否則下面四條失敗看起來像功能壞掉，
-    // 實際上只是走的時間不夠。
-    if (!ben.treasureFound) {
-      const me = live().find((a) => a.id === ben.welcome.userId);
-      console.log(`   [尋寶] 走了 ${ticks}/${maxTicks} 圈仍未踩中；`
-        + `起始距離 ${startDist.toFixed(0)}px，`
-        + `目前距離 ${me ? Math.hypot(spot.x - me.x, spot.y - me.y).toFixed(0) : '?'}px`);
-    }
-  }
-
-  check('只有先知收得到冷熱提示',
-    amy.heats.length > 0 && ben.heats.length === 0,
-    `先知 ${amy.heats.length} 則 / 非先知 ${ben.heats.length} 則`);
-
-  // 走完整條「踩中 → 廣播 → 記分」。單元測試只驗規則，這裡驗真的接起來了。
-  check('非先知踩到寶藏即完成本輪', !!ben.treasureFound,
-    ben.treasureFound ? `由 ${ben.treasureFound.byName} 找到` : '未踩中');
-  check('找到者就是走過去的那個人，不是先知',
-    ben.treasureFound?.by === ben.welcome.userId
-    && ben.treasureFound?.prophetId === amy.welcome.userId);
-  check('找到之後才公布座標',
-    Number.isFinite(ben.treasureFound?.spot?.x),
-    JSON.stringify(ben.treasureFound?.spot));
-  check('找到者拿到分數',
-    ben.scores.some((s) => s.source === 'TREASURE'),
-    ben.scores.map((s) => s.source).join(', '));
-  check('先知拿 0 分（不能得分是這個玩法的前提）',
-    !amy.scores.some((s) => s.source === 'TREASURE'));
-
-  host.send(JSON.stringify({ type: 'HOST_STOP_TREASURE' }));
-  await sleep(300);
-  host.off('message', onHost);
 }
 
 // ── COLOR_HUNT 任務 ───────────────────────────────────────
@@ -1292,6 +1172,32 @@ phone3.close();
 screen.close();
 flood.close();
 await sleep(200);
+
+// ── 主控台的大螢幕預覽 ────────────────────────────────────
+// 預覽小窗也是一台大螢幕（收同樣的廣播），但絕不能被挑去截圖：它比投影機先連上時，
+// 「儲存畫面」與大合照底圖就會變成主持人電腦上那張縮小的預覽。真的大螢幕已在上面關掉。
+{
+  const preview = new WebSocket(URL);
+  const pvMsgs = [];
+  preview.on('open', () => preview.send(JSON.stringify({ type: 'SCREEN_HELLO', preview: true })));
+  preview.on('message', (d) => pvMsgs.push(JSON.parse(d)));
+  const pvHost = new WebSocket(URL);
+  const pvHostMsgs = [];
+  await new Promise((res) => pvHost.on('open', res));
+  pvHost.on('message', (d) => pvHostMsgs.push(JSON.parse(d)));
+  pvHost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(400);
+  check('預覽連線照樣收到大螢幕的資料', pvMsgs.some((m) => m.type === 'STAGE_ROSTER'));
+  pvHost.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'capture' }));
+  await sleep(400);
+  check('只有預覽時「儲存畫面」回報大螢幕沒連線，不會跟預覽要截圖',
+    pvHostMsgs.find((m) => m.type === 'HOST_SCREEN_SHOT')?.error === '大螢幕沒有連線'
+      && !pvMsgs.some((m) => m.type === 'SCREEN_CAPTURE_REQ'),
+    JSON.stringify(pvHostMsgs.find((m) => m.type === 'HOST_SCREEN_SHOT')));
+  preview.close();
+  pvHost.close();
+  await sleep(200);
+}
 
 // ── 重開伺服器後的資料保留 ────────────────────────────────
 // 現場最真實的災難情境：主辦筆電當掉，或有人誤觸 Ctrl+C。

@@ -1,12 +1,12 @@
 /**
  * 虛擬參與者注入器（整合版）
  *
- * 用途：一個人也能把場域填滿，實際玩一輪尋寶或顏色任務。
+ * 用途：一個人也能把場域填滿，實際玩一輪顏色任務或文字雲。
  *
- * 為什麼需要：尋寶至少要 2 人、顏色任務要場上有各種顏色的人，
- * 而「冷熱門檻的節奏對不對」「寶箱在 3D 房間裡看不看得見」這類問題
- * 測試完全測不出來 —— 只能真的玩一輪。找 10 個真人來試調參數不現實，
- * 因此讓機器人湊人數，真人只出一個（當先知或當找的人）。
+ * 為什麼需要：顏色任務要場上有各種顏色的人，文字雲要有夠多的答案才看得出
+ * 大螢幕排不排得下 —— 這類問題測試測不出來，只能真的玩一輪。找 10 個真人
+ * 來試調參數不現實，因此讓機器人湊人數，真人只出一個。
+ * 文字雲出題時，每隻機器人會隨機延遲送出一個詞。
  *
  * ⚠ 這是開發／調校工具，不是展場的一部分。現場請勿使用 ——
  *   機器人會佔用 MAX_AGENTS 的名額，把真的想進場的人擋在外面。
@@ -24,10 +24,14 @@
 import { WebSocket } from 'ws';
 import { EV, STAGE, ACTIONS } from '../shared/protocol.js';
 import {
+
   HEADS, FACES, BODIES, SKIN_TONES, ACCENT_COLORS, randomAvatarConfig,
 } from '../shared/avatars.js';
 import { COLOR_FAMILIES, familyOf } from '../shared/colorFamily.js';
 import { OBSTACLES } from '../shared/scene.js';
+
+/** 文字雲的機器人答案。刻意有重複的機率，才看得出票數多的詞變大 */
+const BOT_WORDS = ['開心', '期待', '好玩', '累', '餓了', '緊張', '新朋友', '有趣', '開心', '期待', '放鬆', '熱鬧'];
 
 // ── 參數 ──────────────────────────────────────────────────
 const argv = process.argv.slice(2);
@@ -128,9 +132,14 @@ class Bot {
     if (m.type === EV.CLIENT_SYNC && m.self) {
       this.pos = { x: m.self.x, y: m.self.y };
     }
-    // 尋寶開始時報一下，方便對照大螢幕
-    if (m.type === EV.TREASURE_START && m.round?.prophetId === this.id) {
-      console.log(`  🔮 ${this.name} 被選為先知（機器人不會喊話，建議指定真人）`);
+    // 文字雲出題時隨機延遲送一個詞：一個人也能看到大螢幕的雲長滿、排不排得下
+    if (m.type === EV.WORDCLOUD_QUESTION) {
+      const word = BOT_WORDS[Math.floor(Math.random() * BOT_WORDS.length)];
+      setTimeout(() => {
+        if (this.alive && this.ws.readyState === this.ws.OPEN) {
+          this.ws.send(JSON.stringify({ type: EV.WORDCLOUD_ANSWER, text: word }));
+        }
+      }, 800 + Math.random() * 6000);
     }
   }
 

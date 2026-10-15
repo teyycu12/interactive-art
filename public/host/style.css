@@ -199,7 +199,7 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
    造成兩欄視覺重疊。軌道雖用了 minmax(0, …)，item 自己不設一樣會頂出去。 */
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 320px);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 440px);
   gap: 18px;
   align-items: start;
 }
@@ -453,6 +453,13 @@ td.export { white-space: nowrap; }
   font-size: 13px; padding: 7px 0; border-bottom: 1px solid var(--sunk);
 }
 .bank li:last-child { border-bottom: none; }
+.bank li.is-editing { background: var(--sunk); border-radius: 8px; padding-left: 8px; padding-right: 6px; }
+.bank-tools { display: flex; gap: 12px; }
+.bank-tools .btn-link:not(.btn-link-danger):hover { color: var(--ink); }
+.bank-msg { font-size: 12px; line-height: 1.6; color: var(--ink-soft); background: var(--sunk); border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
+.bank-msg ul { margin: 4px 0 0; padding-left: 18px; color: var(--danger); }
+.quiz-editing { font-size: 13px; font-weight: 600; color: var(--teal-ink); background: #E3F1EE; border-radius: 8px; padding: 8px 10px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.quiz-editing[hidden] { display: none; }
 .bank .q { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bank button { width: auto; padding: 3px 10px; font-size: 12px; border-width: 2px; border-radius: 8px; }
 .hint.tiny { font-size: 11px; margin-bottom: 0; }
@@ -527,15 +534,19 @@ td.export { white-space: nowrap; }
 .theme-card[aria-pressed="true"] .theme-current { display: block; }
 .theme-card[aria-pressed="true"] .theme-current::before { content: "✓ "; }
 
-/* ── 轉場問卷 ───────────────────────────────────────────────
-   長條用 --teal 填色（裝飾，不是文字），文字一律走 --ink 系列與 --teal-ink。 */
-.survey-bars { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 7px; }
-.survey-bars li { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 13px; }
-.survey-bars .lab { color: var(--ink); font-weight: 500; }
-.survey-bars .n { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.survey-bars .track { grid-column: 1 / -1; height: 8px; border-radius: 5px; background: var(--sunk); overflow: hidden; }
-.survey-bars .track i { display: block; height: 100%; background: var(--teal); transition: width .3s ease; }
-.survey-bars .spot { color: var(--teal-ink); font-size: 11.5px; font-weight: 700; }
+/* ── 文字雲 ─────────────────────────────────────────────────
+   進行中的詞清單：詞、票數、隱藏。票數高的在前（伺服器已排序）。
+   文字一律走 --ink 系列；「隱藏」是會改變全場畫面的動作，用 --danger。 */
+.wc-words { list-style: none; margin: 4px 0 8px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; max-height: 260px; overflow-y: auto; }
+.wc-words li {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px 4px 10px; border: 1.5px solid var(--line); border-radius: 999px; background: var(--surface); font-size: 13px;
+}
+.wc-text { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.wc-n { min-width: 1.6em; padding: 0 6px; border-radius: 999px; background: var(--sunk); color: var(--ink-soft);
+  font-size: 12px; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; }
+.wc-words .wc-hide { min-height: 28px; padding: 2px 6px; font-size: 12px; color: var(--danger); }
+#wordcloud-question { margin-bottom: 0; }
 
 /* 參與者名冊的標籤欄 */
 .tags { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -573,7 +584,7 @@ td.export { white-space: nowrap; }
 .projector .report-dot,
 .projector #tab-btn-system,
 .projector .quiz-editor,
-.projector .bank-load { display: none; }
+.projector .bank-load, .projector .quiz-editing { display: none; }
 
 /* ── 節目單 ───────────────────────────────────────────── */
 .rs-list { list-style: none; margin: 0 0 12px; padding: 0; counter-reset: rs; display: grid; gap: 4px; }
@@ -678,3 +689,41 @@ td.export { white-space: nowrap; }
 .pq-edit .btn-link[disabled] { opacity: .4; cursor: default; text-decoration: none; }
 .persona-actions { flex-wrap: wrap; }
 #bingo-facts { width: 100%; box-sizing: border-box; margin: 6px 0 8px; font: inherit; font-size: 14px; line-height: 1.6; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm, 6px); background: var(--paper, #fff); color: var(--ink); resize: vertical; }
+
+/* ── 大螢幕預覽 ───────────────────────────────────────────── */
+.sp-actions { display: flex; gap: 6px; }
+.sp-actions button, .sp-open { width: auto; padding: 5px 12px; font-size: 13px; font-weight: 700; border: 2px solid var(--line); border-radius: 9px; }
+.sp-open { color: var(--ink-soft); text-decoration: none; background: var(--surface); }
+.sp-open:hover { border-color: var(--ink); color: var(--ink); }
+.sp-frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--sunk);
+  border: 1.5px solid var(--line);
+}
+/* iframe 一律以投影機的 1920×1080 排版，再整塊縮放 —— 讓預覽跟投影幕上的換行、
+   字級、雲的排法完全一致；直接把 iframe 縮小，大螢幕會改用小視窗的排版，看到的就不是同一個畫面 */
+.sp-frame iframe {
+  position: absolute; left: 0; top: 0;
+  width: 1920px; height: 1080px;
+  border: 0;
+  transform-origin: 0 0;
+  pointer-events: none;   /* 預覽只看不點，免得誤觸大螢幕上的東西 */
+}
+.sp-frame.is-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  background: #111;
+}
+.sp-close {
+  position: absolute; top: 14px; right: 14px; z-index: 1;
+  width: auto; padding: 8px 14px; font-size: 14px;
+  background: var(--surface);
+}
+body.sp-lock { overflow: hidden; }

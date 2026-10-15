@@ -1,5 +1,5 @@
 /**
- * 活動報告：把整場的任務、問答、問卷與社交圖譜彙整成兩張表。
+ * 活動報告：把整場的任務、問答、文字雲與社交圖譜彙整成兩張表。
  *
  * 這些資料本來就都在伺服器上（快照也存著），但只有主辦端看得到「當下」，
  * 活動一結束就沒有人整理得出「誰跟幾個人互動過、哪一輪大家最投入」。
@@ -13,17 +13,18 @@
  * @param {object} src
  * @param {object} src.missions   MissionBoard#export()
  * @param {object} src.quiz       QuizSession#export()
- * @param {object} src.survey     SurveySession#export()
+ * @param {Array}  [src.traits]   TraitStore#export()（參與者標籤，例如人格類型）
+ * @param {object} [src.wordcloud] WordCloudSession#export()
  * @param {object} src.scores     ScoreBoard#export()
  * @param {object} src.graph      SocialGraph#export()
  * @param {(id: string) => string} src.nameOf     找不到時回傳空字串
  * @param {(id: string) => boolean} src.isPresent 目前是否在場
  * @param {number} [src.now]
  */
-export function buildReport({ missions, quiz, survey, scores, graph, nameOf, isPresent, now = Date.now() }) {
+export function buildReport({ missions, quiz, traits = [], wordcloud = {}, scores, graph, nameOf, isPresent, now = Date.now() }) {
   const missionList = [...(missions.history ?? []), ...(missions.active ? [missions.active] : [])];
   const quizList = [...(quiz.history ?? []), ...(quiz.current ? [quiz.current] : [])];
-  const surveyList = [...(survey.history ?? []), ...(survey.current ? [survey.current] : [])];
+  const cloudList = wordcloud.history ?? [];
   const edges = graph.edges ?? [];
 
   /** @type {Map<string, object>} */
@@ -33,7 +34,7 @@ export function buildReport({ missions, quiz, survey, scores, graph, nameOf, isP
       people.set(id, {
         id, name: nameOf(id) || '', present: isPresent(id),
         score: 0, connections: 0, missionCompletions: 0,
-        quizAnswered: 0, quizCorrect: 0, surveyTags: [],
+        quizAnswered: 0, quizCorrect: 0, tags: [],
       });
     }
     return people.get(id);
@@ -52,9 +53,9 @@ export function buildReport({ missions, quiz, survey, scores, graph, nameOf, isP
       if (q.revealedAt && a.choice === q.correctIndex) p.quizCorrect++;
     }
   }
-  for (const t of survey.traits ?? []) {
+  for (const t of traits) {
     const p = person(t.agentId);
-    for (const v of Object.values(t.tags ?? {})) p.surveyTags.push(typeof v === 'string' ? v : v?.label ?? '');
+    for (const v of Object.values(t.tags ?? {})) p.tags.push(typeof v === 'string' ? v : v?.label ?? '');
   }
 
   const activities = [];
@@ -83,19 +84,16 @@ export function buildReport({ missions, quiz, survey, scores, graph, nameOf, isP
         : `正解「${q.options?.[q.correctIndex] ?? ''}」・${right} / ${answers.length} 人答對`,
     });
   }
-  for (const s of surveyList) {
-    const answers = s.answers ?? [];
-    const dist = (s.options ?? []).map((o, i) => {
-      const n = answers.filter((a) => a.choice === i).length;
-      return `${o.label ?? o} ${n}`;
-    });
+  for (const c of cloudList) {
+    // 結果欄放票數最高的十個詞：報告要的是「大家在想什麼」，不是整片雲
+    const top = (c.words ?? []).slice(0, 10).map((w) => `${w.text} ${w.count}`);
     activities.push({
-      kind: '問卷',
-      title: s.question,
-      startedAt: s.startedAt,
-      endedAt: s.closedAt ?? null,
-      participants: answers.length,
-      result: dist.join('・'),
+      kind: '文字雲',
+      title: c.question,
+      startedAt: c.startedAt,
+      endedAt: c.closedAt ?? null,
+      participants: c.participants ?? 0,
+      result: top.length ? top.join('・') : '沒有人作答',
     });
   }
   activities.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
@@ -111,7 +109,7 @@ export function buildReport({ missions, quiz, survey, scores, graph, nameOf, isP
       isolated: rows.filter((p) => p.connections === 0).length,
       missions: missionList.length,
       quizzes: quizList.length,
-      surveys: surveyList.length,
+      wordclouds: cloudList.length,
     },
     people: rows,
     activities,
