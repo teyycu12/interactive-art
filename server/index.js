@@ -1400,22 +1400,18 @@ async function captureForHost(ws) {
  */
 const ACTIVITY_STARTS = {
   [EV.HOST_PUBLISH_MISSION]: 'mission',
-  [EV.HOST_START_SURVEY]: 'survey',
-  [EV.HOST_START_TREASURE]: 'treasure',
-  [EV.HOST_START_HARVEST]: 'harvest',
+  [EV.HOST_START_WORDCLOUD]: 'wordcloud',
   [EV.HOST_START_BINGO]: 'bingo',
   [EV.HOST_START_QUIZ]: 'quiz',
 };
 const ACTIVITY_LABEL = {
-  mission: '任務', survey: '轉場問卷', treasure: '尋寶', harvest: '採水果', bingo: '人物賓果', quiz: '即時問答',
+  mission: '任務', wordcloud: '文字雲', bingo: '人物賓果', quiz: '即時問答',
 };
 
 /** 目前在進行的主辦活動；沒有則 null */
 function runningActivity() {
   if (missions.isActive) return 'mission';
-  if (survey.isActive) return 'survey';
-  if (treasure.isActive) return 'treasure';
-  if (harvest.isActive) return 'harvest';
+  if (wordcloud.isActive) return 'wordcloud';
   if (bingo.isActive) return 'bingo';
   if (quiz.isActive) return 'quiz';
   return null;

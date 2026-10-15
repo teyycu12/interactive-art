@@ -1613,17 +1613,17 @@ check('引導端點擋下過大的影格',
     JSON.stringify(pA.bingo.ask));
   check('主辦端看到「勾自我介紹中」', bingoRound?.phase === 'ask', JSON.stringify(bingoRound));
 
-  // 一次只能進行一個主辦活動：賓果進行中開尋寶要被擋下，而且尋寶真的沒開
+  // 一次只能進行一個主辦活動：賓果進行中出文字雲要被擋下，而且題目真的沒發出去
   let rejected = null;
-  let treasureStarted = false;
+  let cloudAsked = false;
   bHost.on('message', (d) => {
     const m = JSON.parse(d);
     if (m.type === 'HOST_REJECT') rejected = m.reason;
-    if (m.type === 'TREASURE_START') treasureStarted = true;
   });
-  bHost.send(JSON.stringify({ type: 'HOST_START_TREASURE', prophetId: null }));
+  pA.ws.on('message', (d) => { if (JSON.parse(d).type === 'WORDCLOUD_QUESTION') cloudAsked = true; });
+  bHost.send(JSON.stringify({ type: 'HOST_START_WORDCLOUD', question: '賓果中插一題' }));
   await sleep(300);
-  check('賓果進行中不能再開尋寶（一次一個活動）', /人物賓果.*還在進行/.test(rejected ?? '') && !treasureStarted, rejected);
+  check('賓果進行中不能出文字雲（一次一個活動）', /人物賓果.*還在進行/.test(rejected ?? '') && !cloudAsked, rejected);
 
   // 乙勾了第一題、甲什麼都沒勾。場上在線的只有這兩支手機，兩人答完就發卡
   pA.ws.send(JSON.stringify({ type: 'BINGO_FACTS', yes: [] }));
