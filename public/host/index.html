@@ -268,12 +268,23 @@
       <h2>人物賓果</h2>
       <div id="bingo-idle">
         <p class="hint">每人一張 3×3 卡，每格「找一個〔條件〕的人」，輸入對方的配對碼才算。
-          <b>同一個人只能填一格</b>，連成一線有加分。</p>
+          開局先在手機上勾幾句自我介紹（最多 30 秒），卡上就會出現「會一種樂器的人」這種格子。
+          <b>同一個人只能填一格</b>（不到 10 人時可以填兩格以上），連成一線有加分。</p>
         <details class="howto">
           <summary>玩法說明</summary>
-          <p>條件取自現場已有的資料：衣服顏色、進場問卷的類型、轉場問卷的答案。
-            類型只有本人知道，所以一定得開口問；條件湊不滿時會補「找一個你還不認識的人」。
-            建議先跑過進場問卷或一題轉場問卷，卡片會更有變化。</p>
+          <p>條件取自：開局勾的自我介紹、衣服顏色、進場問卷的類型、轉場問卷的答案，每類最多 3 格。
+            自我介紹與類型只有本人知道，所以一定得開口問；條件湊不滿時會補「找一個你還不認識的人」。</p>
+          <p>被找的人如果也需要找對方（對方剛好符合他卡上的某一格），手機會問他要不要順便填上，不必再輸碼。</p>
+        </details>
+        <details class="persona-editor" id="bingo-facts-editor">
+          <summary>自我介紹題 <span class="badge-off" id="bingo-facts-default">依場景預設</span></summary>
+          <p class="hint">一行一題，每輪隨機挑 6 題問。寫成「會游泳」這樣的描述，卡上會變成「會游泳的人」。
+            不要問感情、宗教、政治、收入、健康、住址 —— 這些會被大聲問出來。</p>
+          <textarea id="bingo-facts" rows="8" spellcheck="false"></textarea>
+          <div class="row-actions">
+            <button class="btn-ghost" id="btn-bingo-facts-reset">恢復預設</button>
+            <button class="btn-primary" id="btn-bingo-facts-save" disabled>儲存題目</button>
+          </div>
         </details>
         <label class="field">
           <span>限時</span>

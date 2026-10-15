@@ -1635,6 +1635,17 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 }
 .bingo-cell[aria-pressed="true"] { outline: 3px solid var(--accent); outline-offset: 1px; }
 .bingo-cell.filled { background: var(--wall-tint); border-style: dashed; }
+
+/* 賓果開局的自我介紹：一題一列，按一下切換。選中用牆面綠底紙色字（6.65:1） */
+.bingo-facts { display: grid; gap: 8px; margin: 10px 0 14px; }
+.bingo-fact {
+  min-height: 48px; padding: 8px 14px; text-align: left;
+  font-size: 15px; font-weight: 700;
+  background: #FFFCF5; color: var(--ink);
+  border: 2px solid var(--ink); border-radius: var(--r);
+}
+.bingo-fact[aria-pressed="true"] { background: var(--wall); color: #FAF8F5; }
+.bingo-fact[aria-pressed="true"]::before { content: '✓ '; }
 .bingo-cell.filled .who { font-size: 13px; font-weight: 800; color: var(--ok-ink); }
 .bingo-cell.filled .cond { font-weight: 500; color: var(--ink-soft); font-size: 11px; }
 .bingo-entry { display: flex; gap: 8px; align-items: flex-end; }

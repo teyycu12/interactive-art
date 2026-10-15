@@ -241,7 +241,7 @@
         <span class="mb-title">人物賓果</span>
         <span class="mb-prog" id="bingo-prog">0 / 9</span>
       </span>
-      <span class="mb-code">找符合條件的人、問他的配對碼　·　點此打開賓果卡</span>
+      <span class="mb-code" id="bingo-banner-hint">找符合條件的人、問他的配對碼　·　點此打開賓果卡</span>
     </button>
 
     <button class="mission-banner" id="mission-banner" hidden>
@@ -305,6 +305,11 @@
       <button id="btn-wave-back">👋 揮回去</button>
     </div>
 
+    <!-- 剛把你填進賓果的人，也符合你卡上空著的一格：按一下就填上，不必再輸碼 -->
+    <div class="greet-invite" id="bingo-offer" hidden role="status" aria-live="polite">
+      <span id="bingo-offer-text"></span>
+      <button id="btn-bingo-accept">幫我填上</button>
+    </div>
     <div id="emotes">
       <button data-action="CHEERS"><em>🍻</em>乾杯</button>
       <button data-action="HEART"><em>💗</em>愛心</button>
@@ -371,12 +376,24 @@
   </div>
 </div>
 
+<!-- 賓果開局：先勾符合自己的自我介紹，卡上才會出現「會一種樂器的人」這種格子 -->
+<div class="sheet" id="bingo-ask-sheet" hidden>
+  <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="bingo-ask-title">
+    <button class="sheet-close" id="btn-bingo-ask-close" aria-label="關閉">✕</button>
+    <h2 id="bingo-ask-title">人物賓果要開始了</h2>
+    <p class="sheet-brief">先勾一下符合你的。等一下別人的卡上會寫「找一個〔這句話〕的人」，他們會來問你。</p>
+    <div class="bingo-facts" id="bingo-facts" role="group" aria-label="自我介紹"></div>
+    <button class="btn-primary" id="btn-bingo-facts-done">好了</button>
+    <p class="sheet-prog" id="bingo-ask-timer"></p>
+  </div>
+</div>
+
 <!-- 人物賓果卡。條件只有本人知道的（人格類型）就非開口問不可 -->
 <div class="sheet" id="bingo-sheet" hidden>
   <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="bingo-title">
     <button class="sheet-close" id="btn-bingo-close" aria-label="關閉">✕</button>
     <h2 id="bingo-title">人物賓果</h2>
-    <p class="sheet-brief">每格找一個符合條件的人，輸入他的配對碼。<b>同一個人只能填一格</b>，連成一線有加分。</p>
+    <p class="sheet-brief">每格找一個符合條件的人，輸入他的配對碼。<b>每格盡量找不同的人</b>，連成一線有加分。</p>
     <div class="mycode">
       <span class="mycode-label">別人要填你時，把這組碼唸給他</span>
       <b id="bingo-mycode">----</b>

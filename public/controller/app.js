@@ -1367,10 +1367,12 @@ function connect() {
     if (msg.type === EV.CLIENT_WELCOME) {
       // 斷線期間可能錯過 BINGO_ENDED：先把舊卡清掉。還在進行的話，
       // 伺服器在 WELCOME 之後會補送一張（sendBingoCatchUp），不會因此看不到卡
-      if (bingoCard) {
+      if (bingoCard || bingoAsk) {
         bingoCard = null;
         bingoPick = null;
         clearInterval(bingoTimer);
+        clearBingoAsk();
+        hideBingoOffer();
         closeBingo();
         renderBingo();
       }
@@ -1657,13 +1659,98 @@ let bingoTimer = null;
 const bingoSheet = $('#bingo-sheet');
 const bingoInput = $('#bingo-input');
 
+// ── 開局的自我介紹（shared/bingoFacts.js）──
+/** @type {{facts: {id: string, text: string}[], deadline: number, sent: boolean}|null} */
+let bingoAsk = null;
+let bingoAskTimer = null;
+const bingoAskSheet = $('#bingo-ask-sheet');
+
+function openBingoAsk() {
+  if (!bingoAsk) return;
+  renderBingoAsk();
+  if (!bingoAskSheet.hidden) return;
+  bingoAskSheet.hidden = false;
+  pushOverlay(bingoAskSheet, { onEscape: closeBingoAsk, restoreTo: $('#bingo-banner') });
+}
+
+function closeBingoAsk() {
+  if (bingoAskSheet.hidden) return;
+  bingoAskSheet.hidden = true;
+  popOverlay(bingoAskSheet);
+}
+
+function renderBingoAsk() {
+  const box = $('#bingo-facts');
+  // 已經畫過就只更新狀態，不要重建（重建會把勾到一半的選擇洗掉）
+  if (box.dataset.round !== String(bingoAsk.key)) {
+    box.dataset.round = String(bingoAsk.key);
+    box.replaceChildren(...bingoAsk.facts.map((f) => {
+      const b = Object.assign(document.createElement('button'), { type: 'button', className: 'bingo-fact', textContent: f.text });
+      b.dataset.id = f.id;
+      b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', () => {
+        b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true'));
+      });
+      return b;
+    }));
+  }
+  $('#btn-bingo-facts-done').textContent = bingoAsk.sent ? '改好了，重新送出' : '好了';
+}
+
+function tickBingoAsk() {
+  if (!bingoAsk) return;
+  const left = Math.max(0, Math.ceil((bingoAsk.deadline - Date.now()) / 1000));
+  $('#bingo-ask-timer').textContent = bingoAsk.sent
+    ? `已送出，等大家答完就發卡（最多 ${left} 秒）`
+    : `${left} 秒後發卡，沒勾的就當作都不符合`;
+}
+
+function clearBingoAsk() {
+  bingoAsk = null;
+  clearInterval(bingoAskTimer);
+  closeBingoAsk();
+}
+
+$('#btn-bingo-facts-done').addEventListener('click', () => {
+  if (!bingoAsk) return;
+  const yes = [...$('#bingo-facts').querySelectorAll('[aria-pressed="true"]')].map((b) => b.dataset.id);
+  sendMsg(EV.BINGO_FACTS, { yes });
+  bingoAsk.sent = true;
+  renderBingoAsk();
+  tickBingoAsk();
+  vibrate(20);
+  closeBingoAsk();
+  renderBingo();
+});
+$('#btn-bingo-ask-close').addEventListener('click', closeBingoAsk);
+bingoAskSheet.addEventListener('click', (e) => { if (e.target === bingoAskSheet) closeBingoAsk(); });
+
+// ── 「順便填」：剛把你填進賓果的人，也符合你卡上空著的一格 ──
+let bingoOfferTimer = null;
+function showBingoOffer(byName, label) {
+  $('#bingo-offer-text').textContent = `${byName || '對方'}是「${label}」`;
+  $('#bingo-offer').hidden = false;
+  clearTimeout(bingoOfferTimer);
+  // 比伺服器的 OFFER_TTL_MS（90 秒）早收：按下去才說過期，比看不到按鈕更讓人困惑
+  bingoOfferTimer = setTimeout(hideBingoOffer, 60_000);
+}
+function hideBingoOffer() {
+  $('#bingo-offer').hidden = true;
+  clearTimeout(bingoOfferTimer);
+}
+$('#btn-bingo-accept').addEventListener('click', () => {
+  sendMsg(EV.BINGO_ACCEPT, {});
+  hideBingoOffer();
+});
+
 const BINGO_ERROR_TEXT = {
   NO_ROUND: '這一輪已經結束了。',
   NO_CARD: '你還沒有賓果卡，稍等一下再試。',
   BAD_CELL: '請先點選要填的那一格。',
   FILLED: '這一格已經填過了。',
   SELF: '不能填自己喔。',
-  USED: '這個人已經填在你卡上的另一格了 —— 每格要找不同的人。',
+  USED: '這個人在你卡上已經填夠多格了，去找別人吧。',
+  NO_OFFER: '這次的「順便填」已經過期了，請直接輸入他的配對碼。',
   MISMATCH: '這個人不符合這一格的條件，再問問別人。',
   NOT_FOUND: '查無這組配對碼，請對方再唸一次（碼每分鐘會換）。',
   COOLDOWN: '慢一點，等 3 秒再送。',
@@ -1672,9 +1759,15 @@ const BINGO_ERROR_TEXT = {
 function renderBingo() {
   const banner = $('#bingo-banner');
   if (!bingoCard) {
-    banner.hidden = true;
+    // 開局還在勾自我介紹：橫幅先出來，點了打開勾選畫面
+    banner.hidden = !bingoAsk;
+    if (bingoAsk) {
+      $('#bingo-prog').textContent = bingoAsk.sent ? '等發卡' : '準備中';
+      $('#bingo-banner-hint').textContent = bingoAsk.sent ? '已送出自我介紹，等大家答完就發卡' : '先勾一下符合你的自我介紹　·　點此打開';
+    }
     return;
   }
+  $('#bingo-banner-hint').textContent = '找符合條件的人、問他的配對碼　·　點此打開賓果卡';
   const filled = bingoCard.cells.filter((c) => c.filled).length;
   banner.hidden = false;
   $('#bingo-prog').textContent = `${filled} / 9${bingoCard.lines ? `　連線 ${bingoCard.lines}` : ''}`;
@@ -1718,7 +1811,7 @@ function showBingoMsg(text) {
 }
 
 function openBingo() {
-  if (!bingoCard) return;
+  if (!bingoCard) { openBingoAsk(); return; }
   bingoSheet.hidden = false;
   renderBingo();
   pushOverlay(bingoSheet, { onEscape: closeBingo, restoreTo: $('#bingo-banner') });
@@ -1754,7 +1847,26 @@ $('#btn-bingo-submit').addEventListener('click', () => {
 /** @returns {boolean} 是否處理了這則訊息 */
 function handleBingoMessage(msg) {
   switch (msg.type) {
+    case EV.BINGO_ASK:
+      bingoAsk = {
+        key: Date.now(), facts: Array.isArray(msg.facts) ? msg.facts : [],
+        deadline: Date.now() + (msg.remainingMs ?? 30_000), sent: false,
+      };
+      clearInterval(bingoAskTimer);
+      bingoAskTimer = setInterval(tickBingoAsk, 1000);
+      tickBingoAsk();
+      // 主持人剛宣布開始，大家都在看手機：直接打開，不要讓人找橫幅
+      openBingoAsk();
+      vibrate([30, 40, 30]);
+      renderBingo();
+      return true;
+
     case EV.BINGO_CARD:
+      if (bingoAsk) {
+        const wasOpen = !bingoAskSheet.hidden;
+        clearBingoAsk();
+        if (wasOpen || !bingoCard) showToast('賓果卡發下來了！點上方的橫幅打開');
+      }
       bingoCard = msg.card;
       bingoDeadline = msg.remainingMs == null ? null : Date.now() + msg.remainingMs;
       clearInterval(bingoTimer);
@@ -1781,9 +1893,13 @@ function handleBingoMessage(msg) {
       // 被填的人知道「剛剛那個人原來在玩賓果」—— 通常就是下一段對話的開頭
       showToast(`${msg.byName} 把你填進了賓果：「${msg.label}」`);
       vibrate([20, 60, 20]);
+      // 他也符合我卡上空著的一格：給一顆按鈕，按下去就填上
+      if (msg.offer?.label && bingoCard) showBingoOffer(msg.byName, msg.offer.label);
       return true;
 
     case EV.BINGO_ENDED:
+      clearBingoAsk();
+      hideBingoOffer();
       bingoCard = null;
       bingoPick = null;
       clearInterval(bingoTimer);

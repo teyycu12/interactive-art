@@ -80,6 +80,7 @@ function handle(msg, key) {
       else {
         undoRunSheetStep();
         if (lastAction === 'persona') personaSaveRejected();
+        if (lastAction === 'bingo') bingoFactsSaveRejected();
         showError(msg.reason ?? '操作失敗');
       }
       break;
@@ -106,6 +107,10 @@ function handle(msg, key) {
 
     case EV.HOST_PERSONA_QUIZ:
       receivePersonaQuiz(msg);
+      break;
+
+    case EV.HOST_BINGO_FACTS:
+      receiveBingoFacts(msg);
       break;
 
     case EV.HOST_MSG_REPORTS:
@@ -966,11 +971,15 @@ function renderBingo(round) {
   $('#bingo-live').hidden = !round;
   clearInterval(bingoCountdown);
   if (!round) return;
-  bingoDeadlineAt = round.remainingMs == null ? null : Date.now() + round.remainingMs;
+  const asking = round.phase === 'ask';
+  // ask 階段倒數的是勾自我介紹的時間，發卡之後才是本輪限時
+  const left0 = asking ? round.askRemainingMs : round.remainingMs;
+  bingoDeadlineAt = left0 == null ? null : Date.now() + left0;
+  const who = asking ? `勾自我介紹中 ${round.answered ?? 0}/${round.players} 人` : `${round.players} 人`;
   const tick = () => {
-    if (!bingoDeadlineAt) { $('#bingo-left').textContent = `${round.players} 人參加`; return; }
+    if (!bingoDeadlineAt) { $('#bingo-left').textContent = `${who}參加`; return; }
     const left = Math.max(0, bingoDeadlineAt - Date.now());
-    $('#bingo-left').textContent = `${round.players} 人　剩 ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`;
+    $('#bingo-left').textContent = `${who}　剩 ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`;
   };
   tick();
   if (bingoDeadlineAt) bingoCountdown = setInterval(tick, 1000);
@@ -979,6 +988,51 @@ function renderBingo(round) {
     textContent: `${t.name}　連線 ${t.lines}　已填 ${t.filled}/9`,
   })));
 }
+
+// ── 賓果自我介紹題 ──
+// 草稿保護照進場問卷的做法（見 personaSaving）：等伺服器廣播回 HOST_BINGO_FACTS 才算存好，
+// 未存的草稿不會被另一台主辦端的廣播或重連補送蓋掉。
+let bingoFactsDirty = false;
+let bingoFactsSaving = false;
+
+function receiveBingoFacts(view) {
+  $('#bingo-facts-default').hidden = !view.isDefault;
+  if (bingoFactsSaving) {
+    bingoFactsSaving = false;
+    bingoFactsDirty = false;
+  }
+  if (!bingoFactsDirty) {
+    $('#bingo-facts').value = view.facts.join('\n');
+    $('#btn-bingo-facts-save').disabled = true;
+  }
+}
+
+function bingoFactsSaveRejected() {
+  if (!bingoFactsSaving) return;
+  bingoFactsSaving = false;
+  $('#btn-bingo-facts-save').disabled = false;
+}
+
+$('#bingo-facts').addEventListener('input', () => {
+  bingoFactsDirty = true;
+  if (!bingoFactsSaving) $('#btn-bingo-facts-save').disabled = false;
+});
+
+$('#btn-bingo-facts-save').addEventListener('click', () => {
+  lastAction = 'bingo';
+  const facts = $('#bingo-facts').value.split('\n').map((t) => t.trim()).filter(Boolean);
+  ws?.send(JSON.stringify({ type: EV.HOST_SET_BINGO_FACTS, facts }));
+  bingoFactsSaving = true;
+  $('#btn-bingo-facts-save').disabled = true;
+});
+
+$('#btn-bingo-facts-reset').addEventListener('click', () => {
+  if (!confirm('確定要恢復成這個場景的預設題目嗎？目前的修改會消失。')) return;
+  lastAction = 'bingo';
+  bingoFactsDirty = false;
+  bingoFactsSaving = false;
+  ws?.send(JSON.stringify({ type: EV.HOST_SET_BINGO_FACTS, facts: null }));
+});
 
 $('#btn-bingo-start').addEventListener('click', () => {
   lastAction = 'bingo';
