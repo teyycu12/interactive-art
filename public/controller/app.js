@@ -1359,6 +1359,15 @@ function connect() {
     try { msg = JSON.parse(e.data); } catch { return; }
 
     if (msg.type === EV.CLIENT_WELCOME) {
+      // 斷線期間可能錯過 BINGO_ENDED：先把舊卡清掉。還在進行的話，
+      // 伺服器在 WELCOME 之後會補送一張（sendBingoCatchUp），不會因此看不到卡
+      if (bingoCard) {
+        bingoCard = null;
+        bingoPick = null;
+        clearInterval(bingoTimer);
+        closeBingo();
+        renderBingo();
+      }
       // 從候補名單進場：伺服器直接送 WELCOME，不必手機重新操作
       if (closeAudienceWait()) {
         showToast('輪到你了！已經進場');

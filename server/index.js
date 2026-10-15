@@ -647,9 +647,10 @@ function endBingo(by = 'host') {
   if (!bingo.isActive) return;
   const top = bingo.standings();
   bingo.end();
-  // 公布：連最多線的人（同分並列）。沒人連成線就公布填最多格的
+  // 公布：連最多線的人（同分並列）。沒人連成線就公布填最多格的；
+  // 一格都沒人填就沒有贏家 —— 否則全場 0 格同分，每個人都會被唸成贏家
   const best = top[0];
-  const winners = !best ? [] : top
+  const winners = !best || (best.lines === 0 && best.filled === 0) ? [] : top
     .filter((s) => s.lines === best.lines && (best.lines > 0 || s.filled === best.filled))
     .map((s) => nameOf(s.id)).filter(Boolean);
   blastAll(EV.BINGO_ENDED, { winners, by });
@@ -867,8 +868,19 @@ function handleJoin(ws, msg) {
   console.log(`[join] ${agent.name} (${agent.id})　場上人數 ${stage.agents.size}`);
 }
 
+/**
+ * 候補名單上限。伺服器沒有限制單一來源的連線數，沒有上限的話開一堆連線就能把名單
+ * 灌到無限長 —— 而名單每動一次，排隊的每個人都要收一則位置更新（O(n²)）。
+ * 60 遠超過一場活動實際會同時等的人數。
+ */
+const AUDIENCE_MAX = 60;
+
 /** 排進候補名單。同一條連線重送 CLIENT_JOIN 只更新資料，不重排 */
 function enqueueAudience(ws, msg) {
+  if (!audienceQueue.includes(ws) && audienceQueue.length >= AUDIENCE_MAX) {
+    send(ws, EV.CLIENT_REJECT, { reason: '現場人數已滿，候補名單也滿了，請稍候再試' });
+    return;
+  }
   ws.role = 'audience';
   ws.pendingJoin = msg;
   if (!audienceQueue.includes(ws)) {

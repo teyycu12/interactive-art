@@ -1694,6 +1694,18 @@ check('引導端點擋下過大的影格',
   await sleep(300);
   bHost.close();
   check('結束時全場收到結果', pA.bingo.ended !== null && Array.isArray(pB.bingo.ended?.winners), JSON.stringify(pA.bingo.ended));
+
+  // 一格都沒人填就結束：不能把全場 0 格同分的人都唸成贏家
+  const h2 = new WebSocket(URL);
+  await new Promise((res) => h2.on('open', res));
+  h2.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(300);
+  h2.send(JSON.stringify({ type: 'HOST_START_BINGO' }));
+  await sleep(300);
+  h2.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
+  await sleep(300);
+  check('沒人填任何一格就沒有贏家', pA.bingo.ended?.winners?.length === 0, JSON.stringify(pA.bingo.ended));
+  h2.close();
   pA.ws.close();
   pB.ws.close();
   await sleep(200);
