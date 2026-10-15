@@ -656,7 +656,7 @@ function paintRaisedArm(p, c, dir, pose, sleeve) {
   }
 }
 
-/** 有專屬動作畫格的表情。其餘（愛心）仍用頭上的圖示。 */
+/** 有專屬動作畫格的表情 */
 export const PIXEL_POSES = { WAVE: 'wave', CHEERS: 'cheers' };
 
 // ── 對外 ─────────────────────────────────────────────────

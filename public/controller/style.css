@@ -446,7 +446,7 @@ canvas.portrait { image-rendering: pixelated; display: block; }
    按鍵被壓扁會直接影響點擊命中率，所以不讓它被擠，
    但視窗極矮時仍允許整體版面正常收斂。 */
 #emotes {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
   flex-shrink: 0;
 }
 #emotes button { padding: 12px 4px 14px; font-size: 13px; line-height: 1.5; background: #FFFCF5; }

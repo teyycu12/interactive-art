@@ -1470,7 +1470,48 @@ async function captureForHost(ws) {
 // ─────────────────────────────────────────────────────────────
 // 主辦端處理
 // ─────────────────────────────────────────────────────────────
+/**
+ * 主辦端帶的活動，同一時間只能有一個。
+ *
+ * 原本可以同時開任務、賓果、採水果、問答 —— 手機上橫幅、提示框、覆蓋層會疊好幾層，
+ * 第一次來的人分不清現在該做哪一件。主辦端的畫面亂一點還有受過說明的人撐著，
+ * 手機上亂就直接失敗。所以擋在伺服器，不靠主辦端的按鈕狀態（那只是本機的畫面，
+ * 兩台主辦端或節目單「下一項」都可能繞過）。
+ * 被擋下時節目單會自己把指標退回來（host.js 的 undoRunSheetStep），不會跳過那一項。
+ *
+ * 大合照、話題桌不算：一個是一瞬間的事，一個不是主辦端在帶的活動。
+ */
+const ACTIVITY_STARTS = {
+  [EV.HOST_PUBLISH_MISSION]: 'mission',
+  [EV.HOST_START_SURVEY]: 'survey',
+  [EV.HOST_START_TREASURE]: 'treasure',
+  [EV.HOST_START_HARVEST]: 'harvest',
+  [EV.HOST_START_BINGO]: 'bingo',
+  [EV.HOST_START_QUIZ]: 'quiz',
+};
+const ACTIVITY_LABEL = {
+  mission: '任務', survey: '轉場問卷', treasure: '尋寶', harvest: '採水果', bingo: '人物賓果', quiz: '即時問答',
+};
+
+/** 目前在進行的主辦活動；沒有則 null */
+function runningActivity() {
+  if (missions.isActive) return 'mission';
+  if (survey.isActive) return 'survey';
+  if (treasure.isActive) return 'treasure';
+  if (harvest.isActive) return 'harvest';
+  if (bingo.isActive) return 'bingo';
+  if (quiz.isActive) return 'quiz';
+  return null;
+}
+
 function handleHostMessage(ws, msg) {
+  const starting = ACTIVITY_STARTS[msg.type];
+  const running = starting ? runningActivity() : null;
+  // 同一種活動交給它自己判斷（例如問答收題前不能出下一題），回的訊息比較準
+  if (running && running !== starting) {
+    send(ws, EV.HOST_REJECT, { reason: `「${ACTIVITY_LABEL[running]}」還在進行，請先結束再開始${ACTIVITY_LABEL[starting]}` });
+    return;
+  }
   switch (msg.type) {
     case EV.HOST_PUBLISH_MISSION: {
       const result = missions.publish({

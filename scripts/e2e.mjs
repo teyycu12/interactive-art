@@ -766,6 +766,19 @@ const amyAfterPair = amy.scores.at(-1);
 check('配對成功會加分', (amyAfterPair?.score ?? 0) > 0, `${amyAfterPair?.score} 分`);
 check('配對回應帶有本次得分', (amy.results.find((r) => r.ok && !r.pending)?.points ?? 0) > 0);
 
+// 一次只能進行一個主辦活動（server/index.js 的 ACTIVITY_STARTS）：任務還開著就出不了問答
+{
+  const rejects = [];
+  const onReject = (d) => { const m = JSON.parse(d); if (m.type === 'HOST_REJECT') rejects.push(m.reason); };
+  host.on('message', onReject);
+  host.send(JSON.stringify({ type: 'HOST_START_QUIZ', question: '任務中插題', options: ['一', '二'], correctIndex: 0, durationMs: 5000 }));
+  await sleep(300);
+  host.off('message', onReject);
+  check('任務進行中不能出問答（一次一個活動）', /任務.*還在進行/.test(rejects.at(-1) ?? ''), rejects.at(-1));
+}
+host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
+await sleep(300);
+
 // ── 即時問答 ──────────────────────────────────────────────
 host.send(JSON.stringify({
   type: 'HOST_START_QUIZ',
@@ -1683,6 +1696,9 @@ check('引導端點擋下過大的影格',
   });
   bHost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
   await sleep(300);
+  // 前面「結算任務」那段留了一個任務開著；一次只能進行一個活動，先收掉
+  bHost.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
+  await sleep(300);
   check('主辦端認證時收到自我介紹題（依場景預設）', factBank?.isDefault === true && factBank.facts.length >= 3, JSON.stringify(factBank));
   bHost.send(JSON.stringify({ type: 'HOST_START_BINGO' }));
   await sleep(400);
@@ -1690,6 +1706,18 @@ check('引導端點擋下過大的影格',
   check('開局先問自我介紹，還不發卡', facts.length === 6 && pB.bingo.ask?.facts?.length === 6 && pA.bingo.card === null,
     JSON.stringify(pA.bingo.ask));
   check('主辦端看到「勾自我介紹中」', bingoRound?.phase === 'ask', JSON.stringify(bingoRound));
+
+  // 一次只能進行一個主辦活動：賓果進行中開尋寶要被擋下，而且尋寶真的沒開
+  let rejected = null;
+  let treasureStarted = false;
+  bHost.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'HOST_REJECT') rejected = m.reason;
+    if (m.type === 'TREASURE_START') treasureStarted = true;
+  });
+  bHost.send(JSON.stringify({ type: 'HOST_START_TREASURE', prophetId: null }));
+  await sleep(300);
+  check('賓果進行中不能再開尋寶（一次一個活動）', /人物賓果.*還在進行/.test(rejected ?? '') && !treasureStarted, rejected);
 
   // 乙勾了第一題、甲什麼都沒勾。場上在線的只有這兩支手機，兩人答完就發卡
   pA.ws.send(JSON.stringify({ type: 'BINGO_FACTS', yes: [] }));
