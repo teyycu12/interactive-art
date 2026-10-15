@@ -86,6 +86,9 @@
     box-shadow: 0 8px 28px -14px rgba(47,42,38,.4);
   }
   .mission[hidden] { display: none; }
+  /* 賓果橫幅：鼠尾草綠，與任務的陶土色分開。標籤字用 ink 版本（UI-STYLING：亮色不寫字） */
+  .mission.bingo { border-color: #6E9B84; }
+  .mission.bingo .m-label { color: #3D6158; }
   .mission .m-label {
     font-size: 11px; letter-spacing: .2em; color: #B44A2F; font-weight: 700;
   }
@@ -234,6 +237,15 @@
     font-family: ui-monospace, Consolas, monospace;
     font-variant-numeric: tabular-nums; font-weight: 900;
   }
+  /* 音效被瀏覽器擋住時的提示（public/screen/sfx.js）。給操作者看的，不是給觀眾：
+     刻意小、低對比、放在不擋角色的右下角（見 docs/notes/UI-STYLING.md「刻意壓低對比的地方」）。
+     點一下畫面解鎖後就消失。 */
+  .sfx-note {
+    position: fixed; right: 12px; bottom: 10px; z-index: 50;
+    font-size: 12px; color: rgba(58, 46, 39, .45);
+    pointer-events: none;
+  }
+  .sfx-note[hidden] { display: none; }
 </style>
 <link rel="stylesheet" href="scenes/pixel-scene.css">
 <!-- three 由本機 node_modules 直出，不走 CDN。
@@ -249,6 +261,13 @@
 <body>
 <div id="bg3d"></div>
 <canvas id="stage"></canvas>
+
+<!-- 人物賓果：只放進度前幾名，卡片內容是參與者私人的 -->
+<div class="mission bingo" id="bingo" hidden>
+  <div class="m-label">人物賓果 · 找符合條件的人，問他的配對碼</div>
+  <div class="m-title" id="bingo-lead">—</div>
+  <div class="m-brief" id="bingo-meta">—</div>
+</div>
 
 <div class="mission" id="mission" hidden>
   <div class="m-label">現在的任務</div>

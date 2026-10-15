@@ -3,9 +3,13 @@
  *
  * 一次一題的狀態機：
  *
- *   出題 ──→ ASKING（倒數中，接受作答）──→ REVEALED（公布正解與分佈）──→ 收題
- *              │                              ▲
- *              └────── 時間到自動揭曉 ─────────┘
+ *   出題 ─(有討論時間)→ DISCUSS ─→ ASKING（倒數中，接受作答）──→ REVEALED ──→ 收題
+ *     └──(沒有)─────────────────────┘     │                         ▲
+ *                                          └──── 時間到自動揭曉 ─────┘
+ *
+ * DISCUSS 是 Kahoot 團隊模式的「team talk」：題目與選項先亮出來但不能作答，
+ * 讓人轉頭跟旁邊的人商量。原本的問答每個人低頭各答各的，不需要開口 ——
+ * 不符合 INTERACTION-DESIGN 的判準。速度分從 ASKING 開始才算，討論不吃分。
  *
  * 兩個不可妥協的規則：
  *
@@ -44,7 +48,7 @@ export class QuizSession {
    * 出題。
    * @returns {{ok: true, quiz: object} | {ok: false, reason: string}}
    */
-  start({ question, options, correctIndex, durationMs }, now = Date.now()) {
+  start({ question, options, correctIndex, durationMs, talkMs = 0 }, now = Date.now()) {
     if (this.current) return { ok: false, reason: '上一題還沒收掉，請先結束本題' };
 
     const text = clean(question, QUIZ.maxQuestionLength);
@@ -69,7 +73,14 @@ export class QuizSession {
       };
     }
 
+    const talk = talkMs === undefined || talkMs === null ? 0 : Number(talkMs);
+    if (!Number.isFinite(talk) || talk < 0 || talk > QUIZ.maxTalkMs) {
+      return { ok: false, reason: `討論時間須介於 0 至 ${QUIZ.maxTalkMs / 1000} 秒` };
+    }
+
     this.asked++;
+    // 作答從討論結束才開始：startedAt 是作答起點，速度分以它為準
+    const answerFrom = now + talk;
     this.current = {
       id: `qz_${randomUUID().slice(0, 8)}`,
       index: this.asked,
@@ -77,10 +88,12 @@ export class QuizSession {
       options: opts,
       correctIndex: correct,
       durationMs: ms,
-      startedAt: now,
-      endsAt: now + ms,
+      talkMs: talk,
+      askedAt: now,
+      startedAt: answerFrom,
+      endsAt: answerFrom + ms,
       revealedAt: null,
-      phase: QUIZ_PHASE.ASKING,
+      phase: talk > 0 ? QUIZ_PHASE.DISCUSS : QUIZ_PHASE.ASKING,
       /** @type {Map<string, {choice: number, at: number, elapsedMs: number}>} */
       answers: new Map(),
     };
@@ -104,7 +117,9 @@ export class QuizSession {
       question: q.question,
       options: q.options,
       durationMs: q.durationMs,
-      remainingMs: Math.max(0, q.endsAt - now),
+      talkMs: q.talkMs ?? 0,
+      // 討論中倒數的是討論時間；作答中倒數的是作答時間
+      remainingMs: Math.max(0, (q.phase === QUIZ_PHASE.DISCUSS ? q.startedAt : q.endsAt) - now),
       phase: q.phase,
       answered: q.answers.size,
     };
@@ -117,6 +132,7 @@ export class QuizSession {
   answer(agentId, rawChoice, now = Date.now()) {
     const q = this.current;
     if (!q) return { ok: false, reason: QUIZ_ERRORS.NO_QUIZ };
+    if (q.phase === QUIZ_PHASE.DISCUSS) return { ok: false, reason: QUIZ_ERRORS.NOT_YET };
     if (q.phase !== QUIZ_PHASE.ASKING) return { ok: false, reason: QUIZ_ERRORS.CLOSED };
     if (now > q.endsAt + QUIZ_TUNING.lateGraceMs) return { ok: false, reason: QUIZ_ERRORS.CLOSED };
     if (q.answers.has(agentId)) return { ok: false, reason: QUIZ_ERRORS.ALREADY_ANSWERED };
@@ -138,6 +154,20 @@ export class QuizSession {
   /** 作答人數（不含分佈 —— 倒數期間洩漏分佈等於洩漏答案） */
   tally() {
     return { id: this.current?.id ?? null, answered: this.current?.answers.size ?? 0 };
+  }
+
+  /** 討論時間到了，該開始作答 */
+  shouldBeginAnswering(now = Date.now()) {
+    const q = this.current;
+    return !!q && q.phase === QUIZ_PHASE.DISCUSS && now >= q.startedAt;
+  }
+
+  /** 討論結束、開始作答。回傳是否真的切換了 */
+  beginAnswering() {
+    const q = this.current;
+    if (!q || q.phase !== QUIZ_PHASE.DISCUSS) return false;
+    q.phase = QUIZ_PHASE.ASKING;
+    return true;
   }
 
   /** 時間到（含寬限）且尚未揭曉 */
@@ -242,6 +272,7 @@ export class QuizSession {
       options: q.options,
       correctIndex: q.correctIndex,
       durationMs: q.durationMs,
+      talkMs: q.talkMs ?? 0,
       startedAt: q.startedAt,
       revealedAt: q.revealedAt,
       answers: [...q.answers].map(([agentId, a]) => ({

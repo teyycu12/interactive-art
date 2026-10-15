@@ -28,7 +28,7 @@ import {
   SCORE_SOURCES, EVENT_INFO, GREET_OUTCOME,
 } from '../shared/protocol.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
-import { avatarMatchesFamily } from '../shared/colorFamily.js';
+import { avatarMatchesFamily, COLOR_FAMILIES } from '../shared/colorFamily.js';
 import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
@@ -45,6 +45,10 @@ import { HARVEST, HARVEST_PLAN } from '../shared/harvest.js';
 import { SocialGraph } from './socialgraph.js';
 import { PairingSession } from './pairing.js';
 import { Greetings } from './greetings.js';
+import { BingoRound, BINGO_ERRORS, STRANGER } from './bingo.js';
+import { TopicTables } from './topics.js';
+import { TOPIC_QUESTIONS, TOPIC_TABLES } from '../shared/topics.js';
+import { PROPS } from '../shared/scene.js';
 import { QuizSession } from './quiz.js';
 import { SurveySession } from './survey.js';
 import { MessageRelay } from './messages.js';
@@ -66,6 +70,8 @@ const stage = new Stage();
 const missions = new MissionBoard();
 const treasure = new TreasureHunt();
 const harvest = new HarvestRelay();
+const bingo = new BingoRound();
+const topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
 // 揮手要尊重私訊的封鎖：封鎖了卻還能讓對方手機一直跳出「某某在跟你揮手」，封鎖就沒有意義
@@ -123,7 +129,7 @@ let eventInfo = parseEventInfo(snapshot?.event);
  * 光線與重置視角已拿掉（光線現場用不到；重置視角只對已停用的 3D 客廳有意義），
  * 剩下的除錯視圖不落地：那是臨時檢查用的，重開後不該還開著。
  */
-const screenSettings = { debug: false };
+const screenSettings = { debug: false, sound: true };
 
 /**
  * 進場人格問卷的題目。主持人可在主辦端修改，落地進快照 ——
@@ -294,6 +300,15 @@ const screens = new Set();
 const hosts = new Set();
 /** @type {Map<string, import('ws').WebSocket>} agentId → 該參與者的連線，用於定向推送 */
 const controllers = new Map();
+/**
+ * 候補名單：人滿時進場的連線，依先後排隊（ws.role === 'audience'，ws.pendingJoin 是原本的 CLIENT_JOIN）。
+ *
+ * 原本人滿就回「現場人數已滿，請稍候再試」—— 被擋的人只能自己猜什麼時候再試，
+ * 而離場的人還會佔名額 45 秒（AGENT_TTL）。最容易直接走掉的就是這些人。
+ * 現在排進名單，主迴圈一看到空位就替排第一的人完成進場，手機不必再操作。
+ * @type {import('ws').WebSocket[]}
+ */
+const audienceQueue = [];
 
 const send = (ws, type, payload) => {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type, ...payload }));
@@ -357,6 +372,8 @@ function hostState() {
     })),
     mission: missions.state(stage.agents.size),
     graphEdges: graph.size,
+    audience: audienceQueue.length,
+    topics: topics.enabled,
     quiz: quiz.publicView(),
     survey: survey.publicView(),
     quizReveal: quiz.revealView(),
@@ -553,6 +570,163 @@ function handleHarvestHand(ws, isTake) {
   console.log(`[harvest] ${nameOf(agentId)} ${isTake ? '接過' : '放下'}籃子`);
 }
 
+// ─────────────────────────────────────────────────────────────
+// 人物賓果（server/bingo.js）
+// ─────────────────────────────────────────────────────────────
+/**
+ * 候選條件：全部取自系統本來就有的資料。id 帶前綴，判定時據此分流。
+ * 場上沒有任何人符合的條件由 BingoRound 自己濾掉。
+ */
+function bingoPool() {
+  const pool = COLOR_FAMILIES.map((f) => ({ id: `color:${f.id}`, label: `衣服有${f.label}的人` }));
+  for (const t of PERSONA_RESULTS) {
+    pool.push({ id: `persona:${t.id}`, label: `進場問卷是${t.emoji}${t.name}的人` });
+  }
+  // 轉場問卷的答案：只收場上真的有人答過的
+  const seen = new Map();
+  for (const id of stage.agents.keys()) {
+    for (const [key, v] of Object.entries(survey.traitsOf(id))) {
+      if (key === PERSONA_TRAIT_KEY) continue;
+      seen.set(`trait:${key}:${v.value}`, `問卷選了「${v.label}」的人`);
+    }
+  }
+  for (const [id, label] of seen) pool.push({ id, label });
+  return pool;
+}
+
+/** 某人是否符合某條件。from 是填卡的人（「還不認識的人」要看兩人之間有沒有連線） */
+function bingoTest(who, condId, from) {
+  if (condId === STRANGER) return who !== from && !graph.connected(from, who);
+  const agent = stage.get(who);
+  if (!agent) return false;
+  const [kind, a, b] = condId.split(':');
+  if (kind === 'color') return avatarMatchesFamily(agent.avatar, a);
+  if (kind === 'persona') return survey.traitOf(who, PERSONA_TRAIT_KEY)?.value === a;
+  if (kind === 'trait') return String(survey.traitOf(who, a)?.value) === b;
+  return false;
+}
+
+/** 手機看到的卡：填了的格子顯示那個人的名字（不給 id —— 手機不需要） */
+function sendBingoCard(agentId) {
+  const card = bingo.cardOf(agentId);
+  if (!card) return;
+  const r = bingo.round;
+  sendToAgent(agentId, EV.BINGO_CARD, {
+    card: {
+      cells: card.cells.map((c) => ({ label: c.cond.label, filled: !!c.by, name: c.by ? nameOf(c.by) : null })),
+      lines: card.lines,
+    },
+    remainingMs: r.endsAt ? Math.max(0, r.endsAt - Date.now()) : null,
+  });
+}
+
+/** 大螢幕與主辦端：進度前幾名。不送卡片內容 —— 卡是私人的 */
+function bingoPublicView() {
+  const r = bingo.round;
+  if (!r) return null;
+  return {
+    remainingMs: r.endsAt ? Math.max(0, r.endsAt - Date.now()) : null,
+    players: r.cards.size,
+    top: bingo.standings().slice(0, 5).map((s) => ({ name: nameOf(s.id), lines: s.lines, filled: s.filled })),
+  };
+}
+
+const pushBingoState = () => blast([...screens, ...hosts], EV.BINGO_STATE, { round: bingoPublicView() });
+
+function startBingo(ws, msg) {
+  const ids = [...stage.agents.keys()];
+  const durationMs = Number(msg.durationMs) > 0 ? Math.min(Number(msg.durationMs), 30 * 60 * 1000) : null;
+  const result = bingo.start(ids, bingoPool(), bingoTest, { durationMs });
+  if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
+  for (const id of ids) sendBingoCard(id);
+  pushBingoState();
+  console.log(`[bingo] 開始　${ids.length} 人${durationMs ? `　限時 ${durationMs / 60000} 分鐘` : ''}`);
+}
+
+function endBingo(by = 'host') {
+  if (!bingo.isActive) return;
+  const top = bingo.standings();
+  bingo.end();
+  // 公布：連最多線的人（同分並列）。沒人連成線就公布填最多格的；
+  // 一格都沒人填就沒有贏家 —— 否則全場 0 格同分，每個人都會被唸成贏家
+  const best = top[0];
+  const winners = !best || (best.lines === 0 && best.filled === 0) ? [] : top
+    .filter((s) => s.lines === best.lines && (best.lines > 0 || s.filled === best.filled))
+    .map((s) => nameOf(s.id)).filter(Boolean);
+  blastAll(EV.BINGO_ENDED, { winners, by });
+  pushBingoState();
+  console.log(`[bingo] 結束${by === 'time' ? '（時間到）' : ''}　${winners.join('、') || '無人得分'}`);
+}
+
+function handleBingoClaim(ws, msg) {
+  const from = ws.agentId;
+  const reply = (payload) => send(ws, EV.BINGO_RESULT, payload);
+  if (!bingo.isActive) { reply({ ok: false, reason: BINGO_ERRORS.NO_ROUND }); return; }
+  // 防枚舉：每一次嘗試都記配對的冷卻，不論成功失敗。
+  // 否則 MISMATCH ↔ NOT_FOUND 的差異可以拿來窮舉出場上每個人的碼
+  // （見 INTERACTION-DESIGN「顏色預檢不可成為枚舉管道」）
+  const now = Date.now();
+  if (pairing.inCooldown(from, now)) { reply({ ok: false, reason: BINGO_ERRORS.COOLDOWN }); return; }
+  pairing.noteClaim(from, now);
+  const target = pairing.peekTarget(msg.code, now);
+  if (!target) { reply({ ok: false, reason: BINGO_ERRORS.NOT_FOUND }); return; }
+
+  const r = bingo.claim(from, msg.cell, target);
+  if (!r.ok) { reply({ ok: false, reason: r.reason }); return; }
+
+  const points = SCORING.bingoCell + r.newLines * SCORING.bingoLine + (r.full ? SCORING.bingoFull : 0);
+  award(from, points, { source: SCORE_SOURCES.BINGO });
+  reply({ ok: true, name: nameOf(target), newLines: r.newLines, full: r.full });
+  sendBingoCard(from);
+  // 被填進去的人也要知道：「剛剛那個人原來是在玩賓果」—— 這通常就是下一段對話的開頭
+  const cell = bingo.cardOf(from).cells[r.cell];
+  sendToAgent(target, EV.BINGO_TAGGED, { byName: nameOf(from), label: cell.cond.label });
+  pushBingoState();
+  markDirty();
+}
+
+/** 中途進場、重連：補一張卡（已經有就重送） */
+function sendBingoCatchUp(agentId) {
+  if (!bingo.isActive || !agentId) return;
+  bingo.dealCard(agentId, [...stage.agents.keys()]);
+  sendBingoCard(agentId);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 話題桌（server/topics.js）
+// ─────────────────────────────────────────────────────────────
+/** 目前主題的號碼牌桌（shared/themes.js 的 spots）。換主題時桌子跟著換 */
+function topicSpots() {
+  const spots = THEME_MAP[stageTheme]?.spots ?? {};
+  return PROPS.filter((p) => spots[p.id]).map((p) => ({ id: p.id, x: p.x, y: p.y, r: p.r, label: spots[p.id] }));
+}
+
+/**
+ * 主辦端在帶活動時，桌邊不該突然跳出聊天題搶注意力 —— 問答、問卷、尋寶、採收
+ * 進行中一律暫停。任務（配對）與賓果不暫停：坐下來聊正是它們要的。
+ */
+function topicsPaused() {
+  return quiz.isActive || survey.isActive || treasure.isActive || harvest.isActive;
+}
+
+let lastTopicCheck = 0;
+function stepTopics(now) {
+  if (now - lastTopicCheck < 500) return;   // 半秒看一次就夠：停留門檻是 2 秒
+  lastTopicCheck = now;
+  if (topicsPaused()) return;
+  for (const deal of topics.update(topicSpots(), stage.agents.values(), now)) {
+    for (const id of deal.ids) {
+      sendToAgent(id, EV.TOPIC_CARD, {
+        question: deal.question,
+        spot: deal.label,
+        withNames: deal.ids.filter((x) => x !== id).map(nameOf).filter(Boolean),
+      });
+    }
+    blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: deal.question });
+    console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${deal.question}」`);
+  }
+}
+
 function sendHarvestCatchUp(ws, agentId) {
   if (!harvest.isActive) return;
   send(ws, EV.HARVEST_STATE, { round: harvest.publicView() });
@@ -596,6 +770,7 @@ function handleJoin(ws, msg) {
       // 封鎖名單只在伺服器：手機重整後要靠這則才知道點到的人是不是被自己封鎖了
       send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(existing.id) });
       sendHarvestCatchUp(ws, existing.id);
+      sendBingoCatchUp(existing.id);
       return;
     }
     ws.agentId = null; // 角色已被回收，往下走正常入場流程
@@ -637,9 +812,11 @@ function handleJoin(ws, msg) {
     agent.name = name;
     agent.avatar = avatar.value;
   } else {
-    agent = stage.addAgent({ name, avatar: avatar.value });
+    // 已經有人在排隊時，新來的人也排到後面 —— 不能趁著某人離場的那一瞬間插隊
+    const mustQueue = audienceQueue.length > 0 && !ws.promoting;
+    agent = mustQueue ? null : stage.addAgent({ name, avatar: avatar.value });
     if (!agent) {
-      send(ws, EV.CLIENT_REJECT, { reason: '現場人數已滿，請稍候再試' });
+      enqueueAudience(ws, msg);
       return;
     }
   }
@@ -680,6 +857,7 @@ function handleJoin(ws, msg) {
   sendSurveyCatchUp(ws, agent.id);
   send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(agent.id) });
   sendHarvestCatchUp(ws, agent.id);
+  sendBingoCatchUp(agent.id);
   send(ws, EV.SCORE_SELF, {
     score: scores.totalOf(agent.id),
     delta: 0,
@@ -688,6 +866,68 @@ function handleJoin(ws, msg) {
   });
   pushHostState();
   console.log(`[join] ${agent.name} (${agent.id})　場上人數 ${stage.agents.size}`);
+}
+
+/**
+ * 候補名單上限。伺服器沒有限制單一來源的連線數，沒有上限的話開一堆連線就能把名單
+ * 灌到無限長 —— 而名單每動一次，排隊的每個人都要收一則位置更新（O(n²)）。
+ * 60 遠超過一場活動實際會同時等的人數。
+ */
+const AUDIENCE_MAX = 60;
+
+/** 排進候補名單。同一條連線重送 CLIENT_JOIN 只更新資料，不重排 */
+function enqueueAudience(ws, msg) {
+  if (!audienceQueue.includes(ws) && audienceQueue.length >= AUDIENCE_MAX) {
+    send(ws, EV.CLIENT_REJECT, { reason: '現場人數已滿，候補名單也滿了，請稍候再試' });
+    return;
+  }
+  ws.role = 'audience';
+  ws.pendingJoin = msg;
+  if (!audienceQueue.includes(ws)) {
+    audienceQueue.push(ws);
+    console.log(`[audience] 人滿，排入候補　候補 ${audienceQueue.length} 人`);
+  }
+  pushAudiencePositions();
+  pushHostState();
+}
+
+function dropAudience(ws) {
+  const i = audienceQueue.indexOf(ws);
+  if (i === -1) return;
+  audienceQueue.splice(i, 1);
+  pushAudiencePositions();
+  pushHostState();
+}
+
+/** 每個人前面還有幾位 */
+function pushAudiencePositions() {
+  audienceQueue.forEach((w, i) => send(w, EV.AUDIENCE_WAIT, { ahead: i }));
+}
+
+/**
+ * 有空位就讓排第一的人進場。由主迴圈每個 tick 呼叫 —— 空位的來源很多
+ * （主動離場、被請出場、斷線逾時），掛在每一條路徑上遲早會漏一條。
+ */
+function promoteAudience() {
+  let moved = false;
+  while (audienceQueue.length && !stage.isFull()) {
+    const w = audienceQueue.shift();
+    moved = true;
+    if (w.readyState !== w.OPEN || w.role !== 'audience') continue;
+    w.role = null;
+    w.promoting = true;
+    try {
+      handleJoin(w, w.pendingJoin);
+    } finally {
+      w.promoting = false;
+    }
+    // 沒進成（例如名字在這段期間變得不合格）就不再排：handleJoin 已經回了 CLIENT_REJECT
+    if (w.agentId) console.log(`[audience] 候補進場　剩 ${audienceQueue.length} 人`);
+  }
+  if (moved) {
+    pushAudiencePositions();
+    pushHostState();
+  }
 }
 
 /**
@@ -711,6 +951,7 @@ function detachAgent(agentId, { forget = false } = {}) {
     // 問卷標籤是「這個人是誰」，主動離場或被請出場時要一起忘掉；
     // 單純斷線則保留 —— 那個人多半還會用原憑證接回同一個角色。
     survey.forget(agentId);
+    bingo.forget(agentId);
     messages.forget(agentId);
     markDirty();
   }
@@ -1081,6 +1322,11 @@ function handleScreenCommand(ws, msg) {
       screenSettings.debug = msg.value === true;
       blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
       break;
+    case 'sound':
+      // 音效開關。展場若有講者在台上說話，主辦方要能一鍵關掉
+      screenSettings.sound = msg.value === true;
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
+      break;
     case 'clear':
       blast(screens, EV.SCREEN_CMD, { cmd: msg.cmd });
       break;
@@ -1167,6 +1413,20 @@ function handleHostMessage(ws, msg) {
       pushHostState();
       break;
     }
+
+    case EV.HOST_START_BINGO:
+      startBingo(ws, msg);
+      break;
+
+    case EV.HOST_SET_TOPICS:
+      topics.setEnabled(msg.enabled === true);
+      console.log(`[topic] 話題桌${topics.enabled ? '開啟' : '關閉'}`);
+      pushHostState();
+      break;
+
+    case EV.HOST_END_BINGO:
+      endBingo('host');
+      break;
 
     case EV.HOST_START_HARVEST: {
       const result = harvest.start([...stage.agents.keys()], HARVEST_PLAN);
@@ -1283,10 +1543,12 @@ function handleHostMessage(ws, msg) {
         options: msg.options,
         correctIndex: msg.correctIndex,
         durationMs: msg.durationMs,
+        talkMs: msg.talkMs,
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       markDirty();
-      console.log(`[quiz] 第 ${result.quiz.index} 題「${result.quiz.question}」${result.quiz.durationMs / 1000} 秒`);
+      console.log(`[quiz] 第 ${result.quiz.index} 題「${result.quiz.question}」`
+        + `${result.quiz.talkMs ? `討論 ${result.quiz.talkMs / 1000} 秒＋` : ''}${result.quiz.durationMs / 1000} 秒`);
       sendQuestion();
       pushHostState();
       break;
@@ -1386,6 +1648,7 @@ wss.on('connection', (ws) => {
           send(ws, EV.SURVEY_STATE, { state: survey.distribution() });
         }
         sendHarvestCatchUp(ws, null);
+        if (bingo.isActive) send(ws, EV.BINGO_STATE, { round: bingoPublicView() });
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
         // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
         send(ws, EV.STAGE_LINKS, { edges: graphEdges() });
@@ -1503,6 +1766,11 @@ wss.on('connection', (ws) => {
         handleMessageReport(ws, msg);
         break;
 
+      case EV.BINGO_CLAIM:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleBingoClaim(ws, msg);
+        break;
+
       case EV.HARVEST_TAKE:
       case EV.HARVEST_DROP:
         if (ws.role !== 'controller' || !ws.agentId) return;
@@ -1557,12 +1825,16 @@ wss.on('connection', (ws) => {
           });
         }
         sendHarvestCatchUp(ws, null);
+        if (bingo.isActive) send(ws, EV.BINGO_STATE, { round: bingoPublicView() });
         console.log(`[host] 主辦端已連線　共 ${hosts.size} 台`);
         break;
       }
 
       case EV.HOST_PUBLISH_MISSION:
       case EV.HOST_CLOSE_MISSION:
+      case EV.HOST_START_BINGO:
+      case EV.HOST_END_BINGO:
+      case EV.HOST_SET_TOPICS:
       case EV.HOST_START_TREASURE:
       case EV.HOST_STOP_TREASURE:
       case EV.HOST_START_HARVEST:
@@ -1588,7 +1860,9 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    if (ws.role === 'screen') {
+    if (ws.role === 'audience') {
+      dropAudience(ws);
+    } else if (ws.role === 'screen') {
       screens.delete(ws);
     } else if (ws.role === 'host') {
       hosts.delete(ws);
@@ -1633,6 +1907,7 @@ const loop = startTicker({
   onTick(dt) {
     // 傳入社交圖譜：配對過的角色之間凝聚力較強，關係會表現為畫面上的群聚
     const zoneMoves = stage.tick(dt, graph);
+    if (audienceQueue.length) promoteAudience();
     greetings.prune(Date.now());
 
     // 分區進出。只在換區時送，不是每幀 ——
@@ -1674,6 +1949,14 @@ const loop = startTicker({
     // 定時器在事件迴圈被拖慢時會延後觸發，而這裡的時間到必須與
     // 大螢幕上的倒數一致；主迴圈本來就對齊絕對截止時間（scheduler.js）。
     const now = Date.now();
+    // 討論時間到：重送一次題目（phase 變成 ASKING、remainingMs 換成作答時間），
+    // 手機據此解鎖選項、大螢幕換成作答倒數
+    if (quiz.shouldBeginAnswering(now) && quiz.beginAnswering()) {
+      sendQuestion();
+      pushHostState();
+    }
+    if (bingo.shouldAutoEnd(now)) endBingo('time');
+    stepTopics(now);
     if (quiz.shouldAutoReveal(now)) revealQuiz(now);
     else if (quiz.shouldAutoEnd(now)) endQuiz();
 
@@ -2013,7 +2296,9 @@ function sendSocialSelf(agentId) {
   sendToAgent(agentId, EV.SOCIAL_SELF, {
     count: ids.length,
     peers: ids.map((id) => {
-      const peer = stage.agents.get(id);
+      // 已經斷線被回收的人不在 stage 上，但身分目錄還記得 —— 原本這裡只查 stage，
+      // 「今天認識的人」裡先走的那幾位會變成沒有名字的空格
+      const peer = stage.agents.get(id) ?? directory.get(id);
       return { id, name: peer?.name ?? '', avatar: peer?.avatar ?? null };
     }),
   });

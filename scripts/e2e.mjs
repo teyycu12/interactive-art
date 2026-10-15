@@ -15,7 +15,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { CLIENT_SYNC_RADIUS, STAGE, MAX_SPEED } from '../shared/protocol.js';
-import { DOORWAYS } from '../shared/scene.js';
+import { DOORWAYS, PROPS } from '../shared/scene.js';
+import { THEME_MAP } from '../shared/themes.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 3199;
@@ -578,6 +579,14 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
 
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'debug', value: false }));
   await sleep(100);
+
+  // 音效：預設開；主辦端可以關（講者在台上說話時要能一鍵靜音）
+  check('大螢幕音效預設開啟', settings[0]?.sound === true, JSON.stringify(settings[0]));
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'sound', value: false }));
+  await sleep(200);
+  check('主辦端可以關掉大螢幕音效', settings.at(-1)?.sound === false, JSON.stringify(settings.at(-1)));
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'sound', value: true }));
+  await sleep(100);
 }
 
 // ── 進場人格問卷（團隊分類）────────────────────────────────
@@ -839,6 +848,28 @@ check('時間到自動公布正解', amy.quizResult?.correctIndex === 0 && amy.q
   `answered=${amy.quizResult?.answered}`);
 host.send(JSON.stringify({ type: 'HOST_END_QUIZ' }));
 await sleep(300);
+
+// 討論時間（team talk）：題目先亮、還不能作答；時間到由主迴圈切到作答並重送題目
+{
+  host.send(JSON.stringify({
+    type: 'HOST_START_QUIZ', question: '討論題', options: ['甲', '乙'],
+    correctIndex: 1, durationMs: 5000, talkMs: 1500,
+  }));
+  await sleep(300);
+  check('有討論時間的題目先進入討論', amy.quiz?.phase === 'DISCUSS' && amy.quiz?.talkMs === 1500,
+    `phase=${amy.quiz?.phase}`);
+  amy.ws.send(JSON.stringify({ type: 'QUIZ_ANSWER', choice: 1 }));
+  await sleep(200);
+  check('討論中作答被拒', amy.acks.at(-1)?.ok === false && amy.acks.at(-1)?.reason === 'NOT_YET',
+    JSON.stringify(amy.acks.at(-1)));
+  await sleep(1500);
+  check('討論時間到自動切到作答', amy.quiz?.phase === 'ASKING', `phase=${amy.quiz?.phase}`);
+  amy.ws.send(JSON.stringify({ type: 'QUIZ_ANSWER', choice: 1 }));
+  await sleep(200);
+  check('切到作答後可以作答', amy.acks.at(-1)?.ok === true, JSON.stringify(amy.acks.at(-1)));
+  host.send(JSON.stringify({ type: 'HOST_END_QUIZ' }));
+  await sleep(300);
+}
 
 // 問卷的完整流程：出題 → 手機作答 → 改答案 → 收題 → 標籤留在身上
 {
@@ -1548,5 +1579,180 @@ check('引導失敗時不回降級外觀',
 const huge = Buffer.alloc(2 * 1024 * 1024, 0x20);
 check('引導端點擋下過大的影格',
   await postApi('/api/preview', huge) === 'frame_too_large');
+
+// ── 話題桌 ────────────────────────────────────────────────
+// 兩人走到同一張號碼牌桌旁、停留一下，兩支手機拿到同一題，大螢幕也收到。
+// 前面的段落已經把 screen 關掉了，這裡自己開一條大螢幕連線看座標與題目。
+{
+  const tScreen = new WebSocket(URL);
+  let tTheme = null;
+  let tAgents = [];
+  const screenTopics = [];
+  tScreen.on('open', () => tScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
+  tScreen.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'STAGE_THEME') tTheme = m.theme;
+    if (m.type === 'STAGE_SYNC') tAgents = m.agents;
+    if (m.type === 'STAGE_TOPIC') screenTopics.push(m);
+  });
+  const seat = (name) => {
+    const box = joinPhone(name);
+    box.topics = [];
+    box.ws.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'TOPIC_CARD') box.topics.push(m); });
+    return box;
+  };
+  const t1 = seat('話題甲');
+  const t2 = seat('話題乙');
+  await sleep(600);
+  const spotId = Object.keys(THEME_MAP[tTheme]?.spots ?? {})[0];
+  const table = PROPS.find((p) => p.id === spotId);
+  // 走到桌子下緣外側（兩人左右錯開），到了就放開搖桿
+  const goal = (dx) => ({ x: table.x + dx, y: table.y + table.r + 45 });
+  const near = (me, g) => Math.hypot(me.x - g.x, me.y - g.y) < 30;
+  for (let i = 0; i < 400; i++) {
+    let moving = false;
+    for (const [box, g] of [[t1, goal(-40)], [t2, goal(40)]]) {
+      const me = tAgents.find((a) => a.id === box.welcome?.userId);
+      if (!me) { moving = true; continue; }
+      if (near(me, g)) { box.ws.send(JSON.stringify({ type: 'INPUT_MOVE', vector: { x: 0, y: 0 }, intensity: 0 })); continue; }
+      moving = true;
+      const dx = g.x - me.x;
+      const dy = g.y - me.y;
+      const d = Math.hypot(dx, dy) || 1;
+      box.ws.send(JSON.stringify({ type: 'INPUT_MOVE', vector: { x: dx / d, y: dy / d }, intensity: 1 }));
+    }
+    if (!moving) break;
+    await sleep(40);
+  }
+  await sleep(3000);
+  if (!t1.topics.length) {
+    const pos = [t1, t2].map((b) => tAgents.find((a) => a.id === b.welcome?.userId))
+      .map((a) => (a ? Math.round(Math.hypot(a.x - table.x, a.y - table.y)) : '?'));
+    console.log(`   [話題] 沒拿到題目；主題 ${tTheme} 桌 ${spotId}，離桌中心 ${pos.join(', ')}（桌半徑 ${table.r}＋90）`);
+  }
+  check('同桌兩人拿到同一題聊天題',
+    t1.topics.length > 0 && t2.topics.length > 0 && t1.topics.at(-1).question === t2.topics.at(-1).question,
+    JSON.stringify({ spotId, t1: t1.topics.at(-1)?.question, t2: t2.topics.at(-1)?.question }));
+  check('題目卡寫著和誰同桌', t1.topics.at(-1)?.withNames?.includes('話題乙'), JSON.stringify(t1.topics.at(-1)?.withNames));
+  // 桌子可能相鄰（office 的 1、2 號工作桌）：兩人同時在兩張桌的範圍內時，題目發在哪一張都對，
+  // 而同一組人只會拿到一題。所以比對的是「大螢幕顯示的就是手機上那一題」
+  check('大螢幕在桌旁顯示同一題', screenTopics.some((m) => m.question === t1.topics.at(-1)?.question),
+    JSON.stringify(screenTopics));
+  t1.ws.close();
+  t2.ws.close();
+  tScreen.close();
+  await sleep(200);
+}
+
+// ── 人物賓果 ──────────────────────────────────────────────
+{
+  const capture = (box) => {
+    box.bingo = { card: null, results: [], tagged: [], ended: null };
+    box.ws.on('message', (d) => {
+      const m = JSON.parse(d);
+      if (m.type === 'BINGO_CARD') box.bingo.card = m.card;
+      if (m.type === 'BINGO_RESULT') box.bingo.results.push(m);
+      if (m.type === 'BINGO_TAGGED') box.bingo.tagged.push(m);
+      if (m.type === 'BINGO_ENDED') box.bingo.ended = m;
+    });
+    return box;
+  };
+  const pA = capture(joinPhone('賓果甲'));
+  const pB = capture(joinPhone('賓果乙'));
+  await sleep(500);
+  // 前面的段落已經把 host 關掉了，這裡自己開一條
+  const bHost = new WebSocket(URL);
+  await new Promise((res) => bHost.on('open', res));
+  bHost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(300);
+  bHost.send(JSON.stringify({ type: 'HOST_START_BINGO' }));
+  await sleep(400);
+  check('開局時每人拿到一張 9 格的卡', pA.bingo.card?.cells?.length === 9 && pB.bingo.card?.cells?.length === 9);
+
+  // 測試角色的衣服是 #E76F51（紅色族），兩人之間也沒有連線：這兩種格子乙一定符合
+  const fits = (c) => !c.filled && (c.label === '衣服有紅色的人' || c.label === '找一個你還不認識的人');
+  const first = pA.bingo.card.cells.findIndex(fits);
+  pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: first, code: pB.code }));
+  await sleep(300);
+  check('輸入對方的碼、對方符合就填上', pA.bingo.results.at(-1)?.ok === true && pA.bingo.card.cells[first].name === '賓果乙',
+    JSON.stringify(pA.bingo.results.at(-1)));
+  check('被填進去的人收到通知', pB.bingo.tagged.at(-1)?.byName === '賓果甲');
+
+  // 立刻再送：冷卻擋下（防枚舉配對碼）
+  const second = pA.bingo.card.cells.findIndex((c, i) => i !== first && !c.filled);
+  pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: second, code: pB.code }));
+  await sleep(200);
+  check('連續填格受配對冷卻限制', pA.bingo.results.at(-1)?.reason === 'COOLDOWN', JSON.stringify(pA.bingo.results.at(-1)));
+
+  // 冷卻過後，同一個人不能再填第二格
+  await sleep(3100);
+  pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: second, code: pB.code }));
+  await sleep(300);
+  check('同一個人在一張卡上只能填一格', pA.bingo.results.at(-1)?.reason === 'USED', JSON.stringify(pA.bingo.results.at(-1)));
+
+  bHost.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
+  await sleep(300);
+  bHost.close();
+  check('結束時全場收到結果', pA.bingo.ended !== null && Array.isArray(pB.bingo.ended?.winners), JSON.stringify(pA.bingo.ended));
+
+  // 一格都沒人填就結束：不能把全場 0 格同分的人都唸成贏家
+  const h2 = new WebSocket(URL);
+  await new Promise((res) => h2.on('open', res));
+  h2.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(300);
+  h2.send(JSON.stringify({ type: 'HOST_START_BINGO' }));
+  await sleep(300);
+  h2.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
+  await sleep(300);
+  check('沒人填任何一格就沒有贏家', pA.bingo.ended?.winners?.length === 0, JSON.stringify(pA.bingo.ended));
+  h2.close();
+  pA.ws.close();
+  pB.ws.close();
+  await sleep(200);
+}
+
+// ── 候補名單（人滿時）──────────────────────────────────────
+// 放在最後：會把場上補滿到上限，不能影響前面的任何一段。
+{
+  const crowd = [];
+  const join = (name) => {
+    const w = new WebSocket(URL);
+    const box = { w, log: [], welcomed: false };
+    w.on('open', () => w.send(JSON.stringify({ type: 'CLIENT_JOIN', name, avatar: AVATAR })));
+    w.on('message', (d) => {
+      const m = JSON.parse(d);
+      if (m.type === 'CLIENT_WELCOME') box.welcomed = true;
+      if (m.type === 'AUDIENCE_WAIT') box.log.push(m.ahead);
+    });
+    return box;
+  };
+  // 補到有人開始排候補為止（場上原本有幾個人不重要）
+  let first = null;
+  for (let i = 0; i < 40 && !first; i++) {
+    const b = join(`湊數${i}`);
+    await sleep(40);
+    if (b.log.length) first = b; else crowd.push(b);
+  }
+  await sleep(200);
+  check('人滿時排進候補而不是被拒絕', first !== null && first.log.at(-1) === 0, JSON.stringify(first?.log));
+  const second = join('候補乙');
+  await sleep(300);
+  check('候補名單依先後排序', second.log.at(-1) === 1, JSON.stringify(second.log));
+
+  // 有人離場：排第一的自動進場，手機不必再操作
+  crowd.find((b) => b.welcomed).w.send(JSON.stringify({ type: 'CLIENT_LEAVE' }));
+  await sleep(400);
+  check('有空位時排第一的人自動進場', first.welcomed === true);
+  check('後面的人遞補到第一位', second.log.at(-1) === 0, JSON.stringify(second.log));
+
+  // 有人在排隊時，新來的人不能趁空位插隊
+  crowd.filter((b) => b.welcomed).at(-1).w.send(JSON.stringify({ type: 'CLIENT_LEAVE' }));
+  const late = join('插隊者');
+  await sleep(500);
+  check('空位給排隊的人，不給剛來的人', second.welcomed === true && late.welcomed === false && late.log.at(-1) === 0,
+    JSON.stringify({ second: second.welcomed, late: late.log }));
+  for (const b of [...crowd, first, second, late]) b.w.close();
+  await sleep(200);
+}
 
 finish();

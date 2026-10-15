@@ -345,3 +345,58 @@ describe('積分帳本', () => {
     assert.equal(event.correct, true);
   });
 });
+
+describe('討論時間（team talk）', () => {
+  const T0 = 1_000_000;
+  const withTalk = (talkMs = 10_000) => {
+    const s = new QuizSession();
+    const r = s.start({ ...QUESTION, durationMs: 20_000, talkMs }, T0);
+    assert.ok(r.ok, r.reason);
+    return s;
+  };
+
+  test('不設討論時間時照舊直接作答', () => {
+    const s = new QuizSession();
+    s.start({ ...QUESTION, durationMs: 20_000 }, T0);
+    assert.equal(s.phase, QUIZ_PHASE.ASKING);
+    assert.equal(s.publicView(T0).talkMs, 0);
+  });
+
+  test('討論中不能作答，倒數的是討論時間', () => {
+    const s = withTalk(10_000);
+    assert.equal(s.phase, QUIZ_PHASE.DISCUSS);
+    assert.equal(s.publicView(T0 + 4000).remainingMs, 6000);
+    const r = s.answer('a', 0, T0 + 5000);
+    assert.equal(r.ok, false);
+    assert.equal(r.reason, QUIZ_ERRORS.NOT_YET);
+    assert.equal(s.shouldAutoReveal(T0 + 5000), false);
+  });
+
+  test('討論時間到才切到作答，倒數換成作答時間', () => {
+    const s = withTalk(10_000);
+    assert.equal(s.shouldBeginAnswering(T0 + 9_999), false);
+    assert.equal(s.shouldBeginAnswering(T0 + 10_000), true);
+    assert.equal(s.beginAnswering(), true);
+    assert.equal(s.beginAnswering(), false, '只切一次');
+    assert.equal(s.phase, QUIZ_PHASE.ASKING);
+    assert.equal(s.publicView(T0 + 10_000).remainingMs, 20_000);
+    assert.equal(s.answer('a', QUESTION.correctIndex, T0 + 11_000).ok, true);
+  });
+
+  test('速度分從開始作答才算：討論時間不吃分', () => {
+    const s = withTalk(10_000);
+    s.beginAnswering();
+    // 討論一結束立刻答對：應拿到接近滿額的速度分
+    s.answer('fast', QUESTION.correctIndex, T0 + 10_000);
+    const { awards } = s.reveal(T0 + 31_000);
+    assert.equal(awards[0].points, SCORING.quizCorrect + SCORING.quizSpeedBonus);
+  });
+
+  test('討論時間超過上限被拒', () => {
+    const s = new QuizSession();
+    const r = s.start({ ...QUESTION, talkMs: QUIZ.maxTalkMs + 1 }, T0);
+    assert.equal(r.ok, false);
+    assert.equal(s.isActive, false);
+    assert.equal(s.asked, 0, '被拒的題目不佔題號');
+  });
+});

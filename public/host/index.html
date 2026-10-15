@@ -70,6 +70,8 @@
     <div class="topbar-right">
       <div class="stats">
         <div class="stat"><b id="stat-people">0</b><span>在場</span></div>
+        <!-- 人滿後排隊等空位的人。有人在等時，主持人可以考慮請久未操作的人讓位 -->
+        <div class="stat" id="stat-audience-box" hidden><b id="stat-audience">0</b><span>候補</span></div>
         <div class="stat"><b id="stat-edges">0</b><span>社交連結</span></div>
         <div class="stat"><b id="stat-questions">0</b><span>已出題</span></div>
       </div>
@@ -105,6 +107,15 @@
         <div class="rs-add">
           <button class="btn-ghost" id="btn-rs-add-photo">＋ 拍大合照</button>
         </div>
+        <!-- 配方範本（shared/recipes.js）：依目前場景預排好的一整套流程，套用後可再增刪 -->
+        <div class="rs-recipe">
+          <label class="field">
+            <span>從範本開始</span>
+            <select id="rs-recipe"></select>
+          </label>
+          <button class="btn-ghost" id="btn-rs-recipe">套用範本</button>
+        </div>
+        <p class="hint" id="rs-recipe-brief"></p>
         <p class="err" id="rs-err" hidden></p>
       </div>
 
@@ -113,6 +124,7 @@
         <button class="act-chip" data-act="survey" aria-pressed="false">轉場問卷<i class="live-dot" hidden></i></button>
         <button class="act-chip" data-act="treasure" aria-pressed="false">尋寶<i class="live-dot" hidden></i></button>
         <button class="act-chip" data-act="harvest" aria-pressed="false">採水果<i class="live-dot" hidden></i></button>
+        <button class="act-chip" data-act="bingo" aria-pressed="false">人物賓果<i class="live-dot" hidden></i></button>
         <button class="act-chip" data-act="quiz" aria-pressed="false">即時問答<i class="live-dot" hidden></i></button>
       </div>
 
@@ -251,6 +263,45 @@
       <p class="err" id="treasure-err" hidden></p>
     </div>
 
+    <!-- 人物賓果（server/bingo.js）-->
+    <div class="panel act-panel" data-act="bingo" hidden>
+      <h2>人物賓果</h2>
+      <div id="bingo-idle">
+        <p class="hint">每人一張 3×3 卡，每格「找一個〔條件〕的人」，輸入對方的配對碼才算。
+          <b>同一個人只能填一格</b>，連成一線有加分。</p>
+        <details class="howto">
+          <summary>玩法說明</summary>
+          <p>條件取自現場已有的資料：衣服顏色、進場問卷的類型、轉場問卷的答案。
+            類型只有本人知道，所以一定得開口問；條件湊不滿時會補「找一個你還不認識的人」。
+            建議先跑過進場問卷或一題轉場問卷，卡片會更有變化。</p>
+        </details>
+        <label class="field">
+          <span>限時</span>
+          <select id="bingo-duration">
+            <option value="0">不限時（由主持人結束）</option>
+            <option value="300000">5 分鐘</option>
+            <option value="600000" selected>10 分鐘</option>
+            <option value="900000">15 分鐘</option>
+          </select>
+        </label>
+        <div class="row-actions">
+          <button class="btn-primary" id="btn-bingo-start">開始賓果</button>
+          <button class="btn-ghost" data-rs-add="bingo">加入節目單</button>
+        </div>
+      </div>
+
+      <div id="bingo-live" hidden>
+        <div class="live-head">
+          <b>賓果進行中</b>
+          <span class="tag" id="bingo-left">—</span>
+        </div>
+        <ol class="bingo-top" id="bingo-top"></ol>
+        <button class="btn-danger" id="btn-bingo-end">結束本輪</button>
+      </div>
+
+      <p class="err" id="bingo-err" hidden></p>
+    </div>
+
     <!-- 採水果（籃子接力）-->
     <div class="panel act-panel" data-act="harvest" hidden>
       <h2>採水果</h2>
@@ -302,6 +353,18 @@
             <option value="20000" selected>20 秒</option>
             <option value="30000">30 秒</option>
             <option value="60000">60 秒</option>
+          </select>
+        </label>
+
+        <!-- 討論時間：題目先亮出來但不能作答，讓人轉頭跟旁邊的人商量（Kahoot 的 team talk）。
+             預設 10 秒：原本每個人低頭各答各的，不需要開口。 -->
+        <label class="field">
+          <span>討論時間</span>
+          <select id="q-talk">
+            <option value="0">不討論，直接作答</option>
+            <option value="10000" selected>10 秒</option>
+            <option value="20000">20 秒</option>
+            <option value="30000">30 秒</option>
           </select>
         </label>
 
@@ -406,9 +469,18 @@
       <div class="screen-row">
         <button class="btn-ghost" id="btn-screen-clear" title="清掉場景物件被點擊或靠近時的小動畫">清除效果</button>
         <button class="btn-ghost" id="btn-screen-shot" title="把大螢幕當下的場景與角色存成 PNG">儲存畫面</button>
+        <button class="btn-ghost" id="btn-screen-sound" aria-pressed="true"
+                title="配對成功、找到寶藏、出題與公布答案時，大螢幕發出短音效">音效：開</button>
       </div>
+      <p class="hint">瀏覽器不准沒被點過的頁面出聲：大螢幕右下角若出現「點一下畫面開啟音效」，在投影那台電腦上點一下畫面即可。</p>
       <p class="hint" id="screen-status" hidden role="status"></p>
       <p class="err" id="screen-err" hidden></p>
+    </div>
+    <div class="panel">
+      <h2>場景互動</h2>
+      <p class="hint"><b>話題桌</b>：兩人以上在號碼牌桌（「1號桌」那種）旁停留一下，手機就會跳出同一題聊天題，
+        大螢幕也會在桌邊顯示。問答、問卷、尋寶、採收進行中會自動暫停。</p>
+      <button class="btn-ghost" id="btn-topics" aria-pressed="true">話題桌：開</button>
     </div>
 
     <!-- 大合照 -->

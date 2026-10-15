@@ -15,6 +15,7 @@ import { HEAT_LEVELS } from '/shared/heat.js';
 import { SELECTABLE_THEMES as THEMES, THEME_MAP } from '/shared/themes.js';
 import { PERSONA_TYPES, PERSONA_RESULT_MAP, PERSONA_LIMITS } from '/shared/persona.js';
 import { surveysForTheme, SURVEY_BANK_MAP } from '/shared/surveys.js';
+import { recipesForTheme } from '/shared/recipes.js';
 import { propLabel } from '/screen/scenes/registry.js';
 
 const $ = (s) => document.querySelector(s);
@@ -142,6 +143,15 @@ function handle(msg, key) {
       renderHarvest(msg.round, msg.reason);
       break;
 
+    case EV.BINGO_STATE:
+      renderBingo(msg.round);
+      break;
+
+    case EV.BINGO_ENDED:
+      renderBingo(null);
+      pushFeed(`人物賓果結束　${msg.winners?.length ? `最多連線：${msg.winners.join('、')}` : '沒有人連成線'}`, 'ev-pair');
+      break;
+
     case EV.HARVEST_DONE:
       renderHarvest(null);
       pushFeed(`採收完成　${msg.helperNames.join('、')}　各 +${msg.points}`, 'ev-pair');
@@ -174,7 +184,8 @@ function handle(msg, key) {
     case EV.QUIZ_QUESTION:
       quiz = msg.quiz;
       reveal = null;
-      pushFeed(`第 ${quiz.index} 題「${quiz.question}」開始作答`, 'ev-quiz');
+      // 有討論時間的題目會送兩次：開始討論、討論結束開始作答
+      pushFeed(`第 ${quiz.index} 題「${quiz.question}」${quiz.phase === QUIZ_PHASE.DISCUSS ? '開始討論' : '開始作答'}`, 'ev-quiz');
       renderQuiz();
       break;
 
@@ -274,6 +285,7 @@ const ERR_SLOT = {
   quiz: '#quiz-err',
   treasure: '#treasure-err',
   harvest: '#harvest-err',
+  bingo: '#bingo-err',
   mission: '#mission-err',
   runsheet: '#rs-err',
   report: '#report-err',
@@ -375,6 +387,7 @@ function pickSetupTheme(id) {
 
 function renderTheme(id) {
   currentTheme = id;
+  renderRecipes();
   const label = THEME_MAP[id]?.label ?? '';
   $('#event-scene').textContent = label ? `場景：${label}` : '';
   $('#screen-scene').textContent = label;
@@ -460,9 +473,14 @@ const sendScreen = (cmd, value) => {
 };
 
 let screenDebug = false;
+let screenSound = true;
 
 function renderScreenSettings(settings) {
   if (!settings) return;
+  screenSound = settings.sound !== false;
+  const sound = $('#btn-screen-sound');
+  sound.setAttribute('aria-pressed', String(screenSound));
+  sound.textContent = screenSound ? '音效：開' : '音效：關';
   screenDebug = settings.debug === true;
   const btn = $('#btn-screen-debug');
   btn.setAttribute('aria-pressed', String(screenDebug));
@@ -480,6 +498,14 @@ function screenStatus(text) {
 
 $('#btn-screen-clear').addEventListener('click', () => { sendScreen('clear'); screenStatus('已清除大螢幕上的效果'); });
 $('#btn-screen-debug').addEventListener('click', () => sendScreen('debug', !screenDebug));
+$('#btn-screen-sound').addEventListener('click', () => sendScreen('sound', !screenSound));
+
+// 話題桌開關：狀態只由 HOST_STATE 決定，不樂觀切換（同上，兩台主辦端時才一致）
+let topicsOn = true;
+$('#btn-topics').addEventListener('click', () => {
+  lastAction = 'screen';
+  ws?.send(JSON.stringify({ type: EV.HOST_SET_TOPICS, enabled: !topicsOn }));
+});
 $('#btn-screen-shot').addEventListener('click', () => {
   $('#btn-screen-shot').disabled = true;
   screenStatus('向大螢幕要畫面中…');
@@ -929,6 +955,41 @@ function renderHarvest(round, reason) {
   }
 }
 
+/**
+ * 賓果面板。與採收同樣是事件驅動，重整時由 HOST_AUTH 的 BINGO_STATE 補送接回。
+ * 只顯示進度前幾名 —— 卡片內容是參與者私人的，主辦端也不需要看。
+ */
+let bingoDeadlineAt = null;
+let bingoCountdown = null;
+function renderBingo(round) {
+  $('#bingo-idle').hidden = !!round;
+  $('#bingo-live').hidden = !round;
+  clearInterval(bingoCountdown);
+  if (!round) return;
+  bingoDeadlineAt = round.remainingMs == null ? null : Date.now() + round.remainingMs;
+  const tick = () => {
+    if (!bingoDeadlineAt) { $('#bingo-left').textContent = `${round.players} 人參加`; return; }
+    const left = Math.max(0, bingoDeadlineAt - Date.now());
+    $('#bingo-left').textContent = `${round.players} 人　剩 ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`;
+  };
+  tick();
+  if (bingoDeadlineAt) bingoCountdown = setInterval(tick, 1000);
+  const ol = $('#bingo-top');
+  ol.replaceChildren(...round.top.map((t) => Object.assign(document.createElement('li'), {
+    textContent: `${t.name}　連線 ${t.lines}　已填 ${t.filled}/9`,
+  })));
+}
+
+$('#btn-bingo-start').addEventListener('click', () => {
+  lastAction = 'bingo';
+  ws?.send(JSON.stringify({ type: EV.HOST_START_BINGO, durationMs: Number($('#bingo-duration').value) }));
+});
+
+$('#btn-bingo-end').addEventListener('click', () => {
+  if (!confirm('確定要結束這一輪賓果嗎？')) return;
+  ws?.send(JSON.stringify({ type: EV.HOST_END_BINGO }));
+});
+
 $('#btn-harvest-start').addEventListener('click', () => {
   lastAction = 'harvest';
   ws?.send(JSON.stringify({ type: EV.HOST_START_HARVEST }));
@@ -957,6 +1018,11 @@ function renderState(state) {
   if (state.personaSpread) renderPersonaSpread(state.personaSpread);
   syncProphetOptions();
   $('#stat-people').textContent = state.agents.length;
+  $('#stat-audience').textContent = state.audience ?? 0;
+  topicsOn = state.topics !== false;
+  $('#btn-topics').setAttribute('aria-pressed', String(topicsOn));
+  $('#btn-topics').textContent = topicsOn ? '話題桌：開' : '話題桌：關';
+  $('#stat-audience-box').hidden = !state.audience;
   $('#stat-edges').textContent = state.graphEdges;
   $('#people-count').textContent = state.agents.length;
   $('#tab-people-count').textContent = state.agents.length;
@@ -1305,6 +1371,7 @@ const LIVE_VIEW = {
   survey: '#survey-live',
   treasure: '#treasure-live',
   harvest: '#harvest-live',
+  bingo: '#bingo-live',
   quiz: '#quiz-live',
 };
 
@@ -1424,6 +1491,7 @@ function readDraft() {
     options,
     correctIndex,
     durationMs: Number($('#q-duration').value),
+    talkMs: Number($('#q-talk').value),
   };
 }
 
@@ -1435,6 +1503,8 @@ function writeDraft(d) {
   const radio = document.querySelector('#q-options input[type="radio"][value="' + (d.correctIndex ?? 0) + '"]');
   if (radio) radio.checked = true;
   if (d.durationMs) $('#q-duration').value = String(d.durationMs);
+  // 舊題庫的題目沒有這個欄位：沿用表單目前的選擇，不要默默改成「不討論」
+  if (d.talkMs !== undefined) $('#q-talk').value = String(d.talkMs);
   markCorrectRow();
 }
 
@@ -1461,7 +1531,7 @@ function packDraft(d) {
     if (i === d.correctIndex) correctIndex = kept.length;
     kept.push(text);
   });
-  return { question: d.question, options: kept, correctIndex, durationMs: d.durationMs };
+  return { question: d.question, options: kept, correctIndex, durationMs: d.durationMs, talkMs: d.talkMs ?? 0 };
 }
 
 /** 題目 → 節目單步驟。不合法時回傳 null 並把原因顯示在問答面板 */
@@ -1522,7 +1592,9 @@ function renderBank() {
     // 只能從這裡出題
     const go = document.createElement('button');
     go.textContent = '出題';
-    go.addEventListener('click', () => startQuiz({ durationMs: QUIZ.defaultDurationMs, ...item }));
+    go.addEventListener('click', () => startQuiz({
+      durationMs: QUIZ.defaultDurationMs, talkMs: Number($('#q-talk').value), ...item,
+    }));
 
     const use = document.createElement('button');
     use.className = 'bank-load';
@@ -1633,8 +1705,9 @@ function renderQuiz() {
   const tick = () => {
     const left = Math.max(0, deadlineAt - Date.now());
     const el = $('#quiz-countdown');
-    el.textContent = `${(left / 1000).toFixed(1)} 秒`;
-    el.classList.toggle('urgent', left < 5000);
+    const talking = quiz.phase === QUIZ_PHASE.DISCUSS;
+    el.textContent = `${talking ? '討論中　' : ''}${(left / 1000).toFixed(1)} 秒`;
+    el.classList.toggle('urgent', !talking && left < 5000);
     if (left <= 0) { clearInterval(countdownTimer); countdownTimer = null; }
   };
   tick();
@@ -1684,7 +1757,7 @@ renderBank();
 const RS_KEY = 'personaflow.runSheet';
 const RS_KIND = {
   mission: '任務', survey: '問卷', treasure: '尋寶', harvest: '採水果',
-  quiz: '問答', photo: '合照', theme: '場景',
+  quiz: '問答', photo: '合照', theme: '場景', bingo: '賓果',
 };
 
 function loadRunSheet() {
@@ -1714,7 +1787,38 @@ const STEP_BUILDERS = {
   // 先知不存特定的人：排節目單的時候，那個人可能還沒進場
   treasure: () => ({ kind: 'treasure', label: '尋寶（先知隨機）', msg: { type: EV.HOST_START_TREASURE, prophetId: null } }),
   harvest: () => ({ kind: 'harvest', label: '採水果', msg: { type: EV.HOST_START_HARVEST } }),
+  bingo: () => {
+    const durationMs = Number($('#bingo-duration').value);
+    return {
+      kind: 'bingo',
+      label: `人物賓果・${durationMs ? `${durationMs / 60000} 分鐘` : '不限時'}`,
+      msg: { type: EV.HOST_START_BINGO, durationMs },
+    };
+  },
 };
+
+/** 配方範本選單：跟著目前場景換（專屬的在前，通用的在後） */
+function renderRecipes() {
+  const sel = $('#rs-recipe');
+  const list = recipesForTheme(currentTheme);
+  sel.replaceChildren(...list.map((r) => Object.assign(document.createElement('option'), {
+    value: r.id, textContent: r.name,
+  })));
+  renderRecipeBrief();
+}
+function renderRecipeBrief() {
+  const r = recipesForTheme(currentTheme).find((x) => x.id === $('#rs-recipe').value);
+  $('#rs-recipe-brief').textContent = r ? `${r.brief}（${r.steps.map((s) => RS_KIND[s.kind]).join(' → ')}）` : '';
+}
+$('#rs-recipe').addEventListener('change', renderRecipeBrief);
+$('#btn-rs-recipe').addEventListener('click', () => {
+  const r = recipesForTheme(currentTheme).find((x) => x.id === $('#rs-recipe').value);
+  if (!r) return;
+  const cur = loadRunSheet();
+  if (cur.steps.length && !confirm(`會取代目前節目單上的 ${cur.steps.length} 項，確定嗎？`)) return;
+  saveRunSheet({ steps: structuredClone(r.steps), pointer: 0 });
+  pushFeed(`節目單套用範本：${r.name}`, 'ev-plan');
+});
 for (const btn of document.querySelectorAll('[data-rs-add]')) {
   btn.addEventListener('click', () => addStep(STEP_BUILDERS[btn.dataset.rsAdd]()));
 }
@@ -1903,6 +2007,7 @@ function renderReport(format, report) {
 }
 
 renderRunSheet();
+renderRecipes();
 try { if (localStorage.getItem(PROJ_KEY) === '1') setProjector(true); } catch { /* 略 */ }
 
 // ─────────────────────────────────────────────────────────────

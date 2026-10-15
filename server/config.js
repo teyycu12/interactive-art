@@ -256,6 +256,9 @@ export const SCORING = {
   missionFinish: 50,      // 達成該任務目標次數時的一次性獎勵
   quizCorrect: 100,       // 答對的基本分
   quizSpeedBonus: 100,    // 速度加成上限：立刻答對得滿分，鈴響前一刻答對得 0
+  bingoCell: 5,           // 人物賓果每填一格（每格都是去認識一個人，給一點但不多）
+  bingoLine: 20,          // 每連成一線
+  bingoFull: 40,          // 全卡填滿
 
   leaderboardSize: 8,     // 大螢幕與主辦端排行榜列出的人數
   broadcastMs: 500,       // 排行榜廣播節流。積分變動常常一次來 30 筆（問答揭曉），

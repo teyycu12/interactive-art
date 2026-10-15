@@ -745,6 +745,8 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   color: var(--ink);
 }
 .quiz-timer.urgent { color: var(--accent-ink); }
+/* 討論時間：用鼠尾草綠的文字版（6.12:1），跟作答倒數分開 —— 一看就知道「現在是聊天時間」 */
+.quiz-timer.talk { color: var(--ok-ink); }
 
 .quiz-q {
   margin: 0;
@@ -1599,3 +1601,66 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 .zoom-pick button:disabled { opacity: .5; }
 /* 生成中與確認頁看的是定格的照片與角色，不需要縮放 */
 #scan:not([data-phase="aim"]) .zoom-pick { display: none; }
+
+/* 候補名單：「前面還有幾人」是這層唯一要一眼看到的資訊 */
+.audience-ahead {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--ink);
+  margin: 4px 0 8px;
+}
+
+/* ── 人物賓果 ──────────────────────────────────────────── */
+/* 跟任務橫幅同一個樣子，左側那條換成鼠尾草綠：一眼分得出是另一件事 */
+.bingo-banner { box-shadow: inset 6px 0 0 var(--ok), var(--drop); background: var(--wall-tint); }
+.bingo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 10px 0 12px;
+}
+/* 每格都是按鈕：44px 觸控下限之上，條件字要放得下兩三行 */
+.bingo-cell {
+  min-height: 72px;
+  padding: 6px 4px;
+  border: 2px solid var(--ink);
+  border-radius: var(--r-sm);
+  background: #FFFCF5;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  text-align: center;
+}
+.bingo-cell[aria-pressed="true"] { outline: 3px solid var(--accent); outline-offset: 1px; }
+.bingo-cell.filled { background: var(--wall-tint); border-style: dashed; }
+.bingo-cell.filled .who { font-size: 13px; font-weight: 800; color: var(--ok-ink); }
+.bingo-cell.filled .cond { font-weight: 500; color: var(--ink-soft); font-size: 11px; }
+.bingo-entry { display: flex; gap: 8px; align-items: flex-end; }
+.bingo-entry[hidden] { display: none; }
+.bingo-entry .sheet-field { flex: 1; margin-bottom: 0; }
+
+/* 話題桌的題目卡：跟揮手提示同一個位置，但用紙色底 —— 這是要念出來聊的題目，不是待辦 */
+.topic-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  flex-shrink: 0;
+  width: 100%;
+  padding: 8px 12px;
+  background: #FFFCF5;
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: var(--r);
+  box-shadow: inset 6px 0 0 var(--ok), var(--drop-sm);
+  text-align: left;
+}
+.topic-card[hidden] { display: none; }
+.topic-card .tc-head { font-size: 11px; font-weight: 700; color: var(--ok-ink); letter-spacing: .06em; }
+.topic-card .tc-q { font-size: 15px; font-weight: 800; line-height: 1.35; }
+.topic-card .tc-with { font-size: 12px; color: var(--ink-soft); }
+
+/* 今天認識的人 */
+.links-list { list-style: none; margin: 8px 0 14px; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.links-list li { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 13px; font-weight: 700; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
+.links-list .lf { width: 56px; height: 64px; display: grid; place-items: center; }
+.links-list .lf canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; }

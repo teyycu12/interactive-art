@@ -10,7 +10,7 @@
  * 投影畫面上不留任何按鈕或快捷鍵。
  */
 
-import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protocol.js';
+import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, QUIZ_PHASE, EMOTE_GLYPH } from '/shared/protocol.js';
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
 import { TREASURE_RADIUS } from '/shared/heat.js';
@@ -24,6 +24,7 @@ import {
 } from '/shared/character.js';
 import { layoutNameplates } from '/shared/nameplateLayout.js';
 import { stageViewport, setStageTopInset, onStageViewportChange } from './stageViewport.js';
+import { Sfx } from './sfx.js';
 
 let activeScene = null;
 
@@ -37,11 +38,21 @@ const COLOR_SWARM = '#457B9D';
 const CHARACTER_HEIGHT = 150;   // 邏輯座標下的角色高度
 
 let debug = false;
+/**
+ * 目前的賓果進度（BINGO_STATE），null 代表沒有進行中的一輪。
+ * 放在檔頭：syncBanners 會讀它，宣告若排在後面，載入途中一被呼叫就是 TDZ 錯誤、整個大螢幕白掉。
+ */
+let bingoShown = null;
+let bingoDeadline = null;
+
+/** 短音效（public/screen/sfx.js）。開關由主辦端控制，預設開 */
+const sfx = new Sfx();
 
 function applySettings(settings) {
   if (!settings) return;
   debug = settings.debug === true;
   document.getElementById('hud').hidden = !debug;
+  sfx.setEnabled(settings.sound !== false);
 }
 
 function runCommand(cmd) {
@@ -301,10 +312,17 @@ function connect() {
         links = Array.isArray(msg.edges) ? msg.edges : [];
         break;
 
+      case EV.STAGE_TOPIC:
+        if (typeof msg.spotId === 'string' && typeof msg.question === 'string') {
+          topicBubbles.set(msg.spotId, { question: msg.question, at: performance.now() });
+        }
+        break;
+
       case EV.STAGE_GREET:
         // 互相揮手／碰杯：同一道光束，暖色，不留常駐連線（那是配對的事，見 greetings.js）
         if (typeof msg.a === 'string' && typeof msg.b === 'string') {
           sparks.push({ a: msg.a, b: msg.b, at: performance.now(), rgb: GREET_SPARK_RGB });
+          sfx.play('greet');
         }
         break;
 
@@ -320,6 +338,7 @@ function connect() {
         // 規格 v3.0 §3.1 第 05 步：每一次完成都必須在共享畫布上被看見，
         // 否則任務會退化成手機小遊戲
         toast(`${msg.a.name} 和 ${msg.b.name} 認識了！`);
+        sfx.play('pair');
         pulse.set(msg.a.id, performance.now());
         pulse.set(msg.b.id, performance.now());
         // 兩個各自擴散的環看不出「是這兩人連上了」——
@@ -341,6 +360,7 @@ function connect() {
 
       case EV.TREASURE_FOUND:
         toast(`${msg.byName} 找到寶藏了！`);
+        sfx.play('treasure');
         if (msg.by) pulse.set(msg.by, performance.now());
         treasureRound = null;
         treasureHeat = null;
@@ -357,6 +377,8 @@ function connect() {
         break;
 
       case EV.QUIZ_QUESTION:
+        // 同一題送第二次是「討論結束、開始作答」；新題目才是出題音
+        sfx.play(quiz?.id === msg.quiz?.id ? 'go' : 'quiz');
         showQuestion(msg.quiz);
         break;
 
@@ -369,8 +391,23 @@ function connect() {
         harvestRound = msg.round;
         break;
 
+      case EV.BINGO_STATE: {
+        // 有人新連成一線：響一聲（BINGO_STATE 每填一格都會來，只有線數變多才響）
+        const prevTop = bingoShown?.top?.[0]?.lines ?? 0;
+        showBingo(msg.round);
+        if ((msg.round?.top?.[0]?.lines ?? 0) > prevTop) sfx.play('pair');
+        break;
+      }
+
+      case EV.BINGO_ENDED:
+        showBingo(null);
+        toast(msg.winners?.length ? `人物賓果結束！最多連線：${msg.winners.join('、')}` : '人物賓果結束！');
+        sfx.play('treasure');
+        break;
+
       case EV.HARVEST_DONE:
         harvestRound = null;
+        sfx.play('harvest');
         break;
 
       case EV.SURVEY_STATE:
@@ -387,6 +424,7 @@ function connect() {
 
       case EV.QUIZ_REVEAL:
         showReveal(msg);
+        sfx.play('reveal');
         break;
 
       case EV.QUIZ_ENDED:
@@ -820,6 +858,7 @@ function render(now) {
 
   drawSurveySpots(now);
   drawHarvestSpots();
+  drawTopicBubbles(now);
 
   if (debug) updateHud();
   requestAnimationFrame(render);
@@ -949,6 +988,66 @@ function drawSurveyZones() {
     ctx.stroke();
     ctx.restore();
   });
+}
+
+/**
+ * 話題桌的題目泡泡（STAGE_TOPIC）。題目公開在大螢幕上是刻意的：旁邊的人看到
+ * 「1號桌在聊最想學的技能」，可能就走過去加入 —— 新的人坐下，那桌會換一題。
+ * @type {Map<string, {question: string, at: number}>}
+ */
+const topicBubbles = new Map();
+const TOPIC_SHOW_MS = 20_000;
+
+function drawTopicBubbles(now) {
+  // 問卷用同一批道具當地點，兩種標籤疊在一起誰都看不清：問卷優先
+  if (surveyState) return;
+  for (const [spotId, b] of topicBubbles) {
+    const age = now - b.at;
+    if (age > TOPIC_SHOW_MS) { topicBubbles.delete(spotId); continue; }
+    const prop = PROPS.find((p) => p.id === spotId);
+    if (!prop) continue;
+    const pos = toScreen(prop);
+    const h = characterHeightAt(prop);
+    const font = Math.max(12, h * 0.24);
+    const pad = font * 0.7;
+    const lines = wrapText(`💬 ${b.question}`, 13).slice(0, 3);
+
+    ctx.save();
+    // 最後兩秒淡出
+    ctx.globalAlpha = Math.min(1, (TOPIC_SHOW_MS - age) / 2000);
+    ctx.font = `800 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+    const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + pad * 2;
+    const boxH = lines.length * font * 1.3 + pad * 1.4;
+    const x = pos.x - w / 2;
+    const y = pos.y - h * 1.2 - boxH;
+    ctx.fillStyle = '#FFFCF5';
+    ctx.strokeStyle = '#3D6158';
+    ctx.lineWidth = Math.max(2, h * 0.03);
+    roundRect(ctx, x, y, w, boxH, font * 0.6);
+    ctx.fill();
+    ctx.stroke();
+    // 指向桌子的尖角
+    ctx.beginPath();
+    ctx.moveTo(pos.x - font * 0.4, y + boxH);
+    ctx.lineTo(pos.x + font * 0.4, y + boxH);
+    ctx.lineTo(pos.x, y + boxH + font * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#3A2E27';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    lines.forEach((l, i) => ctx.fillText(l, pos.x, y + pad * 0.7 + i * font * 1.3));
+    ctx.restore();
+  }
+}
+
+/** 中文沒有空格可斷，依字數硬斷；超過的部分由呼叫端截掉 */
+function wrapText(text, perLine) {
+  const chars = [...text];
+  const out = [];
+  for (let i = 0; i < chars.length; i += perLine) out.push(chars.slice(i, i + perLine).join(''));
+  return out;
 }
 
 function drawSurveySpots(now) {
@@ -1083,8 +1182,35 @@ function syncBanners() {
   surveyEl.hidden = surveyState === null || quiz !== null;
   document.getElementById('mission').hidden =
     quiz !== null || surveyState !== null || missionShown === null;
+  // 頂端同時只放一條：問答 > 問卷 > 任務 > 賓果
+  document.getElementById('bingo').hidden =
+    quiz !== null || surveyState !== null || missionShown !== null || bingoShown === null;
   measureBannerInset();
 }
+
+function showBingo(round) {
+  bingoShown = round;
+  bingoDeadline = round?.remainingMs == null ? null : Date.now() + round.remainingMs;
+  if (round) {
+    const lead = round.top.filter((t) => t.lines > 0 && t.lines === round.top[0].lines);
+    document.getElementById('bingo-lead').textContent = lead.length
+      ? `最多連線：${lead.map((t) => t.name).join('、')}（${lead[0].lines} 線）`
+      : '還沒有人連成一線';
+    renderBingoMeta();
+  }
+  syncBanners();
+}
+
+function renderBingoMeta() {
+  if (!bingoShown) return;
+  const parts = [`${bingoShown.players} 人參加`];
+  if (bingoDeadline) {
+    const left = Math.max(0, bingoDeadline - Date.now());
+    parts.push(`剩 ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`);
+  }
+  document.getElementById('bingo-meta').textContent = parts.join('　·　');
+}
+setInterval(renderBingoMeta, 1000);
 
 /**
  * 把目前可見的橫幅高度讓給它，場景縮到剩下的空間。
@@ -1092,7 +1218,7 @@ function syncBanners() {
  * 量實際高度而不是寫死：題目長度、選項字數、是否顯示集合地點都會改變高度，
  * 寫死的值在最長的那一題上就會重新蓋到角色 —— 而那一題正是最需要看清楚的。
  */
-const BANNER_IDS = ['quiz', 'survey', 'mission'];
+const BANNER_IDS = ['quiz', 'survey', 'mission', 'bingo'];
 const BANNER_GAP = 14;   // 橫幅與房間上緣之間留一點縫，免得看起來黏在一起
 
 function measureBannerInset() {
@@ -1447,9 +1573,12 @@ function animateTimebar() {
   const step = () => {
     if (!quiz) return;
     const left = Math.max(0, quizDeadline - Date.now());
-    const ratio = quiz.durationMs > 0 ? left / quiz.durationMs : 0;
+    // 討論中倒數的是討論時間，倒數條的滿格也要用它算
+    const talking = quiz.phase === QUIZ_PHASE.DISCUSS;
+    const total = talking ? quiz.talkMs : quiz.durationMs;
+    const ratio = total > 0 ? left / total : 0;
     fill.style.width = `${(ratio * 100).toFixed(1)}%`;
-    bar.classList.toggle('urgent', left < 5000);
+    bar.classList.toggle('urgent', !talking && left < 5000);
     if (left > 0) quizRaf = requestAnimationFrame(step);
   };
   step();
@@ -1459,7 +1588,8 @@ function showQuestion(q) {
   quiz = q;
   quizDeadline = Date.now() + (q.remainingMs ?? 0);
   document.getElementById('q-no').textContent = `第 ${q.index} 題`;
-  document.getElementById('q-state').textContent = '作答中';
+  // 討論時間：題目先亮給全場看，但還不能作答 —— 這是要大家轉頭商量的時間
+  document.getElementById('q-state').textContent = q.phase === QUIZ_PHASE.DISCUSS ? '討論時間 · 跟旁邊的人商量' : '作答中';
   document.getElementById('q-title').textContent = q.question;
   document.getElementById('q-answered').textContent = q.answered ?? 0;
   document.getElementById('q-foot').hidden = false;

@@ -18,6 +18,8 @@ export const EV = {
   // Server → Phone
   CLIENT_WELCOME: 'CLIENT_WELCOME', // 登入確認，回傳伺服器指派的 userId
   CLIENT_REJECT: 'CLIENT_REJECT',   // 資料驗證失敗
+  TOPIC_CARD: 'TOPIC_CARD',         // 話題桌：坐在同一桌的人拿到同一題 {question, spot, withNames}
+  AUDIENCE_WAIT: 'AUDIENCE_WAIT',   // 人滿：已排進候補名單 {ahead}，有空位會由伺服器直接讓他進場（送 CLIENT_WELCOME）
   GREET_INVITE: 'GREET_INVITE',     // 有人跟你揮手（帶 fromId，回揮時當 INPUT_ACTION 的 target）
   GREET_RESULT: 'GREET_RESULT',     // 揮手／乾杯的結果，見 GREET_OUTCOME
   CLIENT_SYNC: 'CLIENT_SYNC',       // 自己與鄰近角色的座標（15Hz，僅送該連線）
@@ -25,6 +27,7 @@ export const EV = {
   // Server → Screen
   STAGE_META: 'STAGE_META',         // 場域尺寸等靜態資訊（連線時送一次）
   STAGE_ROSTER: 'STAGE_ROSTER',     // 參與者名冊（僅在有人加入/離開時送）
+  STAGE_TOPIC: 'STAGE_TOPIC',       // 話題桌發題：{spotId, question}，大螢幕在那張桌子旁顯示題目
   STAGE_GREET: 'STAGE_GREET',       // 兩人互相揮手或碰杯成功：{ kind, a, b }，大螢幕在兩人之間畫一道連線
   STAGE_SYNC: 'STAGE_SYNC',         // 空間狀態廣播（30 FPS）
   STAGE_LINKS: 'STAGE_LINKS',       // 社交圖譜的邊（僅在有人配對成功時送）
@@ -106,6 +109,17 @@ export const EV = {
   HARVEST_REACH: 'HARVEST_REACH',             // Server → Phone：按不按得到「接過籃子」
   HARVEST_DONE: 'HARVEST_DONE',               // Server → All：籃子送回去了，本輪完成
 
+  // 人物賓果（server/bingo.js）。卡片是私人的，只送給本人；大螢幕只看排行
+  HOST_SET_TOPICS: 'HOST_SET_TOPICS',         // Host → Server：話題桌開關 {enabled}
+  HOST_START_BINGO: 'HOST_START_BINGO',       // Host → Server：開一輪 {durationMs?}
+  HOST_END_BINGO: 'HOST_END_BINGO',           // Host → Server：結束本輪
+  BINGO_CARD: 'BINGO_CARD',                   // Server → Phone：自己的卡 {card, remainingMs}
+  BINGO_CLAIM: 'BINGO_CLAIM',                 // Phone → Server：填格 {cell, code}（code 是對方的配對碼）
+  BINGO_RESULT: 'BINGO_RESULT',               // Server → Phone：填格結果 {ok, reason?, name?, newLines?, full?}
+  BINGO_TAGGED: 'BINGO_TAGGED',               // Server → Phone：有人把你填進他的卡 {byName, label}
+  BINGO_STATE: 'BINGO_STATE',                 // Server → Screen/Host：進度排行 {round}（null 代表沒有進行中的一輪）
+  BINGO_ENDED: 'BINGO_ENDED',                 // Server → All：本輪結束 {winners}
+
   // ── 場景主題（shared/themes.js）──────────────────────
   HOST_SET_THEME: 'HOST_SET_THEME',           // Host → Server：切換大螢幕的場景主題
   STAGE_THEME: 'STAGE_THEME',                 // Server → Screen/Host：目前主題（連線時補送、切換時廣播）
@@ -114,7 +128,7 @@ export const EV = {
   HOST_SETUP_EVENT: 'HOST_SETUP_EVENT',       // Host → Server：選定場景並為活動命名（進入活動編排前必填）
   STAGE_EVENT: 'STAGE_EVENT',                 // Server → Screen/Host：目前的活動名稱（尚未設定時為 null）
   HOST_SCREEN_CMD: 'HOST_SCREEN_CMD',         // Host → Server：操作大螢幕（清除效果、除錯視圖、截圖）
-  SCREEN_SETTINGS: 'SCREEN_SETTINGS',         // Server → Screen/Host：大螢幕的持續性設定（除錯視圖）
+  SCREEN_SETTINGS: 'SCREEN_SETTINGS',         // Server → Screen/Host：大螢幕的持續性設定（除錯視圖、音效）
   SCREEN_CMD: 'SCREEN_CMD',                   // Server → Screen：一次性的動作（清除效果）
   HOST_SCREEN_SHOT: 'HOST_SCREEN_SHOT',       // Server → Host：「儲存畫面」的截圖
 
@@ -213,6 +227,9 @@ export const QUIZ = {
   minDurationMs: 5000,
   maxDurationMs: 120000,
   defaultDurationMs: 20000,
+  // 討論時間（Kahoot 團隊模式的 team talk）：題目先亮出來、還不能作答，
+  // 讓人轉頭跟旁邊的人商量。0 = 不討論，直接作答（原本的行為）。
+  maxTalkMs: 30000,
 };
 
 /**
@@ -230,7 +247,7 @@ export const QUIZ_CHOICES = [
 ];
 
 /** 問答階段。ASKING 期間正解絕不離開伺服器。 */
-export const QUIZ_PHASE = { ASKING: 'ASKING', REVEALED: 'REVEALED' };
+export const QUIZ_PHASE = { DISCUSS: 'DISCUSS', ASKING: 'ASKING', REVEALED: 'REVEALED' };
 
 /** 問答失敗原因 */
 export const QUIZ_ERRORS = {
@@ -238,6 +255,7 @@ export const QUIZ_ERRORS = {
   CLOSED: 'CLOSED',
   ALREADY_ANSWERED: 'ALREADY_ANSWERED',
   BAD_CHOICE: 'BAD_CHOICE',
+  NOT_YET: 'NOT_YET',          // 還在討論時間，不能作答
 };
 
 /** 積分來源。主辦端與手機端據此顯示「這分是怎麼來的」 */
@@ -247,6 +265,7 @@ export const SCORE_SOURCES = {
   QUIZ: 'QUIZ',               // 答對問答
   TREASURE: 'TREASURE',       // 找到寶藏
   HARVEST: 'HARVEST',         // 採水果接力完成
+  BINGO: 'BINGO',             // 人物賓果填格、連線、全滿
 };
 
 /** 積分來源的顯示文案，集中定義避免三端各寫一套 */
@@ -256,6 +275,7 @@ export const SCORE_LABELS = {
   QUIZ: '答對問答',
   TREASURE: '找到寶藏',
   HARVEST: '採收接力',
+  BINGO: '人物賓果',
 };
 
 /** 配對失敗原因，集中定義以便手機端顯示對應文案 */
