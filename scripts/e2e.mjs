@@ -1657,9 +1657,10 @@ check('引導端點擋下過大的影格',
 // ── 人物賓果 ──────────────────────────────────────────────
 {
   const capture = (box) => {
-    box.bingo = { card: null, results: [], tagged: [], ended: null };
+    box.bingo = { ask: null, card: null, results: [], tagged: [], ended: null };
     box.ws.on('message', (d) => {
       const m = JSON.parse(d);
+      if (m.type === 'BINGO_ASK') box.bingo.ask = m;
       if (m.type === 'BINGO_CARD') box.bingo.card = m.card;
       if (m.type === 'BINGO_RESULT') box.bingo.results.push(m);
       if (m.type === 'BINGO_TAGGED') box.bingo.tagged.push(m);
@@ -1673,20 +1674,49 @@ check('引導端點擋下過大的影格',
   // 前面的段落已經把 host 關掉了，這裡自己開一條
   const bHost = new WebSocket(URL);
   await new Promise((res) => bHost.on('open', res));
+  let bingoRound = null;
+  let factBank = null;
+  bHost.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'BINGO_STATE') bingoRound = m.round;
+    if (m.type === 'HOST_BINGO_FACTS') factBank = m;
+  });
   bHost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
   await sleep(300);
+  check('主辦端認證時收到自我介紹題（依場景預設）', factBank?.isDefault === true && factBank.facts.length >= 3, JSON.stringify(factBank));
   bHost.send(JSON.stringify({ type: 'HOST_START_BINGO' }));
   await sleep(400);
-  check('開局時每人拿到一張 9 格的卡', pA.bingo.card?.cells?.length === 9 && pB.bingo.card?.cells?.length === 9);
+  const facts = pA.bingo.ask?.facts ?? [];
+  check('開局先問自我介紹，還不發卡', facts.length === 6 && pB.bingo.ask?.facts?.length === 6 && pA.bingo.card === null,
+    JSON.stringify(pA.bingo.ask));
+  check('主辦端看到「勾自我介紹中」', bingoRound?.phase === 'ask', JSON.stringify(bingoRound));
 
-  // 測試角色的衣服是 #E76F51（紅色族），兩人之間也沒有連線：這兩種格子乙一定符合
-  const fits = (c) => !c.filled && (c.label === '衣服有紅色的人' || c.label === '找一個你還不認識的人');
-  const first = pA.bingo.card.cells.findIndex(fits);
+  // 乙勾了第一題、甲什麼都沒勾。場上在線的只有這兩支手機，兩人答完就發卡
+  pA.ws.send(JSON.stringify({ type: 'BINGO_FACTS', yes: [] }));
+  pB.ws.send(JSON.stringify({ type: 'BINGO_FACTS', yes: [facts[0].id, 'bogus'] }));
+  await sleep(600);
+  check('大家都答完就發卡，每人一張 9 格的卡', pA.bingo.card?.cells?.length === 9 && pB.bingo.card?.cells?.length === 9);
+  const factLabel = `${facts[0]?.text}的人`;
+  check('甲的卡上有乙勾的那一題', pA.bingo.card?.cells?.some((c) => c.label === factLabel),
+    JSON.stringify(pA.bingo.card?.cells?.map((c) => c.label)));
+  check('乙自己勾的題目不會出現在乙的卡上（場上沒有別人符合）', !pB.bingo.card?.cells?.some((c) => c.label === factLabel));
+
+  const first = pA.bingo.card.cells.findIndex((c) => c.label === factLabel);
   pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: first, code: pB.code }));
   await sleep(300);
-  check('輸入對方的碼、對方符合就填上', pA.bingo.results.at(-1)?.ok === true && pA.bingo.card.cells[first].name === '賓果乙',
+  check('輸入對方的碼、對方勾過這一題就填上', pA.bingo.results.at(-1)?.ok === true && pA.bingo.card.cells[first].name === '賓果乙',
     JSON.stringify(pA.bingo.results.at(-1)));
-  check('被填進去的人收到通知', pB.bingo.tagged.at(-1)?.byName === '賓果甲');
+  // 甲的衣服是紅色、兩人也沒有配對連線：乙卡上「衣服有紅色」或「還不認識的人」甲一定符合
+  check('被填進去的人收到通知，並被邀請順便把對方填上', pB.bingo.tagged.at(-1)?.byName === '賓果甲' && !!pB.bingo.tagged.at(-1)?.offer?.label,
+    JSON.stringify(pB.bingo.tagged.at(-1)));
+  pB.ws.send(JSON.stringify({ type: 'BINGO_ACCEPT' }));
+  await sleep(300);
+  check('收下邀請不必輸碼就填上，並通知對方', pB.bingo.results.at(-1)?.ok === true
+    && pB.bingo.card.cells.some((c) => c.name === '賓果甲') && pA.bingo.tagged.at(-1)?.byName === '賓果乙'
+    && pA.bingo.tagged.at(-1)?.offer === null, JSON.stringify([pB.bingo.results.at(-1), pA.bingo.tagged.at(-1)]));
+  pB.ws.send(JSON.stringify({ type: 'BINGO_ACCEPT' }));
+  await sleep(200);
+  check('同一個邀請不能收兩次', pB.bingo.results.at(-1)?.reason === 'NO_OFFER', JSON.stringify(pB.bingo.results.at(-1)));
 
   // 立刻再送：冷卻擋下（防枚舉配對碼）
   const second = pA.bingo.card.cells.findIndex((c, i) => i !== first && !c.filled);
@@ -1694,11 +1724,16 @@ check('引導端點擋下過大的影格',
   await sleep(200);
   check('連續填格受配對冷卻限制', pA.bingo.results.at(-1)?.reason === 'COOLDOWN', JSON.stringify(pA.bingo.results.at(-1)));
 
-  // 冷卻過後，同一個人不能再填第二格
+  // 冷卻過後再填同一個人：10 人以上不行；人少時可以（否則 9 格永遠填不滿）
   await sleep(3100);
-  pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: second, code: pB.code }));
+  const fitsB = (c) => !c.filled && (c.label === '衣服有紅色的人' || c.label === '找一個你還不認識的人');
+  const third = pA.bingo.card.cells.findIndex(fitsB);
+  pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: third, code: pB.code }));
   await sleep(300);
-  check('同一個人在一張卡上只能填一格', pA.bingo.results.at(-1)?.reason === 'USED', JSON.stringify(pA.bingo.results.at(-1)));
+  const many = (bingoRound?.players ?? 0) - 1 >= 9;
+  check(many ? '10 人以上：同一個人只能填一格' : '不到 10 人：同一個人可以再填一格',
+    many ? pA.bingo.results.at(-1)?.reason === 'USED' : pA.bingo.results.at(-1)?.ok === true,
+    JSON.stringify({ players: bingoRound?.players, third, r: pA.bingo.results.at(-1) }));
 
   bHost.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
   await sleep(300);
