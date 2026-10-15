@@ -99,9 +99,12 @@ export const EV = {
   BINGO_CARD: 'BINGO_CARD',                   // Server → Phone：自己的卡 {card, remainingMs}
   BINGO_CLAIM: 'BINGO_CLAIM',                 // Phone → Server：填格 {cell, code}（code 是對方的配對碼）
   BINGO_RESULT: 'BINGO_RESULT',               // Server → Phone：填格結果 {ok, reason?, name?, newLines?, full?}
-  BINGO_TAGGED: 'BINGO_TAGGED',               // Server → Phone：有人把你填進他的卡 {byName, label}
+  BINGO_TAGGED: 'BINGO_TAGGED',               // Server → Phone：有人把你填進他的卡 {byName, label, offer: {label}|null}
   BINGO_STATE: 'BINGO_STATE',                 // Server → Screen/Host：進度排行 {round}（null 代表沒有進行中的一輪）
   BINGO_ENDED: 'BINGO_ENDED',                 // Server → All：本輪結束 {winners}
+  BINGO_ASK: 'BINGO_ASK',                     // Server → Phone：開局先勾自我介紹題 {facts: [{id, text}], remainingMs}
+  BINGO_FACTS: 'BINGO_FACTS',                 // Phone → Server：勾了哪幾題 {yes: string[]}
+  BINGO_ACCEPT: 'BINGO_ACCEPT',               // Phone → Server：收下「順便填」的邀請（BINGO_TAGGED 的 offer）
 
   // ── 場景主題（shared/themes.js）──────────────────────
   HOST_SET_THEME: 'HOST_SET_THEME',           // Host → Server：切換大螢幕的場景主題
@@ -131,6 +134,8 @@ export const EV = {
   // 作答隨 CLIENT_JOIN 的 persona 欄位送出。
   HOST_SET_PERSONA_QUIZ: 'HOST_SET_PERSONA_QUIZ', // Host → Server：修改題目（quiz: null 代表恢復預設）
   HOST_PERSONA_QUIZ: 'HOST_PERSONA_QUIZ',         // Server → Host：目前的題目（連線時補送、修改後廣播）
+  HOST_SET_BINGO_FACTS: 'HOST_SET_BINGO_FACTS',   // Host → Server：修改賓果自我介紹題（facts: null 代表恢復預設）
+  HOST_BINGO_FACTS: 'HOST_BINGO_FACTS',           // Server → Host：目前的自我介紹題 {facts, isDefault}
 
   // ── 活動報告 ─────────────────────────────────────────
   HOST_REQUEST_REPORT: 'HOST_REQUEST_REPORT', // Host → Server：要一份整場的活動報告

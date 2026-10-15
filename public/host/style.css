@@ -688,6 +688,7 @@ td.export { white-space: nowrap; }
 .pq-edit-foot { display: flex; justify-content: space-between; margin-top: 4px; }
 .pq-edit .btn-link[disabled] { opacity: .4; cursor: default; text-decoration: none; }
 .persona-actions { flex-wrap: wrap; }
+#bingo-facts { width: 100%; box-sizing: border-box; margin: 6px 0 8px; font: inherit; font-size: 14px; line-height: 1.6; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-sm, 6px); background: var(--paper, #fff); color: var(--ink); resize: vertical; }
 
 /* ── 大螢幕預覽 ───────────────────────────────────────────── */
 .sp-actions { display: flex; gap: 6px; }

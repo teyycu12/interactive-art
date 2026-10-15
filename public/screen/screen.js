@@ -945,8 +945,13 @@ function syncBanners() {
 
 function showBingo(round) {
   bingoShown = round;
-  bingoDeadline = round?.remainingMs == null ? null : Date.now() + round.remainingMs;
-  if (round) {
+  // ask 階段倒數的是勾題目的時間，play 階段才是本輪限時
+  const left = round?.phase === 'ask' ? round.askRemainingMs : round?.remainingMs;
+  bingoDeadline = left == null ? null : Date.now() + left;
+  if (round?.phase === 'ask') {
+    document.getElementById('bingo-lead').textContent = '先在手機上勾一下符合你的自我介紹';
+    renderBingoMeta();
+  } else if (round) {
     const lead = round.top.filter((t) => t.lines > 0 && t.lines === round.top[0].lines);
     document.getElementById('bingo-lead').textContent = lead.length
       ? `最多連線：${lead.map((t) => t.name).join('、')}（${lead[0].lines} 線）`
@@ -958,7 +963,9 @@ function showBingo(round) {
 
 function renderBingoMeta() {
   if (!bingoShown) return;
-  const parts = [`${bingoShown.players} 人參加`];
+  const parts = [bingoShown.phase === 'ask'
+    ? `${bingoShown.answered ?? 0} / ${bingoShown.players} 人答完`
+    : `${bingoShown.players} 人參加`];
   if (bingoDeadline) {
     const left = Math.max(0, bingoDeadline - Date.now());
     parts.push(`剩 ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`);

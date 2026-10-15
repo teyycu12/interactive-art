@@ -1,15 +1,16 @@
 /**
- * 今天的紀念卡：自己的角色、名字、人格類型，加上今天實際碰面並互相確認過的人。
+ * 今天的紀念卡：自己的角色、名字、人格類型，加上今天遇見的人與怎麼遇見的。
  *
  * 參考 AI 拍照亭與活動平台的「帶得走的東西」。原本手機上只有「你認識了 N 個人」
- * 這個數字，活動一結束就什麼都沒留下；而那些人正是這場活動真正的產物
- * （社交圖譜的邊，經雙方確認）。
+ * 這個數字，活動一結束就什麼都沒留下；而那些人正是這場活動真正的產物。
+ * 名單來自 server/encounters.js，伺服器已依關係深淺排好序，這裡取前 8 位。
  *
  * 全部在手機上畫，不經伺服器：不多一個端點，也不必把別人的頭像打包傳來傳去 ——
  * 手機本來就有 SOCIAL_SELF 送來的名單與外觀。
  */
 
 import { avatarPortrait } from '/shared/avatarSprite.js';
+import { encounterLabel } from '/shared/encounters.js';
 
 const W = 1080;
 const H = 1350;
@@ -49,7 +50,7 @@ export async function makeKeepsake({ name, avatar, persona, peers }) {
   // 標題
   g.fillStyle = INK;
   g.font = `900 64px ${FONT}`;
-  g.fillText(peers.length ? `今天我認識了 ${peers.length} 個人` : '今天我來過這裡', W / 2, 140);
+  g.fillText(peers.length ? `今天我遇見了 ${peers.length} 個人` : '今天我來過這裡', W / 2, 140);
 
   // 自己：肖像、名字、類型
   const drawFace = (img, cx, top, size, fallback) => {
@@ -92,16 +93,23 @@ export async function makeKeepsake({ name, avatar, persona, peers }) {
     const cellW = (W - 200) / cols;
     shown.forEach((p, i) => {
       const cx = 100 + cellW * (i % cols) + cellW / 2;
-      const top = 730 + Math.floor(i / cols) * 190;
+      const top = 730 + Math.floor(i / cols) * 215;   // 每格多一行「怎麼遇見的」
       drawFace(theirs[i], cx, top, 130, p.name);
       g.fillStyle = INK;
       g.font = `700 28px ${FONT}`;
       g.fillText(clip(g, p.name, cellW - 16), cx, top + 165);
+      // 只寫最主要的那一種（伺服器排在第一個）：格子只有四分之一寬，寫不下一串
+      const how = encounterLabel(p.via?.slice(0, 1));
+      if (how) {
+        g.fillStyle = SOFT;   // 鼠尾草綠當文字對比不足（UI-STYLING）
+        g.font = `600 22px ${FONT}`;
+        g.fillText(how, cx, top + 196);
+      }
     });
     if (peers.length > shown.length) {
       g.fillStyle = SOFT;
       g.font = `600 28px ${FONT}`;
-      g.fillText(`還有 ${peers.length - shown.length} 位`, W / 2, 1170);
+      g.fillText(`還有 ${peers.length - shown.length} 位`, W / 2, 1190);
     }
   }
 

@@ -40,6 +40,8 @@ import { certificateReport } from './certcheck.js';
 import { startTicker } from './scheduler.js';
 import { MissionBoard } from './missions.js';
 import { SocialGraph } from './socialgraph.js';
+import { Encounters } from './encounters.js';
+import { VIA } from '../shared/encounters.js';
 import { PairingSession } from './pairing.js';
 import { Greetings } from './greetings.js';
 import { BingoRound, BINGO_ERRORS, STRANGER } from './bingo.js';
@@ -58,6 +60,9 @@ import { SnapshotStore, Directory } from './persistence.js';
 import { createHttpLayer } from './httplayer.js';
 import { buildReport } from './report.js';
 import { isBlockedName } from './nameFilter.js';
+import {
+  defaultBingoFacts, validateBingoFacts, BINGO_FACTS_ASK, BINGO_ASK_MS,
+} from '../shared/bingoFacts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -70,6 +75,8 @@ const bingo = new BingoRound();
 const topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
+/** 今天遇見的人（手機名單與紀念卡）。比圖譜寬：揮手、乾杯、同桌也算，見 encounters.js */
+const encounters = new Encounters();
 // 揮手要尊重私訊的封鎖：封鎖了卻還能讓對方手機一直跳出「某某在跟你揮手」，封鎖就沒有意義
 const greetings = new Greetings({ ...GREET, isBlocked: (by, target) => messages.isBlocked(by, target) });
 const quiz = new QuizSession();
@@ -101,6 +108,8 @@ const snapshot = store.load();
 if (snapshot) {
   scores.hydrate(snapshot.scores);
   graph.hydrate(snapshot.graph);
+  if (Array.isArray(snapshot.encounters)) encounters.hydrate(snapshot.encounters);
+  else encounters.seedFromGraph(snapshot.graph);
   missions.hydrate(snapshot.missions);
   quiz.hydrate(snapshot.quiz);
   // 標籤原本存在轉場問卷的快照裡（snapshot.survey.traits），舊存檔照樣讀得回來
@@ -139,6 +148,21 @@ const screenSettings = { debug: false, sound: true };
 let personaQuiz = (snapshot?.personaQuiz && validatePersonaQuiz(snapshot.personaQuiz).ok)
   ? validatePersonaQuiz(snapshot.personaQuiz).value
   : DEFAULT_PERSONA_QUIZ;
+/**
+ * 賓果的自我介紹題。null 代表用目前場景的預設題（換場景會跟著換）。
+ * 落地進快照，理由同進場問卷：活動中途重開，主持人改過的題目不能悄悄變回預設。
+ */
+let bingoFactsCustom = (() => {
+  const v = snapshot?.bingoFacts;
+  if (!Array.isArray(v)) return null;
+  const r = validateBingoFacts(v, isBlockedName);
+  return r.ok ? r.value : null;
+})();
+const bingoFactsView = () => ({
+  facts: bingoFactsCustom ?? defaultBingoFacts(stageTheme),
+  isDefault: bingoFactsCustom === null,
+});
+
 const personaView = () => ({
   quiz: personaQuiz,
   version: personaQuizVersion(personaQuiz),
@@ -152,6 +176,7 @@ const snapshotData = () => ({
   hostKey: HOST_KEY,
   scores: scores.export(),
   graph: graph.export(),
+  encounters: encounters.export(),
   missions: missions.export(),
   quiz: quiz.export(),
   traits: traits.export(),
@@ -161,6 +186,7 @@ const snapshotData = () => ({
   event: eventInfo,
   // 預設題目不存：之後改版預設題目時，沒改過的活動才會跟著用新版
   personaQuiz: personaQuiz === DEFAULT_PERSONA_QUIZ ? null : personaQuiz,
+  bingoFacts: bingoFactsCustom,
 });
 
 /** 狀態有變動，等下一次自動存檔 */
@@ -548,6 +574,7 @@ function bingoTest(who, condId, from) {
   const [kind, a] = condId.split(':');
   if (kind === 'color') return avatarMatchesFamily(agent.avatar, a);
   if (kind === 'persona') return traits.traitOf(who, PERSONA_TRAIT_KEY)?.value === a;
+  if (kind === 'fact') return bingo.hasFact(who, a);
   return false;
 }
 
@@ -569,9 +596,16 @@ function sendBingoCard(agentId) {
 function bingoPublicView() {
   const r = bingo.round;
   if (!r) return null;
+  const asking = r.phase === 'ask';
+  // ask 階段：還在勾自我介紹題，主辦端與大螢幕顯示「x / y 人答完」。
+  // y 只算連著線的人 —— 伺服器也只等他們（bingoAskers），斷線還留在場上的人算進去會一直湊不滿
+  const askers = asking ? bingoAskers() : [];
   return {
+    phase: r.phase,
+    answered: asking ? askers.filter((id) => bingo.hasAnswered(id)).length : null,
+    askRemainingMs: asking ? Math.max(0, r.askEndsAt - Date.now()) : null,
     remainingMs: r.endsAt ? Math.max(0, r.endsAt - Date.now()) : null,
-    players: r.cards.size,
+    players: asking ? askers.length : r.cards.size,
     top: bingo.standings().slice(0, 5).map((s) => ({ name: nameOf(s.id), lines: s.lines, filled: s.filled })),
   };
 }
@@ -581,9 +615,15 @@ const pushBingoState = () => blast([...screens, ...hosts], EV.BINGO_STATE, { rou
 function startBingo(ws, msg) {
   const ids = [...stage.agents.keys()];
   const durationMs = Number(msg.durationMs) > 0 ? Math.min(Number(msg.durationMs), 30 * 60 * 1000) : null;
-  const result = bingo.start(ids, bingoPool(), bingoTest, { durationMs });
+  const bank = bingoFactsView().facts;
+  const facts = [...bank].sort(() => Math.random() - 0.5).slice(0, BINGO_FACTS_ASK);
+  const result = bingo.start(ids, bingoPool(), bingoTest, { durationMs, facts, askMs: BINGO_ASK_MS });
   if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
-  for (const id of ids) sendBingoCard(id);
+  if (bingo.phase === 'ask') {
+    for (const id of ids) sendToAgent(id, EV.BINGO_ASK, bingoAsk());
+  } else {
+    for (const id of ids) sendBingoCard(id);
+  }
   pushBingoState();
   console.log(`[bingo] 開始　${ids.length} 人${durationMs ? `　限時 ${durationMs / 60000} 分鐘` : ''}`);
 }
@@ -618,21 +658,82 @@ function handleBingoClaim(ws, msg) {
 
   const r = bingo.claim(from, msg.cell, target);
   if (!r.ok) { reply({ ok: false, reason: r.reason }); return; }
+  bingoFilled(from, target, r, reply);
+  // 被填進去的人也要知道：「剛剛那個人原來是在玩賓果」—— 這通常就是下一段對話的開頭。
+  // 剛來找他的人若也符合他卡上空著的一格，順便問他要不要填（不必再輸碼：才剛當面拿過）
+  const cell = bingo.cardOf(from).cells[r.cell];
+  const offer = bingo.offerFor(target, from);
+  sendToAgent(target, EV.BINGO_TAGGED, {
+    byName: nameOf(from), label: cell.cond.label, offer: offer ? { label: offer.label } : null,
+  });
+}
 
+/** 收下「順便填」的邀請 */
+function handleBingoAccept(ws) {
+  const me = ws.agentId;
+  const reply = (payload) => send(ws, EV.BINGO_RESULT, payload);
+  if (!bingo.isActive) { reply({ ok: false, reason: BINGO_ERRORS.NO_ROUND }); return; }
+  const r = bingo.acceptOffer(me);
+  if (!r.ok) { reply({ ok: false, reason: r.reason }); return; }
+  bingoFilled(me, r.from, r, reply);
+  // 只通知、不再反過來邀請：對方剛剛才填過我，再邀一次就是無止境的來回
+  const cell = bingo.cardOf(me).cells[r.cell];
+  sendToAgent(r.from, EV.BINGO_TAGGED, { byName: nameOf(me), label: cell.cond.label, offer: null });
+}
+
+/** 填格成功：計分、回覆、更新卡片與排行、記進「今天遇見的人」 */
+function bingoFilled(from, target, r, reply) {
   const points = SCORING.bingoCell + r.newLines * SCORING.bingoLine + (r.full ? SCORING.bingoFull : 0);
   award(from, points, { source: SCORE_SOURCES.BINGO });
   reply({ ok: true, name: nameOf(target), newLines: r.newLines, full: r.full });
   sendBingoCard(from);
-  // 被填進去的人也要知道：「剛剛那個人原來是在玩賓果」—— 這通常就是下一段對話的開頭
-  const cell = bingo.cardOf(from).cells[r.cell];
-  sendToAgent(target, EV.BINGO_TAGGED, { byName: nameOf(from), label: cell.cond.label });
+  // 只記在填格的這一方（理由見 encounters.js）。對方收下「順便填」時，他那邊也會記一筆
+  if (encounters.noteOneWay(from, target, VIA.BINGO)) sendSocialSelf(from);
   pushBingoState();
   markDirty();
 }
 
-/** 中途進場、重連：補一張卡（已經有就重送） */
+/** 勾選自我介紹題 */
+function handleBingoFacts(ws, msg) {
+  const me = ws.agentId;
+  if (!bingo.isActive || !bingo.answerFacts(me, msg.yes)) return;
+  if (bingo.phase === 'play') {
+    // 發卡之後才答（例如重連）：照常補一張卡
+    sendBingoCatchUp(me);
+  } else {
+    pushBingoState();
+    if (bingo.readyToPlay(bingoAskers())) startBingoPlay();
+  }
+}
+
+/** ask 階段要等誰：連著線的人。斷線但還留在場上的人等不到，交給時間到 */
+const bingoAskers = () => [...controllers.keys()].filter((id) => stage.agents.has(id));
+
+/** 自我介紹收齊（或時間到）：發卡、開始計時 */
+function startBingoPlay() {
+  bingo.beginPlay([...stage.agents.keys()]);
+  for (const id of bingo.round.cards.keys()) sendBingoCard(id);
+  pushBingoState();
+  console.log(`[bingo] 發卡　${bingo.round.cards.size} 人`);
+}
+
+/** 這一輪要問的題目：從題庫隨機挑幾題，所有人問同一組，才找得到彼此 */
+function bingoAsk() {
+  const r = bingo.round;
+  return { facts: r.facts, remainingMs: Math.max(0, r.askEndsAt - Date.now()) };
+}
+
+/**
+ * 中途進場、重連：
+ * - 還在問自我介紹：沒答過的人補問
+ * - 已經發卡：補一張卡（已經有就重送）。發卡後才進場的人不再問，直接拿卡
+ */
 function sendBingoCatchUp(agentId) {
   if (!bingo.isActive || !agentId) return;
+  if (bingo.phase === 'ask') {
+    if (!bingo.hasAnswered(agentId)) sendToAgent(agentId, EV.BINGO_ASK, bingoAsk());
+    return;
+  }
   bingo.dealCard(agentId, [...stage.agents.keys()]);
   sendBingoCard(agentId);
 }
@@ -670,6 +771,7 @@ function stepTopics(now) {
     blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: deal.question });
     console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${deal.question}」`);
   }
+  for (const [a, b] of topics.seatedPairs(now)) meetUp(a, b, VIA.TOPIC);
 }
 
 function handleJoin(ws, msg) {
@@ -882,6 +984,7 @@ function detachAgent(agentId, { forget = false } = {}) {
     traits.forget(agentId);
     bingo.forget(agentId);
     messages.forget(agentId);
+    encounters.forget(agentId);
     markDirty();
   }
 }
@@ -922,6 +1025,7 @@ function greetDone(kind, outcome, a, b) {
   blast(screens, EV.STAGE_GREET, { kind, a, b });
   // 回揮的那一方此時頭上已經有揮手圖示；先揮的那一方可能已經消失了，補上
   stage.applyAction(a, kind, { force: true });
+  meetUp(a, b, kind === 'WAVE' ? VIA.WAVE : VIA.CHEERS);
   console.log(`[greet] ${nameOf(a)} × ${nameOf(b)}　${kind === 'WAVE' ? '互相揮手' : '碰杯'}`);
 }
 
@@ -1047,6 +1151,7 @@ function handlePairConfirm(ws, msg) {
   linksDirty = true;
   // 雙方各自看到「我認識了誰」—— 手機端在進場後除了搖桿與分數之外
   // 看不到任何社交狀態，但那正是這場活動真正在累積的東西。
+  encounters.meet(result.from, result.to, VIA.PAIR);
   sendSocialSelf(result.from);
   sendSocialSelf(result.to);
   markDirty();
@@ -1195,6 +1300,12 @@ function handleDirectMessage(ws, msg) {
   send(ws, EV.MSG_RESULT, { ok: true, to: msg.to, ref });
   if (!result.delivered) return;
   const { message } = result;
+  // 對方回過才算兩人聊過；單方面傳不算
+  if (encounters.wrote(message.from, message.to)) {
+    sendSocialSelf(message.from);
+    sendSocialSelf(message.to);
+    markDirty();
+  }
   // 只送給收件人。不廣播、不進大螢幕、不給主辦端 —— 一般私訊只有兩個當事人看得到
   sendToAgent(message.to, EV.MSG_RECEIVE, {
     message: { id: message.id, from: message.from, fromName: nameOf(message.from), text: message.text, at: message.at },
@@ -1226,6 +1337,8 @@ function setStageTheme(theme) {
   markDirty();
   // 手機也要：個人視角畫的是同一個場景的局部，主題不同步就會一邊廚房一邊辦公室
   blast([...screens, ...hosts, ...controllers.values()], EV.STAGE_THEME, { theme: stageTheme });
+  // 預設的自我介紹題跟著場景走
+  if (bingoFactsCustom === null) blast(hosts, EV.HOST_BINGO_FACTS, bingoFactsView());
 }
 
 /**
@@ -1379,6 +1492,20 @@ function handleHostMessage(ws, msg) {
       console.log(`[persona] 進場問卷${personaQuiz === DEFAULT_PERSONA_QUIZ ? '恢復預設' : '已修改'}　${personaQuiz.questions.length} 題`);
       markDirty();
       blast(hosts, EV.HOST_PERSONA_QUIZ, personaView());
+      break;
+    }
+
+    case EV.HOST_SET_BINGO_FACTS: {
+      if (msg.facts === null) {
+        bingoFactsCustom = null;
+      } else {
+        const r = validateBingoFacts(msg.facts, isBlockedName);
+        if (!r.ok) { send(ws, EV.HOST_REJECT, { reason: r.reason }); return; }
+        bingoFactsCustom = r.value;
+      }
+      console.log(`[bingo] 自我介紹題${bingoFactsCustom ? `已修改　${bingoFactsCustom.length} 題` : '恢復預設'}`);
+      markDirty();
+      blast(hosts, EV.HOST_BINGO_FACTS, bingoFactsView());
       break;
     }
 
@@ -1624,13 +1751,22 @@ wss.on('connection', (ws) => {
 
       case EV.MSG_BLOCK:
         if (ws.role !== 'controller' || !ws.agentId) return;
-        if (messages.block(ws.agentId, msg.userId, messagePresence)) console.log(`[block] ${nameOf(ws.agentId)} 封鎖了 ${nameOf(msg.userId) || msg.userId}`);
+        if (messages.block(ws.agentId, msg.userId, messagePresence)) {
+          console.log(`[block] ${nameOf(ws.agentId)} 封鎖了 ${nameOf(msg.userId) || msg.userId}`);
+          // 封鎖是雙向從名單上拿掉的：兩邊都要重送
+          sendSocialSelf(ws.agentId);
+          sendSocialSelf(msg.userId);
+        }
         send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(ws.agentId) });
         break;
 
       case EV.MSG_UNBLOCK:
         if (ws.role !== 'controller' || !ws.agentId) return;
-        if (messages.unblock(ws.agentId, msg.userId)) console.log(`[block] ${nameOf(ws.agentId)} 解除封鎖 ${nameOf(msg.userId) || msg.userId}`);
+        if (messages.unblock(ws.agentId, msg.userId)) {
+          console.log(`[block] ${nameOf(ws.agentId)} 解除封鎖 ${nameOf(msg.userId) || msg.userId}`);
+          sendSocialSelf(ws.agentId);
+          sendSocialSelf(msg.userId);
+        }
         send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(ws.agentId) });
         break;
 
@@ -1642,6 +1778,16 @@ wss.on('connection', (ws) => {
       case EV.BINGO_CLAIM:
         if (ws.role !== 'controller' || !ws.agentId) return;
         handleBingoClaim(ws, msg);
+        break;
+
+      case EV.BINGO_FACTS:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleBingoFacts(ws, msg);
+        break;
+
+      case EV.BINGO_ACCEPT:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleBingoAccept(ws);
         break;
 
       case EV.HOST_AUTH: {
@@ -1675,6 +1821,7 @@ wss.on('connection', (ws) => {
         // 檢舉清單只由 HOST_MSG_REPORTS 驅動，重整後的主辦端要靠這則才看得到
         send(ws, EV.HOST_MSG_REPORTS, { reports: messageReports() });
         send(ws, EV.HOST_PERSONA_QUIZ, personaView());
+        send(ws, EV.HOST_BINGO_FACTS, bingoFactsView());
         // 文字雲面板的詞只由 WORDCLOUD_STATE 驅動，HOST_STATE 只帶題目 ——
         // 少了這裡，重整後的主辦端看得到題目，卻看不到詞、也按不到「隱藏」。
         if (wordcloud.isActive) {
@@ -1704,6 +1851,7 @@ wss.on('connection', (ws) => {
       case EV.HOST_START_WORDCLOUD:
       case EV.HOST_CLOSE_WORDCLOUD:
       case EV.HOST_HIDE_WORD:
+      case EV.HOST_SET_BINGO_FACTS:
       case EV.HOST_REQUEST_REPORT:
         // 未通過認證的連線一律忽略，不回應也不透露任何狀態
         if (ws.role !== 'host') return;
@@ -1808,6 +1956,7 @@ const loop = startTicker({
       sendQuestion();
       pushHostState();
     }
+    if (bingo.phase === 'ask' && bingo.readyToPlay(bingoAskers(), now)) startBingoPlay();
     if (bingo.shouldAutoEnd(now)) endBingo('time');
     stepTopics(now);
     if (quiz.shouldAutoReveal(now)) revealQuiz(now);
@@ -2031,18 +2180,32 @@ const graphEdges = () => graph.export().edges.map((e) => ({ a: e.a, b: e.b, at: 
 /** 圖譜有變動、待廣播。與 stage.rosterDirty 同樣的節流策略 */
 let linksDirty = true;
 
-/** 推送「我認識了誰」給單一參與者。帶對方姓名，手機端才顯示得出來。 */
+/**
+ * 推送「今天遇見的人」給單一參與者。帶對方姓名，手機端才顯示得出來。
+ *
+ * 讀 encounters 不讀圖譜（理由見 encounters.js）。順序由伺服器排好，手機照順序畫。
+ * 封鎖雙向濾掉：紀念卡會被分享出去，不能讓封鎖對象的名字和肖像出現在上面。
+ */
 function sendSocialSelf(agentId) {
-  const ids = [...graph.neighbors(agentId)];
+  const hidden = (id) => messages.isBlocked(agentId, id) || messages.isBlocked(id, agentId);
+  const list = encounters.peersOf(agentId, { hidden });
   sendToAgent(agentId, EV.SOCIAL_SELF, {
-    count: ids.length,
-    peers: ids.map((id) => {
+    count: list.length,
+    peers: list.map(({ id, via }) => {
       // 已經斷線被回收的人不在 stage 上，但身分目錄還記得 —— 原本這裡只查 stage，
       // 「今天認識的人」裡先走的那幾位會變成沒有名字的空格
       const peer = stage.agents.get(id) ?? directory.get(id);
-      return { id, name: peer?.name ?? '', avatar: peer?.avatar ?? null };
+      return { id, name: peer?.name ?? '', avatar: peer?.avatar ?? null, via };
     }),
   });
+}
+
+/** 兩人有了雙方都參與的互動：記帳，名單有變動才推送 */
+function meetUp(a, b, via) {
+  if (!encounters.meet(a, b, via)) return;
+  sendSocialSelf(a);
+  sendSocialSelf(b);
+  markDirty();
 }
 
 const photoRoster = () => {
