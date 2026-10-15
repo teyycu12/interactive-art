@@ -161,9 +161,11 @@ phone.on('open', () => phone.send(JSON.stringify({
 })));
 const phoneSyncs = [];
 const phoneRosters = [];
+const phoneGreets = [];
 phone.on('message', (d) => {
   const m = JSON.parse(d);
   if (m.type === 'CLIENT_WELCOME') welcome = m;
+  if (m.type === 'GREET_RESULT') phoneGreets.push(m);
   if (m.type === 'CLIENT_SYNC') phoneSyncs.push(m);
   if (m.type === 'CLIENT_ROSTER') phoneRosters.push(m);
 });
@@ -188,6 +190,10 @@ check('轉向鏡像 facing = 1', moving.facing === 1);
 phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'CHEERS' }));
 await sleep(200);
 check('社交動作出現在 STAGE_SYNC', live()[0].emote === 'CHEERS');
+// 場上只有一個人：乾杯要兩人一起按，手機必須被告知「身邊沒有人」，不能按了沒反應
+check('獨自按乾杯時手機收到「身邊沒有人」',
+  phoneGreets.at(-1)?.kind === 'CHEERS' && phoneGreets.at(-1)?.outcome === 'NOBODY',
+  JSON.stringify(phoneGreets.at(-1)));
 phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'DROP_TABLE' }));
 await sleep(200);
 check('白名單外的動作被丟棄', live()[0].emote === 'CHEERS');

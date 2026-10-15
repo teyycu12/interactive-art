@@ -167,15 +167,22 @@ export class Stage {
     }
   }
 
-  /** 觸發社交動作，回傳是否成功（false 代表仍在冷卻中） */
-  applyAction(id, action) {
+  /**
+   * 觸發社交動作，回傳是否成功（false 代表仍在冷卻中）
+   * @param {{force?: boolean}} [opts] force：揮手或碰杯成功時替另一方補上圖示。
+   *   那不是使用者按的，所以既不受冷卻限制、也**不重設冷卻、不計次** ——
+   *   重設的話，他剛被回揮完 0.3 秒內按的乾杯會被當成連按吞掉（實測抓到過）。
+   */
+  applyAction(id, action, { force = false } = {}) {
     const agent = this.agents.get(id);
     if (!agent) return false;
     const now = Date.now();
-    if (now - agent.lastEmoteAt < EMOTE_COOLDOWN_MS) return false;
-    agent.lastEmoteAt = now;
+    if (!force) {
+      if (now - agent.lastEmoteAt < EMOTE_COOLDOWN_MS) return false;
+      agent.lastEmoteAt = now;
+      agent.emoteCount++;
+    }
     agent.emote = { action, until: now + EMOTE_DURATION_MS };
-    agent.emoteCount++;
     return true;
   }
 

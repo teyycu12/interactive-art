@@ -18,11 +18,14 @@ export const EV = {
   // Server → Phone
   CLIENT_WELCOME: 'CLIENT_WELCOME', // 登入確認，回傳伺服器指派的 userId
   CLIENT_REJECT: 'CLIENT_REJECT',   // 資料驗證失敗
+  GREET_INVITE: 'GREET_INVITE',     // 有人跟你揮手（帶 fromId，回揮時當 INPUT_ACTION 的 target）
+  GREET_RESULT: 'GREET_RESULT',     // 揮手／乾杯的結果，見 GREET_OUTCOME
   CLIENT_SYNC: 'CLIENT_SYNC',       // 自己與鄰近角色的座標（15Hz，僅送該連線）
   CLIENT_ROSTER: 'CLIENT_ROSTER',   // 場上所有人的 id → 名字（僅在成員變動時送）
   // Server → Screen
   STAGE_META: 'STAGE_META',         // 場域尺寸等靜態資訊（連線時送一次）
   STAGE_ROSTER: 'STAGE_ROSTER',     // 參與者名冊（僅在有人加入/離開時送）
+  STAGE_GREET: 'STAGE_GREET',       // 兩人互相揮手或碰杯成功：{ kind, a, b }，大螢幕在兩人之間畫一道連線
   STAGE_SYNC: 'STAGE_SYNC',         // 空間狀態廣播（30 FPS）
   STAGE_LINKS: 'STAGE_LINKS',       // 社交圖譜的邊（僅在有人配對成功時送）
 
@@ -277,6 +280,17 @@ export const ACTIONS = ['CHEERS', 'HEART', 'WAVE'];
  * （與 QUIZ_CHOICES 的顏色符號是同一個理由）。
  */
 export const EMOTE_GLYPH = { CHEERS: '🍻', HEART: '💗', WAVE: '👋' };
+
+/**
+ * GREET_RESULT 的 outcome。揮手與乾杯共用（server/greetings.js）。
+ * - SENT：揮出去了，等對方回揮（帶 otherName）
+ * - MUTUAL：互相揮手成功／CLINK：碰杯成功（帶 otherName）
+ * - WAITING：按了乾杯，等身邊的人也按
+ * - NOBODY：身邊沒有人
+ */
+export const GREET_OUTCOME = {
+  SENT: 'SENT', MUTUAL: 'MUTUAL', WAITING: 'WAITING', CLINK: 'CLINK', NOBODY: 'NOBODY',
+};
 
 /** 搖桿輸入節流頻率：20 Hz = 每 50ms 一次 */
 export const INPUT_HZ = 20;

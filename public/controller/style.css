@@ -452,6 +452,30 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 #emotes button { padding: 12px 4px 14px; font-size: 13px; line-height: 1.5; background: #FFFCF5; }
 #emotes button em { display: block; font-size: 22px; font-style: normal; }
 
+/* 「某某在跟你揮手」。用大螢幕「1號桌」那種黃牌（ink 字 8.7:1）——
+   要一眼從表情鍵上方跳出來，又不能做成蓋住搖桿的覆蓋層。 */
+.greet-invite {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-shrink: 0;
+  padding: 6px 6px 6px 12px;
+  background: var(--tag);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: var(--r);
+  box-shadow: var(--drop-sm);
+  font-size: 14px; font-weight: 700;
+}
+.greet-invite[hidden] { display: none; }
+.greet-invite span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.greet-invite button {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 0 14px;
+  background: var(--wall);
+  color: #FAF8F5;   /* 6.65:1 */
+  font-weight: 700;
+}
+
 /* 離開鍵刻意做小並置於頂端角落。放在底部與搖桿、動作鍵相鄰會提高誤觸風險，
    而誤觸離開在現場沒有補救餘地。 */
 .btn-exit {

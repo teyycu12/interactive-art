@@ -163,6 +163,7 @@ scaleAt(logicX, logicY, worldHeight)
 | `STAGE_ROSTER` | 成員變動時 | `agents: [{ id, name, avatar }]` |
 | `STAGE_SYNC` | 30 Hz | `agents: [{ id, x, y, vx, vy, heading, state, mode, alpha, facing, offline, emote, emoteT?, arrived? }]` |
 | `STAGE_LINKS` | 配對成功時 | `edges: [{ a, b, at }]` |
+| `STAGE_GREET` | 兩人互相揮手或碰杯成功時 | `{ kind: 'WAVE' \| 'CHEERS', a, b }`（a、b 為角色 id） |
 
 - 連線後**必須**先送 `SCREEN_HELLO` 註冊為顯示端。
 - **必須**以伺服器座標為準。允許做**內插**（參考實作每幀
@@ -272,6 +273,7 @@ scaleAt(logicX, logicY, worldHeight)
 | `mode: 'STAGED'` | 角色被帶往合照位置，`heading = π/2` 面向觀眾 | 合照要看得到每個人的臉 |
 | 配對完成（`MISSION_COMPLETE`） | 雙方脈衝環＋ A→B 光束 | 現場的交談必須在共享畫面上被看見 |
 | 社交圖譜（`STAGE_LINKS`） | 只畫兩端都在場的邊，新邊亮、舊邊淡 | 關係網是作品真正累積的東西 |
+| 打招呼（`STAGE_GREET`） | 兩人之間一道短暫光束，**顏色要與配對不同**，不留常駐連線 | 回揮的人要在大螢幕上看到「成了」；與配對同色會被誤認成認識了 |
 
 呈現形式（箭頭形狀、光束樣式、字體）可自訂；**是否呈現**不可省略。
 場景若有運鏡，**必須**確保上述提示在角色被遮擋或出畫時仍可辨認

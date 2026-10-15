@@ -283,6 +283,12 @@
     <!-- 搖桿區不放說明文字：手機上那行字會被切掉又擋住場景。操作說明在上方的 #agency -->
     <div id="joystick-zone"></div>
 
+    <!-- 有人跟你揮手。刻意不做成覆蓋層：要邊回揮邊看大螢幕找人，搖桿不能被擋住 -->
+    <div class="greet-invite" id="greet-invite" hidden role="status" aria-live="polite">
+      <span id="greet-text"></span>
+      <button id="btn-wave-back">👋 揮回去</button>
+    </div>
+
     <div id="emotes">
       <button data-action="CHEERS"><em>🍻</em>乾杯</button>
       <button data-action="HEART"><em>💗</em>愛心</button>
