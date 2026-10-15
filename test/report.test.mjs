@@ -29,14 +29,13 @@ function sample() {
         answers: [{ agentId: 'a', choice: 1 }, { agentId: 'c', choice: 0 }],
       }],
     },
-    survey: {
-      current: null,
+    wordcloud: {
       history: [{
-        question: '喜歡哪個？', options: [{ label: '貓' }, { label: '狗' }], startedAt: 50, closedAt: 80,
-        answers: [{ agentId: 'a', choice: 0 }, { agentId: 'b', choice: 0 }, { agentId: 'c', choice: 1 }],
+        question: '用一個詞形容今天', startedAt: 50, closedAt: 80, participants: 3,
+        words: [{ text: '開心', count: 2 }, { text: '累', count: 1 }],
       }],
-      traits: [{ agentId: 'c', tags: { pet: { value: 'dog', label: '狗派' } } }],
     },
+    traits: [{ agentId: 'c', tags: { persona: { value: 'owl', label: '🦉 貓頭鷹' } } }],
     scores: { totals: { a: { total: 120 }, b: { total: 20 } } },
     nameOf: (id) => names[id] ?? '',
     isPresent: (id) => id !== 'c',
@@ -50,7 +49,7 @@ test('每個出現過的人都有一列，沒配對過的人算成孤島', () =>
   assert.equal(r.summary.isolated, 1);
   const c = r.people.find((p) => p.id === 'c');
   assert.equal(c.connections, 0);
-  assert.deepEqual(c.surveyTags, ['狗派']);
+  assert.deepEqual(c.tags, ['🦉 貓頭鷹']);
   assert.equal(c.present, false);
 });
 
@@ -65,7 +64,7 @@ test('問答只在公布後計對錯', () => {
 
 test('活動紀錄依開始時間排序，各自帶結果', () => {
   const r = sample();
-  assert.deepEqual(r.activities.map((x) => x.kind), ['問卷', '任務', '問答']);
-  assert.match(r.activities[0].result, /貓 2・狗 1/);
+  assert.deepEqual(r.activities.map((x) => x.kind), ['文字雲', '任務', '問答']);
+  assert.match(r.activities[0].result, /開心 2・累 1/);
   assert.match(r.activities[2].result, /1 \/ 2 人答對/);
 });

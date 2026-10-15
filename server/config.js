@@ -8,7 +8,6 @@
 // 閒置門檻由協定層定義並直接再匯出 —— 手機端提示與伺服器仲裁必須共用同一個值
 export { IDLE_THRESHOLD_MS } from '../shared/protocol.js';
 import fs from 'node:fs';
-import { TREASURE_RADIUS } from '../shared/heat.js';
 
 export const TICK_HZ = 30;                    // 伺服器模擬與廣播頻率（技術文件 §3：30 FPS）
 export const TICK_MS = 1000 / TICK_HZ;
@@ -191,49 +190,6 @@ export const DIRECT_MESSAGES = {
   maxBlocks: 100,         // 每人最多封鎖幾個人（場上最多 30 人，這個上限只擋捏造的 id）
 };
 
-/** 尋寶的冷熱門檻（說明見 TREASURE.heatThresholds）。抽出來是為了讓 minStartDistance 跟著它走 */
-const TREASURE_HEAT = [70, 220, 480, 900];
-
-/**
- * 尋寶任務（先知模式，見 server/treasure.js）
- */
-export const TREASURE = {
-  // 判定半徑由 shared/heat.js 定義 —— 大螢幕要畫出同一個圈，
-  // 兩邊各存一份會出現「看起來踩到了卻沒反應」
-  claimRadius: TREASURE_RADIUS,
-
-  /**
-   * 冷熱門檻（邏輯單位），由近到遠。
-   *
-   * 場域是 1920×1080，對角線約 2200。最遠一級刻意涵蓋大半個場地，
-   * 讓「結冰」真的代表方向錯了，而不是每個人都一直看到結冰。
-   */
-  heatThresholds: TREASURE_HEAT,
-
-  /** 藏寶點與場邊的最小距離，避免藏在角色難以貼近的邊角 */
-  edgeMargin: 160,
-
-  /**
-   * 開局時藏寶點與每個人的理想最小距離（＝「溫」的門檻 heatThresholds[2]），
-   * 讓所有人一開始都在「冷」以外，先知有東西可以喊。
-   *
-   * 原本挑點完全不看人站哪：藏到某人腳邊時，開局下一個 tick 就被踩中，
-   * 先知一句話都還沒說這一輪就結束了（e2e 偶發失敗就是這樣抓到的）。
-   * 人多到找不到這麼遠的點時，退而挑「離最近的人最遠」的候選點。
-   */
-  minStartDistance: TREASURE_HEAT[2],
-
-  /** 找到寶藏的得分。高於一次配對（20），因為它需要整隊合作 */
-  points: 80,
-
-  /**
-   * 先知的得分。
-   *
-   * 刻意設為 0 —— 先知一旦能得分，就有動機自己走過去而不是喊出來，
-   * 整個「必須開口」的設計就垮了。改以榮譽呈現（大螢幕標示先知身分）。
-   */
-  prophetPoints: 0,
-};
 
 // ── 即時問答與積分 ────────────────────────────────────────
 export const QUIZ_TUNING = {

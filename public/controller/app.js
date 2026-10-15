@@ -18,7 +18,7 @@ import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
 } from '/shared/capture-guidance.js';
 import { COLOR_FAMILY_MAP } from '/shared/colorFamily.js';
-import { HEAT_MAP } from '/shared/heat.js';
+import { WORDCLOUD } from '/shared/wordcloud.js';
 import { ZONE_MAP } from '/shared/scene.js';
 import { avatarImage, avatarPortrait } from '/shared/avatarSprite.js';
 import { makeKeepsake, saveKeepsake } from './keepsake.js';
@@ -172,10 +172,8 @@ const LS = {
 let step = 1;
 let config = randomAvatarConfig();
 let displayName = '';
-/** 伺服器指派的角色 id。尋寶要用它判斷「先知是不是我」 */
+/** 伺服器指派的角色 id */
 let myId = null;
-/** 本輪尋寶我是不是先知。只有先知收得到冷熱 */
-let isProphet = false;
 
 // 還原上次的設定，讓現場使用者重整頁面後不必重捏
 try {
@@ -1549,92 +1547,66 @@ function renderZone(zoneId) {
   }
 }
 
-// ── 尋寶（先知模式）──────────────────────────────────────
-/**
- * 尋寶面板。
- *
- * 兩種身分的畫面刻意差很多：
- *   先知　看得到冷熱，但畫面明說「你不能自己去撿」
- *   其他人　完全沒有提示，只寫「聽先知的指令」
- * 若兩邊長得像，先知會以為自己也在找，整個玩法就散掉。
- */
-/** 採收：本輪狀態與「我現在按不按得到籃子」。兩者都由伺服器說了算 */
-let harvestRound = null;
-let canTakeBasket = false;
+// ── 文字雲 ────────────────────────────────────────────────
+// 主持人出題時出現在搖桿區上方，輸入短答送到大螢幕。不是覆蓋層：邊走邊答也可以。
+// 「你送過的」以伺服器回傳的 mine 為準（重連時伺服器會補送），手機不自己記。
+const wcBox = $('#wordcloud-box');
+const wcInput = $('#wc-input');
+wcInput.maxLength = WORDCLOUD.maxAnswerLength;
+let wcRound = null;
+let wcMine = [];
+let wcSending = false;
 
-/**
- * 採收面板。
- *
- * **刻意不寫家具名稱** —— 名稱只存在大螢幕的場景設定裡（換主題會變），
- * 手機再存一份必然漂移。而且這題本來就要人抬頭找地方，指向螢幕比在手機上
- * 描述位置更有用（同問卷的到場題）。
- */
-function renderHarvest() {
-  const box = $('#harvest-box');
-  if (!box) return;
-  box.hidden = !harvestRound;
-  if (!harvestRound) return;
+const WC_ERROR_TEXT = {
+  NO_ROUND: '這題已經結束了。',
+  EMPTY: '寫點什麼再送出吧。',
+  TOO_LONG: `最多 ${WORDCLOUD.maxAnswerLength} 個字。`,
+  BLOCKED: '這個詞不適合出現在大螢幕上，換一個吧。',
+  LIMIT: `每人最多送 ${WORDCLOUD.maxPerPerson} 個。`,
+  DUPLICATE: '你已經送過這個了。',
+};
 
-  const r = harvestRound;
-  const left = r.beds.filter((b) => b.pickedBy === null).length;
-  const holding = r.holder === myId;
-  const iPicked = r.picked.includes(myId);
-  box.classList.toggle('is-holder', holding);
-  $('#harvest-left').textContent = left > 0 ? `還差 ${left} 處` : '可以送回去了';
-
-  let hint;
-  if (holding && left === 0) hint = '全部採完了！把籃子送回出發的地方。';
-  else if (holding && iPicked) hint = '你這一輪採過了 —— 叫一個還沒採的人過來，請他接走籃子。';
-  else if (holding) hint = '你拿著籃子。看大螢幕，走到還沒採的那一處。';
-  else if (iPicked) hint = '你這一輪採過了。有人需要籃子時幫忙喊一聲。';
-  else hint = '看大螢幕找籃子在誰手上，走過去跟他要。';
-  $('#harvest-hint').textContent = hint;
-
-  const btn = $('#btn-harvest');
-  btn.hidden = !(holding || canTakeBasket);
-  btn.textContent = holding ? '把籃子放下' : '接過籃子';
+function renderWordCloudBox() {
+  wcBox.hidden = !wcRound;
+  if (!wcRound) return;
+  $('#wc-question').textContent = wcRound.question;   // 主持人輸入的題目，一律 textContent
+  const full = wcMine.length >= WORDCLOUD.maxPerPerson;
+  wcInput.disabled = full;
+  wcInput.placeholder = full ? '已經送滿了，看大螢幕！' : '輸入你的答案';
+  $('#wc-send').disabled = full || wcSending || !wcInput.value.trim();
+  const mine = $('#wc-mine');
+  mine.hidden = wcMine.length === 0;
+  const left = WORDCLOUD.maxPerPerson - wcMine.length;
+  mine.textContent = `你送過：${wcMine.join('、')}${left > 0 ? `　還可以送 ${left} 個` : ''}`;
 }
 
-$('#btn-harvest')?.addEventListener('click', () => {
-  if (!harvestRound) return;
-  // 接的人發起，不是給的人 —— 「叫他過來」才是這個玩法要的那一步。
-  // 距離由伺服器判定，手機只有搖桿，根本不知道自己在房間的哪裡。
-  sendMsg(harvestRound.holder === myId ? EV.HARVEST_DROP : EV.HARVEST_TAKE);
+function wcMsg(text) {
+  const el = $('#wc-msg');
+  el.textContent = text;
+  el.hidden = !text;
+}
+
+wcInput.addEventListener('input', () => { wcMsg(''); renderWordCloudBox(); });
+$('#wc-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = wcInput.value.trim();
+  if (!wcRound || !text || wcSending) return;
+  wcSending = true;
+  renderWordCloudBox();
+  sendMsg(EV.WORDCLOUD_ANSWER, { text });
 });
 
-function showHarvestNote(text) {
-  const el = $('#harvest-hint');
-  if (!el) return;
-  el.textContent = text;
-}
-
-function renderTreasure(round) {
-  const box = $('#treasure-box');
-  if (!box) return;
-  box.hidden = !round;
-  if (!round) return;
-
-  box.classList.toggle('is-prophet', isProphet);
-  $('#treasure-role').textContent = isProphet ? '🔮 你是先知' : '🔍 尋寶中';
-  $('#treasure-hint').textContent = isProphet
-    ? '只有你看得到冷熱。大聲喊出來，帶大家過去 —— 你自己撿不算分。'
-    : '你看不到提示。聽先知喊的方向走。';
-  $('#treasure-heat').textContent = isProphet ? '等待中…' : '—';
-  $('#treasure-heat').hidden = !isProphet;
-}
-
-function renderHeat(id) {
-  const h = HEAT_MAP[id];
-  if (!h) return;
-  const el = $('#treasure-heat');
-  el.textContent = `${h.glyph} ${h.label}`;
-  el.style.setProperty('--heat', h.color);
-  // 震動只是加分項：iOS 完全不支援，因此顏色與文字本身已經足夠傳達
-  if (id === 'BURNING') navigator.vibrate?.(60);
-}
-
-function showTreasureResult(text) {
-  showToast(text);
+function onWordCloudAck(msg) {
+  wcSending = false;
+  if (Array.isArray(msg.mine)) wcMine = msg.mine;
+  if (msg.ok) {
+    wcInput.value = '';
+    wcMsg('送出了！看看大螢幕');
+    vibrate(20);
+  } else {
+    wcMsg(WC_ERROR_TEXT[msg.reason] ?? '沒有送出，再試一次。');
+  }
+  renderWordCloudBox();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1848,53 +1820,25 @@ function handleMissionMessage(msg) {
       handlePairResult(msg);
       break;
 
-    // ── 採水果（籃子接力）────────────────────────────────
-    case EV.HARVEST_STATE:
-      harvestRound = msg.round;
-      if (!msg.round) canTakeBasket = false;
-      renderHarvest();
+    // ── 文字雲 ────────────────────────────────────────────
+    case EV.WORDCLOUD_QUESTION:
+      wcRound = msg.cloud;
+      wcMine = [];
+      wcSending = false;
+      wcInput.value = '';
+      wcMsg('');
+      renderWordCloudBox();
+      vibrate([20, 60, 20]);
       break;
 
-    case EV.HARVEST_REACH:
-      canTakeBasket = !!msg.canTake;
-      if (msg.note) showHarvestNote(msg.note);
-      renderHarvest();
+    case EV.WORDCLOUD_ACK:
+      onWordCloudAck(msg);
       break;
 
-    case EV.HARVEST_DONE:
-      harvestRound = null;
-      canTakeBasket = false;
-      renderHarvest();
-      showToast(msg.helpers.includes(myId)
-        ? `採收完成！你也有出力　+${msg.points} 分`
-        : `${msg.helperNames.join('、')} 把籃子送回去了`);
-      break;
-
-    // ── 尋寶 ──────────────────────────────────────────────
-    case EV.TREASURE_START:
-      isProphet = msg.round.prophetId === myId;
-      renderTreasure(msg.round);
-      break;
-
-    case EV.TREASURE_HEAT:
-      // 只有先知會收到這則訊息（伺服器單獨送給他），
-      // 其他人的手機上不會有任何冷熱資訊 —— 這是玩法的核心。
-      renderHeat(msg.heat);
-      break;
-
-    case EV.TREASURE_FOUND:
-      showTreasureResult(
-        msg.by === myId
-          ? `你找到寶藏了！　+${msg.points} 分`
-          : `${msg.byName} 找到了寶藏（先知 ${msg.prophetName}）`,
-      );
-      isProphet = false;
-      renderTreasure(null);
-      break;
-
-    case EV.TREASURE_ENDED:
-      isProphet = false;
-      renderTreasure(null);
+    case EV.WORDCLOUD_CLOSED:
+      wcRound = null;
+      renderWordCloudBox();
+      showToast('文字雲收題了，看看大螢幕上大家寫了什麼');
       break;
   }
 }
@@ -2366,8 +2310,6 @@ const quizPanel = $('#quiz-panel');
 
 /** @type {object|null} 目前題目（伺服器視圖，不含正解） */
 let quiz = null;
-/** 目前面板上是哪一種題目：'QUIZ'（有正解、計分）或 'SURVEY'（問卷，可改答案） */
-let askKind = 'QUIZ';
 /** 自己這題選了哪一個，null 代表尚未作答 */
 let myChoice = null;
 let quizTimer = null;
@@ -2447,17 +2389,9 @@ function renderQuizOptions({ locked = false, revealed = null } = {}) {
         // 先在本地鎖定，不等伺服器回應 —— 現場網路有延遲，
         // 按下去沒有立即反應會讓人以為沒按到而狂點
         myChoice = i;
-        if (askKind === 'SURVEY') {
-          // 問卷沒有正解也沒有速度分，因此**允許改**：按錯卻不能改，
-          // 那個人身上的標籤就會一直是錯的，而標籤正是問卷的產物。
-          renderQuizOptions();
-          showQuizMsg('已記錄，想改隨時可以再選。');
-          sendMsg(EV.SURVEY_ANSWER, { choice: i });
-        } else {
-          renderQuizOptions({ locked: true });
-          showQuizMsg('已送出，等待公布答案…');
-          sendMsg(EV.QUIZ_ANSWER, { choice: i });
-        }
+        renderQuizOptions({ locked: true });
+        showQuizMsg('已送出，等待公布答案…');
+        sendMsg(EV.QUIZ_ANSWER, { choice: i });
       });
     }
 
@@ -2491,49 +2425,16 @@ function startQuizCountdown() {
   quizTimer = setInterval(tick, 100);
 }
 
-/** 這一題要不要走到地點、自己到了沒。只影響手機上那一行提示。 */
-let surveyNeedsArrival = false;
-let surveyArrived = false;
-let lastSurveyLabel = '';
-
-/**
- * 作答之後那一行提示。
- *
- * 不寫家具名稱，而是叫人看大螢幕上同名的那個標記 —— 家具的顯示名稱只存在於
- * 大螢幕的場景設定裡（換主題會變），手機再存一份必然漂移。而且這題本來就要
- * 人抬頭看大螢幕才找得到地方，指向螢幕比在手機上描述位置更有用。
- */
-function showSurveyAck(label, arrived) {
-  lastSurveyLabel = label ?? lastSurveyLabel;
-  if (!surveyNeedsArrival) {
-    showQuizMsg(`已記錄：${lastSurveyLabel}　想改隨時可以再選`);
-    return;
-  }
-  showQuizMsg(arrived
-    ? `已到位 ✓　你站在「${lastSurveyLabel}」那一圈裡了`
-    : `已選「${lastSurveyLabel}」—— 看大螢幕，走到同名的那一圈才算完成`);
-}
-
-function showQuestion(q, kind = 'QUIZ') {
-  // 問答的 options 是字串，問卷的是 {label, value, spot} 物件。
-  // 這裡統一攤成字串再交給共用的選項渲染 —— 少了這一步，
-  // 問卷的四個選項會全部顯示成 [object Object]，而且不會有任何錯誤。
-  quiz = kind === 'SURVEY'
-    ? { ...q, options: q.options.map((o) => (typeof o === 'string' ? o : o.label)) }
-    : q;
-  askKind = kind;
+function showQuestion(q) {
+  quiz = q;
   myChoice = null;
-  // 新題目把上一題的到位狀態清掉，否則上一題「已到位 ✓」會留在畫面上
-  surveyNeedsArrival = kind === 'SURVEY' && !!q.requireArrival;
-  surveyArrived = false;
-  lastSurveyLabel = '';
-  $('#quiz-no').textContent = kind === 'SURVEY' ? `問卷 ${q.index}` : `第 ${q.index} 題`;
+  $('#quiz-no').textContent = `第 ${q.index} 題`;
   $('#quiz-q').textContent = q.question;
   $('#quiz-result-card').hidden = true;
   $('#btn-quiz-hide').hidden = true;
   // 討論時間：選項先亮出來但鎖住。這段時間要的是轉頭跟旁邊的人商量，
   // 不是盯著手機 —— 提示寫在最顯眼的那一行
-  const talking = kind === 'QUIZ' && q.phase === QUIZ_PHASE.DISCUSS;
+  const talking = q.phase === QUIZ_PHASE.DISCUSS;
   showQuizMsg(talking ? '先跟身邊的人討論！倒數結束才能作答' : '');
   $('#quiz-timer').classList.toggle('talk', talking);
   renderQuizOptions({ locked: talking });
@@ -2578,55 +2479,9 @@ const QUIZ_MESSAGES = {
   [QUIZ_ERRORS.NOT_YET]: '還在討論時間，等倒數結束再作答。',
 };
 
-/**
- * 問卷收題。
- *
- * 刻意不在手機上顯示全場分佈 —— 那是大螢幕的工作（見規劃：手機是私人資訊、
- * 大螢幕是公共資訊）。手機只留下「你自己選了什麼」。
- */
-function showSurveyClosed(result) {
-  if (!quiz || quiz.id !== result.id) return;
-  clearInterval(quizTimer);
-  quizTimer = null;
-  $('#quiz-timer').textContent = '—';
-  $('#quiz-timer').classList.remove('urgent');
-  renderQuizOptions({ locked: true });
-  showQuizMsg(myChoice === null ? '這題沒作答。' : '已記錄，看大螢幕。');
-  $('#btn-quiz-hide').hidden = false;
-}
 
 function handleQuizMessage(msg) {
   switch (msg.type) {
-    case EV.SURVEY_QUESTION:
-      showQuestion(msg.survey, 'SURVEY');
-      return true;
-
-    case EV.SURVEY_ACK:
-      if (msg.ok) {
-        // 伺服器回傳的標籤文字才是權威值（例如「負責煮」），
-        // 而且重連補送時這是唯一能還原「我剛才選了什麼」的來源
-        myChoice = msg.choice;
-        surveyNeedsArrival = !!msg.requireArrival;
-        renderQuizOptions();
-        showSurveyAck(msg.label, !!msg.arrived);
-      } else {
-        myChoice = null;
-        surveyNeedsArrival = false;
-        renderQuizOptions();
-        showQuizMsg(msg.reason === 'CLOSED' ? '時間到了，這題已經截止。' : '這次作答沒有被接受。');
-      }
-      return true;
-
-    // 要到場才算的題目：人走進／走出自己選的那一圈時伺服器會通知。
-    case EV.SURVEY_ARRIVED:
-      surveyArrived = !!msg.arrived;
-      showSurveyAck(lastSurveyLabel, surveyArrived);
-      return true;
-
-    case EV.SURVEY_CLOSED:
-      showSurveyClosed(msg.result);
-      return true;
-
     case EV.QUIZ_QUESTION:
       showQuestion(msg.quiz);
       return true;
