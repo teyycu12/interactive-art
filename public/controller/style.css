@@ -1640,3 +1640,21 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 .bingo-entry { display: flex; gap: 8px; align-items: flex-end; }
 .bingo-entry[hidden] { display: none; }
 .bingo-entry .sheet-field { flex: 1; margin-bottom: 0; }
+
+/* 話題桌的題目卡：跟揮手提示同一個位置，但用紙色底 —— 這是要念出來聊的題目，不是待辦 */
+.topic-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  flex-shrink: 0;
+  width: 100%;
+  padding: 8px 12px;
+  background: #FFFCF5;
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: var(--r);
+  box-shadow: inset 6px 0 0 var(--ok), var(--drop-sm);
+  text-align: left;
+}
+.topic-card[hidden] { display: none; }
+.topic-card .tc-head { font-size: 11px; font-weight: 700; color: var(--ok-ink); letter-spacing: .06em; }
+.topic-card .tc-q { font-size: 15px; font-weight: 800; line-height: 1.35; }
+.topic-card .tc-with { font-size: 12px; color: var(--ink-soft); }

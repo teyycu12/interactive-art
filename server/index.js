@@ -46,6 +46,9 @@ import { SocialGraph } from './socialgraph.js';
 import { PairingSession } from './pairing.js';
 import { Greetings } from './greetings.js';
 import { BingoRound, BINGO_ERRORS, STRANGER } from './bingo.js';
+import { TopicTables } from './topics.js';
+import { TOPIC_QUESTIONS, TOPIC_TABLES } from '../shared/topics.js';
+import { PROPS } from '../shared/scene.js';
 import { QuizSession } from './quiz.js';
 import { SurveySession } from './survey.js';
 import { MessageRelay } from './messages.js';
@@ -68,6 +71,7 @@ const missions = new MissionBoard();
 const treasure = new TreasureHunt();
 const harvest = new HarvestRelay();
 const bingo = new BingoRound();
+const topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
 // 揮手要尊重私訊的封鎖：封鎖了卻還能讓對方手機一直跳出「某某在跟你揮手」，封鎖就沒有意義
@@ -369,6 +373,7 @@ function hostState() {
     mission: missions.state(stage.agents.size),
     graphEdges: graph.size,
     audience: audienceQueue.length,
+    topics: topics.enabled,
     quiz: quiz.publicView(),
     survey: survey.publicView(),
     quizReveal: quiz.revealView(),
@@ -684,6 +689,41 @@ function sendBingoCatchUp(agentId) {
   if (!bingo.isActive || !agentId) return;
   bingo.dealCard(agentId, [...stage.agents.keys()]);
   sendBingoCard(agentId);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 話題桌（server/topics.js）
+// ─────────────────────────────────────────────────────────────
+/** 目前主題的號碼牌桌（shared/themes.js 的 spots）。換主題時桌子跟著換 */
+function topicSpots() {
+  const spots = THEME_MAP[stageTheme]?.spots ?? {};
+  return PROPS.filter((p) => spots[p.id]).map((p) => ({ id: p.id, x: p.x, y: p.y, r: p.r, label: spots[p.id] }));
+}
+
+/**
+ * 主辦端在帶活動時，桌邊不該突然跳出聊天題搶注意力 —— 問答、問卷、尋寶、採收
+ * 進行中一律暫停。任務（配對）與賓果不暫停：坐下來聊正是它們要的。
+ */
+function topicsPaused() {
+  return quiz.isActive || survey.isActive || treasure.isActive || harvest.isActive;
+}
+
+let lastTopicCheck = 0;
+function stepTopics(now) {
+  if (now - lastTopicCheck < 500) return;   // 半秒看一次就夠：停留門檻是 2 秒
+  lastTopicCheck = now;
+  if (topicsPaused()) return;
+  for (const deal of topics.update(topicSpots(), stage.agents.values(), now)) {
+    for (const id of deal.ids) {
+      sendToAgent(id, EV.TOPIC_CARD, {
+        question: deal.question,
+        spot: deal.label,
+        withNames: deal.ids.filter((x) => x !== id).map(nameOf).filter(Boolean),
+      });
+    }
+    blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: deal.question });
+    console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${deal.question}」`);
+  }
 }
 
 function sendHarvestCatchUp(ws, agentId) {
@@ -1366,6 +1406,12 @@ function handleHostMessage(ws, msg) {
       startBingo(ws, msg);
       break;
 
+    case EV.HOST_SET_TOPICS:
+      topics.setEnabled(msg.enabled === true);
+      console.log(`[topic] 話題桌${topics.enabled ? '開啟' : '關閉'}`);
+      pushHostState();
+      break;
+
     case EV.HOST_END_BINGO:
       endBingo('host');
       break;
@@ -1776,6 +1822,7 @@ wss.on('connection', (ws) => {
       case EV.HOST_CLOSE_MISSION:
       case EV.HOST_START_BINGO:
       case EV.HOST_END_BINGO:
+      case EV.HOST_SET_TOPICS:
       case EV.HOST_START_TREASURE:
       case EV.HOST_STOP_TREASURE:
       case EV.HOST_START_HARVEST:
@@ -1897,6 +1944,7 @@ const loop = startTicker({
       pushHostState();
     }
     if (bingo.shouldAutoEnd(now)) endBingo('time');
+    stepTopics(now);
     if (quiz.shouldAutoReveal(now)) revealQuiz(now);
     else if (quiz.shouldAutoEnd(now)) endQuiz();
 

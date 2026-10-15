@@ -18,6 +18,7 @@ export const EV = {
   // Server → Phone
   CLIENT_WELCOME: 'CLIENT_WELCOME', // 登入確認，回傳伺服器指派的 userId
   CLIENT_REJECT: 'CLIENT_REJECT',   // 資料驗證失敗
+  TOPIC_CARD: 'TOPIC_CARD',         // 話題桌：坐在同一桌的人拿到同一題 {question, spot, withNames}
   AUDIENCE_WAIT: 'AUDIENCE_WAIT',   // 人滿：已排進候補名單 {ahead}，有空位會由伺服器直接讓他進場（送 CLIENT_WELCOME）
   GREET_INVITE: 'GREET_INVITE',     // 有人跟你揮手（帶 fromId，回揮時當 INPUT_ACTION 的 target）
   GREET_RESULT: 'GREET_RESULT',     // 揮手／乾杯的結果，見 GREET_OUTCOME
@@ -26,6 +27,7 @@ export const EV = {
   // Server → Screen
   STAGE_META: 'STAGE_META',         // 場域尺寸等靜態資訊（連線時送一次）
   STAGE_ROSTER: 'STAGE_ROSTER',     // 參與者名冊（僅在有人加入/離開時送）
+  STAGE_TOPIC: 'STAGE_TOPIC',       // 話題桌發題：{spotId, question}，大螢幕在那張桌子旁顯示題目
   STAGE_GREET: 'STAGE_GREET',       // 兩人互相揮手或碰杯成功：{ kind, a, b }，大螢幕在兩人之間畫一道連線
   STAGE_SYNC: 'STAGE_SYNC',         // 空間狀態廣播（30 FPS）
   STAGE_LINKS: 'STAGE_LINKS',       // 社交圖譜的邊（僅在有人配對成功時送）
@@ -108,6 +110,7 @@ export const EV = {
   HARVEST_DONE: 'HARVEST_DONE',               // Server → All：籃子送回去了，本輪完成
 
   // 人物賓果（server/bingo.js）。卡片是私人的，只送給本人；大螢幕只看排行
+  HOST_SET_TOPICS: 'HOST_SET_TOPICS',         // Host → Server：話題桌開關 {enabled}
   HOST_START_BINGO: 'HOST_START_BINGO',       // Host → Server：開一輪 {durationMs?}
   HOST_END_BINGO: 'HOST_END_BINGO',           // Host → Server：結束本輪
   BINGO_CARD: 'BINGO_CARD',                   // Server → Phone：自己的卡 {card, remainingMs}

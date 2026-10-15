@@ -292,6 +292,13 @@
     <!-- 搖桿區不放說明文字：手機上那行字會被切掉又擋住場景。操作說明在上方的 #agency -->
     <div id="joystick-zone"></div>
 
+    <!-- 話題桌：跟同一桌的人拿到同一題。不擋搖桿，點一下或 25 秒後收起 -->
+    <button class="topic-card" id="topic-card" hidden aria-live="polite">
+      <span class="tc-head" id="topic-head">💬 話題</span>
+      <span class="tc-q" id="topic-q"></span>
+      <span class="tc-with" id="topic-with"></span>
+    </button>
+
     <!-- 有人跟你揮手。刻意不做成覆蓋層：要邊回揮邊看大螢幕找人，搖桿不能被擋住 -->
     <div class="greet-invite" id="greet-invite" hidden role="status" aria-live="polite">
       <span id="greet-text"></span>

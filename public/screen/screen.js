@@ -312,6 +312,12 @@ function connect() {
         links = Array.isArray(msg.edges) ? msg.edges : [];
         break;
 
+      case EV.STAGE_TOPIC:
+        if (typeof msg.spotId === 'string' && typeof msg.question === 'string') {
+          topicBubbles.set(msg.spotId, { question: msg.question, at: performance.now() });
+        }
+        break;
+
       case EV.STAGE_GREET:
         // 互相揮手／碰杯：同一道光束，暖色，不留常駐連線（那是配對的事，見 greetings.js）
         if (typeof msg.a === 'string' && typeof msg.b === 'string') {
@@ -852,6 +858,7 @@ function render(now) {
 
   drawSurveySpots(now);
   drawHarvestSpots();
+  drawTopicBubbles(now);
 
   if (debug) updateHud();
   requestAnimationFrame(render);
@@ -981,6 +988,66 @@ function drawSurveyZones() {
     ctx.stroke();
     ctx.restore();
   });
+}
+
+/**
+ * 話題桌的題目泡泡（STAGE_TOPIC）。題目公開在大螢幕上是刻意的：旁邊的人看到
+ * 「1號桌在聊最想學的技能」，可能就走過去加入 —— 新的人坐下，那桌會換一題。
+ * @type {Map<string, {question: string, at: number}>}
+ */
+const topicBubbles = new Map();
+const TOPIC_SHOW_MS = 20_000;
+
+function drawTopicBubbles(now) {
+  // 問卷用同一批道具當地點，兩種標籤疊在一起誰都看不清：問卷優先
+  if (surveyState) return;
+  for (const [spotId, b] of topicBubbles) {
+    const age = now - b.at;
+    if (age > TOPIC_SHOW_MS) { topicBubbles.delete(spotId); continue; }
+    const prop = PROPS.find((p) => p.id === spotId);
+    if (!prop) continue;
+    const pos = toScreen(prop);
+    const h = characterHeightAt(prop);
+    const font = Math.max(12, h * 0.24);
+    const pad = font * 0.7;
+    const lines = wrapText(`💬 ${b.question}`, 13).slice(0, 3);
+
+    ctx.save();
+    // 最後兩秒淡出
+    ctx.globalAlpha = Math.min(1, (TOPIC_SHOW_MS - age) / 2000);
+    ctx.font = `800 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+    const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + pad * 2;
+    const boxH = lines.length * font * 1.3 + pad * 1.4;
+    const x = pos.x - w / 2;
+    const y = pos.y - h * 1.2 - boxH;
+    ctx.fillStyle = '#FFFCF5';
+    ctx.strokeStyle = '#3D6158';
+    ctx.lineWidth = Math.max(2, h * 0.03);
+    roundRect(ctx, x, y, w, boxH, font * 0.6);
+    ctx.fill();
+    ctx.stroke();
+    // 指向桌子的尖角
+    ctx.beginPath();
+    ctx.moveTo(pos.x - font * 0.4, y + boxH);
+    ctx.lineTo(pos.x + font * 0.4, y + boxH);
+    ctx.lineTo(pos.x, y + boxH + font * 0.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#3A2E27';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    lines.forEach((l, i) => ctx.fillText(l, pos.x, y + pad * 0.7 + i * font * 1.3));
+    ctx.restore();
+  }
+}
+
+/** 中文沒有空格可斷，依字數硬斷；超過的部分由呼叫端截掉 */
+function wrapText(text, perLine) {
+  const chars = [...text];
+  const out = [];
+  for (let i = 0; i < chars.length; i += perLine) out.push(chars.slice(i, i + perLine).join(''));
+  return out;
 }
 
 function drawSurveySpots(now) {

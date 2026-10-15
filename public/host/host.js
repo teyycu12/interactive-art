@@ -497,6 +497,13 @@ function screenStatus(text) {
 $('#btn-screen-clear').addEventListener('click', () => { sendScreen('clear'); screenStatus('已清除大螢幕上的效果'); });
 $('#btn-screen-debug').addEventListener('click', () => sendScreen('debug', !screenDebug));
 $('#btn-screen-sound').addEventListener('click', () => sendScreen('sound', !screenSound));
+
+// 話題桌開關：狀態只由 HOST_STATE 決定，不樂觀切換（同上，兩台主辦端時才一致）
+let topicsOn = true;
+$('#btn-topics').addEventListener('click', () => {
+  lastAction = 'screen';
+  ws?.send(JSON.stringify({ type: EV.HOST_SET_TOPICS, enabled: !topicsOn }));
+});
 $('#btn-screen-shot').addEventListener('click', () => {
   $('#btn-screen-shot').disabled = true;
   screenStatus('向大螢幕要畫面中…');
@@ -1010,6 +1017,9 @@ function renderState(state) {
   syncProphetOptions();
   $('#stat-people').textContent = state.agents.length;
   $('#stat-audience').textContent = state.audience ?? 0;
+  topicsOn = state.topics !== false;
+  $('#btn-topics').setAttribute('aria-pressed', String(topicsOn));
+  $('#btn-topics').textContent = topicsOn ? '話題桌：開' : '話題桌：關';
   $('#stat-audience-box').hidden = !state.audience;
   $('#stat-edges').textContent = state.graphEdges;
   $('#people-count').textContent = state.agents.length;

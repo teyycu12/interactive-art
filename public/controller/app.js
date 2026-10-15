@@ -1730,6 +1730,10 @@ function handleMissionMessage(msg) {
   if (handleBingoMessage(msg)) return;
 
   switch (msg.type) {
+    case EV.TOPIC_CARD:
+      showTopic(msg);
+      return;
+
     case EV.GREET_INVITE:
       showGreetInvite(msg.fromId, msg.fromName);
       return;
@@ -2092,6 +2096,28 @@ setInterval(() => {
   if (Date.now() - lastSentAt < INPUT_THROTTLE_MS / 2) return;
   sendInput();
 }, INPUT_THROTTLE_MS);
+
+// ── 話題桌（server/topics.js）──────────────────────────────
+// 跟同一桌的人拿到同一題。題目是要念出來跟旁邊的人聊的，不是作答 ——
+// 所以不給輸入框，只給一句「和誰同桌」，提醒他抬頭找人。
+let topicTimer = null;
+
+function showTopic(msg) {
+  $('#topic-head').textContent = `💬 ${msg.spot ?? '話題桌'}的話題`;
+  $('#topic-q').textContent = msg.question;
+  $('#topic-with').textContent = msg.withNames?.length ? `和 ${msg.withNames.join('、')} 同桌，聊聊看` : '';
+  $('#topic-card').hidden = false;
+  vibrate([20, 40, 20]);
+  clearTimeout(topicTimer);
+  topicTimer = setTimeout(hideTopic, 25_000);
+}
+
+function hideTopic() {
+  clearTimeout(topicTimer);
+  $('#topic-card').hidden = true;
+}
+
+$('#topic-card').addEventListener('click', hideTopic);
 
 // ── 揮手與乾杯的回應（server/greetings.js）─────────────────
 //

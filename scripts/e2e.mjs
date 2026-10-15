@@ -15,7 +15,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import { CLIENT_SYNC_RADIUS, STAGE, MAX_SPEED } from '../shared/protocol.js';
-import { DOORWAYS } from '../shared/scene.js';
+import { DOORWAYS, PROPS } from '../shared/scene.js';
+import { THEME_MAP } from '../shared/themes.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 3199;
@@ -1578,6 +1579,70 @@ check('引導失敗時不回降級外觀',
 const huge = Buffer.alloc(2 * 1024 * 1024, 0x20);
 check('引導端點擋下過大的影格',
   await postApi('/api/preview', huge) === 'frame_too_large');
+
+// ── 話題桌 ────────────────────────────────────────────────
+// 兩人走到同一張號碼牌桌旁、停留一下，兩支手機拿到同一題，大螢幕也收到。
+// 前面的段落已經把 screen 關掉了，這裡自己開一條大螢幕連線看座標與題目。
+{
+  const tScreen = new WebSocket(URL);
+  let tTheme = null;
+  let tAgents = [];
+  const screenTopics = [];
+  tScreen.on('open', () => tScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
+  tScreen.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'STAGE_THEME') tTheme = m.theme;
+    if (m.type === 'STAGE_SYNC') tAgents = m.agents;
+    if (m.type === 'STAGE_TOPIC') screenTopics.push(m);
+  });
+  const seat = (name) => {
+    const box = joinPhone(name);
+    box.topics = [];
+    box.ws.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'TOPIC_CARD') box.topics.push(m); });
+    return box;
+  };
+  const t1 = seat('話題甲');
+  const t2 = seat('話題乙');
+  await sleep(600);
+  const spotId = Object.keys(THEME_MAP[tTheme]?.spots ?? {})[0];
+  const table = PROPS.find((p) => p.id === spotId);
+  // 走到桌子下緣外側（兩人左右錯開），到了就放開搖桿
+  const goal = (dx) => ({ x: table.x + dx, y: table.y + table.r + 45 });
+  const near = (me, g) => Math.hypot(me.x - g.x, me.y - g.y) < 30;
+  for (let i = 0; i < 400; i++) {
+    let moving = false;
+    for (const [box, g] of [[t1, goal(-40)], [t2, goal(40)]]) {
+      const me = tAgents.find((a) => a.id === box.welcome?.userId);
+      if (!me) { moving = true; continue; }
+      if (near(me, g)) { box.ws.send(JSON.stringify({ type: 'INPUT_MOVE', vector: { x: 0, y: 0 }, intensity: 0 })); continue; }
+      moving = true;
+      const dx = g.x - me.x;
+      const dy = g.y - me.y;
+      const d = Math.hypot(dx, dy) || 1;
+      box.ws.send(JSON.stringify({ type: 'INPUT_MOVE', vector: { x: dx / d, y: dy / d }, intensity: 1 }));
+    }
+    if (!moving) break;
+    await sleep(40);
+  }
+  await sleep(3000);
+  if (!t1.topics.length) {
+    const pos = [t1, t2].map((b) => tAgents.find((a) => a.id === b.welcome?.userId))
+      .map((a) => (a ? Math.round(Math.hypot(a.x - table.x, a.y - table.y)) : '?'));
+    console.log(`   [話題] 沒拿到題目；主題 ${tTheme} 桌 ${spotId}，離桌中心 ${pos.join(', ')}（桌半徑 ${table.r}＋90）`);
+  }
+  check('同桌兩人拿到同一題聊天題',
+    t1.topics.length > 0 && t2.topics.length > 0 && t1.topics.at(-1).question === t2.topics.at(-1).question,
+    JSON.stringify({ spotId, t1: t1.topics.at(-1)?.question, t2: t2.topics.at(-1)?.question }));
+  check('題目卡寫著和誰同桌', t1.topics.at(-1)?.withNames?.includes('話題乙'), JSON.stringify(t1.topics.at(-1)?.withNames));
+  // 桌子可能相鄰（office 的 1、2 號工作桌）：兩人同時在兩張桌的範圍內時，題目發在哪一張都對，
+  // 而同一組人只會拿到一題。所以比對的是「大螢幕顯示的就是手機上那一題」
+  check('大螢幕在桌旁顯示同一題', screenTopics.some((m) => m.question === t1.topics.at(-1)?.question),
+    JSON.stringify(screenTopics));
+  t1.ws.close();
+  t2.ws.close();
+  tScreen.close();
+  await sleep(200);
+}
 
 // ── 人物賓果 ──────────────────────────────────────────────
 {
