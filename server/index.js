@@ -1283,10 +1283,12 @@ function handleHostMessage(ws, msg) {
         options: msg.options,
         correctIndex: msg.correctIndex,
         durationMs: msg.durationMs,
+        talkMs: msg.talkMs,
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       markDirty();
-      console.log(`[quiz] 第 ${result.quiz.index} 題「${result.quiz.question}」${result.quiz.durationMs / 1000} 秒`);
+      console.log(`[quiz] 第 ${result.quiz.index} 題「${result.quiz.question}」`
+        + `${result.quiz.talkMs ? `討論 ${result.quiz.talkMs / 1000} 秒＋` : ''}${result.quiz.durationMs / 1000} 秒`);
       sendQuestion();
       pushHostState();
       break;
@@ -1674,6 +1676,12 @@ const loop = startTicker({
     // 定時器在事件迴圈被拖慢時會延後觸發，而這裡的時間到必須與
     // 大螢幕上的倒數一致；主迴圈本來就對齊絕對截止時間（scheduler.js）。
     const now = Date.now();
+    // 討論時間到：重送一次題目（phase 變成 ASKING、remainingMs 換成作答時間），
+    // 手機據此解鎖選項、大螢幕換成作答倒數
+    if (quiz.shouldBeginAnswering(now) && quiz.beginAnswering()) {
+      sendQuestion();
+      pushHostState();
+    }
     if (quiz.shouldAutoReveal(now)) revealQuiz(now);
     else if (quiz.shouldAutoEnd(now)) endQuiz();
 

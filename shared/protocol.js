@@ -213,6 +213,9 @@ export const QUIZ = {
   minDurationMs: 5000,
   maxDurationMs: 120000,
   defaultDurationMs: 20000,
+  // 討論時間（Kahoot 團隊模式的 team talk）：題目先亮出來、還不能作答，
+  // 讓人轉頭跟旁邊的人商量。0 = 不討論，直接作答（原本的行為）。
+  maxTalkMs: 30000,
 };
 
 /**
@@ -230,7 +233,7 @@ export const QUIZ_CHOICES = [
 ];
 
 /** 問答階段。ASKING 期間正解絕不離開伺服器。 */
-export const QUIZ_PHASE = { ASKING: 'ASKING', REVEALED: 'REVEALED' };
+export const QUIZ_PHASE = { DISCUSS: 'DISCUSS', ASKING: 'ASKING', REVEALED: 'REVEALED' };
 
 /** 問答失敗原因 */
 export const QUIZ_ERRORS = {
@@ -238,6 +241,7 @@ export const QUIZ_ERRORS = {
   CLOSED: 'CLOSED',
   ALREADY_ANSWERED: 'ALREADY_ANSWERED',
   BAD_CHOICE: 'BAD_CHOICE',
+  NOT_YET: 'NOT_YET',          // 還在討論時間，不能作答
 };
 
 /** 積分來源。主辦端與手機端據此顯示「這分是怎麼來的」 */

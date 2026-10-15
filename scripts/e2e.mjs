@@ -840,6 +840,28 @@ check('時間到自動公布正解', amy.quizResult?.correctIndex === 0 && amy.q
 host.send(JSON.stringify({ type: 'HOST_END_QUIZ' }));
 await sleep(300);
 
+// 討論時間（team talk）：題目先亮、還不能作答；時間到由主迴圈切到作答並重送題目
+{
+  host.send(JSON.stringify({
+    type: 'HOST_START_QUIZ', question: '討論題', options: ['甲', '乙'],
+    correctIndex: 1, durationMs: 5000, talkMs: 1500,
+  }));
+  await sleep(300);
+  check('有討論時間的題目先進入討論', amy.quiz?.phase === 'DISCUSS' && amy.quiz?.talkMs === 1500,
+    `phase=${amy.quiz?.phase}`);
+  amy.ws.send(JSON.stringify({ type: 'QUIZ_ANSWER', choice: 1 }));
+  await sleep(200);
+  check('討論中作答被拒', amy.acks.at(-1)?.ok === false && amy.acks.at(-1)?.reason === 'NOT_YET',
+    JSON.stringify(amy.acks.at(-1)));
+  await sleep(1500);
+  check('討論時間到自動切到作答', amy.quiz?.phase === 'ASKING', `phase=${amy.quiz?.phase}`);
+  amy.ws.send(JSON.stringify({ type: 'QUIZ_ANSWER', choice: 1 }));
+  await sleep(200);
+  check('切到作答後可以作答', amy.acks.at(-1)?.ok === true, JSON.stringify(amy.acks.at(-1)));
+  host.send(JSON.stringify({ type: 'HOST_END_QUIZ' }));
+  await sleep(300);
+}
+
 // 問卷的完整流程：出題 → 手機作答 → 改答案 → 收題 → 標籤留在身上
 {
   host.send(JSON.stringify({ type: 'HOST_START_SURVEY', bankId: 'kitchen_role', durationMs: 8000 }));

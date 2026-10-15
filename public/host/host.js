@@ -174,7 +174,8 @@ function handle(msg, key) {
     case EV.QUIZ_QUESTION:
       quiz = msg.quiz;
       reveal = null;
-      pushFeed(`第 ${quiz.index} 題「${quiz.question}」開始作答`, 'ev-quiz');
+      // 有討論時間的題目會送兩次：開始討論、討論結束開始作答
+      pushFeed(`第 ${quiz.index} 題「${quiz.question}」${quiz.phase === QUIZ_PHASE.DISCUSS ? '開始討論' : '開始作答'}`, 'ev-quiz');
       renderQuiz();
       break;
 
@@ -1424,6 +1425,7 @@ function readDraft() {
     options,
     correctIndex,
     durationMs: Number($('#q-duration').value),
+    talkMs: Number($('#q-talk').value),
   };
 }
 
@@ -1435,6 +1437,8 @@ function writeDraft(d) {
   const radio = document.querySelector('#q-options input[type="radio"][value="' + (d.correctIndex ?? 0) + '"]');
   if (radio) radio.checked = true;
   if (d.durationMs) $('#q-duration').value = String(d.durationMs);
+  // 舊題庫的題目沒有這個欄位：沿用表單目前的選擇，不要默默改成「不討論」
+  if (d.talkMs !== undefined) $('#q-talk').value = String(d.talkMs);
   markCorrectRow();
 }
 
@@ -1461,7 +1465,7 @@ function packDraft(d) {
     if (i === d.correctIndex) correctIndex = kept.length;
     kept.push(text);
   });
-  return { question: d.question, options: kept, correctIndex, durationMs: d.durationMs };
+  return { question: d.question, options: kept, correctIndex, durationMs: d.durationMs, talkMs: d.talkMs ?? 0 };
 }
 
 /** 題目 → 節目單步驟。不合法時回傳 null 並把原因顯示在問答面板 */
@@ -1522,7 +1526,9 @@ function renderBank() {
     // 只能從這裡出題
     const go = document.createElement('button');
     go.textContent = '出題';
-    go.addEventListener('click', () => startQuiz({ durationMs: QUIZ.defaultDurationMs, ...item }));
+    go.addEventListener('click', () => startQuiz({
+      durationMs: QUIZ.defaultDurationMs, talkMs: Number($('#q-talk').value), ...item,
+    }));
 
     const use = document.createElement('button');
     use.className = 'bank-load';
@@ -1633,8 +1639,9 @@ function renderQuiz() {
   const tick = () => {
     const left = Math.max(0, deadlineAt - Date.now());
     const el = $('#quiz-countdown');
-    el.textContent = `${(left / 1000).toFixed(1)} 秒`;
-    el.classList.toggle('urgent', left < 5000);
+    const talking = quiz.phase === QUIZ_PHASE.DISCUSS;
+    el.textContent = `${talking ? '討論中　' : ''}${(left / 1000).toFixed(1)} 秒`;
+    el.classList.toggle('urgent', !talking && left < 5000);
     if (left <= 0) { clearInterval(countdownTimer); countdownTimer = null; }
   };
   tick();

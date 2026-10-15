@@ -10,7 +10,7 @@
  * 投影畫面上不留任何按鈕或快捷鍵。
  */
 
-import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, EMOTE_GLYPH } from '/shared/protocol.js';
+import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, QUIZ_PHASE, EMOTE_GLYPH } from '/shared/protocol.js';
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
 import { TREASURE_RADIUS } from '/shared/heat.js';
@@ -1447,9 +1447,12 @@ function animateTimebar() {
   const step = () => {
     if (!quiz) return;
     const left = Math.max(0, quizDeadline - Date.now());
-    const ratio = quiz.durationMs > 0 ? left / quiz.durationMs : 0;
+    // 討論中倒數的是討論時間，倒數條的滿格也要用它算
+    const talking = quiz.phase === QUIZ_PHASE.DISCUSS;
+    const total = talking ? quiz.talkMs : quiz.durationMs;
+    const ratio = total > 0 ? left / total : 0;
     fill.style.width = `${(ratio * 100).toFixed(1)}%`;
-    bar.classList.toggle('urgent', left < 5000);
+    bar.classList.toggle('urgent', !talking && left < 5000);
     if (left > 0) quizRaf = requestAnimationFrame(step);
   };
   step();
@@ -1459,7 +1462,8 @@ function showQuestion(q) {
   quiz = q;
   quizDeadline = Date.now() + (q.remainingMs ?? 0);
   document.getElementById('q-no').textContent = `第 ${q.index} 題`;
-  document.getElementById('q-state').textContent = '作答中';
+  // 討論時間：題目先亮給全場看，但還不能作答 —— 這是要大家轉頭商量的時間
+  document.getElementById('q-state').textContent = q.phase === QUIZ_PHASE.DISCUSS ? '討論時間 · 跟旁邊的人商量' : '作答中';
   document.getElementById('q-title').textContent = q.question;
   document.getElementById('q-answered').textContent = q.answered ?? 0;
   document.getElementById('q-foot').hidden = false;

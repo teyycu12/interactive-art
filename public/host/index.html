@@ -305,6 +305,18 @@
           </select>
         </label>
 
+        <!-- 討論時間：題目先亮出來但不能作答，讓人轉頭跟旁邊的人商量（Kahoot 的 team talk）。
+             預設 10 秒：原本每個人低頭各答各的，不需要開口。 -->
+        <label class="field">
+          <span>討論時間</span>
+          <select id="q-talk">
+            <option value="0">不討論，直接作答</option>
+            <option value="10000" selected>10 秒</option>
+            <option value="20000">20 秒</option>
+            <option value="30000">30 秒</option>
+          </select>
+        </label>
+
         <div class="row-actions">
           <button class="btn-primary" id="btn-quiz-start">出題</button>
           <button class="btn-ghost" id="btn-quiz-save">存入題庫</button>

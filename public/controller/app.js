@@ -12,7 +12,7 @@ import {
 } from '/shared/avatars.js';
 import {
   EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS, DIRECT_MESSAGE, MSG_ERRORS,
-  QUIZ_CHOICES, QUIZ_ERRORS, GREET_OUTCOME,
+  QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME,
 } from '/shared/protocol.js';
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
@@ -2180,11 +2180,13 @@ function startQuizCountdown() {
     const left = Math.max(0, quizDeadline - Date.now());
     const el = $('#quiz-timer');
     el.textContent = (left / 1000).toFixed(1);
-    el.classList.toggle('urgent', left < 5000);
+    el.classList.toggle('urgent', left < 5000 && quiz?.phase !== QUIZ_PHASE.DISCUSS);
     if (left <= 0) {
       clearInterval(quizTimer);
       quizTimer = null;
-      if (myChoice === null) showQuizMsg('時間到，等待公布答案…');
+      // 討論結束時不說「時間到」：伺服器馬上會重送題目、解鎖選項
+      if (quiz?.phase === QUIZ_PHASE.DISCUSS) showQuizMsg('開始作答！');
+      else if (myChoice === null) showQuizMsg('時間到，等待公布答案…');
     }
   };
   tick();
@@ -2231,8 +2233,12 @@ function showQuestion(q, kind = 'QUIZ') {
   $('#quiz-q').textContent = q.question;
   $('#quiz-result-card').hidden = true;
   $('#btn-quiz-hide').hidden = true;
-  showQuizMsg('');
-  renderQuizOptions();
+  // 討論時間：選項先亮出來但鎖住。這段時間要的是轉頭跟旁邊的人商量，
+  // 不是盯著手機 —— 提示寫在最顯眼的那一行
+  const talking = kind === 'QUIZ' && q.phase === QUIZ_PHASE.DISCUSS;
+  showQuizMsg(talking ? '先跟身邊的人討論！倒數結束才能作答' : '');
+  $('#quiz-timer').classList.toggle('talk', talking);
+  renderQuizOptions({ locked: talking });
   startQuizCountdown();
   openQuiz();
 }
@@ -2271,6 +2277,7 @@ const QUIZ_MESSAGES = {
   [QUIZ_ERRORS.CLOSED]: '時間到了，這題已經截止。',
   [QUIZ_ERRORS.ALREADY_ANSWERED]: '你已經作答過了，答案不能更改。',
   [QUIZ_ERRORS.BAD_CHOICE]: '選項不正確，請重新選擇。',
+  [QUIZ_ERRORS.NOT_YET]: '還在討論時間，等倒數結束再作答。',
 };
 
 /**

@@ -745,6 +745,8 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   color: var(--ink);
 }
 .quiz-timer.urgent { color: var(--accent-ink); }
+/* 討論時間：用鼠尾草綠的文字版（6.12:1），跟作答倒數分開 —— 一看就知道「現在是聊天時間」 */
+.quiz-timer.talk { color: var(--ok-ink); }
 
 .quiz-q {
   margin: 0;
