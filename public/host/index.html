@@ -121,9 +121,7 @@
 
       <div class="act-picker" role="group" aria-label="選擇玩法">
         <button class="act-chip" data-act="mission" aria-pressed="true">任務<i class="live-dot" hidden></i></button>
-        <button class="act-chip" data-act="survey" aria-pressed="false">轉場問卷<i class="live-dot" hidden></i></button>
-        <button class="act-chip" data-act="treasure" aria-pressed="false">尋寶<i class="live-dot" hidden></i></button>
-        <button class="act-chip" data-act="harvest" aria-pressed="false">採水果<i class="live-dot" hidden></i></button>
+        <button class="act-chip" data-act="wordcloud" aria-pressed="false">文字雲<i class="live-dot" hidden></i></button>
         <button class="act-chip" data-act="bingo" aria-pressed="false">人物賓果<i class="live-dot" hidden></i></button>
         <button class="act-chip" data-act="quiz" aria-pressed="false">即時問答<i class="live-dot" hidden></i></button>
       </div>
@@ -181,86 +179,42 @@
     </div>
 
     <!-- 轉場問卷：沒有正解的題目，答案留成參與者身上的標籤 -->
-    <div class="panel act-panel" data-act="survey" hidden>
-      <h2>轉場問卷</h2>
+    <!-- 文字雲（server/wordcloud.js）：主持人提問，參與者用手機輸入，大螢幕即時呈現。
+         取代已移除的轉場問卷、尋寶、採水果 -->
+    <div class="panel act-panel" data-act="wordcloud" hidden>
+      <h2>文字雲</h2>
 
-      <div id="survey-idle">
+      <div id="wordcloud-idle">
+        <p class="hint">出一題，參與者用手機輸入短答（每人最多 3 個、每個 12 字內），
+          大螢幕會即時長成文字雲，越多人寫的詞越大。</p>
         <details class="howto">
           <summary>玩法說明</summary>
-          <p>切換場景的空檔問一題。沒有正解、不計分，答案會留成參與者身上的標籤，
-            之後的任務可以用「答某個選項的人」當條件。</p>
+          <p>答案會投在大螢幕上，但不顯示是誰寫的。不雅字會自動擋下；
+            看到不適合的詞，在進行中的清單按「隱藏」，就會立刻從大螢幕拿掉。</p>
+          <p>文字雲本身不需要開口 —— 收題後挑幾個詞問「誰寫了這個？」，讓它變成話題。</p>
         </details>
         <label class="field">
           <span>題目</span>
-          <select id="survey-pick"></select>
-        </label>
-        <p class="brief" id="survey-preview"></p>
-        <label class="field">
-          <span>作答時間</span>
-          <select id="survey-duration">
-            <option value="15000">15 秒</option>
-            <option value="20000" selected>20 秒</option>
-            <option value="30000">30 秒</option>
-            <option value="45000">45 秒</option>
-          </select>
-        </label>
-        <label class="field check">
-          <input type="checkbox" id="survey-arrive" checked>
-          <span>要走到大螢幕上的地點才算完成</span>
-        </label>
-        <p class="hint" id="survey-arrive-note">選項都綁了場景裡的地點時才能勾。
-          不勾就只是在手機上按一下，全場不會有人站起來。</p>
-        <div class="row-actions">
-          <button class="btn-primary" id="btn-survey-start">出題</button>
-          <button class="btn-ghost" data-rs-add="survey">加入節目單</button>
-        </div>
-      </div>
-
-      <div id="survey-live" hidden>
-        <div class="live-head">
-          <b id="survey-live-q">—</b>
-          <span class="tag" id="survey-countdown">—</span>
-        </div>
-        <ul class="survey-bars" id="survey-bars"></ul>
-        <p class="hint" id="survey-live-foot">—</p>
-        <button class="btn-danger" id="btn-survey-close">收題</button>
-      </div>
-
-      <p class="err" id="survey-err" hidden></p>
-    </div>
-
-    <!-- 尋寶（先知模式）-->
-    <div class="panel act-panel" data-act="treasure" hidden>
-      <h2>尋寶</h2>
-      <div id="treasure-idle">
-        <p class="hint">隨機藏一個寶箱，指定一位「先知」用喊的把大家導過去。</p>
-        <details class="howto">
-          <summary>為什麼先知不能得分</summary>
-          <p><b>只有先知看得到冷熱提示，而且先知本人不能得分</b> ——
-            他必須用喊的把其他人導過去。這是讓現場開口講話的關鍵，
-            若讓先知也能得分，他會自己走過去而不是喊出來。</p>
-        </details>
-        <label class="field">
-          <span>先知</span>
-          <select id="treasure-prophet"><option value="">隨機指定</option></select>
+          <input id="wordcloud-question" autocomplete="off" placeholder="例：用一個詞形容今天的心情">
         </label>
         <div class="row-actions">
-          <button class="btn-primary" id="btn-treasure-start">開始尋寶</button>
-          <button class="btn-ghost" data-rs-add="treasure">加入節目單</button>
+          <button class="btn-primary" id="btn-wordcloud-start">出題</button>
+          <button class="btn-ghost" data-rs-add="wordcloud">加入節目單</button>
         </div>
       </div>
 
-      <div id="treasure-live" hidden>
+      <div id="wordcloud-live" hidden>
         <div class="live-head">
-          <b>尋寶進行中</b>
-          <span class="tag" id="treasure-heat">—</span>
+          <b id="wordcloud-live-q">—</b>
+          <span class="tag" id="wordcloud-count">0 人作答</span>
         </div>
-        <p class="hint">先知　<b id="treasure-prophet-name">—</b>
-          　寶箱位置已顯示在大螢幕上。</p>
-        <button class="btn-danger" id="btn-treasure-stop">中止本輪</button>
+        <ul class="wc-words" id="wordcloud-words"></ul>
+        <p class="hint tiny" id="wordcloud-empty">還沒有人送出答案。</p>
+        <p class="hint tiny">看到不適合的詞，按「隱藏」會立刻從大螢幕拿掉（本題內同一個詞不會再出現）。</p>
+        <button class="btn-danger" id="btn-wordcloud-close">收題</button>
       </div>
 
-      <p class="err" id="treasure-err" hidden></p>
+      <p class="err" id="wordcloud-err" hidden></p>
     </div>
 
     <!-- 人物賓果（server/bingo.js）-->
@@ -268,12 +222,23 @@
       <h2>人物賓果</h2>
       <div id="bingo-idle">
         <p class="hint">每人一張 3×3 卡，每格「找一個〔條件〕的人」，輸入對方的配對碼才算。
-          <b>同一個人只能填一格</b>，連成一線有加分。</p>
+          開局先在手機上勾幾句自我介紹（最多 30 秒），卡上就會出現「會一種樂器的人」這種格子。
+          <b>同一個人只能填一格</b>（不到 10 人時可以填兩格以上），連成一線有加分。</p>
         <details class="howto">
           <summary>玩法說明</summary>
-          <p>條件取自現場已有的資料：衣服顏色、進場問卷的類型、轉場問卷的答案。
-            類型只有本人知道，所以一定得開口問；條件湊不滿時會補「找一個你還不認識的人」。
-            建議先跑過進場問卷或一題轉場問卷，卡片會更有變化。</p>
+          <p>條件取自：開局勾的自我介紹、衣服顏色、進場問卷的類型，每類最多 3 格。
+            自我介紹與類型只有本人知道，所以一定得開口問；條件湊不滿時會補「找一個你還不認識的人」。</p>
+          <p>被找的人如果也需要找對方（對方剛好符合他卡上的某一格），手機會問他要不要順便填上，不必再輸碼。</p>
+        </details>
+        <details class="persona-editor" id="bingo-facts-editor">
+          <summary>自我介紹題 <span class="badge-off" id="bingo-facts-default">依場景預設</span></summary>
+          <p class="hint">一行一題，每輪隨機挑 6 題問。寫成「會游泳」這樣的描述，卡上會變成「會游泳的人」。
+            不要問感情、宗教、政治、收入、健康、住址 —— 這些會被大聲問出來。</p>
+          <textarea id="bingo-facts" rows="8" spellcheck="false"></textarea>
+          <div class="row-actions">
+            <button class="btn-ghost" id="btn-bingo-facts-reset">恢復預設</button>
+            <button class="btn-primary" id="btn-bingo-facts-save" disabled>儲存題目</button>
+          </div>
         </details>
         <label class="field">
           <span>限時</span>
@@ -300,35 +265,6 @@
       </div>
 
       <p class="err" id="bingo-err" hidden></p>
-    </div>
-
-    <!-- 採水果（籃子接力）-->
-    <div class="panel act-panel" data-act="harvest" hidden>
-      <h2>採水果</h2>
-      <div id="harvest-idle">
-        <p class="hint">場上只有一個籃子，<b>一個人一輪只能採一處</b>，採完要交給還沒採過的人。</p>
-        <details class="howto">
-          <summary>玩法說明</summary>
-          <p>採完就得把籃子交給一個還沒採過的人 —— 他得先被叫過來，
-            而那一句「換你拿」就是這個玩法要的東西。大螢幕上看得到誰還沒採。</p>
-        </details>
-        <div class="row-actions">
-          <button class="btn-primary" id="btn-harvest-start">開始採收</button>
-          <button class="btn-ghost" data-rs-add="harvest">加入節目單</button>
-        </div>
-      </div>
-
-      <div id="harvest-live" hidden>
-        <div class="live-head">
-          <b>採收進行中</b>
-          <span class="tag" id="harvest-left">—</span>
-        </div>
-        <p class="hint">籃子在　<b id="harvest-holder">沒有人拿著</b>
-          　／　採過的人　<b id="harvest-picked">0</b></p>
-        <button class="btn-danger" id="btn-harvest-stop">中止本輪</button>
-      </div>
-
-      <p class="err" id="harvest-err" hidden></p>
     </div>
 
     <!-- 即時問答 -->
@@ -375,14 +311,26 @@
         </div>
        </div>
 
+        <p class="quiz-editing" id="quiz-editing" hidden>
+          正在編輯題庫裡的題目，按「更新這題」存回原位。
+          <button class="btn-link" id="btn-quiz-edit-cancel">取消編輯</button>
+        </p>
+
         <p class="hint" id="quiz-rule">答對得分，愈快得分愈高。</p>
 
         <div class="bank-head">
           <span>題庫 <b id="bank-count">0</b></span>
-          <button class="btn-link" id="btn-bank-clear">清空</button>
+          <span class="bank-tools">
+            <!-- .txt：一題一段、正解前面加 *，用記事本就能改（格式見 shared/quizText.js） -->
+            <button class="btn-link" id="btn-bank-export">下載 .txt</button>
+            <button class="btn-link" id="btn-bank-import">匯入 .txt</button>
+            <button class="btn-link btn-link-danger" id="btn-bank-clear">清空</button>
+          </span>
+          <input type="file" id="bank-file" accept=".txt,text/plain" hidden>
         </div>
         <ul class="bank" id="quiz-bank"></ul>
-        <p class="hint tiny">題庫存在這台電腦的瀏覽器裡，可以在活動前先把題目都打好。</p>
+        <div class="bank-msg" id="bank-msg" hidden role="status"></div>
+        <p class="hint tiny">題庫存在這台電腦的瀏覽器裡。可以下載成 .txt 用記事本修改、換電腦，再匯入回來。</p>
       </div>
 
       <div id="quiz-live" hidden>
@@ -537,6 +485,21 @@
 
    <!-- 右側欄：不論在哪一頁都看得到的現場狀況 -->
    <aside class="side">
+    <!-- 大螢幕預覽：主持人背對投影幕時也看得到觀眾正在看什麼 -->
+    <div class="panel screen-preview">
+      <div class="panel-head">
+        <h2>大螢幕</h2>
+        <div class="sp-actions">
+          <button class="btn-ghost" id="btn-preview-expand">放大</button>
+          <!-- 新分頁開的是真正的大螢幕（不帶 ?preview=1）：會出聲、能截圖，可以直接拖到投影機上 -->
+          <a class="btn-ghost sp-open" href="/screen/" target="_blank" rel="noopener">新分頁開啟</a>
+        </div>
+      </div>
+      <div class="sp-frame" id="sp-frame">
+        <button class="sp-close" id="btn-preview-close" hidden>關閉放大（Esc）</button>
+      </div>
+    </div>
+
     <div class="panel">
       <h2>積分排行</h2>
       <ol class="ranks" id="ranks"></ol>

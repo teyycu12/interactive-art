@@ -11,12 +11,11 @@ import {
 } from '/shared/protocol.js';
 import { renderAvatarSVG, CV_FULL_PART } from '/shared/avatars.js';
 import { COLOR_FAMILIES } from '/shared/colorFamily.js';
-import { HEAT_LEVELS } from '/shared/heat.js';
 import { SELECTABLE_THEMES as THEMES, THEME_MAP } from '/shared/themes.js';
 import { PERSONA_TYPES, PERSONA_RESULT_MAP, PERSONA_LIMITS } from '/shared/persona.js';
-import { surveysForTheme, SURVEY_BANK_MAP } from '/shared/surveys.js';
+import { WORDCLOUD } from '/shared/wordcloud.js';
+import { quizBankToText, parseQuizText, sameQuiz } from '/shared/quizText.js';
 import { recipesForTheme } from '/shared/recipes.js';
-import { propLabel } from '/screen/scenes/registry.js';
 
 const $ = (s) => document.querySelector(s);
 const SS_KEY = 'personaflow.hostKey';
@@ -66,7 +65,6 @@ function handle(msg, key) {
       if (msg.scoring) { scoring = msg.scoring; renderScoringRule(); }
       buildMissionTypes();
       buildThemes();
-      buildSurveyPicker();
       // 先不開控制台：要等 STAGE_EVENT 才知道這場活動設定過沒有（緊接在後面送到）
       $('#auth').hidden = true;
       setConn('已連線', false);
@@ -80,6 +78,7 @@ function handle(msg, key) {
       else {
         undoRunSheetStep();
         if (lastAction === 'persona') personaSaveRejected();
+        if (lastAction === 'bingo') bingoFactsSaveRejected();
         showError(msg.reason ?? '操作失敗');
       }
       break;
@@ -108,24 +107,29 @@ function handle(msg, key) {
       receivePersonaQuiz(msg);
       break;
 
+    case EV.HOST_BINGO_FACTS:
+      receiveBingoFacts(msg);
+      break;
+
     case EV.HOST_MSG_REPORTS:
       renderReports(Array.isArray(msg.reports) ? msg.reports : []);
       break;
 
-    case EV.SURVEY_QUESTION:
-      renderSurveyLive({ ...msg.survey, counts: new Array(msg.survey.options.length).fill(0), totalAnswers: msg.survey.answered ?? 0 });
+    case EV.WORDCLOUD_QUESTION:
+      renderWordCloud({ question: msg.cloud.question, words: [], participants: 0 });
+      pushFeed(`文字雲出題「${msg.cloud.question}」`, 'ev-mission');
       break;
 
-    case EV.SURVEY_STATE:
-      if (msg.state) renderSurveyLive(msg.state);
+    case EV.WORDCLOUD_STATE:
+      if (msg.cloud) renderWordCloudWords(msg.cloud);
       break;
 
-    case EV.SURVEY_CLOSED:
-      // 收題後把最終分佈留在面板上，按「出題」才換下一題 ——
-      // 主辦端常常要照著分佈決定下一個任務的條件
-      renderSurveyLive({ ...msg.result, closed: true });
-      setTimeout(() => { if (survey?.closed) renderSurveyLive(null); }, 20000);
+    case EV.WORDCLOUD_CLOSED: {
+      const top = (msg.result.words ?? []).slice(0, 3).map((w) => w.text).join('、');
+      pushFeed(`文字雲收題「${msg.result.question}」　${msg.result.participants} 人作答${top ? `・最多：${top}` : ''}`, 'ev-mission');
+      renderWordCloud(null);
       break;
+    }
 
     case EV.MISSION_ANNOUNCE:
       pushFeed(`發布任務「${msg.mission.title}」`, 'ev-mission');
@@ -139,10 +143,6 @@ function handle(msg, key) {
       pushFeed(`${msg.a.name} × ${msg.b.name} 完成配對`, 'ev-pair');
       break;
 
-    case EV.HARVEST_STATE:
-      renderHarvest(msg.round, msg.reason);
-      break;
-
     case EV.BINGO_STATE:
       renderBingo(msg.round);
       break;
@@ -150,30 +150,6 @@ function handle(msg, key) {
     case EV.BINGO_ENDED:
       renderBingo(null);
       pushFeed(`人物賓果結束　${msg.winners?.length ? `最多連線：${msg.winners.join('、')}` : '沒有人連成線'}`, 'ev-pair');
-      break;
-
-    case EV.HARVEST_DONE:
-      renderHarvest(null);
-      pushFeed(`採收完成　${msg.helperNames.join('、')}　各 +${msg.points}`, 'ev-pair');
-      break;
-
-    case EV.TREASURE_START:
-      renderTreasure(msg.round);
-      pushFeed(`尋寶開始，先知＝${nameOfAgent(msg.round.prophetId)}`, 'ev-mission');
-      break;
-
-    case EV.TREASURE_HEAT:
-      $('#treasure-heat').textContent = heatLabel(msg.heat);
-      break;
-
-    case EV.TREASURE_FOUND:
-      pushFeed(`${msg.byName} 找到寶藏（先知 ${msg.prophetName}）`, 'ev-pair');
-      renderTreasure(null);
-      break;
-
-    case EV.TREASURE_ENDED:
-      pushFeed('尋寶中止', 'ev-mission');
-      renderTreasure(null);
       break;
 
     case EV.MISSION_CLOSED:
@@ -281,10 +257,8 @@ const ERR_SLOT = {
   persona: '#persona-err',
   setup: '#setup-err',
   screen: '#screen-err',
-  survey: '#survey-err',
+  wordcloud: '#wordcloud-err',
   quiz: '#quiz-err',
-  treasure: '#treasure-err',
-  harvest: '#harvest-err',
   bingo: '#bingo-err',
   mission: '#mission-err',
   runsheet: '#rs-err',
@@ -393,9 +367,6 @@ function renderTheme(id) {
   $('#screen-scene').textContent = label;
   // 設定頁還開著、主辦者也還沒自己挑過的話，預選目前的場景
   if (!$('#setup').hidden && setupTheme === null) pickSetupTheme(id);
-  // 場景專屬的問卷題（廚房分工、團隊角色）要跟著主題換，
-  // 否則在辦公室裡會看到「你在廚房負責什麼」排在第一個
-  buildSurveyPicker();
 }
 
 function renderEvent(info) {
@@ -431,6 +402,7 @@ function openSetup(editing) {
 function showConsole() {
   $('#setup').hidden = true;
   $('#console').hidden = false;
+  initPreview();
 }
 
 $('#btn-setup').addEventListener('click', () => {
@@ -581,147 +553,64 @@ function receiveScreenShot(msg) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 轉場問卷
+// 文字雲
 // ─────────────────────────────────────────────────────────────
-let survey = null;
-let surveyTimer = null;
-/** 主辦端是否自己挑過題目。沒挑過時，切換場景要跟著把該場景的題目擺到第一個。 */
-let surveyPicked = false;
+// 題目由 WORDCLOUD_QUESTION 驅動、詞由 WORDCLOUD_STATE 驅動（伺服器在 HOST_AUTH 時都會補送）。
+$('#wordcloud-question').maxLength = WORDCLOUD.maxQuestionLength;
 
-function buildSurveyPicker() {
-  const sel = $('#survey-pick');
-  if (!sel) return;
-  // 只在主辦端自己挑過題目時才保留選擇：沒挑過就跟著場景走，
-  // 否則切到廚房之後，第一個選項仍是上一個場景留下的通用題
-  const keep = surveyPicked ? sel.value : null;
-  sel.replaceChildren();
-  for (const q of surveysForTheme(currentTheme)) {
-    const o = document.createElement('option');
-    o.value = q.id;
-    o.textContent = q.theme ? `${q.question}（本場景）` : q.question;
-    sel.append(o);
-  }
-  if (keep && SURVEY_BANK_MAP[keep]) sel.value = keep;
-  renderSurveyPreview();
+/** @param {{question: string, words: object[], participants: number}|null} state */
+function renderWordCloud(state) {
+  $('#wordcloud-idle').hidden = !!state;
+  $('#wordcloud-live').hidden = !state;
+  if (!state) return;
+  $('#wordcloud-live-q').textContent = state.question;   // 主持人自己輸入的題目，一律 textContent
+  renderWordCloudWords(state);
 }
 
-function renderSurveyPreview() {
-  syncArriveToggle();
-  const q = SURVEY_BANK_MAP[$('#survey-pick').value];
-  // 先讓主辦端看到選項與對應地點：綁了道具的選項，之後可以直接叫那群人去那裡集合
-  $('#survey-preview').textContent = q
-    ? q.options.map((o) => (o.spot ? `${o.label}→${propLabel(currentTheme, o.spot)}` : o.label)).join('　·　')
-    : '';
-}
-
-function renderSurveyLive(state) {
-  survey = state;
-  const live = !!state;
-  $('#survey-idle').hidden = live;
-  $('#survey-live').hidden = !live;
-  clearInterval(surveyTimer);
-  surveyTimer = null;
-  if (!live) return;
-
-  $('#survey-live-q').textContent = state.question;
-  const bars = $('#survey-bars');
-  bars.replaceChildren();
-  const total = Math.max(1, state.totalAnswers ?? 0);
-  state.options.forEach((opt, i) => {
+function renderWordCloudWords(cloud) {
+  $('#wordcloud-count').textContent = `${cloud.participants ?? 0} 人作答`;
+  const list = $('#wordcloud-words');
+  list.replaceChildren();
+  $('#wordcloud-empty').hidden = (cloud.words ?? []).length > 0;
+  for (const w of cloud.words ?? []) {
     const li = document.createElement('li');
-    const lab = document.createElement('span');
-    lab.className = 'lab';
-    lab.textContent = opt.label;
-    if (opt.spot) {
-      const sp = document.createElement('span');
-      sp.className = 'spot';
-      sp.textContent = `　→ ${propLabel(currentTheme, opt.spot)}`;
-      lab.append(sp);
-    }
+    const text = document.createElement('span');
+    text.className = 'wc-text';
+    text.textContent = w.text;   // 參與者輸入的文字，一律 textContent
     const n = document.createElement('span');
-    n.className = 'n';
-    // 要到場才算的題目，「按了」與「走到了」是兩個數字 ——
-    // 只顯示一個的話主辦者看不出該不該再催一次
-    n.textContent = state.requireArrival
-      ? `到位 ${state.arrived?.[i] ?? 0} / 選 ${state.counts?.[i] ?? 0}`
-      : `${state.counts?.[i] ?? 0} 人`;
-    const track = document.createElement('span');
-    track.className = 'track';
-    const fill = document.createElement('i');
-    fill.style.width = `${Math.round(((state.counts?.[i] ?? 0) / total) * 100)}%`;
-    track.append(fill);
-    li.append(lab, n, track);
-    bars.append(li);
-  });
-  $('#survey-live-foot').textContent = state.requireArrival
-    ? `已作答 ${state.totalAnswers ?? 0} 人　已到位 ${state.totalArrived ?? 0} 人　標籤 ${state.key}`
-    : `已作答 ${state.totalAnswers ?? 0} 人　標籤 ${state.key}`;
-
-  if (state.closed) {
-    $('#survey-countdown').textContent = '已收題';
-    return;
+    n.className = 'wc-n';
+    n.textContent = `${w.count}`;
+    const hide = document.createElement('button');
+    hide.type = 'button';
+    hide.className = 'btn-link wc-hide';
+    hide.textContent = '隱藏';
+    hide.addEventListener('click', () => {
+      ws?.send(JSON.stringify({ type: EV.HOST_HIDE_WORD, word: w.text }));
+      li.remove();   // 先從清單拿掉，伺服器的 WORDCLOUD_STATE 隨後會確認
+    });
+    li.append(text, n, hide);
+    list.append(li);
   }
-  const deadline = Date.now() + (state.remainingMs ?? 0);
-  const tick = () => {
-    const left = Math.max(0, deadline - Date.now());
-    $('#survey-countdown').textContent = left > 0 ? `${(left / 1000).toFixed(0)} 秒` : '時間到';
-    if (left <= 0) { clearInterval(surveyTimer); surveyTimer = null; }
-  };
-  tick();
-  surveyTimer = setInterval(tick, 500);
 }
 
-$('#survey-pick').addEventListener('change', () => { surveyPicked = true; renderSurveyPreview(); });
-
-/**
- * 沒有綁地點的題目不能要求到場。
- *
- * 讓它勾得起來的話，伺服器會安靜地把這個要求忽略掉（start() 會檢查），
- * 而主辦者看到的是一個勾了卻沒作用的選項 —— 不如直接不讓它勾。
- */
-let arriveWanted = true;   // 主辦者自己的選擇，換題目時要記得
-
-function syncArriveToggle() {
-  const q = SURVEY_BANK_MAP[$('#survey-pick').value];
-  const can = !!q && q.options.every((o) => o.spot);
-  const box = $('#survey-arrive');
-  box.disabled = !can;
-  // 換成純手機題時強制取消勾選，換回有地點的題目再恢復主辦者原本的選擇。
-  // 不記的話，先瀏覽過一題沒地點的題目就會把勾選永久清掉，
-  // 而主辦者不會注意到 —— 出題後才發現全場沒有人站起來。
-  box.checked = can && arriveWanted;
-  $('#survey-arrive-note').textContent = can
-    ? '不勾就只是在手機上按一下，全場不會有人站起來。'
-    : '這一題的選項沒有綁場景裡的地點，只能在手機上作答。';
+function wordcloudStep() {
+  const question = $('#wordcloud-question').value.trim();
+  if (!question) { lastAction = 'wordcloud'; showError('請先輸入題目'); return null; }
+  return { kind: 'wordcloud', label: `文字雲：${question}`, msg: { type: EV.HOST_START_WORDCLOUD, question } };
 }
 
-$('#survey-arrive').addEventListener('change', (e) => {
-  if (!e.target.disabled) arriveWanted = e.target.checked;
+$('#btn-wordcloud-start').addEventListener('click', () => {
+  const step = wordcloudStep();
+  if (!step) return;
+  lastAction = 'wordcloud';
+  ws?.send(JSON.stringify(step.msg));
 });
-
-function surveyStep() {
-  const q = SURVEY_BANK_MAP[$('#survey-pick').value];
-  const requireArrival = $('#survey-arrive').checked;
-  return {
-    kind: 'survey',
-    label: `${q?.question ?? '問卷'}${requireArrival ? '（要走到定點）' : ''}`,
-    msg: {
-      type: EV.HOST_START_SURVEY,
-      bankId: $('#survey-pick').value,
-      requireArrival,
-      durationMs: Number($('#survey-duration').value),
-    },
-  };
-}
-
-$('#btn-survey-start').addEventListener('click', () => {
-  lastAction = 'survey';
-  ws?.send(JSON.stringify(surveyStep().msg));
+$('#wordcloud-question').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) $('#btn-wordcloud-start').click();
 });
-
-$('#btn-survey-close').addEventListener('click', () => {
-  lastAction = 'survey';
-  ws?.send(JSON.stringify({ type: EV.HOST_CLOSE_SURVEY }));
+$('#btn-wordcloud-close').addEventListener('click', () => {
+  lastAction = 'wordcloud';
+  ws?.send(JSON.stringify({ type: EV.HOST_CLOSE_WORDCLOUD }));
 });
 
 function buildMissionTypes() {
@@ -900,63 +789,11 @@ function avatarThumb(avatar) {
   return img;
 }
 
-// ── 尋寶 ──────────────────────────────────────────────────
-/** 場上名冊快取，供先知下拉選單與事件文案使用 */
+/** 場上名冊快取，供事件文案使用 */
 let roster = [];
-const nameOfAgent = (id) => roster.find((a) => a.id === id)?.name ?? id;
-const heatLabel = (id) => {
-  const h = HEAT_LEVELS.find((x) => x.id === id);
-  return h ? `${h.glyph} ${h.label}` : '—';
-};
-
-function renderTreasure(round) {
-  $('#treasure-idle').hidden = !!round;
-  $('#treasure-live').hidden = !round;
-  if (round) {
-    $('#treasure-prophet-name').textContent = nameOfAgent(round.prophetId);
-    $('#treasure-heat').textContent = '—';
-  }
-}
-
-function syncProphetOptions() {
-  const sel = $('#treasure-prophet');
-  const keep = sel.value;
-  sel.replaceChildren();
-  const any = document.createElement('option');
-  any.value = '';
-  any.textContent = '隨機指定';
-  sel.append(any);
-  for (const a of roster) {
-    const o = document.createElement('option');
-    o.value = a.id;
-    o.textContent = a.name;
-    sel.append(o);
-  }
-  // 保留主辦端已經選好的人，重新渲染名冊不該把選擇清掉
-  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
-}
 
 /**
- * 採收面板。與尋寶同樣是事件驅動（HOST_STATE 不含它），因此主辦端重整或
- * 斷線重連時由 HARVEST_STATE 的補送把畫面接回來 —— 少了那一步，
- * 重整後的主辦端會停在「開始採收」那一頁，「中止本輪」根本不在畫面上。
- */
-function renderHarvest(round, reason) {
-  $('#harvest-idle').hidden = !!round;
-  $('#harvest-live').hidden = !round;
-  if (round) {
-    const left = round.beds.filter((b) => b.pickedBy === null).length;
-    $('#harvest-left').textContent = left > 0 ? `還差 ${left} 處` : '送回去就完成';
-    $('#harvest-holder').textContent = round.holder ? nameOfAgent(round.holder) : '沒有人拿著（放在地上）';
-    $('#harvest-picked').textContent = `${round.picked.length} 人`;
-  } else if (reason) {
-    pushFeed(reason === 'NO_FRESH_HANDS'
-      ? '採收中止：還沒採過的人不夠了' : '採收中止：場上沒有人', 'ev-mission');
-  }
-}
-
-/**
- * 賓果面板。與採收同樣是事件驅動，重整時由 HOST_AUTH 的 BINGO_STATE 補送接回。
+ * 賓果面板。事件驅動（HOST_STATE 不含它），重整時由 HOST_AUTH 的 BINGO_STATE 補送接回。
  * 只顯示進度前幾名 —— 卡片內容是參與者私人的，主辦端也不需要看。
  */
 let bingoDeadlineAt = null;
@@ -966,11 +803,15 @@ function renderBingo(round) {
   $('#bingo-live').hidden = !round;
   clearInterval(bingoCountdown);
   if (!round) return;
-  bingoDeadlineAt = round.remainingMs == null ? null : Date.now() + round.remainingMs;
+  const asking = round.phase === 'ask';
+  // ask 階段倒數的是勾自我介紹的時間，發卡之後才是本輪限時
+  const left0 = asking ? round.askRemainingMs : round.remainingMs;
+  bingoDeadlineAt = left0 == null ? null : Date.now() + left0;
+  const who = asking ? `勾自我介紹中 ${round.answered ?? 0}/${round.players} 人` : `${round.players} 人`;
   const tick = () => {
-    if (!bingoDeadlineAt) { $('#bingo-left').textContent = `${round.players} 人參加`; return; }
+    if (!bingoDeadlineAt) { $('#bingo-left').textContent = `${who}參加`; return; }
     const left = Math.max(0, bingoDeadlineAt - Date.now());
-    $('#bingo-left').textContent = `${round.players} 人　剩 ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`;
+    $('#bingo-left').textContent = `${who}　剩 ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`;
   };
   tick();
   if (bingoDeadlineAt) bingoCountdown = setInterval(tick, 1000);
@@ -979,6 +820,51 @@ function renderBingo(round) {
     textContent: `${t.name}　連線 ${t.lines}　已填 ${t.filled}/9`,
   })));
 }
+
+// ── 賓果自我介紹題 ──
+// 草稿保護照進場問卷的做法（見 personaSaving）：等伺服器廣播回 HOST_BINGO_FACTS 才算存好，
+// 未存的草稿不會被另一台主辦端的廣播或重連補送蓋掉。
+let bingoFactsDirty = false;
+let bingoFactsSaving = false;
+
+function receiveBingoFacts(view) {
+  $('#bingo-facts-default').hidden = !view.isDefault;
+  if (bingoFactsSaving) {
+    bingoFactsSaving = false;
+    bingoFactsDirty = false;
+  }
+  if (!bingoFactsDirty) {
+    $('#bingo-facts').value = view.facts.join('\n');
+    $('#btn-bingo-facts-save').disabled = true;
+  }
+}
+
+function bingoFactsSaveRejected() {
+  if (!bingoFactsSaving) return;
+  bingoFactsSaving = false;
+  $('#btn-bingo-facts-save').disabled = false;
+}
+
+$('#bingo-facts').addEventListener('input', () => {
+  bingoFactsDirty = true;
+  if (!bingoFactsSaving) $('#btn-bingo-facts-save').disabled = false;
+});
+
+$('#btn-bingo-facts-save').addEventListener('click', () => {
+  lastAction = 'bingo';
+  const facts = $('#bingo-facts').value.split('\n').map((t) => t.trim()).filter(Boolean);
+  ws?.send(JSON.stringify({ type: EV.HOST_SET_BINGO_FACTS, facts }));
+  bingoFactsSaving = true;
+  $('#btn-bingo-facts-save').disabled = true;
+});
+
+$('#btn-bingo-facts-reset').addEventListener('click', () => {
+  if (!confirm('確定要恢復成這個場景的預設題目嗎？目前的修改會消失。')) return;
+  lastAction = 'bingo';
+  bingoFactsDirty = false;
+  bingoFactsSaving = false;
+  ws?.send(JSON.stringify({ type: EV.HOST_SET_BINGO_FACTS, facts: null }));
+});
 
 $('#btn-bingo-start').addEventListener('click', () => {
   lastAction = 'bingo';
@@ -990,33 +876,10 @@ $('#btn-bingo-end').addEventListener('click', () => {
   ws?.send(JSON.stringify({ type: EV.HOST_END_BINGO }));
 });
 
-$('#btn-harvest-start').addEventListener('click', () => {
-  lastAction = 'harvest';
-  ws?.send(JSON.stringify({ type: EV.HOST_START_HARVEST }));
-});
-
-$('#btn-harvest-stop').addEventListener('click', () => {
-  if (!confirm('確定要中止這一輪採收嗎？已經採的不會給分。')) return;
-  ws?.send(JSON.stringify({ type: EV.HOST_STOP_HARVEST }));
-});
-
-$('#btn-treasure-start').addEventListener('click', () => {
-  lastAction = 'treasure';
-  ws?.send(JSON.stringify({
-    type: EV.HOST_START_TREASURE,
-    prophetId: $('#treasure-prophet').value || null,
-  }));
-});
-
-$('#btn-treasure-stop').addEventListener('click', () => {
-  if (!confirm('確定要中止這一輪尋寶嗎？寶箱位置不會公布。')) return;
-  ws?.send(JSON.stringify({ type: EV.HOST_STOP_TREASURE }));
-});
 
 function renderState(state) {
   roster = state.agents ?? [];
   if (state.personaSpread) renderPersonaSpread(state.personaSpread);
-  syncProphetOptions();
   $('#stat-people').textContent = state.agents.length;
   $('#stat-audience').textContent = state.audience ?? 0;
   topicsOn = state.topics !== false;
@@ -1368,9 +1231,7 @@ for (const c of document.querySelectorAll('.act-chip')) {
 /** 各玩法「進行中」的畫面。看它的 hidden 就知道該玩法有沒有在跑。 */
 const LIVE_VIEW = {
   mission: '#mission-live',
-  survey: '#survey-live',
-  treasure: '#treasure-live',
-  harvest: '#harvest-live',
+  wordcloud: '#wordcloud-live',
   bingo: '#bingo-live',
   quiz: '#quiz-live',
 };
@@ -1429,6 +1290,8 @@ let quiz = null;
 /** @type {object|null} 揭曉結果 */
 let reveal = null;
 let countdownTimer = null;
+/** 正在編輯的題庫題目（索引）。null＝編輯區是新題目，「存入題庫」會新增一題 */
+let editingIndex = null;
 /** 倒數基準：以收到題目的當下 + remainingMs 換算，不依賴這台電腦的時鐘是否準確 */
 let deadlineAt = 0;
 
@@ -1502,10 +1365,20 @@ function writeDraft(d) {
   });
   const radio = document.querySelector('#q-options input[type="radio"][value="' + (d.correctIndex ?? 0) + '"]');
   if (radio) radio.checked = true;
-  if (d.durationMs) $('#q-duration').value = String(d.durationMs);
+  if (d.durationMs) setSelect($('#q-duration'), d.durationMs, `${d.durationMs / 1000} 秒`);
   // 舊題庫的題目沒有這個欄位：沿用表單目前的選擇，不要默默改成「不討論」
-  if (d.talkMs !== undefined) $('#q-talk').value = String(d.talkMs);
+  if (d.talkMs !== undefined) setSelect($('#q-talk'), d.talkMs, `${d.talkMs / 1000} 秒`);
   markCorrectRow();
+}
+
+/**
+ * 設定下拉選單；值不在選項裡就補一個。匯入的 .txt 可以寫「時間 45」，
+ * 直接設 value 會變成空選，出題時作答時間就默默掉回預設。
+ */
+function setSelect(sel, value, label) {
+  const v = String(value);
+  if (![...sel.options].some((o) => o.value === v)) sel.append(new Option(label, v));
+  sel.value = v;
 }
 
 /**
@@ -1558,14 +1431,88 @@ $('#btn-quiz-save').addEventListener('click', () => {
   const draft = readDraft();
   const err = validateDraft(draft);
   if (err) { showError(err, '#quiz-err'); return; }
-  saveBank([...loadBank(), draft]);
+  const bank = loadBank();
+  if (editingIndex !== null && bank[editingIndex]) {
+    bank[editingIndex] = draft;
+    setEditing(null);
+    saveBank(bank);
+    writeDraft({ question: '', options: [], correctIndex: 0 });
+  } else {
+    saveBank([...bank, draft]);
+  }
+});
+
+/** 進入／離開「編輯題庫裡的某一題」。編輯中「存入題庫」改成覆蓋原題，不再多存一份 */
+function setEditing(index) {
+  editingIndex = index;
+  $('#quiz-editing').hidden = index === null;
+  $('#btn-quiz-save').textContent = index === null ? '存入題庫' : '更新這題';
+  renderBank();
+}
+
+$('#btn-quiz-edit-cancel').addEventListener('click', () => {
+  setEditing(null);
+  writeDraft({ question: '', options: [], correctIndex: 0 });
 });
 
 $('#btn-bank-clear').addEventListener('click', () => {
   if (!loadBank().length) return;
   if (!confirm('確定要清空題庫嗎？此動作無法復原。')) return;
+  setEditing(null);
   saveBank([]);
 });
+
+// ── 題庫 ⇄ .txt ──────────────────────────────────────────
+// 主持人多半是在活動前用記事本整理題目、或從別台電腦帶過來；題庫只存在這台
+// 瀏覽器裡，沒有匯出入就只能在現場一題一題重打。
+$('#btn-bank-export').addEventListener('click', () => {
+  const bank = loadBank();
+  // 題庫是空的也給檔案：裡面的格式說明就是給第一次寫題目的人看的範本
+  const text = '﻿' + quizBankToText(bank).replace(/\n/g, '\r\n');   // BOM＋CRLF：舊版記事本才不會亂碼、擠成一行
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `問答題庫-${bank.length}題.txt`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+$('#btn-bank-import').addEventListener('click', () => $('#bank-file').click());
+
+$('#bank-file').addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = '';   // 同一個檔案改完再選一次也要觸發 change
+  if (!file) return;
+  if (file.size > 512 * 1024) { showBankMsg('檔案太大，不像是題庫（上限 512KB）。'); return; }
+  const { items, errors } = parseQuizText(await file.text());
+  // 加在題庫後面，已經有的題目略過：匯入同一份兩次不會變兩倍
+  const bank = loadBank();
+  const fresh = items.filter((q) => !bank.some((b) => sameQuiz(b, q)));
+  if (fresh.length) saveBank([...bank, ...fresh]);
+  const parts = [`匯入 ${fresh.length} 題`];
+  if (items.length > fresh.length) parts.push(`${items.length - fresh.length} 題已在題庫裡，略過`);
+  if (errors.length) parts.push(`${errors.length} 題有問題沒匯入`);
+  if (!items.length && !errors.length) parts.splice(0, parts.length, '檔案裡沒有找到題目。格式可以先按「下載 .txt」參考。');
+  showBankMsg(parts.join('，') + '。', errors);
+});
+
+function showBankMsg(text, errors = []) {
+  const el = $('#bank-msg');
+  el.replaceChildren(text);
+  if (errors.length) {
+    const ul = document.createElement('ul');
+    for (const err of errors) {
+      const li = document.createElement('li');
+      li.textContent = err;   // 檔案內容是外部輸入，一律 textContent
+      ul.append(li);
+    }
+    el.append(ul);
+  }
+  el.hidden = false;
+  clearTimeout(showBankMsg.timer);
+  // 有錯誤時留著讓人對照檔案修改；沒錯誤的提示幾秒後收掉
+  if (!errors.length) showBankMsg.timer = setTimeout(() => { el.hidden = true; }, 5000);
+}
 
 $('#btn-quiz-reveal').addEventListener('click', () => {
   ws?.send(JSON.stringify({ type: EV.HOST_REVEAL_QUIZ }));
@@ -1583,6 +1530,7 @@ function renderBank() {
 
   items.forEach((item, i) => {
     const li = document.createElement('li');
+    li.classList.toggle('is-editing', i === editingIndex);
 
     const q = document.createElement('span');
     q.className = 'q';
@@ -1598,8 +1546,12 @@ function renderBank() {
 
     const use = document.createElement('button');
     use.className = 'bank-load';
-    use.textContent = '載入';
-    use.addEventListener('click', () => writeDraft(item));
+    use.textContent = '編輯';
+    use.addEventListener('click', () => {
+      writeDraft(item);
+      setEditing(i);
+      $('#q-text').focus();
+    });
 
     const del = document.createElement('button');
     del.className = 'btn-kick';
@@ -1607,6 +1559,9 @@ function renderBank() {
     del.addEventListener('click', () => {
       const next = loadBank();
       next.splice(i, 1);
+      // 刪掉的正是編輯中的題目就離開編輯；刪掉前面的題目，編輯中的索引要跟著往前
+      if (editingIndex === i) setEditing(null);
+      else if (editingIndex !== null && editingIndex > i) editingIndex--;
       saveBank(next);
     });
 
@@ -1756,8 +1711,10 @@ renderBank();
 // ─────────────────────────────────────────────────────────────
 const RS_KEY = 'personaflow.runSheet';
 const RS_KIND = {
-  mission: '任務', survey: '問卷', treasure: '尋寶', harvest: '採水果',
+  mission: '任務', wordcloud: '文字雲',
   quiz: '問答', photo: '合照', theme: '場景', bingo: '賓果',
+  // 已移除的玩法：舊節目單裡若還存著，至少看得出是什麼（按下一項會被伺服器忽略）
+  survey: '問卷（已移除）', treasure: '尋寶（已移除）', harvest: '採水果（已移除）',
 };
 
 function loadRunSheet() {
@@ -1782,11 +1739,8 @@ function addStep(step) {
 
 const STEP_BUILDERS = {
   mission: missionStep,
-  survey: surveyStep,
+  wordcloud: wordcloudStep,
   quiz: () => quizStep(readDraft()),
-  // 先知不存特定的人：排節目單的時候，那個人可能還沒進場
-  treasure: () => ({ kind: 'treasure', label: '尋寶（先知隨機）', msg: { type: EV.HOST_START_TREASURE, prophetId: null } }),
-  harvest: () => ({ kind: 'harvest', label: '採水果', msg: { type: EV.HOST_START_HARVEST } }),
   bingo: () => {
     const durationMs = Number($('#bingo-duration').value);
     return {
@@ -1984,7 +1938,7 @@ function renderReport(format, report) {
   const s = report.summary;
   const sum = $('#report-summary');
   sum.textContent = `共 ${s.participants} 人參與（目前在場 ${s.present}）・社交連結 ${s.edges} 條・`
-    + `${s.isolated} 人整場沒有配對過・任務 ${s.missions} 輪、問答 ${s.quizzes} 題、問卷 ${s.surveys} 題`;
+    + `${s.isolated} 人整場沒有配對過・任務 ${s.missions} 輪、問答 ${s.quizzes} 題、文字雲 ${s.wordclouds} 題`;
   sum.hidden = false;
 
   const d = new Date(report.generatedAt);
@@ -2000,11 +1954,56 @@ function renderReport(format, report) {
       ['名稱', '目前在場', '積分', '社交連結', '任務完成次數', '問答作答', '問答答對', '問卷標籤'],
       ...report.people.map((p) => [
         p.name || '（已離場）', p.present ? '是' : '否', p.score, p.connections,
-        p.missionCompletions, p.quizAnswered, p.quizCorrect, p.surveyTags.join('、'),
+        p.missionCompletions, p.quizAnswered, p.quizCorrect, p.tags.join('、'),
       ]),
     ]);
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// 大螢幕預覽
+// ─────────────────────────────────────────────────────────────
+// 直接嵌入真的大螢幕頁面（?preview=1：不出聲、不被挑去截圖），而不是在主控台重畫一份 ——
+// 重畫的版本遲早會跟投影幕不一樣，主持人看到的就不是觀眾看到的。
+const spFrame = $('#sp-frame');
+let spIframe = null;
+
+function fitPreview() {
+  if (!spIframe) return;
+  const { width, height } = spFrame.getBoundingClientRect();
+  const k = Math.min(width / 1920, height / 1080);
+  // 放大時畫面比例不一定是 16:9，置中留黑邊
+  spIframe.style.transform = `translate(${(width - 1920 * k) / 2}px, ${(height - 1080 * k) / 2}px) scale(${k})`;
+}
+new ResizeObserver(fitPreview).observe(spFrame);
+
+/** 進到控制台才開預覽：登入頁與活動設定頁不必先跑一份 3D */
+function initPreview() {
+  if (spIframe) return;
+  spIframe = document.createElement('iframe');
+  spIframe.src = '/screen/?preview=1';
+  spIframe.title = '大螢幕即時畫面';
+  spIframe.tabIndex = -1;
+  spFrame.prepend(spIframe);
+  fitPreview();
+}
+
+function setPreviewExpanded(on) {
+  spFrame.classList.toggle('is-expanded', on);
+  document.body.classList.toggle('sp-lock', on);
+  $('#btn-preview-close').hidden = !on;
+  fitPreview();
+  if (on) $('#btn-preview-close').focus();
+}
+
+$('#btn-preview-expand').addEventListener('click', () => setPreviewExpanded(true));
+$('#btn-preview-close').addEventListener('click', () => {
+  setPreviewExpanded(false);
+  $('#btn-preview-expand').focus();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && spFrame.classList.contains('is-expanded')) setPreviewExpanded(false);
+});
 
 renderRunSheet();
 renderRecipes();

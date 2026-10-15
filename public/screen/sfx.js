@@ -19,16 +19,14 @@ const CUES = {
   pair: { notes: [659, 988], gap: 0.09, type: 'triangle', gain: 0.22 },
   // 互相揮手、碰杯：比配對輕，一聲
   greet: { notes: [784], gap: 0, type: 'sine', gain: 0.16 },
-  // 找到寶藏：上行琶音，最長也最響 —— 全場一起等的那一刻
-  treasure: { notes: [523, 659, 784, 1047], gap: 0.08, type: 'triangle', gain: 0.26 },
+  // 慶祝：上行琶音，最長也最響 —— 賓果結束這類全場一起等的時刻（原本是尋寶找到寶藏）
+  fanfare: { notes: [523, 659, 784, 1047], gap: 0.08, type: 'triangle', gain: 0.26 },
   // 出題：提醒全場抬頭看螢幕
   quiz: { notes: [880, 880], gap: 0.14, type: 'square', gain: 0.08 },
   // 討論結束、開始作答
   go: { notes: [988], gap: 0, type: 'square', gain: 0.1 },
   // 公布答案
   reveal: { notes: [523, 784], gap: 0.12, type: 'triangle', gain: 0.2 },
-  // 採收完成
-  harvest: { notes: [587, 740, 880], gap: 0.09, type: 'triangle', gain: 0.22 },
 };
 
 /** 同一種音效的最短間隔：30 人同時配對時不能疊成一片噪音 */

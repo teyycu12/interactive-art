@@ -1265,57 +1265,31 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   letter-spacing: .01em;
 }
 
-/* ── 尋寶（先知模式）───────────────────────────────────── */
-.treasure {
+/* ── 文字雲作答區（主持人出題時出現）──────────────────────────
+   疊在場景上，與其他提示框同一種底板。輸入框 16px：iOS 小於 16px 會自動放大整頁 */
+.wc-box {
   margin: 0 0 12px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-radius: var(--r);
-  background: var(--sunk);
+  background: var(--paper);
   border: 2px solid var(--ink);
   box-shadow: var(--drop-sm);
 }
-/* 先知的框刻意醒目：他要一眼知道「我這局有特殊身分」 */
-.treasure.is-prophet {
-  background: #FBEFC6;
-  box-shadow: inset 6px 0 0 var(--tag), var(--drop-sm);
+.wc-q { margin: 0 0 8px; display: flex; align-items: baseline; gap: 8px; font-size: 15px; color: var(--ink); line-height: 1.4; }
+.wc-q b { overflow-wrap: anywhere; }
+.wc-tag { flex: none; font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: var(--wall-tint); color: var(--ok-ink); }
+.wc-form { display: flex; gap: 8px; }
+#wc-input {
+  flex: 1; min-width: 0; min-height: 44px; padding: 8px 12px; font: inherit; font-size: 16px;
+  border: 2px solid var(--line); border-radius: 12px; background: #FFFDF8; color: var(--ink);
 }
-.tr-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.tr-role { font-size: 15px; font-weight: 800; }
-.tr-heat {
-  font-size: 20px;
-  font-weight: 800;
-  padding: 4px 12px;
-  border-radius: 999px;
-  color: #fff;
-  background: var(--heat, #888);
-  /* 冷熱是先知唯一的資訊來源，變動時要看得出來 */
-  transition: background .25s ease;
-}
-/* 採收的框：拿著籃子的人要一眼知道「東西在我手上」 */
-.treasure.harvest.is-holder {
-  border-color: #2A9D8F;
-  background: rgba(42, 157, 143, .12);
-}
-.hv-act {
-  margin-top: 10px;
-  width: 100%;
-  /* 交接是這個玩法唯一要按的鈕，而現場是站著單手操作：按鈕放大到整列 */
-  min-height: 52px;
-  font-size: 16px;
-}
-.tr-hint {
-  margin: 7px 0 0;
-  font-size: 13px;
-  line-height: 1.5;
-  opacity: .85;
-}
+#wc-input:focus { outline: none; border-color: var(--ink); }
+#wc-send { width: auto; flex: none; min-height: 44px; padding: 0 18px; }
+.wc-mine { margin: 8px 0 0; font-size: 13px; color: var(--ink-soft); }
+.wc-msg { margin: 6px 0 0; font-size: 13px; font-weight: 700; color: var(--ink); }
+.wc-mine[hidden], .wc-msg[hidden] { display: none; }
 
-/* 所在分區。刻意做得比尋寶那塊低調 —— 它是常駐的環境資訊，
+/* 所在分區。刻意做得低調 —— 它是常駐的環境資訊，
    不是需要立刻反應的事件 */
 .zone-chip {
   display: inline-block;
@@ -1372,12 +1346,12 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   #controller > .bar { grid-column: 1 / -1; grid-row: 1; margin-bottom: 6px; min-height: 0; }
   #controller > #mission-banner,
   #controller > #zone-chip,
-  #controller > #treasure-box,
+  #controller > #wordcloud-box,
   #controller > #links-strip,
   #controller > .agency-row { grid-column: 1; margin-bottom: 6px; }
   #controller > #mission-banner { grid-row: 2; }
   #controller > #zone-chip { grid-row: 3; justify-self: start; }
-  #controller > #treasure-box { grid-row: 4; }
+  #controller > #wordcloud-box { grid-row: 4; }
   #controller > #links-strip { grid-row: 5; }
   #controller > .agency-row { grid-row: 6; }
 
@@ -1635,6 +1609,17 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 }
 .bingo-cell[aria-pressed="true"] { outline: 3px solid var(--accent); outline-offset: 1px; }
 .bingo-cell.filled { background: var(--wall-tint); border-style: dashed; }
+
+/* 賓果開局的自我介紹：一題一列，按一下切換。選中用牆面綠底紙色字（6.65:1） */
+.bingo-facts { display: grid; gap: 8px; margin: 10px 0 14px; }
+.bingo-fact {
+  min-height: 48px; padding: 8px 14px; text-align: left;
+  font-size: 15px; font-weight: 700;
+  background: #FFFCF5; color: var(--ink);
+  border: 2px solid var(--ink); border-radius: var(--r);
+}
+.bingo-fact[aria-pressed="true"] { background: var(--wall); color: #FAF8F5; }
+.bingo-fact[aria-pressed="true"]::before { content: '✓ '; }
 .bingo-cell.filled .who { font-size: 13px; font-weight: 800; color: var(--ok-ink); }
 .bingo-cell.filled .cond { font-weight: 500; color: var(--ink-soft); font-size: 11px; }
 .bingo-entry { display: flex; gap: 8px; align-items: flex-end; }
@@ -1664,3 +1649,5 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 .links-list li { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 13px; font-weight: 700; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
 .links-list .lf { width: 56px; height: 64px; display: grid; place-items: center; }
 .links-list .lf canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+.links-list .lw { display: flex; flex-direction: column; gap: 2px; }
+.links-list .lw small { font-size: 11px; font-weight: 600; color: var(--ink-soft); }

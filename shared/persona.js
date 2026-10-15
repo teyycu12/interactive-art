@@ -2,7 +2,7 @@
  * 進場人格問卷（團隊分類用）。
  *
  * 角色生成要等二十幾秒，這段時間順便答幾題，把人分成五種類型（DISC 四型＋變色龍），
- * 結果記成參與者身上的標籤（`survey` 的 traits，鍵名 `persona`），
+ * 結果記成參與者身上的標籤（server/traits.js，鍵名 `persona`），
  * 主辦端看得到每個人是哪一型與全場分佈，作為分組的依據。
  *
  * 伺服器（驗證主辦端改的題目、判定類型）、手機（作答、當場顯示結果）、
@@ -45,7 +45,7 @@ export const CHAMELEON = {
 export const PERSONA_RESULTS = [PERSONA_TYPES.D, PERSONA_TYPES.I, PERSONA_TYPES.S, PERSONA_TYPES.C, CHAMELEON];
 export const PERSONA_RESULT_MAP = Object.fromEntries(PERSONA_RESULTS.map((t) => [t.id, t]));
 
-/** 標籤的鍵名。與轉場問卷的標籤放在同一處（survey traits），主辦端名冊自然就看得到 */
+/** 標籤的鍵名（server/traits.js）。主辦端名冊與人物賓果的條件都讀這個標籤 */
 export const PERSONA_TRAIT_KEY = 'persona';
 
 /**
