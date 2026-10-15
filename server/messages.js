@@ -81,11 +81,19 @@ export class MessageRelay {
     return { ok: true, delivered: true, message };
   }
 
-  /** 收件人封鎖寄件人。回傳是否真的新增了一筆 */
-  block(by, target) {
+  /**
+   * 收件人封鎖寄件人。回傳是否真的新增了一筆
+   *
+   * 只收場上真的有的人，每人另有上限：否則任何一支手機都能送上千個捏造的 id，
+   * 每一個都在記憶體裡留到活動結束。
+   *
+   * @param {{exists: (id: string) => boolean}} [presence]
+   */
+  block(by, target, presence) {
     if (typeof target !== 'string' || !target || by === target) return false;
+    if (presence && !presence.exists(target)) return false;
     const set = this.blocks.get(by) ?? new Set();
-    if (set.has(target)) return false;
+    if (set.has(target) || set.size >= this.opts.maxBlocks) return false;
     set.add(target);
     this.blocks.set(by, set);
     return true;
@@ -129,9 +137,18 @@ export class MessageRelay {
     return this.reports.length !== before;
   }
 
-  /** 某人離場（主動或被移除）：清掉他的頻率紀錄。檢舉保留，主辦端還要看得到 */
+  /**
+   * 某人離場（主動或被移除）：清掉他的頻率紀錄與封鎖關係。檢舉保留，主辦端還要看得到。
+   *
+   * 封鎖要兩個方向都清：他封鎖的人、以及別人名單裡的他。離場後 id 不會再被用到
+   * （重新進場是新的 id），留著只會讓記憶體隨活動時間一直長。
+   */
   forget(id) {
     this.sentAt.delete(id);
+    this.blocks.delete(id);
+    for (const [by, set] of this.blocks) {
+      if (set.delete(id) && !set.size) this.blocks.delete(by);
+    }
   }
 
   #prune(now) {

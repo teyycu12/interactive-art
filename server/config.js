@@ -179,7 +179,11 @@ export const DIRECT_MESSAGES = {
   keepForReportMs: 30 * 60 * 1000, // 訊息留 30 分鐘供檢舉；只在記憶體，不寫快照
   keepMax: 500,           // 保留則數上限，超過就丟最舊的
   reportsMax: 50,         // 主辦端檢舉清單上限
+  maxBlocks: 100,         // 每人最多封鎖幾個人（場上最多 30 人，這個上限只擋捏造的 id）
 };
+
+/** 尋寶的冷熱門檻（說明見 TREASURE.heatThresholds）。抽出來是為了讓 minStartDistance 跟著它走 */
+const TREASURE_HEAT = [70, 220, 480, 900];
 
 /**
  * 尋寶任務（先知模式，見 server/treasure.js）
@@ -195,7 +199,7 @@ export const TREASURE = {
    * 場域是 1920×1080，對角線約 2200。最遠一級刻意涵蓋大半個場地，
    * 讓「結冰」真的代表方向錯了，而不是每個人都一直看到結冰。
    */
-  heatThresholds: [70, 220, 480, 900],
+  heatThresholds: TREASURE_HEAT,
 
   /** 藏寶點與場邊的最小距離，避免藏在角色難以貼近的邊角 */
   edgeMargin: 160,
@@ -208,7 +212,7 @@ export const TREASURE = {
    * 先知一句話都還沒說這一輪就結束了（e2e 偶發失敗就是這樣抓到的）。
    * 人多到找不到這麼遠的點時，退而挑「離最近的人最遠」的候選點。
    */
-  minStartDistance: 480,
+  minStartDistance: TREASURE_HEAT[2],
 
   /** 找到寶藏的得分。高於一次配對（20），因為它需要整隊合作 */
   points: 80,

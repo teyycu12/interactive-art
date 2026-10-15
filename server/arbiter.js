@@ -297,6 +297,13 @@ function updateFacing(agent, dt) {
   }
 }
 
+/** 依方向向量決定正／背／側面。側面與正背之間有遲滯（VIEW_SIDE_RATIO），斜走時不會來回跳 */
+function viewFor(x, y, current) {
+  const ratio = current === AGENT_VIEW.SIDE ? 1 / VIEW_SIDE_RATIO : VIEW_SIDE_RATIO;
+  if (Math.abs(x) > Math.abs(y) * ratio) return AGENT_VIEW.SIDE;
+  return y < 0 ? AGENT_VIEW.BACK : AGENT_VIEW.FRONT;
+}
+
 /**
  * 更新正面／背面／側面（AGENT_VIEW）。
  *
@@ -312,13 +319,26 @@ function updateFacing(agent, dt) {
  */
 function updateView(agent, dt) {
   const ms = dt * 1000;
-  const speed = Math.hypot(agent.vx, agent.vy);
 
-  if (speed <= FACING_FLIP_SPEED) {
+  // 定位到位（合照）：直接採用指定朝向，不等停留計時。
+  // 合照流程在 allArrived() 成立的當下就截圖，而「停下滿 VIEW_RETURN_FRONT_MS
+  // 才轉回正面」要 900ms —— 從畫面下方往上走到位的人會以背影入鏡，
+  // 即使 heading 已經轉向鏡頭。
+  if (agent.arrived && agent.targetHeading !== null) {
+    agent.view = viewFor(Math.cos(agent.targetHeading), Math.sin(agent.targetHeading), agent.view);
     agent.viewPending = null;
     agent.viewPendingMs = 0;
-    // 還在減速（介於行走門檻與翻面門檻之間）就維持原樣，真的停下才計時
-    if (agent.view === AGENT_VIEW.FRONT || speed > WALK_THRESHOLD) return;
+    agent.viewIdleMs = 0;
+    return;
+  }
+
+  const speed = Math.hypot(agent.vx, agent.vy);
+
+  // 真的停下：計時轉回正面
+  if (speed <= WALK_THRESHOLD) {
+    agent.viewPending = null;
+    agent.viewPendingMs = 0;
+    if (agent.view === AGENT_VIEW.FRONT) return;
     agent.viewIdleMs += ms;
     if (agent.viewIdleMs >= VIEW_RETURN_FRONT_MS) {
       agent.view = AGENT_VIEW.FRONT;
@@ -328,10 +348,11 @@ function updateView(agent, dt) {
   }
   agent.viewIdleMs = 0;
 
-  const ratio = agent.view === AGENT_VIEW.SIDE ? 1 / VIEW_SIDE_RATIO : VIEW_SIDE_RATIO;
-  let want;
-  if (Math.abs(agent.vx) > Math.abs(agent.vy) * ratio) want = AGENT_VIEW.SIDE;
-  else want = agent.vy < 0 ? AGENT_VIEW.BACK : AGENT_VIEW.FRONT;
+  // 介於行走門檻與翻面門檻之間（輕推搖桿慢慢走）。原本這一段直接 return：
+  // 往上走（背面）之後輕輕往下推，角色會一路倒退著朝觀眾走，永遠不轉過來。
+  // 現在照樣判斷方向，只是停留時間加倍 —— 減速時速度方向不變，不會因此閃。
+  const slow = speed <= FACING_FLIP_SPEED;
+  const want = viewFor(agent.vx, agent.vy, agent.view);
 
   if (want === agent.view) {
     agent.viewPending = null;
@@ -344,7 +365,7 @@ function updateView(agent, dt) {
     agent.viewPending = want;
     agent.viewPendingMs = ms;
   }
-  if (agent.viewPendingMs >= FACING_DWELL_MS) {
+  if (agent.viewPendingMs >= (slow ? FACING_DWELL_MS * 2 : FACING_DWELL_MS)) {
     agent.view = want;
     agent.viewPending = null;
     agent.viewPendingMs = 0;

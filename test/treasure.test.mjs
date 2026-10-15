@@ -268,3 +268,19 @@ describe('藏寶點避開開局時的人', () => {
     }
   });
 });
+
+test('人擠滿場時，備用藏寶點仍在每個人的判定圈外', async () => {
+  const { pickSpot } = await import('../server/treasure.js');
+  const { TREASURE } = await import('../server/config.js');
+  const { STAGE } = await import('../shared/protocol.js');
+  // 30 人均勻鋪滿：找不到 minStartDistance 那麼遠的點，必定走備案
+  const crowd = [];
+  for (let i = 0; i < 6; i++) for (let j = 0; j < 5; j++) {
+    crowd.push({ x: (i + 0.5) * STAGE.width / 6, y: (j + 0.5) * STAGE.height / 5 });
+  }
+  for (let t = 0; t < 50; t++) {
+    const spot = pickSpot(crowd);
+    const gap = Math.min(...crowd.map((p) => Math.hypot(p.x - spot.x, p.y - spot.y)));
+    assert.ok(gap > TREASURE.claimRadius, `第 ${t} 次離最近的人只有 ${gap.toFixed(0)}`);
+  }
+});

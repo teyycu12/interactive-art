@@ -45,7 +45,11 @@ export function pickSpot(avoid = []) {
   const m = TREASURE.edgeMargin;
   let best = null;
   let bestGap = -1;
-  for (let i = 0; i < 80; i++) {
+  // 先抽 80 次找「離每個人都夠遠」的點；人多到找不到時，退而用離最近的人最遠的那一個。
+  // 但備案至少要在每個人的判定圈外，否則開局下一個 tick 就被踩中 —— 那正是
+  // minStartDistance 要防的事。還沒找到這樣的點就繼續抽，最多 400 次。
+  for (let i = 0; i < 400; i++) {
+    if (i >= 80 && bestGap > TREASURE.claimRadius) break;
     const x = m + Math.random() * (STAGE.width - m * 2);
     const y = m + Math.random() * (STAGE.height - m * 2);
     // 藏在道具裡的話沒有人走得到，那一輪會永遠結束不了
@@ -53,7 +57,6 @@ export function pickSpot(avoid = []) {
     let gap = Infinity;
     for (const p of avoid) gap = Math.min(gap, Math.hypot(p.x - x, p.y - y));
     if (gap >= TREASURE.minStartDistance) return { x, y };
-    // 人多到找不到夠遠的點時，記下離最近的人最遠的那一個
     if (gap > bestGap) { best = { x, y }; bestGap = gap; }
   }
   return best ?? { x: STAGE.width / 2, y: STAGE.height / 2 };

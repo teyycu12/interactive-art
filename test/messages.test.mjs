@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { MessageRelay, cleanText } from '../server/messages.js';
 import { MSG_ERRORS, DIRECT_MESSAGE } from '../shared/protocol.js';
@@ -106,4 +106,33 @@ test('舊訊息過期後不能再檢舉，保留則數有上限', () => {
   assert.equal(r.report('b', first.id), null, '過期');
   for (let i = 0; i < 5; i++) r.send('a', 'b', String(i), everyone, T0 + 2000 + i);
   assert.ok(r.recent.size <= 3);
+});
+
+describe('封鎖名單不會無限長大', () => {
+  const presence = (...ids) => ({ exists: (id) => ids.includes(id) });
+
+  test('不收場上沒有的 id：捏造的 id 不能塞進記憶體', () => {
+    const relay = new MessageRelay();
+    assert.equal(relay.block('A', 'ghost', presence('A', 'B')), false);
+    assert.deepEqual(relay.blockedBy('A'), []);
+    assert.equal(relay.block('A', 'B', presence('A', 'B')), true);
+  });
+
+  test('每人封鎖數有上限', () => {
+    const relay = new MessageRelay({ maxBlocks: 3 });
+    for (const id of ['B', 'C', 'D', 'E']) relay.block('A', id);
+    assert.equal(relay.blockedBy('A').length, 3);
+  });
+
+  test('離場時兩個方向的封鎖都清掉', () => {
+    const relay = new MessageRelay();
+    relay.block('A', 'B');
+    relay.block('B', 'C');
+    relay.block('C', 'B');
+    relay.forget('B');
+    assert.deepEqual(relay.blockedBy('A'), []);
+    assert.deepEqual(relay.blockedBy('B'), []);
+    assert.deepEqual(relay.blockedBy('C'), []);
+    assert.equal(relay.blocks.size, 0);
+  });
 });

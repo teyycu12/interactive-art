@@ -24,7 +24,6 @@ import {
 } from '/shared/character.js';
 import { layoutNameplates } from '/shared/nameplateLayout.js';
 import { stageViewport, setStageTopInset, onStageViewportChange } from './stageViewport.js';
-import { VoxelCharacters } from './voxelCharacters.js';
 
 let activeScene = null;
 
@@ -665,7 +664,17 @@ function drawTreasure(now) {
 
 // 體素 3D 角色：預設關閉。場景是 2D 的，角色維持平面紙娃娃（shared/character.js）；
 // ?voxel=1 才開，留作比較與實驗。WebGL 不能用時 ok 為 false，照舊畫 2D。
-const voxels = new URLSearchParams(location.search).get('voxel') === '1' ? new VoxelCharacters() : null;
+//
+// 動態載入：voxelCharacters.js 會 import 整包 three.js（約 1 MB）。靜態 import 的話，
+// 預設不開體素的每一次開機都要下載、解析它；而且 /vendor/three.module.js 一旦
+// 載不到，整個 screen.js 模組載入失敗，連 2D 舞台都是空白 —— 展場網路不穩時
+// 這是投影直接黑掉。載入失敗就維持 null，照舊畫 2D（「失敗一律降級」）。
+let voxels = null;
+if (new URLSearchParams(location.search).get('voxel') === '1') {
+  import('./voxelCharacters.js')
+    .then(({ VoxelCharacters }) => { voxels = new VoxelCharacters(); })
+    .catch((err) => console.warn('[voxel] 載入失敗，照舊畫 2D', err));
+}
 let lastFrameAt = 0;
 
 function render(now) {

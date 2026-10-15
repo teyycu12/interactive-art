@@ -1090,7 +1090,13 @@ function startScanProgress() {
     // 問卷在作答時不出提示：兩個都要人看，疊在一起反而都不看
     if (!personaScanActive && sec >= 3 && sec - lastTipAt >= (lastTipAt === 0 ? 0 : 6)) {
       if (tipEl) tipEl.hidden = false;
-      if (tipTextEl) tipTextEl.textContent = TIPS[tipIndex % TIPS.length];
+      // 答完問卷的人，結果本身就是開口的理由：每隔一則換成「找同類型的人」。
+      // 問卷作答那幾題是低頭的，這一句把它接回「抬頭看人」。
+      const persona = PERSONA_RESULT_MAP[personaAnswers?.resultId];
+      const text = persona && tipIndex % 2 === 0
+        ? `找找看身邊誰也是${persona.emoji} ${persona.name}，問問他怎麼答的。`
+        : TIPS[tipIndex % TIPS.length];
+      if (tipTextEl) tipTextEl.textContent = text;
       tipIndex += 1;
       lastTipAt = sec;
     }
@@ -2418,9 +2424,8 @@ $('#btn-msg-send').addEventListener('click', () => {
   const text = msgInput.value.trim();
   if (!composeTo || !text || composeSending) return;
   composeSending = true;
-  sendingFrom = 'composer';
   $('#btn-msg-send').disabled = true;
-  sendMsg(EV.MSG_SEND, { to: composeTo, text });
+  sendMsg(EV.MSG_SEND, { to: composeTo, text, ref: trackSend('composer') });
 });
 
 const MSG_ERROR_TEXT = {
@@ -2433,14 +2438,35 @@ const MSG_ERROR_TEXT = {
   [MSG_ERRORS.BLOCKED]: '你封鎖了對方，要先解除封鎖才能傳訊息。',
 };
 
-/** 剛送出的那則是從哪裡送的：'composer'（點角色寫的）或 'reply'（收件畫面上的回應） */
-let sendingFrom = null;
+/**
+ * 送出中的訊息：請求編號 → 從哪裡送的（'composer' 點角色寫的、'reply' 收件畫面的回應）。
+ *
+ * 原本只有一個全域的 sendingFrom：從寫訊息畫面送出後、結果回來前，剛好跳出一則
+ * 新訊息而他立刻回覆，第一個結果就會被當成回覆的 —— 收件畫面在回覆還沒確認前
+ * 就被關掉，第二個結果則把錯誤顯示到錯的那一格。伺服器會原樣帶回 ref。
+ */
+const pendingSends = new Map();
+let sendSeq = 0;
+
+function trackSend(from) {
+  const ref = String(++sendSeq);
+  pendingSends.set(ref, from);
+  // 等不到結果（連線層限流丟掉、斷線）時不能讓送出鍵永遠鎖著
+  setTimeout(() => {
+    if (pendingSends.has(ref)) onMessageResult({ ok: false, ref, reason: null });
+  }, 8000);
+  return ref;
+}
 
 function onMessageResult(msg) {
-  const from = sendingFrom;
-  sendingFrom = null;
-  composeSending = false;
-  replySending = false;
+  // 已經逾時處理過的遲到結果：忽略，否則可能把他正在寫的下一則關掉
+  if (msg.ref && !pendingSends.has(msg.ref)) return;
+  // 舊版伺服器不帶 ref：退回「最早送出的那一則」
+  const ref = msg.ref ?? pendingSends.keys().next().value;
+  const from = pendingSends.get(ref) ?? null;
+  pendingSends.delete(ref);
+  if (from === 'reply') replySending = false;
+  else composeSending = false;
   if (msg.ok) {
     showToast('訊息已送出');
     if (from === 'reply') showNextMessage();
@@ -2517,10 +2543,9 @@ $('#btn-inbox-reply').addEventListener('click', () => {
   const text = replyInput.value.trim();
   if (!showing || !text || replySending) return;
   replySending = true;
-  sendingFrom = 'reply';
   $('#btn-inbox-reply').disabled = true;
   // 回應直接送給寄件人。不需要他還在名冊上 —— 伺服器會判斷他還在不在場、手機有沒有連線
-  sendMsg(EV.MSG_SEND, { to: showing.from, text });
+  sendMsg(EV.MSG_SEND, { to: showing.from, text, ref: trackSend('reply') });
 });
 $('#btn-inbox-block').addEventListener('click', () => {
   if (!showing) return;

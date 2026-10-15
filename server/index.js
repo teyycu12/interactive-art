@@ -980,13 +980,16 @@ const messagePresence = {
 
 function handleDirectMessage(ws, msg) {
   const from = ws.agentId;
+  // 手機帶來的請求編號，原樣帶回：手機上「點角色寫的」與「收件畫面的回應」可能
+  // 同時在等結果，靠先後順序對不準（連線層限流丟掉的訊息不會有回覆）
+  const ref = typeof msg.ref === 'string' && msg.ref.length <= 16 ? msg.ref : undefined;
   const result = messages.send(from, msg.to, msg.text, messagePresence);
   if (!result.ok) {
-    send(ws, EV.MSG_RESULT, { ok: false, to: msg.to ?? null, reason: result.reason });
+    send(ws, EV.MSG_RESULT, { ok: false, to: msg.to ?? null, reason: result.reason, ref });
     return;
   }
   // 被封鎖時一樣回報成功（理由見 messages.js 開頭），只是不轉送
-  send(ws, EV.MSG_RESULT, { ok: true, to: msg.to });
+  send(ws, EV.MSG_RESULT, { ok: true, to: msg.to, ref });
   if (!result.delivered) return;
   const { message } = result;
   // 只送給收件人。不廣播、不進大螢幕、不給主辦端 —— 一般私訊只有兩個當事人看得到
@@ -1436,7 +1439,7 @@ wss.on('connection', (ws) => {
 
       case EV.MSG_BLOCK:
         if (ws.role !== 'controller' || !ws.agentId) return;
-        if (messages.block(ws.agentId, msg.userId)) console.log(`[block] ${nameOf(ws.agentId)} 封鎖了 ${nameOf(msg.userId) || msg.userId}`);
+        if (messages.block(ws.agentId, msg.userId, messagePresence)) console.log(`[block] ${nameOf(ws.agentId)} 封鎖了 ${nameOf(msg.userId) || msg.userId}`);
         send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(ws.agentId) });
         break;
 

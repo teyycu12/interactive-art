@@ -119,6 +119,44 @@ const DEFAULT_FALLBACK_COLORS = {
   skin: '#F4C08A', hair: '#4A2C1A', torso: '#8FA05E', legs: '#B7A98A',
 };
 
+/**
+ * 上傳超過上限：等手機把 body 送完再回 413。
+ *
+ * 原本是 sendJSON 之後立刻 req.destroy()。手機那時多半還在送剩下的 body，
+ * 切線會讓它在讀到回應之前就收到連線重設 —— 手機只看到網路錯誤，拿不到
+ * 「太大」的原因，也拿不到 photo_too_large 附的降級顏色。
+ *
+ * 光是「回應後晚點再切」不夠：Node 在回應送完、請求卻還沒讀完時會自己關線，
+ * 客戶端一樣收到 ECONNRESET。所以順序反過來 —— 剩下的 body 讀進來直接丟
+ * （不保留，記憶體不會長），讀完才回 413。不能無限期收下去：超過
+ * DRAIN_MAX_BYTES 或 DRAIN_MAX_MS 就照舊回應並切線。
+ *
+ * 實測（對本機連送 2 MB 影格 200 次）：原本 45 次連線錯誤；只延後切線仍有 2–13 次；
+ * 讀完再回為 0 次。
+ */
+const DRAIN_MAX_BYTES = 8 * 1024 * 1024;
+const DRAIN_MAX_MS = 5000;
+
+function rejectTooLarge(req, res, body) {
+  let replied = false;
+  const reply = (thenDestroy) => {
+    if (replied) return;
+    replied = true;
+    clearTimeout(timer);
+    sendJSON(res, 413, body);
+    if (thenDestroy) req.destroy();
+  };
+  const timer = setTimeout(() => reply(true), DRAIN_MAX_MS);
+  timer.unref();
+  req.removeAllListeners('data');
+  let drained = 0;
+  req.on('data', (chunk) => {
+    drained += chunk.length;
+    if (drained > DRAIN_MAX_BYTES) reply(true);
+  });
+  req.on('end', () => reply(false));
+}
+
 function sendJSON(res, code, body) {
   const payload = JSON.stringify(body);
   res.writeHead(code, {
@@ -231,8 +269,7 @@ function proxyPreview(req, res) {
     size += chunk.length;
     if (size > MAX_PREVIEW_BYTES) {
       aborted = true;
-      sendJSON(res, 413, { ok: false, error: 'frame_too_large' });
-      req.destroy();
+      rejectTooLarge(req, res, { ok: false, error: 'frame_too_large' });
       return;
     }
     chunks.push(chunk);
@@ -470,8 +507,7 @@ function proxyGenerate(req, res) {
     size += chunk.length;
     if (size > MAX_PHOTO_BYTES) {
       aborted = true;
-      sendJSON(res, 413, { ok: false, error: 'photo_too_large', fallbackColors: DEFAULT_FALLBACK_COLORS });
-      req.destroy();
+      rejectTooLarge(req, res, { ok: false, error: 'photo_too_large', fallbackColors: DEFAULT_FALLBACK_COLORS });
       return;
     }
     chunks.push(chunk);
@@ -613,8 +649,7 @@ function handleRequest(req, res) {
       size += chunk.length;
       if (size > MAX_PHOTO_BYTES) {
         aborted = true;
-        sendJSON(res, 413, { ok: false, error: 'capture_too_large' });
-        req.destroy();
+        rejectTooLarge(req, res, { ok: false, error: 'capture_too_large' });
         return;
       }
       chunks.push(chunk);

@@ -249,8 +249,8 @@ export function randomAvatarConfig() {
  *
  * CV 角色沒有調色盤欄位：改用生成服務取樣回來的顏色（連下身顏色也用取樣的）。
  * 髮型與服裝用 pixelParts（生成服務分析照片後給的），沒有就用預設身形。
- * 拍照角色的側面與背面就是這樣畫出來的 —— 正面用生成的圖，其餘三個方向
- * 用同一套像素畫法（見 shared/avatarSprite.js 的 cvPixelSprite）。
+ * 拍照角色走到這裡的是 renderAvatarSVG（例如主辦端名單的小頭像）；場上與手機縮圖
+ * 用的是生成的原圖（avatarSprite.js 的 cvAvatarImage / cvPortrait）。
  * 若不接這個分支，這些欄位會是 undefined 並被插值成 fill="undefined"。
  */
 export function avatarPixelSpec(cfg) {

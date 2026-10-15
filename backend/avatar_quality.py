@@ -151,10 +151,17 @@ def correction_for_validation(validation: Dict[str, Any]) -> str:
             "no grid lines, no graph paper, no checkerboard, no floor, no shadow, no scenery."
         )
     if "too_wide" in errors:
-        # 多半是在旁邊多畫了一個人（或側面、背面），而且跟本體連在一起。
+        # 多半是多畫了一個人，或兩個視圖黏在一起。
+        #
+        # 措辭刻意不說「只畫一個人」：目前只有像素風格設了 max_aspect，而它的
+        # prompt 要的正是「正、側、背三個人一排」，量的是切出來的正面那一格。
+        # 叫它「只畫一個、旁邊不要有側面背面」等於跟原 prompt 打架 —— 模型要嘛交出
+        # 設計稿式的格線框線（_PIXEL_NEGATIVE 註解裡那張），要嘛丟掉側面背面，
+        # 付費重生多半再失敗一次。改講「每個人各自分開」，單人與多視圖風格都成立。
         instructions.append(
-            "Draw EXACTLY ONE figure, standing alone in the centre: no second character, "
-            "no side or back view beside it. Keep both arms close to the body."
+            "Every figure is one single person standing alone, separated from any other "
+            "figure by clear pure-white space: figures must never touch, overlap or merge, "
+            "and never add an extra person. Keep both arms close to the body."
         )
     if "fragmented_foreground" in errors:
         # 措辭刻意不提任何風格：這段會被接到當次生成的 prompt 後面，

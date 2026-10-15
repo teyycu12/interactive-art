@@ -88,7 +88,11 @@ class AvatarValidatorTests(unittest.TestCase):
         self.assertNotIn("too_wide", validate_avatar_png(png)["errors"])
         result = validate_avatar_png(png, max_aspect=0.56)
         self.assertIn("too_wide", result["errors"], result)
-        self.assertIn("EXACTLY ONE figure", correction_for_validation(result))
+        correction = correction_for_validation(result)
+        self.assertIn("never add an extra person", correction)
+        # 像素風格的 prompt 要三視圖：叫它「只畫一個」會跟原 prompt 打架
+        self.assertNotIn("EXACTLY ONE", correction)
+        self.assertNotIn("no side or back view", correction)
         self.assertIn("再送出", guidance_for_validation(result))
 
     def test_stray_fragment_does_not_make_a_normal_figure_too_wide(self):
