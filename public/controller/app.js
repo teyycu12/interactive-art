@@ -12,15 +12,17 @@ import {
 } from '/shared/avatars.js';
 import {
   EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS, DIRECT_MESSAGE, MSG_ERRORS,
-  QUIZ_CHOICES, QUIZ_ERRORS, GREET_OUTCOME,
+  QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME,
 } from '/shared/protocol.js';
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
 } from '/shared/capture-guidance.js';
 import { COLOR_FAMILY_MAP } from '/shared/colorFamily.js';
-import { HEAT_MAP } from '/shared/heat.js';
+import { WORDCLOUD } from '/shared/wordcloud.js';
 import { ZONE_MAP } from '/shared/scene.js';
 import { avatarImage, avatarPortrait } from '/shared/avatarSprite.js';
+import { makeKeepsake, saveKeepsake } from './keepsake.js';
+import { encounterLabel } from '/shared/encounters.js';
 import { AvatarRenderer } from './avatarRenderer.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -171,10 +173,8 @@ const LS = {
 let step = 1;
 let config = randomAvatarConfig();
 let displayName = '';
-/** 伺服器指派的角色 id。尋寶要用它判斷「先知是不是我」 */
+/** 伺服器指派的角色 id */
 let myId = null;
-/** 本輪尋寶我是不是先知。只有先知收得到冷熱 */
-let isProphet = false;
 
 // 還原上次的設定，讓現場使用者重整頁面後不必重捏
 try {
@@ -1131,22 +1131,27 @@ $('#btn-retry').addEventListener('click', () => openCamera());
 $('#btn-give-up').addEventListener('click', () => fallbackToBuilder(null));
 
 /**
- * 顯示「你認識了誰」。
+ * 顯示「今天遇見了誰」。
  *
  * 這場活動真正在累積的是人與人的連結，但手機端進場後原本只有搖桿、
  * 任務與分數 —— 那份累積完全看不見。這裡把它變成參與者自己的收藏。
+ * 名單不只配對：揮手、乾杯、同桌、交接籃子都算（server/encounters.js）。
  */
+/** 最近一次的「今天遇見的人」，伺服器已排好序。離場之後紀念卡還要用，所以留在這裡 */
+let lastPeers = [];
+
 function renderSocialStrip(msg) {
   const strip = $('#links-strip');
   const peers = Array.isArray(msg?.peers) ? msg.peers : [];
+  lastPeers = peers;
   if (peers.length === 0) { strip.hidden = true; return; }
 
   $('#ls-count').textContent = String(msg.count ?? peers.length);
 
   const faces = $('#ls-faces');
   faces.textContent = '';
-  // 只畫最近幾位：手機橫幅放不下更多，而數字已經說明了總數
-  for (const peer of peers.slice(-6)) {
+  // 只畫前幾位（關係最實的）：手機橫幅放不下更多，而數字已經說明了總數
+  for (const peer of peers.slice(0, 6)) {
     const sprite = peer.avatar ? avatarImage(peer.avatar) : null;
     const cell = document.createElement('span');
     cell.className = 'ls-face';
@@ -1163,10 +1168,67 @@ function renderSocialStrip(msg) {
   strip.hidden = false;
 }
 
-$('#links-strip').addEventListener('click', () => {
-  // 目前只做提示；完整名單留待有需求時再展開成面板
-  showToast('這些是你在現場實際碰面並互相確認過的人');
-});
+// ── 今天認識的人與紀念卡（public/controller/keepsake.js）────────
+const linksSheet = $('#links-sheet');
+
+function openLinks() {
+  const list = $('#links-list');
+  list.replaceChildren();
+  for (const peer of lastPeers) {
+    const li = document.createElement('li');
+    const face = Object.assign(document.createElement('span'), { className: 'lf' });
+    if (peer.avatar) avatarPortrait(peer.avatar).then((c) => face.append(c)).catch(() => {});
+    const who = Object.assign(document.createElement('span'), { className: 'lw' });
+    who.append(document.createTextNode(peer.name || '（已離場）'));
+    const how = encounterLabel(peer.via);
+    if (how) who.append(Object.assign(document.createElement('small'), { textContent: how }));
+    li.append(face, who);
+    list.append(li);
+  }
+  $('#keepsake-msg').hidden = true;
+  linksSheet.hidden = false;
+  pushOverlay(linksSheet, { onEscape: closeLinks, restoreTo: $('#links-strip') });
+}
+
+function closeLinks() {
+  if (linksSheet.hidden) return;
+  linksSheet.hidden = true;
+  popOverlay(linksSheet);
+}
+
+/** 畫紀念卡並交給系統分享或下載。兩顆按鈕（名單面板、離場頁）共用 */
+async function saveTodayCard(btn, msgEl) {
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = '製作中…';
+  try {
+    const card = await makeKeepsake({
+      name: displayName,
+      avatar: config,
+      persona: PERSONA_RESULT_MAP[personaAnswers?.resultId] ?? null,
+      peers: lastPeers,
+    });
+    const how = await saveKeepsake(card, `紀念卡-${displayName}.png`);
+    if (how === 'downloaded') (msgEl ? showKeepsakeMsg : showToast)('已下載紀念卡。iPhone 會開新分頁，長按圖片即可儲存。');
+  } catch {
+    (msgEl ? showKeepsakeMsg : showToast)('紀念卡沒做成，請再試一次。');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+function showKeepsakeMsg(text) {
+  const el = $('#keepsake-msg');
+  el.textContent = text;
+  el.hidden = false;
+}
+
+$('#links-strip').addEventListener('click', openLinks);
+$('#btn-links-close').addEventListener('click', closeLinks);
+linksSheet.addEventListener('click', (e) => { if (e.target === linksSheet) closeLinks(); });
+$('#btn-keepsake').addEventListener('click', (e) => saveTodayCard(e.currentTarget, $('#keepsake-msg')));
+$('#btn-keepsake-farewell').addEventListener('click', (e) => saveTodayCard(e.currentTarget, null));
 
 // ── 捏臉 ──────────────────────────────────────────────────
 $('#btn-random').addEventListener('click', () => { config = randomAvatarConfig(); refresh(); });
@@ -1301,6 +1363,22 @@ function connect() {
     try { msg = JSON.parse(e.data); } catch { return; }
 
     if (msg.type === EV.CLIENT_WELCOME) {
+      // 斷線期間可能錯過 BINGO_ENDED：先把舊卡清掉。還在進行的話，
+      // 伺服器在 WELCOME 之後會補送一張（sendBingoCatchUp），不會因此看不到卡
+      if (bingoCard || bingoAsk) {
+        bingoCard = null;
+        bingoPick = null;
+        clearInterval(bingoTimer);
+        clearBingoAsk();
+        hideBingoOffer();
+        closeBingo();
+        renderBingo();
+      }
+      // 從候補名單進場：伺服器直接送 WELCOME，不必手機重新操作
+      if (closeAudienceWait()) {
+        showToast('輪到你了！已經進場');
+        vibrate([60, 40, 60, 40, 120]);
+      }
       try {
         localStorage.setItem(LS.userId, msg.userId);
         if (msg.rejoinToken) localStorage.setItem(LS.rejoinToken, msg.rejoinToken);
@@ -1328,7 +1406,10 @@ function connect() {
       // 個人視角畫的是大螢幕同一個場景的局部，主題要跟著主辦端切換
       stageTheme = msg.theme;
       renderer?.setTheme(stageTheme);
+    } else if (msg.type === EV.AUDIENCE_WAIT) {
+      showAudienceWait(msg.ahead);
     } else if (msg.type === EV.CLIENT_REJECT) {
+      closeAudienceWait();
       setStatus('資料有誤', 'warn');
       showToast(`登入失敗：${msg.reason}`);
       backToBuilder();
@@ -1357,6 +1438,37 @@ function backToBuilder() {
   showScreen('builder');
   showStep(3);
 }
+
+// ── 候補名單（人滿時）────────────────────────────────────
+const audienceWait = $('#audience-wait');
+
+function showAudienceWait(ahead) {
+  $('#audience-ahead').textContent = ahead > 0 ? `前面還有 ${ahead} 人` : '下一個就是你';
+  setStatus('候補中', 'warn');
+  if (!audienceWait.hidden) return;
+  audienceWait.hidden = false;
+  pushOverlay(audienceWait, { onEscape: leaveAudience });
+}
+
+/** @returns {boolean} 原本是否開著 */
+function closeAudienceWait() {
+  if (audienceWait.hidden) return false;
+  audienceWait.hidden = true;
+  popOverlay(audienceWait);
+  return true;
+}
+
+/** 不等了：斷開這條連線（伺服器會把他移出名單），回到捏臉頁 */
+function leaveAudience() {
+  closeAudienceWait();
+  if (ws) {
+    ws.superseded = true;
+    ws.close();
+  }
+  backToBuilder();
+}
+
+$('#btn-audience-leave').addEventListener('click', leaveAudience);
 
 // ─────────────────────────────────────────────────────────────
 // 任務與配對（規格 v3.0 §3.3）
@@ -1443,99 +1555,346 @@ function renderZone(zoneId) {
   }
 }
 
-// ── 尋寶（先知模式）──────────────────────────────────────
-/**
- * 尋寶面板。
- *
- * 兩種身分的畫面刻意差很多：
- *   先知　看得到冷熱，但畫面明說「你不能自己去撿」
- *   其他人　完全沒有提示，只寫「聽先知的指令」
- * 若兩邊長得像，先知會以為自己也在找，整個玩法就散掉。
- */
-/** 採收：本輪狀態與「我現在按不按得到籃子」。兩者都由伺服器說了算 */
-let harvestRound = null;
-let canTakeBasket = false;
+// ── 文字雲 ────────────────────────────────────────────────
+// 主持人出題時出現在搖桿區上方，輸入短答送到大螢幕。不是覆蓋層：邊走邊答也可以。
+// 「你送過的」以伺服器回傳的 mine 為準（重連時伺服器會補送），手機不自己記。
+const wcBox = $('#wordcloud-box');
+const wcInput = $('#wc-input');
+wcInput.maxLength = WORDCLOUD.maxAnswerLength;
+let wcRound = null;
+let wcMine = [];
+let wcSending = false;
 
-/**
- * 採收面板。
- *
- * **刻意不寫家具名稱** —— 名稱只存在大螢幕的場景設定裡（換主題會變），
- * 手機再存一份必然漂移。而且這題本來就要人抬頭找地方，指向螢幕比在手機上
- * 描述位置更有用（同問卷的到場題）。
- */
-function renderHarvest() {
-  const box = $('#harvest-box');
-  if (!box) return;
-  box.hidden = !harvestRound;
-  if (!harvestRound) return;
+const WC_ERROR_TEXT = {
+  NO_ROUND: '這題已經結束了。',
+  EMPTY: '寫點什麼再送出吧。',
+  TOO_LONG: `最多 ${WORDCLOUD.maxAnswerLength} 個字。`,
+  BLOCKED: '這個詞不適合出現在大螢幕上，換一個吧。',
+  LIMIT: `每人最多送 ${WORDCLOUD.maxPerPerson} 個。`,
+  DUPLICATE: '你已經送過這個了。',
+};
 
-  const r = harvestRound;
-  const left = r.beds.filter((b) => b.pickedBy === null).length;
-  const holding = r.holder === myId;
-  const iPicked = r.picked.includes(myId);
-  box.classList.toggle('is-holder', holding);
-  $('#harvest-left').textContent = left > 0 ? `還差 ${left} 處` : '可以送回去了';
-
-  let hint;
-  if (holding && left === 0) hint = '全部採完了！把籃子送回出發的地方。';
-  else if (holding && iPicked) hint = '你這一輪採過了 —— 叫一個還沒採的人過來，請他接走籃子。';
-  else if (holding) hint = '你拿著籃子。看大螢幕，走到還沒採的那一處。';
-  else if (iPicked) hint = '你這一輪採過了。有人需要籃子時幫忙喊一聲。';
-  else hint = '看大螢幕找籃子在誰手上，走過去跟他要。';
-  $('#harvest-hint').textContent = hint;
-
-  const btn = $('#btn-harvest');
-  btn.hidden = !(holding || canTakeBasket);
-  btn.textContent = holding ? '把籃子放下' : '接過籃子';
+function renderWordCloudBox() {
+  wcBox.hidden = !wcRound;
+  if (!wcRound) return;
+  $('#wc-question').textContent = wcRound.question;   // 主持人輸入的題目，一律 textContent
+  const full = wcMine.length >= WORDCLOUD.maxPerPerson;
+  wcInput.disabled = full;
+  wcInput.placeholder = full ? '已經送滿了，看大螢幕！' : '輸入你的答案';
+  $('#wc-send').disabled = full || wcSending || !wcInput.value.trim();
+  const mine = $('#wc-mine');
+  mine.hidden = wcMine.length === 0;
+  const left = WORDCLOUD.maxPerPerson - wcMine.length;
+  mine.textContent = `你送過：${wcMine.join('、')}${left > 0 ? `　還可以送 ${left} 個` : ''}`;
 }
 
-$('#btn-harvest')?.addEventListener('click', () => {
-  if (!harvestRound) return;
-  // 接的人發起，不是給的人 —— 「叫他過來」才是這個玩法要的那一步。
-  // 距離由伺服器判定，手機只有搖桿，根本不知道自己在房間的哪裡。
-  sendMsg(harvestRound.holder === myId ? EV.HARVEST_DROP : EV.HARVEST_TAKE);
+function wcMsg(text) {
+  const el = $('#wc-msg');
+  el.textContent = text;
+  el.hidden = !text;
+}
+
+wcInput.addEventListener('input', () => { wcMsg(''); renderWordCloudBox(); });
+$('#wc-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = wcInput.value.trim();
+  if (!wcRound || !text || wcSending) return;
+  wcSending = true;
+  renderWordCloudBox();
+  sendMsg(EV.WORDCLOUD_ANSWER, { text });
 });
 
-function showHarvestNote(text) {
-  const el = $('#harvest-hint');
-  if (!el) return;
+function onWordCloudAck(msg) {
+  wcSending = false;
+  if (Array.isArray(msg.mine)) wcMine = msg.mine;
+  if (msg.ok) {
+    wcInput.value = '';
+    wcMsg('送出了！看看大螢幕');
+    vibrate(20);
+  } else {
+    wcMsg(WC_ERROR_TEXT[msg.reason] ?? '沒有送出，再試一次。');
+  }
+  renderWordCloudBox();
+}
+
+// ─────────────────────────────────────────────────────────────
+// 人物賓果（server/bingo.js）
+// ─────────────────────────────────────────────────────────────
+// 卡是私人的：條件寫在自己手機上，要找的人得自己去問。
+// 填格用的是對方的配對碼 —— 與配對任務同一組碼，因此也受同一份冷卻限制。
+
+/** @type {{cells: {label: string, filled: boolean, name: string|null}[], lines: number}|null} */
+let bingoCard = null;
+let bingoDeadline = null;
+let bingoPick = null;
+let bingoTimer = null;
+const bingoSheet = $('#bingo-sheet');
+const bingoInput = $('#bingo-input');
+
+// ── 開局的自我介紹（shared/bingoFacts.js）──
+/** @type {{facts: {id: string, text: string}[], deadline: number, sent: boolean}|null} */
+let bingoAsk = null;
+let bingoAskTimer = null;
+const bingoAskSheet = $('#bingo-ask-sheet');
+
+function openBingoAsk() {
+  if (!bingoAsk) return;
+  renderBingoAsk();
+  if (!bingoAskSheet.hidden) return;
+  bingoAskSheet.hidden = false;
+  pushOverlay(bingoAskSheet, { onEscape: closeBingoAsk, restoreTo: $('#bingo-banner') });
+}
+
+function closeBingoAsk() {
+  if (bingoAskSheet.hidden) return;
+  bingoAskSheet.hidden = true;
+  popOverlay(bingoAskSheet);
+}
+
+function renderBingoAsk() {
+  const box = $('#bingo-facts');
+  // 已經畫過就只更新狀態，不要重建（重建會把勾到一半的選擇洗掉）
+  if (box.dataset.round !== String(bingoAsk.key)) {
+    box.dataset.round = String(bingoAsk.key);
+    box.replaceChildren(...bingoAsk.facts.map((f) => {
+      const b = Object.assign(document.createElement('button'), { type: 'button', className: 'bingo-fact', textContent: f.text });
+      b.dataset.id = f.id;
+      b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', () => {
+        b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true'));
+      });
+      return b;
+    }));
+  }
+  $('#btn-bingo-facts-done').textContent = bingoAsk.sent ? '改好了，重新送出' : '好了';
+}
+
+function tickBingoAsk() {
+  if (!bingoAsk) return;
+  const left = Math.max(0, Math.ceil((bingoAsk.deadline - Date.now()) / 1000));
+  $('#bingo-ask-timer').textContent = bingoAsk.sent
+    ? `已送出，等大家答完就發卡（最多 ${left} 秒）`
+    : `${left} 秒後發卡，沒勾的就當作都不符合`;
+}
+
+function clearBingoAsk() {
+  bingoAsk = null;
+  clearInterval(bingoAskTimer);
+  closeBingoAsk();
+}
+
+$('#btn-bingo-facts-done').addEventListener('click', () => {
+  if (!bingoAsk) return;
+  const yes = [...$('#bingo-facts').querySelectorAll('[aria-pressed="true"]')].map((b) => b.dataset.id);
+  sendMsg(EV.BINGO_FACTS, { yes });
+  bingoAsk.sent = true;
+  renderBingoAsk();
+  tickBingoAsk();
+  vibrate(20);
+  closeBingoAsk();
+  renderBingo();
+});
+$('#btn-bingo-ask-close').addEventListener('click', closeBingoAsk);
+bingoAskSheet.addEventListener('click', (e) => { if (e.target === bingoAskSheet) closeBingoAsk(); });
+
+// ── 「順便填」：剛把你填進賓果的人，也符合你卡上空著的一格 ──
+let bingoOfferTimer = null;
+function showBingoOffer(byName, label) {
+  $('#bingo-offer-text').textContent = `${byName || '對方'}是「${label}」`;
+  $('#bingo-offer').hidden = false;
+  clearTimeout(bingoOfferTimer);
+  // 比伺服器的 OFFER_TTL_MS（90 秒）早收：按下去才說過期，比看不到按鈕更讓人困惑
+  bingoOfferTimer = setTimeout(hideBingoOffer, 60_000);
+}
+function hideBingoOffer() {
+  $('#bingo-offer').hidden = true;
+  clearTimeout(bingoOfferTimer);
+}
+$('#btn-bingo-accept').addEventListener('click', () => {
+  sendMsg(EV.BINGO_ACCEPT, {});
+  hideBingoOffer();
+});
+
+const BINGO_ERROR_TEXT = {
+  NO_ROUND: '這一輪已經結束了。',
+  NO_CARD: '你還沒有賓果卡，稍等一下再試。',
+  BAD_CELL: '請先點選要填的那一格。',
+  FILLED: '這一格已經填過了。',
+  SELF: '不能填自己喔。',
+  USED: '這個人在你卡上已經填夠多格了，去找別人吧。',
+  NO_OFFER: '這次的「順便填」已經過期了，請直接輸入他的配對碼。',
+  MISMATCH: '這個人不符合這一格的條件，再問問別人。',
+  NOT_FOUND: '查無這組配對碼，請對方再唸一次（碼每分鐘會換）。',
+  COOLDOWN: '慢一點，等 3 秒再送。',
+};
+
+function renderBingo() {
+  const banner = $('#bingo-banner');
+  if (!bingoCard) {
+    // 開局還在勾自我介紹：橫幅先出來，點了打開勾選畫面
+    banner.hidden = !bingoAsk;
+    if (bingoAsk) {
+      $('#bingo-prog').textContent = bingoAsk.sent ? '等發卡' : '準備中';
+      $('#bingo-banner-hint').textContent = bingoAsk.sent ? '已送出自我介紹，等大家答完就發卡' : '先勾一下符合你的自我介紹　·　點此打開';
+    }
+    return;
+  }
+  $('#bingo-banner-hint').textContent = '找符合條件的人、問他的配對碼　·　點此打開賓果卡';
+  const filled = bingoCard.cells.filter((c) => c.filled).length;
+  banner.hidden = false;
+  $('#bingo-prog').textContent = `${filled} / 9${bingoCard.lines ? `　連線 ${bingoCard.lines}` : ''}`;
+  $('#bingo-mycode').textContent = myCode;
+
+  const grid = $('#bingo-grid');
+  grid.replaceChildren();
+  bingoCard.cells.forEach((c, i) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `bingo-cell${c.filled ? ' filled' : ''}`;
+    btn.setAttribute('aria-pressed', String(bingoPick === i));
+    if (c.filled) {
+      btn.disabled = true;
+      btn.append(
+        Object.assign(document.createElement('span'), { className: 'who', textContent: c.name || '已填' }),
+        Object.assign(document.createElement('span'), { className: 'cond', textContent: c.label }),
+      );
+    } else {
+      btn.textContent = c.label;
+      btn.addEventListener('click', () => pickBingoCell(i));
+    }
+    grid.append(btn);
+  });
+}
+
+function pickBingoCell(i) {
+  bingoPick = i;
+  $('#bingo-msg').hidden = true;
+  $('#bingo-entry-label').textContent = `「${bingoCard.cells[i].label}」：輸入他的配對碼`;
+  $('#bingo-entry').hidden = false;
+  bingoInput.value = '';
+  renderBingo();
+  setTimeout(() => bingoInput.focus(), 50);
+}
+
+function showBingoMsg(text) {
+  const el = $('#bingo-msg');
   el.textContent = text;
+  el.hidden = !text;
 }
 
-function renderTreasure(round) {
-  const box = $('#treasure-box');
-  if (!box) return;
-  box.hidden = !round;
-  if (!round) return;
-
-  box.classList.toggle('is-prophet', isProphet);
-  $('#treasure-role').textContent = isProphet ? '🔮 你是先知' : '🔍 尋寶中';
-  $('#treasure-hint').textContent = isProphet
-    ? '只有你看得到冷熱。大聲喊出來，帶大家過去 —— 你自己撿不算分。'
-    : '你看不到提示。聽先知喊的方向走。';
-  $('#treasure-heat').textContent = isProphet ? '等待中…' : '—';
-  $('#treasure-heat').hidden = !isProphet;
+function openBingo() {
+  if (!bingoCard) { openBingoAsk(); return; }
+  bingoSheet.hidden = false;
+  renderBingo();
+  pushOverlay(bingoSheet, { onEscape: closeBingo, restoreTo: $('#bingo-banner') });
 }
 
-function renderHeat(id) {
-  const h = HEAT_MAP[id];
-  if (!h) return;
-  const el = $('#treasure-heat');
-  el.textContent = `${h.glyph} ${h.label}`;
-  el.style.setProperty('--heat', h.color);
-  // 震動只是加分項：iOS 完全不支援，因此顏色與文字本身已經足夠傳達
-  if (id === 'BURNING') navigator.vibrate?.(60);
+function closeBingo() {
+  if (bingoSheet.hidden) return;
+  bingoSheet.hidden = true;
+  bingoInput.blur();
+  popOverlay(bingoSheet);
 }
 
-function showTreasureResult(text) {
-  showToast(text);
+function tickBingoTimer() {
+  const el = $('#bingo-timer');
+  if (!bingoDeadline) { el.textContent = ''; return; }
+  const left = Math.max(0, bingoDeadline - Date.now());
+  el.textContent = `剩 ${Math.floor(left / 60000)} 分 ${String(Math.floor(left / 1000) % 60).padStart(2, '0')} 秒`;
+}
+
+$('#bingo-banner').addEventListener('click', openBingo);
+$('#btn-bingo-close').addEventListener('click', closeBingo);
+bingoSheet.addEventListener('click', (e) => { if (e.target === bingoSheet) closeBingo(); });
+bingoInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('#btn-bingo-submit').click(); }
+});
+$('#btn-bingo-submit').addEventListener('click', () => {
+  const code = bingoInput.value.trim();
+  if (bingoPick === null) { showBingoMsg(BINGO_ERROR_TEXT.BAD_CELL); return; }
+  if (!/^\d{4}$/.test(code)) { showBingoMsg('配對碼是 4 位數字。'); return; }
+  sendMsg(EV.BINGO_CLAIM, { cell: bingoPick, code });
+});
+
+/** @returns {boolean} 是否處理了這則訊息 */
+function handleBingoMessage(msg) {
+  switch (msg.type) {
+    case EV.BINGO_ASK:
+      bingoAsk = {
+        key: Date.now(), facts: Array.isArray(msg.facts) ? msg.facts : [],
+        deadline: Date.now() + (msg.remainingMs ?? 30_000), sent: false,
+      };
+      clearInterval(bingoAskTimer);
+      bingoAskTimer = setInterval(tickBingoAsk, 1000);
+      tickBingoAsk();
+      // 主持人剛宣布開始，大家都在看手機：直接打開，不要讓人找橫幅
+      openBingoAsk();
+      vibrate([30, 40, 30]);
+      renderBingo();
+      return true;
+
+    case EV.BINGO_CARD:
+      if (bingoAsk) {
+        const wasOpen = !bingoAskSheet.hidden;
+        clearBingoAsk();
+        if (wasOpen || !bingoCard) showToast('賓果卡發下來了！點上方的橫幅打開');
+      }
+      bingoCard = msg.card;
+      bingoDeadline = msg.remainingMs == null ? null : Date.now() + msg.remainingMs;
+      clearInterval(bingoTimer);
+      if (bingoDeadline) bingoTimer = setInterval(tickBingoTimer, 1000);
+      tickBingoTimer();
+      renderBingo();
+      return true;
+
+    case EV.BINGO_RESULT:
+      if (msg.ok) {
+        bingoPick = null;
+        $('#bingo-entry').hidden = true;
+        showBingoMsg('');
+        vibrate([30, 40, 30]);
+        showToast(msg.full ? '全卡完成！🎉'
+          : msg.newLines ? `連成一線！和 ${msg.name} 填好了`
+          : `填好了：${msg.name}`);
+      } else {
+        showBingoMsg(BINGO_ERROR_TEXT[msg.reason] ?? '沒填成功，請再試一次。');
+      }
+      return true;
+
+    case EV.BINGO_TAGGED:
+      // 被填的人知道「剛剛那個人原來在玩賓果」—— 通常就是下一段對話的開頭
+      showToast(`${msg.byName} 把你填進了賓果：「${msg.label}」`);
+      vibrate([20, 60, 20]);
+      // 他也符合我卡上空著的一格：給一顆按鈕，按下去就填上
+      if (msg.offer?.label && bingoCard) showBingoOffer(msg.byName, msg.offer.label);
+      return true;
+
+    case EV.BINGO_ENDED:
+      clearBingoAsk();
+      hideBingoOffer();
+      bingoCard = null;
+      bingoPick = null;
+      clearInterval(bingoTimer);
+      closeBingo();
+      renderBingo();
+      showToast(msg.winners?.length ? `賓果結束！${msg.winners.join('、')} 最多連線` : '賓果結束！');
+      return true;
+
+    default:
+      return false;
+  }
 }
 
 function handleMissionMessage(msg) {
   // 問答與積分自成一組，先讓它們處理；沒接走的才往下當任務訊息
   if (handleQuizMessage(msg)) return;
+  if (handleBingoMessage(msg)) return;
 
   switch (msg.type) {
+    case EV.TOPIC_CARD:
+      showTopic(msg);
+      return;
+
     case EV.GREET_INVITE:
       showGreetInvite(msg.fromId, msg.fromName);
       return;
@@ -1547,6 +1906,8 @@ function handleMissionMessage(msg) {
     case EV.PAIR_CODE:
       myCode = msg.code;
       renderMission();
+      // 賓果卡上也印著自己的碼（別人要填你時用），每分鐘輪換時要跟著換
+      renderBingo();
       break;
 
     case EV.MISSION_ANNOUNCE:
@@ -1581,53 +1942,25 @@ function handleMissionMessage(msg) {
       handlePairResult(msg);
       break;
 
-    // ── 採水果（籃子接力）────────────────────────────────
-    case EV.HARVEST_STATE:
-      harvestRound = msg.round;
-      if (!msg.round) canTakeBasket = false;
-      renderHarvest();
+    // ── 文字雲 ────────────────────────────────────────────
+    case EV.WORDCLOUD_QUESTION:
+      wcRound = msg.cloud;
+      wcMine = [];
+      wcSending = false;
+      wcInput.value = '';
+      wcMsg('');
+      renderWordCloudBox();
+      vibrate([20, 60, 20]);
       break;
 
-    case EV.HARVEST_REACH:
-      canTakeBasket = !!msg.canTake;
-      if (msg.note) showHarvestNote(msg.note);
-      renderHarvest();
+    case EV.WORDCLOUD_ACK:
+      onWordCloudAck(msg);
       break;
 
-    case EV.HARVEST_DONE:
-      harvestRound = null;
-      canTakeBasket = false;
-      renderHarvest();
-      showToast(msg.helpers.includes(myId)
-        ? `採收完成！你也有出力　+${msg.points} 分`
-        : `${msg.helperNames.join('、')} 把籃子送回去了`);
-      break;
-
-    // ── 尋寶 ──────────────────────────────────────────────
-    case EV.TREASURE_START:
-      isProphet = msg.round.prophetId === myId;
-      renderTreasure(msg.round);
-      break;
-
-    case EV.TREASURE_HEAT:
-      // 只有先知會收到這則訊息（伺服器單獨送給他），
-      // 其他人的手機上不會有任何冷熱資訊 —— 這是玩法的核心。
-      renderHeat(msg.heat);
-      break;
-
-    case EV.TREASURE_FOUND:
-      showTreasureResult(
-        msg.by === myId
-          ? `你找到寶藏了！　+${msg.points} 分`
-          : `${msg.byName} 找到了寶藏（先知 ${msg.prophetName}）`,
-      );
-      isProphet = false;
-      renderTreasure(null);
-      break;
-
-    case EV.TREASURE_ENDED:
-      isProphet = false;
-      renderTreasure(null);
+    case EV.WORDCLOUD_CLOSED:
+      wcRound = null;
+      renderWordCloudBox();
+      showToast('文字雲收題了，看看大螢幕上大家寫了什麼');
       break;
   }
 }
@@ -1752,6 +2085,13 @@ $('#btn-confirm-exit').addEventListener('click', () => {
   renderMission();
   closeSheet();
   closeConfirmPair();
+  // 賓果卡也要收：漏關任何一層，#app 的 inert 解不開，離場畫面就不能操作（UI-STYLING）
+  bingoCard = null;
+  bingoPick = null;
+  clearInterval(bingoTimer);
+  closeBingo();
+  renderBingo();
+  closeLinks();
   quiz = null;
   myChoice = null;
   closeQuiz();
@@ -1778,6 +2118,8 @@ $('#btn-confirm-exit').addEventListener('click', () => {
 $('#btn-rejoin').addEventListener('click', () => {
   hasLeft = false;
   reconnectDelay = 500;
+  // 重新進場是全新的角色：上一個角色認識的人不能留在新角色的名單與紀念卡上
+  renderSocialStrip({ peers: [] });
   showScreen('entry');
   syncStartButton();
 });
@@ -1890,6 +2232,28 @@ setInterval(() => {
   if (Date.now() - lastSentAt < INPUT_THROTTLE_MS / 2) return;
   sendInput();
 }, INPUT_THROTTLE_MS);
+
+// ── 話題桌（server/topics.js）──────────────────────────────
+// 跟同一桌的人拿到同一題。題目是要念出來跟旁邊的人聊的，不是作答 ——
+// 所以不給輸入框，只給一句「和誰同桌」，提醒他抬頭找人。
+let topicTimer = null;
+
+function showTopic(msg) {
+  $('#topic-head').textContent = `💬 ${msg.spot ?? '話題桌'}的話題`;
+  $('#topic-q').textContent = msg.question;
+  $('#topic-with').textContent = msg.withNames?.length ? `和 ${msg.withNames.join('、')} 同桌，聊聊看` : '';
+  $('#topic-card').hidden = false;
+  vibrate([20, 40, 20]);
+  clearTimeout(topicTimer);
+  topicTimer = setTimeout(hideTopic, 25_000);
+}
+
+function hideTopic() {
+  clearTimeout(topicTimer);
+  $('#topic-card').hidden = true;
+}
+
+$('#topic-card').addEventListener('click', hideTopic);
 
 // ── 揮手與乾杯的回應（server/greetings.js）─────────────────
 //
@@ -2068,8 +2432,6 @@ const quizPanel = $('#quiz-panel');
 
 /** @type {object|null} 目前題目（伺服器視圖，不含正解） */
 let quiz = null;
-/** 目前面板上是哪一種題目：'QUIZ'（有正解、計分）或 'SURVEY'（問卷，可改答案） */
-let askKind = 'QUIZ';
 /** 自己這題選了哪一個，null 代表尚未作答 */
 let myChoice = null;
 let quizTimer = null;
@@ -2149,17 +2511,9 @@ function renderQuizOptions({ locked = false, revealed = null } = {}) {
         // 先在本地鎖定，不等伺服器回應 —— 現場網路有延遲，
         // 按下去沒有立即反應會讓人以為沒按到而狂點
         myChoice = i;
-        if (askKind === 'SURVEY') {
-          // 問卷沒有正解也沒有速度分，因此**允許改**：按錯卻不能改，
-          // 那個人身上的標籤就會一直是錯的，而標籤正是問卷的產物。
-          renderQuizOptions();
-          showQuizMsg('已記錄，想改隨時可以再選。');
-          sendMsg(EV.SURVEY_ANSWER, { choice: i });
-        } else {
-          renderQuizOptions({ locked: true });
-          showQuizMsg('已送出，等待公布答案…');
-          sendMsg(EV.QUIZ_ANSWER, { choice: i });
-        }
+        renderQuizOptions({ locked: true });
+        showQuizMsg('已送出，等待公布答案…');
+        sendMsg(EV.QUIZ_ANSWER, { choice: i });
       });
     }
 
@@ -2180,59 +2534,32 @@ function startQuizCountdown() {
     const left = Math.max(0, quizDeadline - Date.now());
     const el = $('#quiz-timer');
     el.textContent = (left / 1000).toFixed(1);
-    el.classList.toggle('urgent', left < 5000);
+    el.classList.toggle('urgent', left < 5000 && quiz?.phase !== QUIZ_PHASE.DISCUSS);
     if (left <= 0) {
       clearInterval(quizTimer);
       quizTimer = null;
-      if (myChoice === null) showQuizMsg('時間到，等待公布答案…');
+      // 討論結束時不說「時間到」：伺服器馬上會重送題目、解鎖選項
+      if (quiz?.phase === QUIZ_PHASE.DISCUSS) showQuizMsg('開始作答！');
+      else if (myChoice === null) showQuizMsg('時間到，等待公布答案…');
     }
   };
   tick();
   quizTimer = setInterval(tick, 100);
 }
 
-/** 這一題要不要走到地點、自己到了沒。只影響手機上那一行提示。 */
-let surveyNeedsArrival = false;
-let surveyArrived = false;
-let lastSurveyLabel = '';
-
-/**
- * 作答之後那一行提示。
- *
- * 不寫家具名稱，而是叫人看大螢幕上同名的那個標記 —— 家具的顯示名稱只存在於
- * 大螢幕的場景設定裡（換主題會變），手機再存一份必然漂移。而且這題本來就要
- * 人抬頭看大螢幕才找得到地方，指向螢幕比在手機上描述位置更有用。
- */
-function showSurveyAck(label, arrived) {
-  lastSurveyLabel = label ?? lastSurveyLabel;
-  if (!surveyNeedsArrival) {
-    showQuizMsg(`已記錄：${lastSurveyLabel}　想改隨時可以再選`);
-    return;
-  }
-  showQuizMsg(arrived
-    ? `已到位 ✓　你站在「${lastSurveyLabel}」那一圈裡了`
-    : `已選「${lastSurveyLabel}」—— 看大螢幕，走到同名的那一圈才算完成`);
-}
-
-function showQuestion(q, kind = 'QUIZ') {
-  // 問答的 options 是字串，問卷的是 {label, value, spot} 物件。
-  // 這裡統一攤成字串再交給共用的選項渲染 —— 少了這一步，
-  // 問卷的四個選項會全部顯示成 [object Object]，而且不會有任何錯誤。
-  quiz = kind === 'SURVEY'
-    ? { ...q, options: q.options.map((o) => (typeof o === 'string' ? o : o.label)) }
-    : q;
-  askKind = kind;
+function showQuestion(q) {
+  quiz = q;
   myChoice = null;
-  // 新題目把上一題的到位狀態清掉，否則上一題「已到位 ✓」會留在畫面上
-  surveyNeedsArrival = kind === 'SURVEY' && !!q.requireArrival;
-  surveyArrived = false;
-  lastSurveyLabel = '';
-  $('#quiz-no').textContent = kind === 'SURVEY' ? `問卷 ${q.index}` : `第 ${q.index} 題`;
+  $('#quiz-no').textContent = `第 ${q.index} 題`;
   $('#quiz-q').textContent = q.question;
   $('#quiz-result-card').hidden = true;
   $('#btn-quiz-hide').hidden = true;
-  showQuizMsg('');
-  renderQuizOptions();
+  // 討論時間：選項先亮出來但鎖住。這段時間要的是轉頭跟旁邊的人商量，
+  // 不是盯著手機 —— 提示寫在最顯眼的那一行
+  const talking = q.phase === QUIZ_PHASE.DISCUSS;
+  showQuizMsg(talking ? '先跟身邊的人討論！倒數結束才能作答' : '');
+  $('#quiz-timer').classList.toggle('talk', talking);
+  renderQuizOptions({ locked: talking });
   startQuizCountdown();
   openQuiz();
 }
@@ -2271,57 +2598,12 @@ const QUIZ_MESSAGES = {
   [QUIZ_ERRORS.CLOSED]: '時間到了，這題已經截止。',
   [QUIZ_ERRORS.ALREADY_ANSWERED]: '你已經作答過了，答案不能更改。',
   [QUIZ_ERRORS.BAD_CHOICE]: '選項不正確，請重新選擇。',
+  [QUIZ_ERRORS.NOT_YET]: '還在討論時間，等倒數結束再作答。',
 };
 
-/**
- * 問卷收題。
- *
- * 刻意不在手機上顯示全場分佈 —— 那是大螢幕的工作（見規劃：手機是私人資訊、
- * 大螢幕是公共資訊）。手機只留下「你自己選了什麼」。
- */
-function showSurveyClosed(result) {
-  if (!quiz || quiz.id !== result.id) return;
-  clearInterval(quizTimer);
-  quizTimer = null;
-  $('#quiz-timer').textContent = '—';
-  $('#quiz-timer').classList.remove('urgent');
-  renderQuizOptions({ locked: true });
-  showQuizMsg(myChoice === null ? '這題沒作答。' : '已記錄，看大螢幕。');
-  $('#btn-quiz-hide').hidden = false;
-}
 
 function handleQuizMessage(msg) {
   switch (msg.type) {
-    case EV.SURVEY_QUESTION:
-      showQuestion(msg.survey, 'SURVEY');
-      return true;
-
-    case EV.SURVEY_ACK:
-      if (msg.ok) {
-        // 伺服器回傳的標籤文字才是權威值（例如「負責煮」），
-        // 而且重連補送時這是唯一能還原「我剛才選了什麼」的來源
-        myChoice = msg.choice;
-        surveyNeedsArrival = !!msg.requireArrival;
-        renderQuizOptions();
-        showSurveyAck(msg.label, !!msg.arrived);
-      } else {
-        myChoice = null;
-        surveyNeedsArrival = false;
-        renderQuizOptions();
-        showQuizMsg(msg.reason === 'CLOSED' ? '時間到了，這題已經截止。' : '這次作答沒有被接受。');
-      }
-      return true;
-
-    // 要到場才算的題目：人走進／走出自己選的那一圈時伺服器會通知。
-    case EV.SURVEY_ARRIVED:
-      surveyArrived = !!msg.arrived;
-      showSurveyAck(lastSurveyLabel, surveyArrived);
-      return true;
-
-    case EV.SURVEY_CLOSED:
-      showSurveyClosed(msg.result);
-      return true;
-
     case EV.QUIZ_QUESTION:
       showQuestion(msg.quiz);
       return true;

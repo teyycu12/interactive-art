@@ -86,6 +86,9 @@
     box-shadow: 0 8px 28px -14px rgba(47,42,38,.4);
   }
   .mission[hidden] { display: none; }
+  /* 賓果橫幅：鼠尾草綠，與任務的陶土色分開。標籤字用 ink 版本（UI-STYLING：亮色不寫字） */
+  .mission.bingo { border-color: #6E9B84; }
+  .mission.bingo .m-label { color: #3D6158; }
   .mission .m-label {
     font-size: 11px; letter-spacing: .2em; color: #B44A2F; font-weight: 700;
   }
@@ -181,21 +184,38 @@
   .q-opt.dim { opacity: .28; }
   .q-opt.right { border-color: var(--ink); }
 
-  /* ── 轉場問卷 ───────────────────────────────────────────
-     沿用問答的版型，換成綠框以示「這題沒有對錯」。
-     選項上的填滿長條是即時分佈 —— 全場看得到的公共資訊，
-     個人答了什麼只留在自己手機上。 */
-  .survey { border-color: #2A8C80; }
-  .q-opt { position: relative; overflow: hidden; }
-  .q-opt .fill {
-    position: absolute; inset: 0 auto 0 0; width: 0;
-    background: rgba(255, 255, 255, .26);
-    transition: width .35s ease;
+  /* ── 文字雲 ─────────────────────────────────────────────
+     蓋在場景上的整面紙色畫布；詞的位置由 screen.js 以螺旋排版算出，
+     位置與字級的變化交給 transition，新詞以 wc-pop 彈出 —— 「長出來」的感覺。 */
+  .wordcloud {
+    /* 比活動名稱卡、橫幅高一層：出題期間文字雲是全場焦點，左上角的名稱卡不該壓在題目上 */
+    position: fixed; inset: 18px; z-index: 4;
+    display: flex; flex-direction: column;
+    background: rgba(250, 248, 245, .97);
+    border: 3px solid var(--ink); border-radius: 22px;
+    padding: 18px 26px 14px;
+    box-shadow: 0 18px 50px -24px rgba(47, 42, 38, .55);
   }
-  .q-opt > .g, .q-opt > .t, .q-opt > .c, .q-opt > .spot { position: relative; }
-  .q-opt .spot {
-    flex: none; font-size: 15px; font-weight: 700; opacity: .9;
-    border: 2px solid rgba(255, 255, 255, .7); border-radius: 999px; padding: 2px 10px;
+  .wordcloud[hidden] { display: none; }
+  .wc-head { display: flex; align-items: center; gap: 16px; flex: none; }
+  .wc-kind {
+    flex: none; font-size: 16px; font-weight: 800; letter-spacing: .08em;
+    padding: 4px 14px; border-radius: 999px; background: #2A8C80; color: #fff;
+  }
+  .wc-title { margin: 0; flex: 1; font-size: clamp(24px, 3.2vw, 44px); font-weight: 800; color: var(--ink); line-height: 1.25; }
+  .wc-meta { flex: none; font-size: 18px; font-weight: 700; color: var(--soft); font-variant-numeric: tabular-nums; }
+  .wc-area { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+  .wc-word {
+    position: absolute; left: 0; top: 0; white-space: nowrap; font-weight: 800; line-height: 1;
+    transform: translate(var(--x), var(--y));
+    transition: transform .6s cubic-bezier(.2, .8, .2, 1), font-size .6s cubic-bezier(.2, .8, .2, 1), opacity .4s;
+    animation: wc-pop .55s cubic-bezier(.2, 1.4, .4, 1) both;
+  }
+  @keyframes wc-pop { from { opacity: 0; scale: .2; } to { opacity: 1; scale: 1; } }
+  .wc-hint { margin: 6px 0 0; flex: none; text-align: center; font-size: 18px; font-weight: 700; color: var(--soft); }
+  .wordcloud.closed .wc-kind { background: var(--ink); }
+  @media (prefers-reduced-motion: reduce) {
+    .wc-word { transition: none; animation: none; }
   }
 
   /* ── 排行榜 ─────────────────────────────────────────────
@@ -234,6 +254,15 @@
     font-family: ui-monospace, Consolas, monospace;
     font-variant-numeric: tabular-nums; font-weight: 900;
   }
+  /* 音效被瀏覽器擋住時的提示（public/screen/sfx.js）。給操作者看的，不是給觀眾：
+     刻意小、低對比、放在不擋角色的右下角（見 docs/notes/UI-STYLING.md「刻意壓低對比的地方」）。
+     點一下畫面解鎖後就消失。 */
+  .sfx-note {
+    position: fixed; right: 12px; bottom: 10px; z-index: 50;
+    font-size: 12px; color: rgba(58, 46, 39, .45);
+    pointer-events: none;
+  }
+  .sfx-note[hidden] { display: none; }
 </style>
 <link rel="stylesheet" href="scenes/pixel-scene.css">
 <!-- three 由本機 node_modules 直出，不走 CDN。
@@ -249,6 +278,13 @@
 <body>
 <div id="bg3d"></div>
 <canvas id="stage"></canvas>
+
+<!-- 人物賓果：只放進度前幾名，卡片內容是參與者私人的 -->
+<div class="mission bingo" id="bingo" hidden>
+  <div class="m-label">人物賓果 · 找符合條件的人，問他的配對碼</div>
+  <div class="m-title" id="bingo-lead">—</div>
+  <div class="m-brief" id="bingo-meta">—</div>
+</div>
 
 <div class="mission" id="mission" hidden>
   <div class="m-label">現在的任務</div>
@@ -270,18 +306,17 @@
   <div class="q-opts" id="q-opts"></div>
 </div>
 
-<!-- 轉場問卷。沒有正解，因此畫面上只呈現分佈；個人答了什麼留在自己手機上。 -->
-<div class="quiz survey" id="survey" hidden>
-  <div class="q-line">
-    <span class="q-kind" id="sv-no">問卷</span>
-    <p class="q-title" id="sv-title">—</p>
-    <span class="q-foot" id="sv-foot">已作答 <b id="sv-answered">0</b> 人</span>
-    <span class="q-state" id="sv-state">作答中</span>
+<!-- 文字雲（public/screen/screen.js 的 showWordCloud）。整面蓋在場景上：
+     答案是這一刻全場的焦點，場景淡到後面。不顯示是誰寫的。 -->
+<div class="wordcloud" id="wordcloud" hidden>
+  <div class="wc-head">
+    <span class="wc-kind">文字雲</span>
+    <p class="wc-title" id="wc-title">—</p>
+    <span class="wc-meta" id="wc-meta">0 人作答</span>
   </div>
-  <div class="q-timebar" id="sv-timebar"><i id="sv-timefill"></i></div>
-  <!-- 選項綁了地點時這裡是空的：選項改畫在場景裡它對應的家具旁，
-       既省掉橫幅高度，也直接回答「我選這個要走去哪」。 -->
-  <div class="q-opts" id="sv-opts"></div>
+  <div class="wc-area" id="wc-area"></div>
+  <p class="wc-hint" id="wc-hint">拿起手機，輸入你的答案！</p>
+</div>
 </div>
 
 <div class="ranks" id="ranks" hidden>

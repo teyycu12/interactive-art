@@ -235,6 +235,15 @@
     </div>
 
     <!-- 任務橫幅。點擊才展開輸入面板，讓數字鍵盤不會干擾搖桿。 -->
+    <!-- 人物賓果：平常只佔一行，點開才是整張卡 -->
+    <button class="mission-banner bingo-banner" id="bingo-banner" hidden>
+      <span class="mb-row">
+        <span class="mb-title">人物賓果</span>
+        <span class="mb-prog" id="bingo-prog">0 / 9</span>
+      </span>
+      <span class="mb-code" id="bingo-banner-hint">找符合條件的人、問他的配對碼　·　點此打開賓果卡</span>
+    </button>
+
     <button class="mission-banner" id="mission-banner" hidden>
       <span class="mb-row">
         <span class="mb-title" id="mb-title">—</span>
@@ -246,30 +255,21 @@
     <!-- 所在分區。走進舞台／暢飲／沙發區時出現 -->
     <p class="zone-chip" id="zone-chip" hidden></p>
 
-    <!-- 採水果（籃子接力）。手機不寫家具名稱，叫人看大螢幕 ——
-         名稱只存在大螢幕的場景設定裡，換主題會變，手機再存一份必然漂移。 -->
-    <div class="treasure harvest" id="harvest-box" hidden>
-      <div class="tr-row">
-        <span class="tr-role" id="harvest-role">🧺 採水果</span>
-        <span class="tr-heat" id="harvest-left" style="--heat:#2A9D8F">—</span>
-      </div>
-      <p class="tr-hint" id="harvest-hint"></p>
-      <button class="btn-primary hv-act" id="btn-harvest" hidden></button>
-    </div>
-
-    <!-- 尋寶。先知與其他人看到的內容刻意不同，見 app.js 的 renderTreasure -->
-    <div class="treasure" id="treasure-box" hidden>
-      <div class="tr-row">
-        <span class="tr-role" id="treasure-role">尋寶中</span>
-        <span class="tr-heat" id="treasure-heat" hidden>—</span>
-      </div>
-      <p class="tr-hint" id="treasure-hint"></p>
+    <!-- 文字雲：主持人出題時出現，輸入短答送到大螢幕。不擋搖桿，邊走邊答也可以 -->
+    <div class="wc-box" id="wordcloud-box" hidden>
+      <p class="wc-q"><span class="wc-tag">文字雲</span><b id="wc-question">—</b></p>
+      <form class="wc-form" id="wc-form" autocomplete="off">
+        <input id="wc-input" enterkeyhint="send" placeholder="輸入你的答案" aria-label="你的答案">
+        <button class="btn-primary" id="wc-send" type="submit" disabled>送出</button>
+      </form>
+      <p class="wc-mine" id="wc-mine" hidden></p>
+      <p class="wc-msg" id="wc-msg" hidden role="status" aria-live="polite"></p>
     </div>
 
     <!-- 社交連結：這場活動真正在累積的東西，但手機端原本完全看不到。
          配對成功才出現，沒有連結時不佔版面。 -->
     <button class="links-strip" id="links-strip" hidden>
-      <span class="ls-label">你認識了 <b id="ls-count">0</b> 個人</span>
+      <span class="ls-label">今天遇見了 <b id="ls-count">0</b> 個人</span>
       <span class="ls-faces" id="ls-faces"></span>
     </button>
 
@@ -283,12 +283,24 @@
     <!-- 搖桿區不放說明文字：手機上那行字會被切掉又擋住場景。操作說明在上方的 #agency -->
     <div id="joystick-zone"></div>
 
+    <!-- 話題桌：跟同一桌的人拿到同一題。不擋搖桿，點一下或 25 秒後收起 -->
+    <button class="topic-card" id="topic-card" hidden aria-live="polite">
+      <span class="tc-head" id="topic-head">💬 話題</span>
+      <span class="tc-q" id="topic-q"></span>
+      <span class="tc-with" id="topic-with"></span>
+    </button>
+
     <!-- 有人跟你揮手。刻意不做成覆蓋層：要邊回揮邊看大螢幕找人，搖桿不能被擋住 -->
     <div class="greet-invite" id="greet-invite" hidden role="status" aria-live="polite">
       <span id="greet-text"></span>
       <button id="btn-wave-back">👋 揮回去</button>
     </div>
 
+    <!-- 剛把你填進賓果的人，也符合你卡上空著的一格：按一下就填上，不必再輸碼 -->
+    <div class="greet-invite" id="bingo-offer" hidden role="status" aria-live="polite">
+      <span id="bingo-offer-text"></span>
+      <button id="btn-bingo-accept">幫我填上</button>
+    </div>
     <div id="emotes">
       <button data-action="CHEERS"><em>🍻</em>乾杯</button>
       <button data-action="HEART"><em>💗</em>愛心</button>
@@ -304,6 +316,8 @@
       <p class="lede">謝謝參與。你仍然會出現在活動的大合照裡。</p>
     </div>
     <div class="foot">
+      <!-- 離場時最容易想帶走東西：自己的角色與今天認識的人 -->
+      <button class="btn-ghost" id="btn-keepsake-farewell">存下今天的紀念卡</button>
       <button class="btn-primary" id="btn-rejoin">重新進場</button>
     </div>
   </section>
@@ -341,6 +355,54 @@
 <div class="score-pop" id="score-pop" hidden></div>
 
 <!-- ── 配對面板 ─────────────────────────────────────────── -->
+<!-- 今天遇見的人：配對、揮手、乾杯、同桌、交接籃子、互傳訊息都算（server/encounters.js） -->
+<div class="sheet" id="links-sheet" hidden>
+  <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="links-title">
+    <button class="sheet-close" id="btn-links-close" aria-label="關閉">✕</button>
+    <h2 id="links-title">今天遇見的人</h2>
+    <p class="sheet-brief">今天在現場跟你有過互動的人，配對過的排在最前面。</p>
+    <ul class="links-list" id="links-list"></ul>
+    <button class="btn-primary" id="btn-keepsake">存成紀念卡</button>
+    <p class="sheet-msg" id="keepsake-msg" hidden role="status" aria-live="polite"></p>
+  </div>
+</div>
+
+<!-- 賓果開局：先勾符合自己的自我介紹，卡上才會出現「會一種樂器的人」這種格子 -->
+<div class="sheet" id="bingo-ask-sheet" hidden>
+  <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="bingo-ask-title">
+    <button class="sheet-close" id="btn-bingo-ask-close" aria-label="關閉">✕</button>
+    <h2 id="bingo-ask-title">人物賓果要開始了</h2>
+    <p class="sheet-brief">先勾一下符合你的。等一下別人的卡上會寫「找一個〔這句話〕的人」，他們會來問你。</p>
+    <div class="bingo-facts" id="bingo-facts" role="group" aria-label="自我介紹"></div>
+    <button class="btn-primary" id="btn-bingo-facts-done">好了</button>
+    <p class="sheet-prog" id="bingo-ask-timer"></p>
+  </div>
+</div>
+
+<!-- 人物賓果卡。條件只有本人知道的（人格類型）就非開口問不可 -->
+<div class="sheet" id="bingo-sheet" hidden>
+  <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="bingo-title">
+    <button class="sheet-close" id="btn-bingo-close" aria-label="關閉">✕</button>
+    <h2 id="bingo-title">人物賓果</h2>
+    <p class="sheet-brief">每格找一個符合條件的人，輸入他的配對碼。<b>每格盡量找不同的人</b>，連成一線有加分。</p>
+    <div class="mycode">
+      <span class="mycode-label">別人要填你時，把這組碼唸給他</span>
+      <b id="bingo-mycode">----</b>
+    </div>
+    <div class="bingo-grid" id="bingo-grid" role="grid" aria-label="賓果卡"></div>
+    <div class="bingo-entry" id="bingo-entry" hidden>
+      <label class="sheet-field">
+        <span id="bingo-entry-label">輸入對方的配對碼</span>
+        <input id="bingo-input" inputmode="numeric" pattern="[0-9]*" maxlength="4"
+               placeholder="0000" autocomplete="off">
+      </label>
+      <button class="btn-primary" id="btn-bingo-submit">填入</button>
+    </div>
+    <p class="sheet-msg" id="bingo-msg" hidden role="alert" aria-live="assertive"></p>
+    <p class="sheet-prog" id="bingo-timer"></p>
+  </div>
+</div>
+
 <div class="sheet" id="pair-sheet" hidden>
   <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="pair-title">
     <button class="sheet-close" id="btn-pair-close" aria-label="關閉">✕</button>
@@ -443,6 +505,18 @@
 
 <!-- 退出二次確認。用頁內對話框而非原生 confirm()：
      原生對話框在手機上樣式不受控，且會凍結整個 JS 執行緒。 -->
+<!-- 人滿時的候補。有空位時伺服器直接讓他進場（送 CLIENT_WELCOME），這層就收起來 -->
+<div class="overlay" id="audience-wait" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="audience-title" aria-describedby="audience-text">
+    <h2 id="audience-title">現場人滿，你在候補名單上</h2>
+    <p class="audience-ahead" id="audience-ahead" role="status" aria-live="polite"></p>
+    <p id="audience-text">有人離場就會自動讓你進場，不用重新操作。等的時候先看看大螢幕 —— 尋寶時也可以幫先知一起喊方向。</p>
+    <div class="dialog-actions">
+      <button class="btn-ghost" id="btn-audience-leave">先不等了</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="confirm-exit" hidden>
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
     <h2 id="confirm-title">確定要離開嗎？</h2>

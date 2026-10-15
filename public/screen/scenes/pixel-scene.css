@@ -4,7 +4,9 @@
 .scene-status { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 9px 18px; margin: 0; border-radius: 5px; background: #f6f0df; font-size: 13px; max-width: 80vw; text-align: center; }
 .scene-object { position: absolute; transform: translate(-50%, -50%); padding: 0; border: 0; background: transparent; pointer-events: auto; cursor: pointer; }
 .scene-object:hover, .scene-object:focus-visible { background: #fff1bc33 !important; outline: 2px dashed #9b542f; outline-offset: 3px; }
-.mission, .quiz, .ranks, .offline, .toasts, .hud, .event-card { z-index: 3; }
+.mission, .quiz, .ranks, .hud, .event-card { z-index: 3; }
+/* 通知與斷線提示要蓋得過文字雲（index.html 的 .wordcloud，z-index 4）：出題期間也要看得到 */
+.offline, .toasts { z-index: 5; }
 /* 左上角標題卡（活動名稱）。在頁面層而非 .scene-ui 裡，3D 客廳也用同一張 */
 .event-card { position: fixed; top: 12px; left: 20px; max-width: 46vw; padding: 7px 13px; border-radius: 5px; background: #dce5d6ed; color: #51443e; pointer-events: none; }
 .event-card h1 { font-size: 25px; letter-spacing: .12em; margin: 0; overflow-wrap: anywhere; }
