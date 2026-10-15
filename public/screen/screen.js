@@ -24,6 +24,7 @@ import {
 } from '/shared/character.js';
 import { layoutNameplates } from '/shared/nameplateLayout.js';
 import { stageViewport, setStageTopInset, onStageViewportChange } from './stageViewport.js';
+import { Sfx } from './sfx.js';
 
 let activeScene = null;
 
@@ -38,10 +39,14 @@ const CHARACTER_HEIGHT = 150;   // 邏輯座標下的角色高度
 
 let debug = false;
 
+/** 短音效（public/screen/sfx.js）。開關由主辦端控制，預設開 */
+const sfx = new Sfx();
+
 function applySettings(settings) {
   if (!settings) return;
   debug = settings.debug === true;
   document.getElementById('hud').hidden = !debug;
+  sfx.setEnabled(settings.sound !== false);
 }
 
 function runCommand(cmd) {
@@ -305,6 +310,7 @@ function connect() {
         // 互相揮手／碰杯：同一道光束，暖色，不留常駐連線（那是配對的事，見 greetings.js）
         if (typeof msg.a === 'string' && typeof msg.b === 'string') {
           sparks.push({ a: msg.a, b: msg.b, at: performance.now(), rgb: GREET_SPARK_RGB });
+          sfx.play('greet');
         }
         break;
 
@@ -320,6 +326,7 @@ function connect() {
         // 規格 v3.0 §3.1 第 05 步：每一次完成都必須在共享畫布上被看見，
         // 否則任務會退化成手機小遊戲
         toast(`${msg.a.name} 和 ${msg.b.name} 認識了！`);
+        sfx.play('pair');
         pulse.set(msg.a.id, performance.now());
         pulse.set(msg.b.id, performance.now());
         // 兩個各自擴散的環看不出「是這兩人連上了」——
@@ -341,6 +348,7 @@ function connect() {
 
       case EV.TREASURE_FOUND:
         toast(`${msg.byName} 找到寶藏了！`);
+        sfx.play('treasure');
         if (msg.by) pulse.set(msg.by, performance.now());
         treasureRound = null;
         treasureHeat = null;
@@ -357,6 +365,8 @@ function connect() {
         break;
 
       case EV.QUIZ_QUESTION:
+        // 同一題送第二次是「討論結束、開始作答」；新題目才是出題音
+        sfx.play(quiz?.id === msg.quiz?.id ? 'go' : 'quiz');
         showQuestion(msg.quiz);
         break;
 
@@ -371,6 +381,7 @@ function connect() {
 
       case EV.HARVEST_DONE:
         harvestRound = null;
+        sfx.play('harvest');
         break;
 
       case EV.SURVEY_STATE:
@@ -387,6 +398,7 @@ function connect() {
 
       case EV.QUIZ_REVEAL:
         showReveal(msg);
+        sfx.play('reveal');
         break;
 
       case EV.QUIZ_ENDED:

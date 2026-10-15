@@ -123,7 +123,7 @@ let eventInfo = parseEventInfo(snapshot?.event);
  * 光線與重置視角已拿掉（光線現場用不到；重置視角只對已停用的 3D 客廳有意義），
  * 剩下的除錯視圖不落地：那是臨時檢查用的，重開後不該還開著。
  */
-const screenSettings = { debug: false };
+const screenSettings = { debug: false, sound: true };
 
 /**
  * 進場人格問卷的題目。主持人可在主辦端修改，落地進快照 ——
@@ -1079,6 +1079,11 @@ function handleScreenCommand(ws, msg) {
   switch (msg.cmd) {
     case 'debug':
       screenSettings.debug = msg.value === true;
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
+      break;
+    case 'sound':
+      // 音效開關。展場若有講者在台上說話，主辦方要能一鍵關掉
+      screenSettings.sound = msg.value === true;
       blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
       break;
     case 'clear':

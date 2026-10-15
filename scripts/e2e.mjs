@@ -578,6 +578,14 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
 
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'debug', value: false }));
   await sleep(100);
+
+  // 音效：預設開；主辦端可以關（講者在台上說話時要能一鍵靜音）
+  check('大螢幕音效預設開啟', settings[0]?.sound === true, JSON.stringify(settings[0]));
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'sound', value: false }));
+  await sleep(200);
+  check('主辦端可以關掉大螢幕音效', settings.at(-1)?.sound === false, JSON.stringify(settings.at(-1)));
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'sound', value: true }));
+  await sleep(100);
 }
 
 // ── 進場人格問卷（團隊分類）────────────────────────────────

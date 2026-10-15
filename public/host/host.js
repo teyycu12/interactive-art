@@ -461,9 +461,14 @@ const sendScreen = (cmd, value) => {
 };
 
 let screenDebug = false;
+let screenSound = true;
 
 function renderScreenSettings(settings) {
   if (!settings) return;
+  screenSound = settings.sound !== false;
+  const sound = $('#btn-screen-sound');
+  sound.setAttribute('aria-pressed', String(screenSound));
+  sound.textContent = screenSound ? '音效：開' : '音效：關';
   screenDebug = settings.debug === true;
   const btn = $('#btn-screen-debug');
   btn.setAttribute('aria-pressed', String(screenDebug));
@@ -481,6 +486,7 @@ function screenStatus(text) {
 
 $('#btn-screen-clear').addEventListener('click', () => { sendScreen('clear'); screenStatus('已清除大螢幕上的效果'); });
 $('#btn-screen-debug').addEventListener('click', () => sendScreen('debug', !screenDebug));
+$('#btn-screen-sound').addEventListener('click', () => sendScreen('sound', !screenSound));
 $('#btn-screen-shot').addEventListener('click', () => {
   $('#btn-screen-shot').disabled = true;
   screenStatus('向大螢幕要畫面中…');

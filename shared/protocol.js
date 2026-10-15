@@ -114,7 +114,7 @@ export const EV = {
   HOST_SETUP_EVENT: 'HOST_SETUP_EVENT',       // Host → Server：選定場景並為活動命名（進入活動編排前必填）
   STAGE_EVENT: 'STAGE_EVENT',                 // Server → Screen/Host：目前的活動名稱（尚未設定時為 null）
   HOST_SCREEN_CMD: 'HOST_SCREEN_CMD',         // Host → Server：操作大螢幕（清除效果、除錯視圖、截圖）
-  SCREEN_SETTINGS: 'SCREEN_SETTINGS',         // Server → Screen/Host：大螢幕的持續性設定（除錯視圖）
+  SCREEN_SETTINGS: 'SCREEN_SETTINGS',         // Server → Screen/Host：大螢幕的持續性設定（除錯視圖、音效）
   SCREEN_CMD: 'SCREEN_CMD',                   // Server → Screen：一次性的動作（清除效果）
   HOST_SCREEN_SHOT: 'HOST_SCREEN_SHOT',       // Server → Host：「儲存畫面」的截圖
 
