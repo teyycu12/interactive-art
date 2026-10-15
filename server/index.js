@@ -32,16 +32,13 @@ import { avatarMatchesFamily, COLOR_FAMILIES } from '../shared/colorFamily.js';
 import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
-  PERSISTENCE, TREASURE, VISION_HOST, VISION_PORT, GREET, PAIRING,
+  PERSISTENCE, VISION_HOST, VISION_PORT, GREET, PAIRING,
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
 import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
 import { startTicker } from './scheduler.js';
 import { MissionBoard } from './missions.js';
-import { TreasureHunt } from './treasure.js';
-import { HarvestRelay } from './harvest.js';
-import { HARVEST, HARVEST_PLAN } from '../shared/harvest.js';
 import { SocialGraph } from './socialgraph.js';
 import { Encounters } from './encounters.js';
 import { VIA } from '../shared/encounters.js';
@@ -52,7 +49,8 @@ import { TopicTables } from './topics.js';
 import { TOPIC_QUESTIONS, TOPIC_TABLES } from '../shared/topics.js';
 import { PROPS } from '../shared/scene.js';
 import { QuizSession } from './quiz.js';
-import { SurveySession } from './survey.js';
+import { TraitStore } from './traits.js';
+import { WordCloudSession } from './wordcloud.js';
 import { MessageRelay } from './messages.js';
 import {
   DEFAULT_PERSONA_QUIZ, PERSONA_TRAIT_KEY, PERSONA_RESULTS, validatePersonaQuiz, scorePersona, personaQuizVersion,
@@ -73,8 +71,6 @@ const PORT = Number(process.env.PORT) || 3000;
 
 const stage = new Stage();
 const missions = new MissionBoard();
-const treasure = new TreasureHunt();
-const harvest = new HarvestRelay();
 const bingo = new BingoRound({ claimCooldownMs: PAIRING.claimCooldownMs });
 const topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
 const graph = new SocialGraph();
@@ -84,8 +80,10 @@ const encounters = new Encounters();
 // 揮手要尊重私訊的封鎖：封鎖了卻還能讓對方手機一直跳出「某某在跟你揮手」，封鎖就沒有意義
 const greetings = new Greetings({ ...GREET, isBlocked: (by, target) => messages.isBlocked(by, target) });
 const quiz = new QuizSession();
-/** 轉場問卷：沒有正解的題目，答案留成參與者身上的標籤 */
-const survey = new SurveySession();
+/** 參與者身上的標籤（進場人格問卷的類型；人物賓果的條件也讀它） */
+const traits = new TraitStore();
+/** 文字雲：主持人提問，參與者用手機輸入，大螢幕即時呈現 */
+const wordcloud = new WordCloudSession();
 const scores = new ScoreBoard();
 /** 私訊：點手機畫面上的角色傳文字。只在記憶體，不寫快照（見 messages.js） */
 const messages = new MessageRelay();
@@ -114,7 +112,9 @@ if (snapshot) {
   else encounters.seedFromGraph(snapshot.graph);
   missions.hydrate(snapshot.missions);
   quiz.hydrate(snapshot.quiz);
-  survey.hydrate(snapshot.survey);
+  // 標籤原本存在轉場問卷的快照裡（snapshot.survey.traits），舊存檔照樣讀得回來
+  traits.hydrate(snapshot.traits ?? snapshot.survey?.traits);
+  wordcloud.hydrate(snapshot.wordcloud);
   directory.hydrate(snapshot.directory);
 }
 
@@ -179,7 +179,8 @@ const snapshotData = () => ({
   encounters: encounters.export(),
   missions: missions.export(),
   quiz: quiz.export(),
-  survey: survey.export(),
+  traits: traits.export(),
+  wordcloud: wordcloud.export(),
   directory: directory.export(),
   theme: stageTheme,
   event: eventInfo,
@@ -322,6 +323,8 @@ const wss = new WebSocketServer({ server, maxPayload: MAX_MESSAGE_BYTES });
 
 /** @type {Set<import('ws').WebSocket>} 已註冊的大螢幕連線 */
 const screens = new Set();
+/** 能拿來截圖的大螢幕：連線中、且不是主控台的預覽小窗（見 SCREEN_HELLO） */
+const isCaptureScreen = (ws) => ws.readyState === ws.OPEN && !ws.preview;
 /** @type {Set<import('ws').WebSocket>} 已通過認證的主辦端連線 */
 const hosts = new Set();
 /** @type {Map<string, import('ws').WebSocket>} agentId → 該參與者的連線，用於定向推送 */
@@ -393,15 +396,15 @@ function hostState() {
       connections: graph.degree(a.id),
       activeMs: Math.round(a.activeMs),
       score: scores.totalOf(a.id),
-      // 問卷標籤：主辦端要看得出「這個人答了什麼」，才能判斷任務條件湊不湊得出來
-      traits: survey.traitsOf(a.id),
+      // 標籤（進場人格問卷的類型）：主辦端名冊與分組都看它
+      traits: traits.traitsOf(a.id),
     })),
     mission: missions.state(stage.agents.size),
     graphEdges: graph.size,
     audience: audienceQueue.length,
     topics: topics.enabled,
     quiz: quiz.publicView(),
-    survey: survey.publicView(),
+    wordcloud: wordcloud.publicView(),
     quizReveal: quiz.revealView(),
     leaderboard: scores.leaderboard(SCORING.leaderboardSize, nameOf, isPresent),
     personaSpread: personaSpread(),
@@ -410,7 +413,7 @@ function hostState() {
 
 /** 在場者的人格類型分佈（含還沒答的人數），依 PERSONA_RESULTS 的順序 */
 function personaSpread() {
-  const counts = survey.spread(PERSONA_TRAIT_KEY, isPresent);
+  const counts = traits.spread(PERSONA_TRAIT_KEY, isPresent);
   const answered = [...counts.values()].reduce((a, b) => a + b, 0);
   return {
     counts: PERSONA_RESULTS.map((t) => ({ id: t.id, count: counts.get(t.id) ?? 0 })),
@@ -427,7 +430,7 @@ function applyPersona(agentId, raw) {
   if (!raw || raw.version !== personaQuizVersion(personaQuiz)) return;
   const result = scorePersona(personaQuiz, raw.answers);
   if (!result) return;
-  survey.setTrait(agentId, PERSONA_TRAIT_KEY, { value: result.id, label: `${result.emoji} ${result.name}`, at: Date.now() });
+  traits.setTrait(agentId, PERSONA_TRAIT_KEY, { value: result.id, label: `${result.emoji} ${result.name}`, at: Date.now() });
   markDirty();
 }
 
@@ -534,68 +537,17 @@ const clamp01 = (n) => Math.max(0, Math.min(1, n));
  * ⚠ 送的是 publicView（不含座標）—— 補送給手機的東西一樣不能夾帶答案。
  */
 /**
- * 補送進行中的問卷給單一連線。
+ * 補送進行中的文字雲給單一連線（手機）。
  *
- * 與尋寶同一類補送問題，而且**中途進場與斷線重連走的是不同分支**
- * （重連那段會提前 return），兩邊都要呼叫 —— 少了任一邊，那支手機
- * 在整題結束前都不會知道現在有一題可以答。
+ * 中途進場與斷線重連走的是不同分支（重連那段會提前 return），兩邊都要呼叫 ——
+ * 少了任一邊，那支手機在整題結束前都不會知道現在有一題可以答。
+ * 已經送過答案的人要看到自己送過什麼，而不是一個可以重送的空白題。
  */
-function sendSurveyCatchUp(ws, agentId) {
-  if (!survey.isActive) return;
-  send(ws, EV.SURVEY_QUESTION, { survey: survey.publicView() });
-  // 已經答過的人（重連回來）要看到自己選過什麼，而不是一個可以重按的空白題
-  const mine = survey.current.answers.get(agentId);
-  if (mine) {
-    const option = survey.current.options[mine.choice];
-    send(ws, EV.SURVEY_ACK, {
-      ok: true, choice: mine.choice, label: option.label, spot: option.spot,
-      requireArrival: survey.current.requireArrival,
-      arrived: survey.isArrived(agentId),
-    });
-  }
-}
-
-function sendTreasureCatchUp(ws, agentId) {
-  if (!treasure.isActive) return;
-  send(ws, EV.TREASURE_START, { round: treasure.publicView() });
-  // 回來的若正好是先知，強制下一幀重送冷熱：否則要等到等級**變動**
-  // 才收得到，而隊伍恰好停在原地時那可以是好幾十秒。
-  if (agentId === treasure.round.prophetId) treasure.resendHeat();
-}
-
-/** 接過／放下籃子按不動時，給手機一句看得懂的話 */
-const HAND_NOTE = {
-  TOO_FAR: '要先走到籃子旁邊',
-  ALREADY_HOLDING: '籃子已經在你手上了',
-  NOT_HOLDING: '籃子不在你手上',
-};
-
-/**
- * 接過／放下籃子。
- *
- * 由**接的人**發起，不是給的人 —— 把人叫過來才是這個玩法要的那一步。
- * 距離一律由伺服器判定：手機只有搖桿，根本不知道自己在房間的哪裡，
- * 也不該由它說了算（同問卷的到位判定）。
- */
-function handleHarvestHand(ws, isTake) {
-  if (!harvest.isActive) return;
-  const agentId = ws.agentId;
-  const res = isTake
-    ? harvest.take(agentId, (id) => stage.agents.get(id) ?? null)
-    : harvest.drop(agentId);
-  if (!res.ok) {
-    // 按不動時回一句話而不是沉默：「我按了沒反應」是現場最難解釋的一種失敗
-    send(ws, EV.HARVEST_REACH, {
-      canTake: harvest.canTake(agentId), note: HAND_NOTE[res.reason] ?? null,
-    });
-    return;
-  }
-  // 從別人手上接過來才算兩人交集；從地上撿起來不算
-  if (isTake && res.from && res.from !== agentId) meetUp(res.from, agentId, VIA.HARVEST);
-  // 交接是離散事件，立刻廣播而不等節流：按下去到畫面上換手之間的延遲，
-  // 現場會讀成「沒按到」而再按一次
-  blastAll(EV.HARVEST_STATE, { round: harvest.publicView() });
-  console.log(`[harvest] ${nameOf(agentId)} ${isTake ? '接過' : '放下'}籃子`);
+function sendWordCloudCatchUp(ws, agentId) {
+  if (!wordcloud.isActive) return;
+  send(ws, EV.WORDCLOUD_QUESTION, { cloud: wordcloud.publicView() });
+  const mine = wordcloud.mineOf(agentId);
+  if (mine.length) send(ws, EV.WORDCLOUD_ACK, { ok: true, mine });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -610,15 +562,7 @@ function bingoPool() {
   for (const t of PERSONA_RESULTS) {
     pool.push({ id: `persona:${t.id}`, label: `進場問卷是${t.emoji}${t.name}的人` });
   }
-  // 轉場問卷的答案：只收場上真的有人答過的
-  const seen = new Map();
-  for (const id of stage.agents.keys()) {
-    for (const [key, v] of Object.entries(survey.traitsOf(id))) {
-      if (key === PERSONA_TRAIT_KEY) continue;
-      seen.set(`trait:${key}:${v.value}`, `問卷選了「${v.label}」的人`);
-    }
-  }
-  for (const [id, label] of seen) pool.push({ id, label });
+  // 轉場問卷已移除，標籤條件只剩進場人格問卷的類型
   // 「一起做一件事」：同桌那一格只在話題桌開著、這個場景有號碼牌桌時才放
   const tables = topics.enabled && topicSpots().length > 0;
   for (const c of ACT_CONDS) if (c.id !== 'act:topic' || tables) pool.push(c);
@@ -630,10 +574,9 @@ function bingoTest(who, condId, from) {
   if (condId === STRANGER) return who !== from && !graph.connected(from, who);
   const agent = stage.get(who);
   if (!agent) return false;
-  const [kind, a, b] = condId.split(':');
+  const [kind, a] = condId.split(':');
   if (kind === 'color') return avatarMatchesFamily(agent.avatar, a);
-  if (kind === 'persona') return survey.traitOf(who, PERSONA_TRAIT_KEY)?.value === a;
-  if (kind === 'trait') return String(survey.traitOf(who, a)?.value) === b;
+  if (kind === 'persona') return traits.traitOf(who, PERSONA_TRAIT_KEY)?.value === a;
   if (kind === 'fact') return bingo.hasFact(who, a);
   // 任何人都可能跟你一起做到；真正的判定在發生的那一刻（bingoAct）
   if (kind === 'act') return who !== from;
@@ -837,11 +780,11 @@ function topicSpots() {
 }
 
 /**
- * 主辦端在帶活動時，桌邊不該突然跳出聊天題搶注意力 —— 問答、問卷、尋寶、採收
- * 進行中一律暫停。任務（配對）與賓果不暫停：坐下來聊正是它們要的。
+ * 主辦端在帶活動時，桌邊不該突然跳出聊天題搶注意力 —— 問答、文字雲進行中一律暫停。
+ * 任務（配對）與賓果不暫停：坐下來聊正是它們要的。
  */
 function topicsPaused() {
-  return quiz.isActive || survey.isActive || treasure.isActive || harvest.isActive;
+  return quiz.isActive || wordcloud.isActive;
 }
 
 let lastTopicCheck = 0;
@@ -864,14 +807,6 @@ function stepTopics(now) {
     meetUp(a, b, VIA.TOPIC);
     bingoAct(a, b, 'act:topic');
   }
-}
-
-function sendHarvestCatchUp(ws, agentId) {
-  if (!harvest.isActive) return;
-  send(ws, EV.HARVEST_STATE, { round: harvest.publicView() });
-  // 「接過籃子」那個鈕只由 HARVEST_REACH 驅動，而那是只在**變動**時才推的事件 ——
-  // 少了這一行，重連回來的人站在籃子旁邊也按不到，要等走開再走回來才會恢復。
-  if (agentId) send(ws, EV.HARVEST_REACH, { canTake: harvest.canTake(agentId) });
 }
 
 function handleJoin(ws, msg) {
@@ -901,14 +836,10 @@ function handleJoin(ws, msg) {
       // 重連的人可能已經累積了社交連結（邊是既成事實，不隨斷線消失）
       sendSocialSelf(existing.id);
       sendClientRoster(ws);
-      // 尋寶進行中就補送。這個分支會 return，走不到下面正常入場的補送 ——
-      // 少了這裡，瞬斷重連的先知會在剩下的整輪裡看著一片空白，
-      // 而他正是所有人都在等著聽他喊話的那一個。
-      sendTreasureCatchUp(ws, existing.id);
-      sendSurveyCatchUp(ws, existing.id);
+      // 文字雲進行中就補送。這個分支會 return，走不到下面正常入場的補送
+      sendWordCloudCatchUp(ws, existing.id);
       // 封鎖名單只在伺服器：手機重整後要靠這則才知道點到的人是不是被自己封鎖了
       send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(existing.id) });
-      sendHarvestCatchUp(ws, existing.id);
       sendBingoCatchUp(existing.id);
       return;
     }
@@ -989,13 +920,9 @@ function handleJoin(ws, msg) {
   // 問答進行中就補送題目。剩餘時間由伺服器算，所以晚到的人拿到的是
   // 真正剩下的秒數，而不是從頭開始的完整倒數。
   if (quiz.isActive) sendQuestion(ws);
-  // 尋寶同理：中途進場的人若什麼都沒收到，會在其他人都在跑的時候
-  // 盯著一片空白的畫面。⚠ 送的是 publicView（不含座標）——
-  // 補送給手機的東西一樣不能夾帶答案。
-  sendTreasureCatchUp(ws, agent.id);
-  sendSurveyCatchUp(ws, agent.id);
+  // 文字雲同理：中途進場的人要能馬上作答
+  sendWordCloudCatchUp(ws, agent.id);
   send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(agent.id) });
-  sendHarvestCatchUp(ws, agent.id);
   sendBingoCatchUp(agent.id);
   send(ws, EV.SCORE_SELF, {
     score: scores.totalOf(agent.id),
@@ -1087,9 +1014,9 @@ function detachAgent(agentId, { forget = false } = {}) {
   greetings.drop(agentId);
   if (forget) {
     directory.forget(agentId);
-    // 問卷標籤是「這個人是誰」，主動離場或被請出場時要一起忘掉；
+    // 標籤是「這個人是誰」，主動離場或被請出場時要一起忘掉；
     // 單純斷線則保留 —— 那個人多半還會用原憑證接回同一個角色。
-    survey.forget(agentId);
+    traits.forget(agentId);
     bingo.forget(agentId);
     messages.forget(agentId);
     encounters.forget(agentId);
@@ -1321,34 +1248,24 @@ function endQuiz() {
 
 /** 作答人數變動後才廣播，節流由主迴圈負責 */
 let quizTallyDirty = false;
-/** 問卷分佈變動後才廣播，同上 */
-let surveyDirty = false;
+/** 文字雲的詞變動後才廣播，同上 */
+let wordcloudDirty = false;
 
-/**
- * 收掉問卷並公布最終分佈。
- *
- * 標籤在作答當下就寫進去了，這裡不再改動任何人的資料 ——
- * 收題只是把題目從畫面上拿掉，並讓大螢幕停在最終分佈上。
- */
-function closeSurvey(now = Date.now()) {
-  const result = survey.close(now);
+/** 收掉文字雲。大螢幕停在最終的雲上，手機收起作答面板 */
+function closeWordCloud(now = Date.now()) {
+  const result = wordcloud.close(now);
   if (!result) return;
-  blastAll(EV.SURVEY_CLOSED, { result });
+  blastAll(EV.WORDCLOUD_CLOSED, { result });
   markDirty();
   pushHostState();
-  console.log(`[survey] 收題「${result.question}」　${result.totalAnswers} 人作答`);
+  console.log(`[wordcloud] 收題「${result.question}」　${result.participants} 人作答、${result.words.length} 個詞`);
 }
 
-function handleSurveyAnswer(ws, msg) {
-  const r = survey.answer(ws.agentId, msg.choice);
-  if (!r.ok) { send(ws, EV.SURVEY_ACK, { ok: false, reason: r.reason }); return; }
-  // 回傳選到的標籤文字：手機上要顯示「你是：負責煮」，而那段文字只有伺服器有
-  send(ws, EV.SURVEY_ACK, {
-    ok: true, choice: r.choice, label: r.option.label, spot: r.option.spot,
-    requireArrival: survey.current.requireArrival,
-  });
-  surveyDirty = true;
-  markDirty();
+function handleWordCloudAnswer(ws, msg) {
+  const r = wordcloud.answer(ws.agentId, msg.text);
+  // mine 一律帶回：手機的「你送過的」清單以伺服器為準（重連、被拒時都對得上）
+  send(ws, EV.WORDCLOUD_ACK, r.ok ? { ok: true, mine: r.mine } : { ok: false, reason: r.reason, mine: r.mine ?? [] });
+  if (r.ok) wordcloudDirty = true;
 }
 
 function handleQuizAnswer(ws, msg) {
@@ -1464,7 +1381,7 @@ function handleScreenCommand(ws, msg) {
  * 刻意不 await，理由同 HOST_TAKE_PHOTO。
  */
 async function captureForHost(ws) {
-  if (![...screens].some((s) => s.readyState === s.OPEN)) {
+  if (![...screens].some(isCaptureScreen)) {
     send(ws, EV.HOST_SCREEN_SHOT, { error: '大螢幕沒有連線' });
     return;
   }
@@ -1488,22 +1405,18 @@ async function captureForHost(ws) {
  */
 const ACTIVITY_STARTS = {
   [EV.HOST_PUBLISH_MISSION]: 'mission',
-  [EV.HOST_START_SURVEY]: 'survey',
-  [EV.HOST_START_TREASURE]: 'treasure',
-  [EV.HOST_START_HARVEST]: 'harvest',
+  [EV.HOST_START_WORDCLOUD]: 'wordcloud',
   [EV.HOST_START_BINGO]: 'bingo',
   [EV.HOST_START_QUIZ]: 'quiz',
 };
 const ACTIVITY_LABEL = {
-  mission: '任務', survey: '轉場問卷', treasure: '尋寶', harvest: '採水果', bingo: '人物賓果', quiz: '即時問答',
+  mission: '任務', wordcloud: '文字雲', bingo: '人物賓果', quiz: '即時問答',
 };
 
 /** 目前在進行的主辦活動；沒有則 null */
 function runningActivity() {
   if (missions.isActive) return 'mission';
-  if (survey.isActive) return 'survey';
-  if (treasure.isActive) return 'treasure';
-  if (harvest.isActive) return 'harvest';
+  if (wordcloud.isActive) return 'wordcloud';
   if (bingo.isActive) return 'bingo';
   if (quiz.isActive) return 'quiz';
   return null;
@@ -1539,41 +1452,6 @@ function handleHostMessage(ws, msg) {
       break;
     }
 
-    case EV.HOST_START_TREASURE: {
-      const result = treasure.start([...stage.agents.keys()], {
-        prophetId: msg.prophetId ?? null,
-        avoid: [...stage.agents.values()].map((a) => ({ x: a.x, y: a.y })),
-      });
-      if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
-      const view = treasure.publicView();
-      console.log(`[treasure] 開始，先知＝${nameOf(view.prophetId)}`);
-      // 公開狀態不含座標（見 treasure.js 的 publicView 說明）。
-      // 大螢幕與主辦端另外收到座標，因為它們是「公開的畫面」，
-      // 不在參與者手上 —— 大螢幕要畫出寶箱，主辦端要知道自己藏了哪。
-      blast(controllers.values(), EV.TREASURE_START, { round: view });
-      blast([...screens, ...hosts], EV.TREASURE_START, {
-        round: view, spot: treasure.spot(),
-      });
-      pushHostState();
-      break;
-    }
-
-    case EV.HOST_STOP_TREASURE: {
-      const r = treasure.stop();
-      if (!r) return;
-      console.log('[treasure] 本輪中止');
-      // ⚠ 中止不公布座標。沒有人找到，那個點就還是秘密 ——
-      //   主辦端可能馬上重開一輪（甚至同一個點），先講出來等於直接送答案。
-      //   只有 TREASURE_FOUND 才公布，因為那時本輪已經真的結束了。
-      //   大螢幕與主辦端另外收到座標：它們是公開畫面，不在參與者手上。
-      blast(controllers.values(), EV.TREASURE_ENDED, { id: r.id });
-      blast([...screens, ...hosts], EV.TREASURE_ENDED, {
-        id: r.id, spot: { x: r.x, y: r.y },
-      });
-      pushHostState();
-      break;
-    }
-
     case EV.HOST_START_BINGO:
       startBingo(ws, msg);
       break;
@@ -1588,45 +1466,31 @@ function handleHostMessage(ws, msg) {
       endBingo('host');
       break;
 
-    case EV.HOST_START_HARVEST: {
-      const result = harvest.start([...stage.agents.keys()], HARVEST_PLAN);
+    case EV.HOST_START_WORDCLOUD: {
+      // 上一題還開著就先收掉：節目單按「下一項」接著出下一題時，
+      // 不該卡在「上一題還沒收」—— 那時主持人正對著全場說話。題目不合格時保留上一題。
+      if (wordcloud.isActive && msg.question && String(msg.question).trim()) closeWordCloud();
+      const result = wordcloud.start({ question: msg.question });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
-      console.log(`[harvest] 開始，共 ${HARVEST_PLAN.beds.length} 處`);
-      // 這個玩法沒有秘密：哪一處採過了、籃子在誰手上都要讓全場看見，
-      // 「誰還沒採」正是大家要互相喊的那件事。三端送同一份。
-      blastAll(EV.HARVEST_STATE, { round: harvest.publicView() });
-      pushHostState();
-      break;
-    }
-
-    case EV.HOST_STOP_HARVEST: {
-      const r = harvest.stop();
-      if (!r) return;
-      console.log('[harvest] 本輪中止');
-      blastAll(EV.HARVEST_STATE, { round: null });
-      pushHostState();
-      break;
-    }
-
-    case EV.HOST_START_SURVEY: {
-      const result = survey.start({
-        bankId: msg.bankId ?? null,
-        key: msg.key, question: msg.question, options: msg.options, durationMs: msg.durationMs,
-        requireArrival: msg.requireArrival,
-      });
-      if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
-      const view = survey.publicView();
-      console.log(`[survey] 出題「${view.question}」　標籤 ${view.key}`);
+      console.log(`[wordcloud] 出題「${result.round.question}」`);
       markDirty();
-      // 手機要作答、大螢幕與主辦端要顯示題目，三端都送同一份（問卷沒有正解，不必藏）
-      blastAll(EV.SURVEY_QUESTION, { survey: view });
-      blast([...screens, ...hosts], EV.SURVEY_STATE, { state: survey.distribution() });
+      // 手機要作答、大螢幕與主辦端要顯示題目，三端都送題目；雲本身只給大螢幕與主辦端
+      blastAll(EV.WORDCLOUD_QUESTION, { cloud: result.round });
+      blast([...screens, ...hosts], EV.WORDCLOUD_STATE, { cloud: wordcloud.cloud() });
       pushHostState();
       break;
     }
 
-    case EV.HOST_CLOSE_SURVEY:
-      closeSurvey();
+    case EV.HOST_HIDE_WORD:
+      if (wordcloud.hide(msg.word)) {
+        console.log(`[wordcloud] 主持人隱藏了一個詞`);
+        // 隱藏要立刻生效，不等節流：那個詞可能正投在全場面前
+        blast([...screens, ...hosts], EV.WORDCLOUD_STATE, { cloud: wordcloud.cloud() });
+      }
+      break;
+
+    case EV.HOST_CLOSE_WORDCLOUD:
+      closeWordCloud();
       break;
 
     case EV.HOST_SET_THEME: {
@@ -1701,7 +1565,8 @@ function handleHostMessage(ws, msg) {
         report: buildReport({
           missions: missions.export(),
           quiz: quiz.export(),
-          survey: survey.export(),
+          traits: traits.export(),
+          wordcloud: wordcloud.export(),
           scores: scores.export(),
           graph: graph.export(),
           // 已經離場的人從 directory 找名字；被移除的人兩邊都查不到，留空
@@ -1809,6 +1674,9 @@ wss.on('connection', (ws) => {
         // 讓真正的參與者再也進不來。
         if (ws.agentId) break;
         ws.role = 'screen';
+        // 主控台裡的預覽小窗也是一台大螢幕（收同樣的廣播），但不能被挑去截圖：
+        // 它比投影機先連上時，合照底圖就會變成主持人電腦上那張縮小的預覽
+        ws.preview = msg.preview === true;
         screens.add(ws);
         send(ws, EV.STAGE_META, { stage: STAGE, fps: SYNC_FPS });
         // 投影機中途重開或新接一台螢幕，都要知道現在該顯示哪個主題
@@ -1816,12 +1684,11 @@ wss.on('connection', (ws) => {
         send(ws, EV.STAGE_EVENT, { event: eventInfo });
         send(ws, EV.SCREEN_SETTINGS, { settings: screenSettings });
         send(ws, EV.STAGE_ROSTER, { agents: stage.roster() });
-        // 進行中的問卷：投影機中途重開時要接回目前的題目與分佈
-        if (survey.isActive) {
-          send(ws, EV.SURVEY_QUESTION, { survey: survey.publicView() });
-          send(ws, EV.SURVEY_STATE, { state: survey.distribution() });
+        // 進行中的文字雲：投影機中途重開時要接回目前的題目與雲
+        if (wordcloud.isActive) {
+          send(ws, EV.WORDCLOUD_QUESTION, { cloud: wordcloud.publicView() });
+          send(ws, EV.WORDCLOUD_STATE, { cloud: wordcloud.cloud() });
         }
-        sendHarvestCatchUp(ws, null);
         if (bingo.isActive) send(ws, EV.BINGO_STATE, { round: bingoPublicView() });
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
         // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
@@ -1837,7 +1704,7 @@ wss.on('connection', (ws) => {
           leaderboard: scores.leaderboard(SCORING.leaderboardSize, nameOf, isPresent),
           players: stage.agents.size,
         });
-        console.log(`[screen] 大螢幕已連線　共 ${screens.size} 台`);
+        console.log(ws.preview ? '[screen] 主控台預覽已連線' : `[screen] 大螢幕已連線　共 ${[...screens].filter((s) => !s.preview).length} 台`);
         break;
 
       case EV.INPUT_MOVE: {
@@ -1913,9 +1780,9 @@ wss.on('connection', (ws) => {
         handleQuizAnswer(ws, msg);
         break;
 
-      case EV.SURVEY_ANSWER:
+      case EV.WORDCLOUD_ANSWER:
         if (ws.role !== 'controller' || !ws.agentId) return;
-        handleSurveyAnswer(ws, msg);
+        handleWordCloudAnswer(ws, msg);
         break;
 
       case EV.MSG_SEND:
@@ -1964,12 +1831,6 @@ wss.on('connection', (ws) => {
         handleBingoAccept(ws);
         break;
 
-      case EV.HARVEST_TAKE:
-      case EV.HARVEST_DROP:
-        if (ws.role !== 'controller' || !ws.agentId) return;
-        handleHarvestHand(ws, msg.type === EV.HARVEST_TAKE);
-        break;
-
       case EV.HOST_AUTH: {
         // 與 SCREEN_HELLO 同一個理由：已綁定角色的連線改註冊為主辦端後，
         // 關閉時只會走 hosts 的清理分支，agent 的 disconnectedAt 永遠是 null，
@@ -2002,23 +1863,12 @@ wss.on('connection', (ws) => {
         send(ws, EV.HOST_MSG_REPORTS, { reports: messageReports() });
         send(ws, EV.HOST_PERSONA_QUIZ, personaView());
         send(ws, EV.HOST_BINGO_FACTS, bingoFactsView());
-        // 補送進行中的尋寶。HOST_STATE 不含尋寶（見 hostState），而主辦端的
-        // 尋寶面板只由 TREASURE_* 事件驅動 —— 少了這裡，中途重整或斷線重連的
-        // 主辦端會停在「開始尋寶」那一頁，#treasure-live 永遠是 hidden，
-        // 「中止本輪」按鈕根本不在畫面上，本輪就再也停不掉了。
-        // 帶座標，理由同 HOST_START_TREASURE：主辦端是公開畫面，不在參與者手上。
-        // 問卷面板的分佈只由 SURVEY_STATE 驅動，HOST_STATE 只帶題目本身 ——
-        // 少了這裡，重整後的主辦端會看到題目卻看不到已經有幾個人答了。
-        if (survey.isActive) {
-          send(ws, EV.SURVEY_QUESTION, { survey: survey.publicView() });
-          send(ws, EV.SURVEY_STATE, { state: survey.distribution() });
+        // 文字雲面板的詞只由 WORDCLOUD_STATE 驅動，HOST_STATE 只帶題目 ——
+        // 少了這裡，重整後的主辦端看得到題目，卻看不到詞、也按不到「隱藏」。
+        if (wordcloud.isActive) {
+          send(ws, EV.WORDCLOUD_QUESTION, { cloud: wordcloud.publicView() });
+          send(ws, EV.WORDCLOUD_STATE, { cloud: wordcloud.cloud() });
         }
-        if (treasure.isActive) {
-          send(ws, EV.TREASURE_START, {
-            round: treasure.publicView(), spot: treasure.spot(),
-          });
-        }
-        sendHarvestCatchUp(ws, null);
         if (bingo.isActive) send(ws, EV.BINGO_STATE, { round: bingoPublicView() });
         console.log(`[host] 主辦端已連線　共 ${hosts.size} 台`);
         break;
@@ -2029,10 +1879,6 @@ wss.on('connection', (ws) => {
       case EV.HOST_START_BINGO:
       case EV.HOST_END_BINGO:
       case EV.HOST_SET_TOPICS:
-      case EV.HOST_START_TREASURE:
-      case EV.HOST_STOP_TREASURE:
-      case EV.HOST_START_HARVEST:
-      case EV.HOST_STOP_HARVEST:
       case EV.HOST_START_QUIZ:
       case EV.HOST_REVEAL_QUIZ:
       case EV.HOST_END_QUIZ:
@@ -2043,9 +1889,10 @@ wss.on('connection', (ws) => {
       case EV.HOST_SCREEN_CMD:
       case EV.HOST_DISMISS_REPORT:
       case EV.HOST_SET_PERSONA_QUIZ:
+      case EV.HOST_START_WORDCLOUD:
+      case EV.HOST_CLOSE_WORDCLOUD:
+      case EV.HOST_HIDE_WORD:
       case EV.HOST_SET_BINGO_FACTS:
-      case EV.HOST_START_SURVEY:
-      case EV.HOST_CLOSE_SURVEY:
       case EV.HOST_REQUEST_REPORT:
         // 未通過認證的連線一律忽略，不回應也不透露任何狀態
         if (ws.role !== 'host') return;
@@ -2088,7 +1935,7 @@ const heartbeat = setInterval(() => {
 // 排程器對齊絕對截止時間，消除 setInterval 在 Windows 上的累積漂移
 // （實測有效頻率由 27.3 Hz 修正為 30.0 Hz，詳見 scheduler.js）
 let lastTallyAt = 0;
-let lastSurveyAt = 0;
+let lastWordCloudAt = 0;
 let lastScoreAt = 0;
 /** CLIENT_SYNC 的節流基準。主迴圈是 30Hz，個人視角只需 15Hz。 */
 let lastClientSyncAt = 0;
@@ -2156,29 +2003,16 @@ const loop = startTicker({
     if (quiz.shouldAutoReveal(now)) revealQuiz(now);
     else if (quiz.shouldAutoEnd(now)) endQuiz();
 
-    // 問卷的時間到同樣由主迴圈推進，理由與問答相同：setTimeout 在事件迴圈
+    // 限時任務到點結算，與問答同樣由主迴圈推進：setTimeout 在事件迴圈
     // 被拖慢時會延後觸發，而這裡的時間到必須與大螢幕上的倒數一致。
-    // 限時任務到點結算，與問卷、問答同樣由主迴圈推進
     if (missions.shouldAutoClose(now)) closeMission('time');
 
-    if (survey.shouldAutoClose(now)) closeSurvey(now);
-    else if (survey.isActive) {
-      // 到位狀態由伺服器的座標判定，每拍更新。手機不知道自己在房間的哪裡
-      // （它只有搖桿），也不該由它說了算。
-      const moved = survey.syncArrivals((id) => stage.agents.get(id) ?? null);
-      for (const agentId of moved) {
-        const sock = controllers.get(agentId);
-        // 只通知狀態真的變了的那幾個人，而不是每拍廣播給全場 ——
-        // 三十個人乘以 30Hz 就是每秒九百則訊息，而其中絕大多數內容相同
-        if (sock) send(sock, EV.SURVEY_ARRIVED, { arrived: survey.isArrived(agentId) });
-      }
-      if (moved.length) surveyDirty = true;
-    }
-
-    if (survey.isActive && surveyDirty && now - lastSurveyAt >= 250) {
-      lastSurveyAt = now;
-      surveyDirty = false;
-      blast([...screens, ...hosts], EV.SURVEY_STATE, { state: survey.distribution(now) });
+    // 文字雲：有新答案時才廣播，最快每 300ms 一次。三十個人同時送出時
+    // 逐則廣播等於每秒上百份整片雲，而大螢幕的動畫本來就跟不上那麼快。
+    if (wordcloud.isActive && wordcloudDirty && now - lastWordCloudAt >= 300) {
+      lastWordCloudAt = now;
+      wordcloudDirty = false;
+      blast([...screens, ...hosts], EV.WORDCLOUD_STATE, { cloud: wordcloud.cloud() });
     }
 
     // 作答人數：只送給大螢幕與主辦端。參與者不需要知道，
@@ -2234,105 +2068,6 @@ const loop = startTicker({
         const view = stage.personalSnapshot(id, CLIENT_SYNC_RADIUS);
         // 角色可能已被 TTL 回收，但連線還在（下一次 CLIENT_JOIN 會重建）
         if (view) send(sock, EV.CLIENT_SYNC, view);
-      }
-    }
-
-    // 尋寶：冷熱推播與踩中判定。
-    //
-    // 與 CLIENT_SYNC 同樣必須放在下面那道 `screens.size === 0` 早退**之前** ——
-    // 放在後面的話，投影機還沒接上時整場尋寶會完全沒有反應，
-    // 而先知會以為是自己的手機壞了。
-    // 先確認本輪還成立：先知離場、或除了先知沒有別人時，
-    // 這一輪已經永遠不可能結束（見 treasure.js 的 viability 說明）。
-    //
-    // ⚠ 不能在這裡 return —— 下面還有大螢幕的整段廣播，
-    //   提早跳出會讓投影畫面停一幀。改以旗標往下讓它自然跳過。
-    if (treasure.isActive) {
-      const viable = treasure.viability(stage.agents);
-      if (!viable.ok) {
-        const r = treasure.stop();
-        console.log(`[treasure] 本輪中止：${viable.reason}`);
-        // 同上：中止不對手機公布座標
-        blast(controllers.values(), EV.TREASURE_ENDED, {
-          id: r.id, reason: viable.reason,
-        });
-        blast([...screens, ...hosts], EV.TREASURE_ENDED, {
-          id: r.id, reason: viable.reason, spot: { x: r.x, y: r.y },
-        });
-        pushHostState();
-      }
-    }
-
-    if (treasure.isActive) {
-      const found = treasure.check(stage.agents);
-      if (found) {
-        const r = treasure.round;
-        const name = nameOf(found.id);
-        console.log(`[treasure] ${name} 找到寶藏`);
-        // 找到之後座標才公布 —— 在那之前它是本輪唯一的秘密
-        blastAll(EV.TREASURE_FOUND, {
-          id: r.id,
-          by: found.id,
-          byName: name,
-          prophetId: r.prophetId,
-          prophetName: nameOf(r.prophetId),
-          spot: { x: r.x, y: r.y },
-          points: TREASURE.points,
-        });
-        if (TREASURE.points > 0) {
-          award(found.id, TREASURE.points, { source: SCORE_SOURCES.TREASURE });
-        }
-        treasure.stop();
-        pushHostState();
-      } else {
-        // 冷熱只送先知一個人。這是整個玩法的核心：
-        // 送給所有人就退化成普通尋寶，沒有人需要開口講話。
-        const heat = treasure.heatFor(stage.agents);
-        // 只在等級變動時推送，而非每幀 —— 先知要的是「變熱了」這個事件，
-        // 每幀重送同一個字只是白白佔用現場頻寬。
-        if (heat && heat.changed) {
-          sendToAgent(treasure.round.prophetId, EV.TREASURE_HEAT, { heat: heat.heat });
-          blast([...screens, ...hosts], EV.TREASURE_HEAT, { heat: heat.heat });
-        }
-      }
-    }
-
-    // 採水果。與尋寶同樣放在 `screens.size === 0` 早退**之前**：
-    // 投影機還沒接上時整輪會完全沒有反應，而現場會以為是手機壞了。
-    if (harvest.isActive) {
-      // 一人一畦的代價是它會卡死（還沒採的比還沒採過的人多）。
-      // 不能在這裡 return —— 下面還有大螢幕的整段廣播（同尋寶）。
-      const viable = harvest.viability(stage.agents.keys());
-      if (!viable.ok) {
-        harvest.stop();
-        console.log(`[harvest] 本輪中止：${viable.reason}`);
-        blastAll(EV.HARVEST_STATE, { round: null, reason: viable.reason });
-        pushHostState();
-      }
-    }
-
-    if (harvest.isActive) {
-      const r = harvest.tick((id) => stage.agents.get(id) ?? null, stage.agents.keys());
-      // 只通知狀態真的變了的那幾支手機，不是每拍廣播（同 SURVEY_ARRIVED）
-      for (const id of r.reachChanged) {
-        sendToAgent(id, EV.HARVEST_REACH, { canTake: harvest.canTake(id) });
-      }
-      if (r.picked.length > 0 || r.dropped) {
-        blastAll(EV.HARVEST_STATE, { round: harvest.publicView() });
-      }
-      if (r.delivered) {
-        const view = harvest.publicView();
-        // 出過力的人都算：採過的每一個人，加上最後把籃子送回去的那一個。
-        // 只給最後那個人分數的話，前面幾棒會覺得自己白跑 —— 而這是接力。
-        const helpers = [...new Set([...view.picked, view.holder])].filter(Boolean);
-        console.log(`[harvest] 完成，${helpers.length} 人接力`);
-        blastAll(EV.HARVEST_DONE, {
-          id: view.id, round: view,
-          helpers, helperNames: helpers.map(nameOf), points: HARVEST.points,
-        });
-        for (const id of helpers) award(id, HARVEST.points, { source: SCORE_SOURCES.HARVEST });
-        harvest.stop();
-        pushHostState();
       }
     }
 
@@ -2462,7 +2197,7 @@ const CAPTURE_TIMEOUT_MS = 8000;
  * 沒有大螢幕連線時回 null，呼叫端會退回 Python 端的舞台底圖。
  */
 const requestScreenCapture = () => new Promise((resolve) => {
-  const screen = [...screens].find((ws) => ws.readyState === ws.OPEN);
+  const screen = [...screens].find(isCaptureScreen);
   if (!screen) { resolve(null); return; }
 
   const requestId = randomBytes(8).toString('hex');

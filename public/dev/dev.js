@@ -267,57 +267,32 @@ function handle(p, msg) {
     case EV.CLIENT_SYNC:
       if (msg.self) p.pos = { x: msg.self.x, y: msg.self.y };
       break;
-    // 採水果：狀態是全場共用的，但每個傀儡要知道籃子是不是在自己手上
-    case EV.HARVEST_STATE:
-      p.holdsBasket = msg.round?.holder === p.id;
-      p.harvest = msg.round;
-      if (!msg.round) p.canTake = false;
-      renderHand(p);
-      break;
-    case EV.HARVEST_REACH:
-      p.canTake = !!msg.canTake;
-      if (msg.note) p.note = msg.note;
-      renderHand(p);
-      break;
-    case EV.HARVEST_DONE:
-      p.harvest = null;
-      p.holdsBasket = false;
-      p.canTake = false;
-      p.note = msg.helpers.includes(p.id) ? `採收完成，+${msg.points}` : '採收完成';
-      renderHand(p);
-      break;
-    case EV.SURVEY_QUESTION:
-      p.ask = normalizeAsk(msg.survey, 'SURVEY');
+    // 文字雲：傀儡也能作答，湊滿場上時才看得出大螢幕的雲排得下多少詞
+    case EV.WORDCLOUD_QUESTION:
+      p.ask = { kind: 'WORDCLOUD', question: msg.cloud.question, options: [] };
       p.answered = null;
+      p.mine = [];
       renderAsk(p);
+      break;
+    case EV.WORDCLOUD_ACK:
+      p.mine = msg.mine ?? p.mine ?? [];
+      p.note = msg.ok ? `已送出（${p.mine.length}）` : `被拒：${msg.reason}`;
+      renderAsk(p);
+      break;
+    case EV.WORDCLOUD_CLOSED:
+      if (p.ask?.kind === 'WORDCLOUD') { p.ask = null; renderAsk(p); }
       break;
     case EV.QUIZ_QUESTION:
       p.ask = normalizeAsk(msg.quiz, 'QUIZ');
       p.answered = null;
       renderAsk(p);
       break;
-    case EV.SURVEY_ACK:
-      p.needsArrival = !!msg.requireArrival;
-      p.answerLabel = msg.label ?? '';
-      p.arrived = !!msg.arrived;
-      p.note = arrivalNote(p);
-      break;
-
-    // 要到場才算的題目：傀儡走進／走出自己選的那一圈時伺服器會通知。
-    // 開發台顯示它，才看得出「走到了沒」與「按了沒」是兩回事。
-    case EV.SURVEY_ARRIVED:
-      p.arrived = !!msg.arrived;
-      p.note = arrivalNote(p);
-      break;
     case EV.QUIZ_ACK:
       p.note = '已送出';
       break;
-    case EV.SURVEY_CLOSED:
     case EV.QUIZ_ENDED:
       p.ask = null;
       p.answered = null;
-      p.needsArrival = false;
-      p.arrived = false;
       renderAsk(p);
       break;
     default:
@@ -326,12 +301,6 @@ function handle(p, msg) {
   renderStatus(p);
 }
 
-function arrivalNote(p) {
-  if (!p.needsArrival) return `已記錄：${p.answerLabel}`;
-  return p.arrived ? `已到位 ✓ ${p.answerLabel}` : `已選「${p.answerLabel}」，還沒走到`;
-}
-
-/** 問答的 options 是字串、問卷的是物件。攤成字串再渲染，否則會畫出 [object Object]。 */
 function normalizeAsk(q, kind) {
   if (!q) return null;
   return {
@@ -410,12 +379,6 @@ function buildCard(p) {
   ask.className = 'ask';
   ask.hidden = true;
 
-  // 採水果的交接鈕。這個玩法只能靠「兩個人站在一起」才試得出來，
-  // 而開發階段湊不出兩支手機 —— 沒有這一顆，整個接力在這裡無法驗證。
-  const hv = document.createElement('button');
-  hv.type = 'button';
-  hv.className = 'hv';
-  hv.hidden = true;
 
   const note = document.createElement('p');
   note.className = 'note';
@@ -429,12 +392,8 @@ function buildCard(p) {
   leave.addEventListener('click', () => leavePuppet(p));
   foot.append(leave);
 
-  hv.addEventListener('click', () => {
-    sendTo(p, p.holdsBasket ? EV.HARVEST_DROP : EV.HARVEST_TAKE, {});
-  });
-
-  el.append(head, pad, emotes, goto, ask, hv, note, foot);
-  p.refs = { idEl, posEl, pad, ask, hv, note, sel };
+  el.append(head, pad, emotes, goto, ask, note, foot);
+  p.refs = { idEl, posEl, pad, ask, note, sel };
   return el;
 }
 
@@ -467,17 +426,6 @@ function renderStatus(p) {
   note.textContent = p.note;
 }
 
-/**
- * 採水果的交接鈕。與題目面板同樣不在 renderStatus 裡重建 ——
- * 15Hz 重建會讓按下去的瞬間按鈕已經被換掉，點擊落空而畫面看起來完全正常。
- */
-function renderHand(p) {
-  const { hv } = p.refs ?? {};
-  if (!hv) return;
-  hv.hidden = !p.harvest || !(p.holdsBasket || p.canTake);
-  hv.textContent = p.holdsBasket ? '🧺 放下籃子' : '🧺 接過籃子';
-}
-
 /** 題目面板。只在題目本身或自己的選擇變動時呼叫。 */
 function renderAsk(p) {
   const { ask } = p.refs;
@@ -490,7 +438,24 @@ function renderAsk(p) {
   ask.textContent = '';
   const q = document.createElement('div');
   q.className = 'q';
-  q.textContent = `${p.ask.kind === 'SURVEY' ? '問卷' : '問答'} ${p.ask.index}：${p.ask.question}`;
+  if (p.ask.kind === 'WORDCLOUD') {
+    q.textContent = `文字雲：${p.ask.question}`;
+    const form = document.createElement('form');
+    form.className = 'opts';
+    const input = document.createElement('input');
+    input.placeholder = p.mine?.length ? `已送：${p.mine.join('、')}` : '輸入答案';
+    const send = document.createElement('button');
+    send.type = 'submit';
+    send.textContent = '送出';
+    form.append(input, send);
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (input.value.trim()) sendTo(p, EV.WORDCLOUD_ANSWER, { text: input.value.trim() });
+    });
+    ask.append(q, form);
+    return;
+  }
+  q.textContent = `問答 ${p.ask.index}：${p.ask.question}`;
   const opts = document.createElement('div');
   opts.className = 'opts';
   p.ask.options.forEach((label, i) => {
@@ -498,11 +463,11 @@ function renderAsk(p) {
     b.type = 'button';
     b.textContent = label;
     b.setAttribute('aria-pressed', String(p.answered === i));
-    // 問答答過就鎖住（伺服器也會拒），問卷可以改 —— 與手機端同一套規則
-    b.disabled = p.ask.kind === 'QUIZ' && p.answered !== null;
+    // 問答答過就鎖住（伺服器也會拒）—— 與手機端同一套規則
+    b.disabled = p.answered !== null;
     b.addEventListener('click', () => {
       p.answered = i;
-      sendTo(p, p.ask.kind === 'SURVEY' ? EV.SURVEY_ANSWER : EV.QUIZ_ANSWER, { choice: i });
+      sendTo(p, EV.QUIZ_ANSWER, { choice: i });
       renderAsk(p);
     });
     opts.append(b);
@@ -535,9 +500,7 @@ setInterval(() => {
     const dist = Math.hypot(dx, dy);
     if (dist <= (prop.r ?? 0) + ARRIVE_SLACK) {
       clearTarget(p);
-      // 問卷要求到場時以到位狀態為準：「已抵達」只代表走到了選單指定的道具，
-      // 未必是自己答案對應的那一個，蓋掉到位狀態會讓人誤判
-      p.note = p.needsArrival ? arrivalNote(p) : '已抵達';
+      p.note = '已抵達';
       setDir(p, 0, 0);
       renderStatus(p);
       continue;

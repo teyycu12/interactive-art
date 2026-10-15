@@ -12,33 +12,30 @@
  * 不放即時問答：題目與正解是每場活動自己的內容，範本替不了。
  *
  * 編排原則（每一套都照這個順序）：
- *   1. 先一題轉場問卷（要走到定點）—— 讓人動起來、身上有標籤，後面的賓果才有變化
+ *   1. 先一題文字雲暖場 —— 每個人都送得出一個詞，大螢幕馬上熱鬧起來，
+ *      主持人也有話題可以接（「誰寫了這個？」）
  *   2. 配對任務或人物賓果 —— 一對一認識人
- *   3. 需要整隊合作的（尋寶、採水果）—— 這時大家已經認識幾個人，比較喊得出口
- *   4. 大合照收尾
+ *   3. 大合照收尾
+ * （尋寶、採水果、轉場問卷已於 2026-10 移除，原本排在這裡的步驟改成文字雲。）
  */
 
 import { EV } from './protocol.js';
-import { SURVEY_BANK_MAP } from './surveys.js';
+import { WORDCLOUD } from './wordcloud.js';
 
-// 標籤直接取題庫的題目：手寫一份會跟題庫漂移
-const survey = (bankId) => ({
-  kind: 'survey',
-  label: `${SURVEY_BANK_MAP[bankId]?.question ?? bankId}（要走到定點）`,
-  msg: { type: EV.HOST_START_SURVEY, bankId, requireArrival: true, durationMs: 30000 },
-});
+const wordcloud = (question) => {
+  if ([...question].length > WORDCLOUD.maxQuestionLength) throw new Error(`文字雲題目太長：${question}`);
+  return { kind: 'wordcloud', label: `文字雲：${question}`, msg: { type: EV.HOST_START_WORDCLOUD, question } };
+};
 const pairing = (target, minutes) => ({
   kind: 'mission',
   label: `找一個人配對・每人 ${target} 次・${minutes} 分鐘`,
-  msg: { type: EV.HOST_PUBLISH_MISSION, missionType: 'PAIRING', target, colorFamily: null, durationMs: minutes * 60000 },
+  msg: { type: EV.HOST_PUBLISH_MISSION, missionType: 'PAIRING', target, durationMs: minutes * 60000 },
 });
 const bingo = (minutes) => ({
   kind: 'bingo',
   label: `人物賓果・${minutes} 分鐘`,
   msg: { type: EV.HOST_START_BINGO, durationMs: minutes * 60000 },
 });
-const treasure = { kind: 'treasure', label: '尋寶（先知隨機）', msg: { type: EV.HOST_START_TREASURE, prophetId: null } };
-const harvest = { kind: 'harvest', label: '採水果', msg: { type: EV.HOST_START_HARVEST } };
 const photo = { kind: 'photo', label: '拍大合照', msg: { type: EV.HOST_TAKE_PHOTO } };
 
 /**
@@ -50,29 +47,29 @@ export const RECIPES = [
     id: 'kitchen_mixer',
     theme: 'kitchen',
     name: '交誼破冰（約 30 分鐘）',
-    brief: '彼此不認識的一群人：先分工、再一對一認識，最後一起找寶藏。',
-    steps: [survey('kitchen_role'), pairing(2, 8), bingo(10), treasure, photo],
+    brief: '彼此不認識的一群人：先用文字雲暖場，再一對一認識，最後聊聊今天的收穫。',
+    steps: [wordcloud('用一個詞形容你今天的心情'), pairing(2, 8), bingo(10), wordcloud('今天最難忘的一刻？'), photo],
   },
   {
     id: 'office_onboarding',
     theme: 'office',
     name: '新人報到・新生訓練（約 35 分鐘）',
-    brief: '同一個單位的新成員：先用賓果把人認一輪，再用需要分工的玩法磨合。',
-    steps: [survey('team_role'), bingo(10), pairing(3, 8), harvest, photo],
+    brief: '同一個單位的新成員：先說說期待，用賓果把人認一輪，再配對加深印象。',
+    steps: [wordcloud('你最期待在這裡學到什麼？'), bingo(10), pairing(3, 8), wordcloud('用一個詞形容這個團隊'), photo],
   },
   {
     id: 'gym_welcome',
     theme: 'gym',
     name: '社團迎新・運動會暖場（約 25 分鐘）',
-    brief: '人多、動態高：短配對、短賓果先認識幾個人，再用接力讓大家一起跑起來。',
-    steps: [survey('sport_role'), pairing(2, 5), bingo(5), harvest, photo],
+    brief: '人多、動態高：先看看大家愛什麼運動，再用短配對、短賓果認識幾個人。',
+    steps: [wordcloud('你最喜歡的運動是？'), pairing(2, 5), bingo(5), photo],
   },
   {
     id: 'quick_icebreaker',
     theme: null,
     name: '快速破冰（約 15 分鐘）',
-    brief: '時間很短的場合：一題問卷暖身、一輪賓果、合照收尾。任何場景都能用。',
-    steps: [survey('chrono'), bingo(5), photo],
+    brief: '時間很短的場合：一題文字雲暖身、一輪賓果、合照收尾。任何場景都能用。',
+    steps: [wordcloud('用一個詞形容今天'), bingo(5), photo],
   },
 ];
 

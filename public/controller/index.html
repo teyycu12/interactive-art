@@ -255,24 +255,15 @@
     <!-- 所在分區。走進舞台／暢飲／沙發區時出現 -->
     <p class="zone-chip" id="zone-chip" hidden></p>
 
-    <!-- 採水果（籃子接力）。手機不寫家具名稱，叫人看大螢幕 ——
-         名稱只存在大螢幕的場景設定裡，換主題會變，手機再存一份必然漂移。 -->
-    <div class="treasure harvest" id="harvest-box" hidden>
-      <div class="tr-row">
-        <span class="tr-role" id="harvest-role">🧺 採水果</span>
-        <span class="tr-heat" id="harvest-left" style="--heat:#2A9D8F">—</span>
-      </div>
-      <p class="tr-hint" id="harvest-hint"></p>
-      <button class="btn-primary hv-act" id="btn-harvest" hidden></button>
-    </div>
-
-    <!-- 尋寶。先知與其他人看到的內容刻意不同，見 app.js 的 renderTreasure -->
-    <div class="treasure" id="treasure-box" hidden>
-      <div class="tr-row">
-        <span class="tr-role" id="treasure-role">尋寶中</span>
-        <span class="tr-heat" id="treasure-heat" hidden>—</span>
-      </div>
-      <p class="tr-hint" id="treasure-hint"></p>
+    <!-- 文字雲：主持人出題時出現，輸入短答送到大螢幕。不擋搖桿，邊走邊答也可以 -->
+    <div class="wc-box" id="wordcloud-box" hidden>
+      <p class="wc-q"><span class="wc-tag">文字雲</span><b id="wc-question">—</b></p>
+      <form class="wc-form" id="wc-form" autocomplete="off">
+        <input id="wc-input" enterkeyhint="send" placeholder="輸入你的答案" aria-label="你的答案">
+        <button class="btn-primary" id="wc-send" type="submit" disabled>送出</button>
+      </form>
+      <p class="wc-mine" id="wc-mine" hidden></p>
+      <p class="wc-msg" id="wc-msg" hidden role="status" aria-live="polite"></p>
     </div>
 
     <!-- 社交連結：這場活動真正在累積的東西，但手機端原本完全看不到。

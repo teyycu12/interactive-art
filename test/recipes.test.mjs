@@ -10,10 +10,10 @@ import assert from 'node:assert/strict';
 
 import { RECIPES, recipesForTheme } from '../shared/recipes.js';
 import { EV, MISSION_TYPES, MISSION_DURATIONS } from '../shared/protocol.js';
-import { SURVEY_BANK_MAP } from '../shared/surveys.js';
+import { WORDCLOUD } from '../shared/wordcloud.js';
 import { SELECTABLE_THEMES, THEME_MAP } from '../shared/themes.js';
 
-const KINDS = new Set(['mission', 'survey', 'treasure', 'harvest', 'bingo', 'photo']);
+const KINDS = new Set(['mission', 'wordcloud', 'bingo', 'photo']);
 
 test('每個可選的場景都至少有一套範本', () => {
   for (const t of SELECTABLE_THEMES) assert.ok(recipesForTheme(t.id).length > 0, t.id);
@@ -34,13 +34,12 @@ test('每一步的訊息型別都存在、種類認得', () => {
   }
 });
 
-test('問卷題目存在，且屬於該範本的場景（或通用）', () => {
+test('文字雲題目非空、在長度上限內（伺服器會照同一個上限拒絕）', () => {
   for (const r of RECIPES) {
-    for (const step of r.steps.filter((s) => s.kind === 'survey')) {
-      const q = SURVEY_BANK_MAP[step.msg.bankId];
-      assert.ok(q, `${r.id}: ${step.msg.bankId}`);
-      assert.ok(q.theme === null || q.theme === r.theme, `${r.id}: ${q.id} 屬於 ${q.theme}`);
-      assert.ok(step.msg.durationMs >= 15000 && step.msg.durationMs <= 45000);
+    for (const step of r.steps.filter((s) => s.kind === 'wordcloud')) {
+      const q = step.msg.question;
+      assert.ok(typeof q === 'string' && q.trim().length > 0, r.id);
+      assert.ok([...q].length <= WORDCLOUD.maxQuestionLength, `${r.id}: ${q}`);
     }
   }
 });

@@ -82,33 +82,16 @@ export const EV = {
   ZONE_SELF: 'ZONE_SELF',                     // Server → Phone：我進出了某個分區
   ZONE_STATE: 'ZONE_STATE',                   // Server → Screen/Host：各分區目前有幾人
 
-  // ── 尋寶任務（先知模式，見 server/treasure.js）────────
-  HOST_START_TREASURE: 'HOST_START_TREASURE', // Host → Server：開始一輪尋寶
-  HOST_STOP_TREASURE: 'HOST_STOP_TREASURE',   // Host → Server：中止本輪
-  TREASURE_START: 'TREASURE_START',           // Server → All：本輪開始（不含座標）
-  TREASURE_HEAT: 'TREASURE_HEAT',             // Server → Prophet：冷熱提示（僅送先知）
-  TREASURE_FOUND: 'TREASURE_FOUND',           // Server → All：找到了，公布座標
-  TREASURE_ENDED: 'TREASURE_ENDED',           // Server → All：本輪中止
-
-  // ── 轉場問卷（沒有正解的題目，見 shared/surveys.js）──
-  HOST_START_SURVEY: 'HOST_START_SURVEY',     // Host → Server：出一題問卷
-  HOST_CLOSE_SURVEY: 'HOST_CLOSE_SURVEY',     // Host → Server：收掉本題
-  SURVEY_QUESTION: 'SURVEY_QUESTION',         // Server → All：題目與選項
-  SURVEY_ANSWER: 'SURVEY_ANSWER',             // Phone → Server：送出選擇（可改）
-  SURVEY_ACK: 'SURVEY_ACK',                   // Server → Phone：已記錄
-  SURVEY_ARRIVED: 'SURVEY_ARRIVED',           // Server → Phone：到位狀態變了（要到場才算的題目）
-  SURVEY_STATE: 'SURVEY_STATE',               // Server → Screen/Host：即時分佈
-  SURVEY_CLOSED: 'SURVEY_CLOSED',             // Server → All：本題收掉，附最終分佈
-
-  // 採水果（籃子接力）。沒有秘密 —— 哪一畦採過了、籃子在誰手上都要讓全場看見，
-  // 「誰還沒採」正是大家要互相喊的那件事，因此三端送同一份狀態。
-  HOST_START_HARVEST: 'HOST_START_HARVEST',   // Host → Server：開始一輪採收
-  HOST_STOP_HARVEST: 'HOST_STOP_HARVEST',     // Host → Server：中止本輪
-  HARVEST_STATE: 'HARVEST_STATE',             // Server → All：本輪狀態（round 為 null 代表結束）
-  HARVEST_TAKE: 'HARVEST_TAKE',               // Phone → Server：接過／撿起籃子
-  HARVEST_DROP: 'HARVEST_DROP',               // Phone → Server：把籃子放在原地
-  HARVEST_REACH: 'HARVEST_REACH',             // Server → Phone：按不按得到「接過籃子」
-  HARVEST_DONE: 'HARVEST_DONE',               // Server → All：籃子送回去了，本輪完成
+  // ── 文字雲（shared/wordcloud.js、server/wordcloud.js）───
+  // 尋寶、採水果、轉場問卷已移除（2026-10），由文字雲取代。
+  HOST_START_WORDCLOUD: 'HOST_START_WORDCLOUD', // Host → Server：出一題 {question}
+  HOST_CLOSE_WORDCLOUD: 'HOST_CLOSE_WORDCLOUD', // Host → Server：收掉本題
+  HOST_HIDE_WORD: 'HOST_HIDE_WORD',             // Host → Server：把某個詞從文字雲隱藏 {word}
+  WORDCLOUD_QUESTION: 'WORDCLOUD_QUESTION',     // Server → All：題目（連線時補送）
+  WORDCLOUD_ANSWER: 'WORDCLOUD_ANSWER',         // Phone → Server：送一個答案 {text}
+  WORDCLOUD_ACK: 'WORDCLOUD_ACK',               // Server → Phone：結果與自己送過的答案 {ok, reason?, mine}
+  WORDCLOUD_STATE: 'WORDCLOUD_STATE',           // Server → Screen/Host：目前的詞與票數（節流廣播）
+  WORDCLOUD_CLOSED: 'WORDCLOUD_CLOSED',         // Server → All：本題收掉，附最終的詞與票數
 
   // 人物賓果（server/bingo.js）。卡片是私人的，只送給本人；大螢幕只看排行
   HOST_SET_TOPICS: 'HOST_SET_TOPICS',         // Host → Server：話題桌開關 {enabled}
@@ -259,8 +242,9 @@ export const SCORE_SOURCES = {
   PAIR: 'PAIR',               // 完成一次配對
   MISSION_DONE: 'MISSION_DONE', // 達成該任務的目標次數
   QUIZ: 'QUIZ',               // 答對問答
-  TREASURE: 'TREASURE',       // 找到寶藏
-  HARVEST: 'HARVEST',         // 採水果接力完成
+  // 尋寶與採水果已移除；來源保留，舊存檔裡的積分紀錄才顯示得出是怎麼來的
+  TREASURE: 'TREASURE',       // 找到寶藏（已移除的玩法）
+  HARVEST: 'HARVEST',         // 採水果接力完成（已移除的玩法）
   BINGO: 'BINGO',             // 人物賓果填格、連線、全滿
 };
 

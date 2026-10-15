@@ -6,7 +6,7 @@
  */
 export const ENCOUNTER_KINDS = [
   { id: 'pair', label: '配對認識' },
-  { id: 'harvest', label: '交接籃子' },
+  { id: 'harvest', label: '交接籃子' },   // 採水果已移除；留著標籤，舊紀錄才顯示得出來
   { id: 'message', label: '傳過訊息' },
   { id: 'topic', label: '同桌聊天' },
   { id: 'cheers', label: '一起乾杯' },

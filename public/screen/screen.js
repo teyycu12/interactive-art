@@ -13,10 +13,8 @@
 import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, QUIZ_PHASE, EMOTE_GLYPH } from '/shared/protocol.js';
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
-import { TREASURE_RADIUS } from '/shared/heat.js';
-import { SURVEY } from '/shared/surveys.js';
-import { HARVEST } from '/shared/harvest.js';
-import { createScene, pinnedSceneId, propLabel } from './scenes/registry.js';
+import { WORDCLOUD } from '/shared/wordcloud.js';
+import { createScene, pinnedSceneId } from './scenes/registry.js';
 import { DEFAULT_THEME, isThemeId, THEME_MAP } from '/shared/themes.js';
 import {
   drawCharacter, drawNameplate, drawEmote, drawOffline, emoteIsPosed,
@@ -51,11 +49,18 @@ let bingoDeadline = null;
 /** 短音效（public/screen/sfx.js）。開關由主辦端控制，預設開 */
 const sfx = new Sfx();
 
+/**
+ * ?preview=1：嵌在主控台裡的預覽小窗。畫面與真的大螢幕完全一樣，但
+ * 不出聲（主持人的電腦跟著投影機一起響只會干擾），也不提供截圖（見伺服器的 SCREEN_HELLO）。
+ */
+const PREVIEW = new URLSearchParams(location.search).get('preview') === '1';
+if (PREVIEW) { document.documentElement.classList.add('is-preview'); sfx.setEnabled(false); }
+
 function applySettings(settings) {
   if (!settings) return;
   debug = settings.debug === true;
   document.getElementById('hud').hidden = !debug;
-  sfx.setEnabled(settings.sound !== false);
+  sfx.setEnabled(!PREVIEW && settings.sound !== false);
 }
 
 function runCommand(cmd) {
@@ -176,15 +181,6 @@ let rosterSeenOnce = false;
  * 出來，那張集體共創的關係圖就只存在於伺服器的記憶體裡。
  */
 let links = [];
-/**
- * 尋寶本輪狀態（含座標）。
- *
- * 大螢幕拿得到座標而手機拿不到 —— 大螢幕是公開畫面，寶箱畫上去
- * 所有人都看得到大概方位，但「還差多遠」仍只有先知知道。
- */
-let treasureRound = null;
-let treasureHeat = null;
-
 /** 剛完成配對的連線特效，播完即丟 */
 const sparks = [];
 /** 揮手、碰杯的光束色（陶土橘）。與配對的青綠分開：一眼分得出「認識了」與「打了招呼」 */
@@ -244,7 +240,7 @@ function connect() {
   ws.addEventListener('open', () => {
     screenReconnectDelay = 1000;
     setOffline(false);
-    ws.send(JSON.stringify({ type: EV.SCREEN_HELLO }));
+    ws.send(JSON.stringify({ type: EV.SCREEN_HELLO, preview: PREVIEW }));
   });
 
   ws.addEventListener('message', (e) => {
@@ -357,31 +353,6 @@ function connect() {
         sparks.push({ a: msg.a.id, b: msg.b.id, at: performance.now() });
         break;
 
-      case EV.TREASURE_START:
-        // 大螢幕看得到座標而手機看不到，是刻意的：
-        // 大螢幕是「公開的畫面」，寶箱畫在上面所有人都看得到大概方位，
-        // 但仍然需要先知喊出冷熱才知道差多遠 —— 這正是設計要的張力。
-        treasureRound = { ...msg.round, ...(msg.spot ?? {}) };
-        toast(`尋寶開始！先知　${roster.get(msg.round.prophetId)?.name ?? ''}`);
-        break;
-
-      case EV.TREASURE_HEAT:
-        treasureHeat = msg.heat;
-        break;
-
-      case EV.TREASURE_FOUND:
-        toast(`${msg.byName} 找到寶藏了！`);
-        sfx.play('treasure');
-        if (msg.by) pulse.set(msg.by, performance.now());
-        treasureRound = null;
-        treasureHeat = null;
-        break;
-
-      case EV.TREASURE_ENDED:
-        treasureRound = null;
-        treasureHeat = null;
-        break;
-
       case EV.MISSION_CLOSED:
         showMission(null);
         toast(`任務結束　共 ${msg.totalCompletions} 次配對`);
@@ -393,13 +364,17 @@ function connect() {
         showQuestion(msg.quiz);
         break;
 
-      case EV.SURVEY_QUESTION:
-        showSurvey({ ...msg.survey, counts: new Array(msg.survey.options.length).fill(0), totalAnswers: msg.survey.answered ?? 0 },
-          { durationMs: msg.survey.durationMs });
+      case EV.WORDCLOUD_QUESTION:
+        sfx.play('quiz');
+        showWordCloud({ question: msg.cloud.question, words: [], participants: 0 });
         break;
 
-      case EV.HARVEST_STATE:
-        harvestRound = msg.round;
+      case EV.WORDCLOUD_STATE:
+        if (msg.cloud) updateWordCloud(msg.cloud);
+        break;
+
+      case EV.WORDCLOUD_CLOSED:
+        closeWordCloud(msg.result);
         break;
 
       case EV.BINGO_STATE: {
@@ -412,20 +387,7 @@ function connect() {
 
       case EV.BINGO_ENDED:
         showBingoFinale(msg);
-        sfx.play('treasure');
-        break;
-
-      case EV.HARVEST_DONE:
-        harvestRound = null;
-        sfx.play('harvest');
-        break;
-
-      case EV.SURVEY_STATE:
-        if (msg.state) showSurvey(msg.state);
-        break;
-
-      case EV.SURVEY_CLOSED:
-        showSurvey(msg.result, { closed: true });
+        sfx.play('fanfare');
         break;
 
       case EV.QUIZ_TALLY:
@@ -680,45 +642,6 @@ function captureStageFrame() {
 }
 
 
-/**
- * 寶箱。畫在角色下方（先繪製），避免蓋住站上去的人。
- *
- * 刻意畫得明顯：這是全場要一起找的目標，看不清楚就失去意義。
- * 但只畫「在哪」，不畫「離最近的人多遠」—— 後者是先知的獨佔資訊。
- */
-/** 寶箱在 3D 世界裡的高度（角色為 2.1，寶箱約及膝） */
-const TREASURE_WORLD_HEIGHT = 0.8;
-
-function drawTreasure(now) {
-  if (!treasureRound || !Number.isFinite(treasureRound.x)) return;
-  const p = toScreen(treasureRound);
-  // 半徑必須跟著透視縮放，與角色走同一條路徑（characterHeightAt）——
-  // 直接用 2D 的 scale 會讓寶箱在房間深處畫得跟最前方一樣大，
-  // 那就是「貼紙浮在畫面上」而不是放在地板上。
-  const r = activeScene
-    ? (activeScene.scaleAt(treasureRound.x, treasureRound.y, TREASURE_WORLD_HEIGHT) || TREASURE_RADIUS * scale)
-    : TREASURE_RADIUS * scale;
-  // 呼吸脈動：靜止的圖示在滿是走動角色的畫面上會被忽略
-  const beat = 1 + Math.sin(now / 380) * 0.08;
-
-  ctx.save();
-  ctx.translate(p.x, p.y);
-
-  ctx.beginPath();
-  ctx.arc(0, 0, r * beat, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(233,196,106,.18)';
-  ctx.fill();
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = 'rgba(233,196,106,.85)';
-  ctx.stroke();
-
-  ctx.font = `${Math.round(r * 1.1)}px system-ui, "Apple Color Emoji", sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('💎', 0, 0);
-  ctx.restore();
-}
-
 // 體素 3D 角色：預設關閉。場景是 2D 的，角色維持平面紙娃娃（shared/character.js）；
 // ?voxel=1 才開，留作比較與實驗。WebGL 不能用時 ok 為 false，照舊畫 2D。
 //
@@ -759,9 +682,6 @@ function render(now) {
       STAGE.width * scale - m * 2, STAGE.height * scale - m * 2);
   }
 
-  drawTreasure(now);
-  drawSurveyZones();
-  drawHarvestZones();
 
   // 位置內插
   for (const a of latest) {
@@ -858,16 +778,12 @@ function render(now) {
     const fontSize = Math.max(10, height * 0.12);
     const { w, h } = measureNameplate(ctx, name, { fontSize });
     plates.push({ id: a.id, x: pos.x, y: pos.y + NAMEPLATE_DROP, w, h, pos, name, fontSize });
-    drawPendingMark(a, pos, height);
-    drawHarvestMark(a, pos, height);
     if (a.emote && !emoteIsPosed(entry?.img, a.emote)) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }
 
   drawNameplates(plates);
 
-  drawSurveySpots(now);
-  drawHarvestSpots();
   drawTopicBubbles(now);
 
   if (debug) updateHud();
@@ -914,91 +830,7 @@ function drawNameplates(plates) {
  * 半徑由投影過的兩個點量出來，不是縮放乘上去的：3D 地板有透視壓縮，
  * 直接乘會畫出一個與伺服器判定不一致的圈 —— 而那正是最難查的一種不一致。
  */
-/**
- * 答了但還沒走到的人，在頭上標一個自己答案顏色的箭頭。
- *
- * 「還差一個」只說得出數字，說不出是誰。標出來之後旁邊的人會開口提醒他 ——
- * 而「通關路徑上要有一步必須跟另一個人講話」正是本專案對新玩法的判準
- * （見 INTERACTION-DESIGN）。
- */
-function drawPendingMark(a, pos, height) {
-  const choice = pendingChoice.get(a.id);
-  if (choice === undefined) return;
-  const color = QUIZ_CHOICES[choice]?.color ?? '#E76F51';
-  // 尺寸抓角色高度的 0.17：再小就與名牌上的字混在一起，
-  // 投影到場地另一端時看不出那是一個記號還是一個像素雜點
-  const r = Math.max(8, height * 0.17);
-  const y = pos.y - height * 1.5;
-  // 浮動幅度很小，但它仍然是裝飾性動態 —— 使用者要求減少動態時就不要動
-  const bob = reducedMotion.matches ? 0 : Math.sin(performance.now() / 420 + pos.x) * r * 0.18;
 
-  ctx.save();
-  ctx.translate(0, bob);   // 緩慢上下浮動：靜止的畫面上，會動的東西才抓得到餘光
-  // 朝下的三角指著這個人，與他要去的那個圈同色 —— 顏色就是「你要去哪一圈」
-  ctx.beginPath();
-  ctx.moveTo(pos.x - r, y - r * 1.15);
-  ctx.lineTo(pos.x + r, y - r * 1.15);
-  ctx.lineTo(pos.x, y + r * 0.75);
-  ctx.closePath();
-  ctx.fillStyle = color;
-  ctx.strokeStyle = 'rgba(255,255,255,.9)';
-  ctx.lineWidth = Math.max(1.6, r * 0.28);
-  ctx.lineJoin = 'round';
-  ctx.stroke();
-  ctx.fill();
-  ctx.restore();
-}
-
-const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
-
-/** agentId → 選項索引。只放「答了但還沒走到」的人。 */
-const pendingChoice = new Map();
-
-function syncPendingChoice() {
-  pendingChoice.clear();
-  if (!surveyState?.requireArrival) return;
-  for (const p of surveyState.pending ?? []) pendingChoice.set(p.id, p.choice);
-}
-
-function drawSurveyZones() {
-  if (!surveyState?.requireArrival || !optionsAreOnStage(surveyState.options)) return;
-
-  surveyState.options.forEach((opt, i) => {
-    const prop = PROPS.find((p) => p.id === opt.spot);
-    if (!prop) return;
-    const pos = toScreen(prop);
-    const reach = (prop.r ?? 0) + SURVEY.arriveRadius;
-    const rx = Math.abs(toScreen({ x: prop.x + reach, y: prop.y }).x - pos.x);
-    const ry = Math.abs(toScreen({ x: prop.x, y: prop.y + reach }).y - pos.y) || rx * 0.6;
-    if (!(rx > 0)) return;
-
-    // 湊齊了就換成實線 —— 虛線代表「還缺人」，實線代表「這一組到齊了」。
-    // 數字要看清楚得盯著螢幕，而一圈線的虛實在場地另一端也分得出來。
-    const chosen = surveyState.counts?.[i] ?? 0;
-    const here = surveyState.arrived?.[i] ?? 0;
-    const done = chosen > 0 && here >= chosen;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(pos.x, pos.y, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fillStyle = `${QUIZ_CHOICES[i].color}${done ? '4D' : '33'}`;
-    ctx.fill();
-    ctx.lineWidth = Math.max(3, rx * (done ? 0.07 : 0.055));
-    ctx.strokeStyle = QUIZ_CHOICES[i].color;
-    if (!done) ctx.setLineDash([rx * 0.13, rx * 0.085]);
-    ctx.stroke();
-
-    // 內側再描一圈白：投影到深色地板與淺色地毯上時，單一顏色的線
-    // 在其中一種底色上一定會糊掉，而場景裡兩種底色都有
-    ctx.beginPath();
-    ctx.ellipse(pos.x, pos.y, rx * 0.955, ry * 0.955, 0, 0, Math.PI * 2);
-    ctx.setLineDash([]);
-    ctx.lineWidth = Math.max(1.5, rx * 0.02);
-    ctx.strokeStyle = 'rgba(255,255,255,.55)';
-    ctx.stroke();
-    ctx.restore();
-  });
-}
 
 /**
  * 話題桌的題目泡泡（STAGE_TOPIC）。題目公開在大螢幕上是刻意的：旁邊的人看到
@@ -1009,8 +841,6 @@ const topicBubbles = new Map();
 const TOPIC_SHOW_MS = 20_000;
 
 function drawTopicBubbles(now) {
-  // 問卷用同一批道具當地點，兩種標籤疊在一起誰都看不清：問卷優先
-  if (surveyState) return;
   for (const [spotId, b] of topicBubbles) {
     const age = now - b.at;
     if (age > TOPIC_SHOW_MS) { topicBubbles.delete(spotId); continue; }
@@ -1060,77 +890,6 @@ function wrapText(text, perLine) {
   return out;
 }
 
-function drawSurveySpots(now) {
-  if (!surveyState || !optionsAreOnStage(surveyState.options)) return;
-  const counts = surveyState.counts ?? [];
-
-  const needArrival = !!surveyState.requireArrival;
-  const arrived = surveyState.arrived ?? [];
-
-  surveyState.options.forEach((opt, i) => {
-    const prop = PROPS.find((p) => p.id === opt.spot);
-    if (!prop) return;
-    const pos = toScreen(prop);
-
-
-    // 尺寸比照站在同一個位置的人，遠近才一致 —— 固定尺寸的標籤在房間深處
-    // 會大得像貼紙浮在畫面上（與角色高度同一個理由）
-    const h = characterHeightAt(prop);
-    const pad = h * 0.16;
-    const font = Math.max(11, h * 0.26);
-    const countFont = Math.max(12, h * 0.3);
-
-    const label = opt.label;
-    // 要到場才算時，到位數才是成績；選了幾個人只是過程，所以排在後面且較小。
-    const chosen = counts[i] ?? 0;
-    const here = arrived[i] ?? 0;
-    const count = needArrival
-      ? `${here}/${chosen}${chosen > 0 && here >= chosen ? ' ✓' : ''}`
-      : `${chosen} 人`;
-    ctx.save();
-    ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
-    const labelW = ctx.measureText(label).width;
-    ctx.font = `900 ${countFont}px system-ui, "Noto Sans TC", sans-serif`;
-    const countW = ctx.measureText(count).width;
-    const gap = pad * 0.9;
-    const w = pad * 2 + font * 1.1 + gap + labelW + gap + countW;
-    const boxH = Math.max(font, countFont) + pad * 1.6;
-    const x = pos.x - w / 2;
-    const y = pos.y - h * 1.15 - boxH;
-
-    ctx.fillStyle = QUIZ_CHOICES[i].color;
-    ctx.strokeStyle = 'rgba(47,42,38,.85)';
-    ctx.lineWidth = Math.max(1.5, h * 0.025);
-    roundRect(ctx, x, y, w, boxH, boxH / 2);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = '#fff';
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left';
-    const midY = y + boxH / 2;
-    let cursor = x + pad;
-    ctx.font = `900 ${font * 1.1}px system-ui, sans-serif`;
-    ctx.fillText(QUIZ_CHOICES[i].glyph, cursor, midY);
-    cursor += font * 1.1 + gap;
-    ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
-    ctx.fillText(label, cursor, midY);
-    cursor += labelW + gap;
-    ctx.font = `900 ${countFont}px system-ui, "Noto Sans TC", sans-serif`;
-    ctx.fillText(count, cursor, midY);
-
-    // 指向家具的小尖角，免得標籤看起來飄在半空中
-    ctx.beginPath();
-    ctx.moveTo(pos.x - boxH * 0.22, y + boxH);
-    ctx.lineTo(pos.x + boxH * 0.22, y + boxH);
-    ctx.lineTo(pos.x, y + boxH + boxH * 0.42);
-    ctx.closePath();
-    ctx.fillStyle = QUIZ_CHOICES[i].color;
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-  });
-}
 
 function roundRect(c, x, y, w, h, r) {
   const rr = Math.min(r, w / 2, h / 2);
@@ -1184,17 +943,15 @@ let quizDeadline = 0;
 let quizRaf = null;
 
 /**
- * 題目、問卷與任務橫幅都固定在畫面上緣，同時出現會疊在一起。
- * 優先序：問答 > 問卷 > 任務 —— 問答有倒數與計分，最不能被蓋住。
+ * 題目與任務橫幅都固定在畫面上緣，同時出現會疊在一起。
+ * 頂端同時只放一條：問答 > 任務 > 賓果 —— 問答有倒數與計分，最不能被蓋住。
+ * （文字雲不是橫幅，是蓋在場景上的整面畫面，見 showWordCloud。）
  */
 function syncBanners() {
-  const surveyEl = document.getElementById('survey');
-  surveyEl.hidden = surveyState === null || quiz !== null;
-  document.getElementById('mission').hidden =
-    quiz !== null || surveyState !== null || missionShown === null;
-  // 頂端同時只放一條：問答 > 問卷 > 任務 > 賓果
+  document.getElementById('mission').hidden = quiz !== null || missionShown === null;
+  // 結束後的結算（bingoFinale）也佔用賓果橫幅，見 showBingoFinale
   document.getElementById('bingo').hidden =
-    quiz !== null || surveyState !== null || missionShown !== null || (bingoShown === null && !bingoFinale);
+    quiz !== null || missionShown !== null || (bingoShown === null && !bingoFinale);
   measureBannerInset();
 }
 
@@ -1271,7 +1028,7 @@ setInterval(renderBingoMeta, 1000);
  * 量實際高度而不是寫死：題目長度、選項字數、是否顯示集合地點都會改變高度，
  * 寫死的值在最長的那一題上就會重新蓋到角色 —— 而那一題正是最需要看清楚的。
  */
-const BANNER_IDS = ['quiz', 'survey', 'mission', 'bingo'];
+const BANNER_IDS = ['quiz', 'mission', 'bingo'];
 const BANNER_GAP = 14;   // 橫幅與房間上緣之間留一點縫，免得看起來黏在一起
 
 function measureBannerInset() {
@@ -1326,296 +1083,6 @@ function renderQuizOptions(revealed = null, counts = null) {
   });
 }
 
-// ── 轉場問卷 ────────────────────────────────────────────────
-/** @type {object|null} 目前的問卷分佈（題目 + 即時票數） */
-let surveyState = null;
-
-/**
- * 採水果（籃子接力）。
- *
- * 大螢幕是這個玩法的**唯一**公開資訊來源：手機上刻意不寫家具名稱，
- * 因此「還有哪幾處沒採」「籃子在誰手上」「誰已經採過了」三件事都得在這裡講清楚，
- * 否則拿著籃子的人不知道要找誰，而整個玩法就只剩走路。
- */
-let harvestRound = null;
-
-const BASKET = { full: '#2A9D8F', done: '#8FBF7F', ink: 'rgba(47,42,38,.85)' };
-
-/** 還沒採的那幾處，地上畫一圈 —— 判定範圍要看得見，不然會站在旁邊納悶怎麼沒反應 */
-function drawHarvestZones() {
-  if (!harvestRound) return;
-  for (const bed of harvestRound.beds) {
-    const prop = PROPS.find((p) => p.id === bed.propId);
-    if (!prop) continue;
-    const pos = toScreen(prop);
-    // 半徑要分別投影 x 與 y：地板是斜的，用同一個數字會畫成正圓浮在空中
-    const reach = prop.r + HARVEST.reachRadius;
-    const rx = Math.abs(toScreen({ x: prop.x + reach, y: prop.y }).x - pos.x);
-    const ry = Math.abs(toScreen({ x: prop.x, y: prop.y + reach }).y - pos.y);
-    const picked = bed.pickedBy !== null;
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(pos.x, pos.y, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fillStyle = picked ? `${BASKET.done}33` : `${BASKET.full}4D`;
-    ctx.fill();
-    ctx.lineWidth = Math.max(2, rx * 0.05);
-    ctx.strokeStyle = picked ? BASKET.done : BASKET.full;
-    // 採過的換實線，還沒採的維持虛線 —— 數字要盯著看，線的虛實在場地另一端也分得出來
-    if (!picked) ctx.setLineDash([rx * 0.18, rx * 0.12]);
-    ctx.stroke();
-    ctx.restore();
-  }
-}
-
-/** 每個人頭上的採收記號：拿著籃子的人掛籃子，採過的人掛一個 ✓ */
-function drawHarvestMark(a, pos, height) {
-  if (!harvestRound) return;
-  const holding = harvestRound.holder === a.id;
-  const used = harvestRound.picked.includes(a.id);
-  if (!holding && !used) return;
-
-  const r = Math.max(9, height * (holding ? 0.2 : 0.13));
-  const y = pos.y - height * (holding ? 1.62 : 1.5);
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(pos.x, y, r, 0, Math.PI * 2);
-  ctx.fillStyle = holding ? BASKET.full : BASKET.done;
-  ctx.fill();
-  ctx.lineWidth = Math.max(1.5, r * 0.18);
-  ctx.strokeStyle = BASKET.ink;
-  ctx.stroke();
-  ctx.fillStyle = '#fff';
-  ctx.font = `900 ${r * 1.35}px system-ui, "Noto Sans TC", sans-serif`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  // 採過的人標 ✓ 而不是標「還沒採的人」：一輪下來採過的永遠比較少，
-  // 而拿著籃子的人要找的正是「沒有記號的那些人」
-  ctx.fillText(holding ? '🧺' : '✓', pos.x, y + r * 0.06);
-  ctx.restore();
-}
-
-/** 每一處的名牌，外加籃子沒人拿著時落在地上的位置 */
-function drawHarvestSpots() {
-  if (!harvestRound) return;
-
-  for (const bed of harvestRound.beds) {
-    const prop = PROPS.find((p) => p.id === bed.propId);
-    if (!prop) continue;
-    harvestPill(prop, propLabel(sceneId, prop.id), bed.pickedBy ? '✓ 採好了' : '還沒採',
-      bed.pickedBy ? BASKET.done : BASKET.full);
-  }
-  const home = PROPS.find((p) => p.id === harvestRound.home);
-  if (home) {
-    const left = harvestRound.beds.filter((b) => b.pickedBy === null).length;
-    harvestPill(home, propLabel(sceneId, home.id),
-      left === 0 ? '送回這裡 ←' : `還差 ${left} 處`, '#E9C46A');
-  }
-  if (!harvestRound.holder) {
-    // 沒有人拿著：籃子躺在最後一個人放下（或離場）的地方，要畫出來才有人去撿
-    const pos = toScreen(harvestRound.basket);
-    const r = Math.max(12, characterHeightAt(harvestRound.basket) * 0.2);
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y - r, r, 0, Math.PI * 2);
-    ctx.fillStyle = BASKET.full;
-    ctx.fill();
-    ctx.lineWidth = Math.max(1.5, r * 0.18);
-    ctx.strokeStyle = BASKET.ink;
-    ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = `900 ${r * 1.3}px system-ui, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('🧺', pos.x, pos.y - r);
-    ctx.restore();
-  }
-}
-
-function harvestPill(prop, label, state, color) {
-  const pos = toScreen(prop);
-  const h = characterHeightAt(prop);
-  const pad = h * 0.16;
-  const font = Math.max(11, h * 0.26);
-  ctx.save();
-  ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
-  const labelW = ctx.measureText(label).width;
-  ctx.font = `900 ${font}px system-ui, "Noto Sans TC", sans-serif`;
-  const stateW = ctx.measureText(state).width;
-  const gap = pad * 0.9;
-  const w = pad * 2 + labelW + gap + stateW;
-  const boxH = font + pad * 1.6;
-  // 菜畦貼在畫面左緣，名牌置中就會被裁掉半截 —— 現場看到的是「蘿蔔畦」
-  // 這種少一個字的名字，而那正好是任務要喊的那個詞。夾回畫面內，
-  // 指向道具的尖角另外夾在名牌寬度之內，免得它飄到名牌外面。
-  const vp = stageViewport();
-  const x = Math.min(Math.max(pos.x - w / 2, vp.x + 6), vp.x + vp.width - w - 6);
-  // 上方放不下時改掛在道具下面（上緣是房間的牆與大標題，硬擠會疊在一起）
-  const above = pos.y - h * 1.15 - boxH;
-  const flip = above < vp.y + 6;
-  const y = flip ? pos.y + h * 0.25 : above;
-  const tipX = Math.min(Math.max(pos.x, x + boxH * 0.3), x + w - boxH * 0.3);
-
-  ctx.fillStyle = color;
-  ctx.strokeStyle = BASKET.ink;
-  ctx.lineWidth = Math.max(1.5, h * 0.025);
-  roundRect(ctx, x, y, w, boxH, boxH / 2);
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.fillStyle = '#fff';
-  ctx.textBaseline = 'middle';
-  ctx.textAlign = 'left';
-  const midY = y + boxH / 2;
-  ctx.font = `700 ${font}px system-ui, "Noto Sans TC", sans-serif`;
-  ctx.fillText(label, x + pad, midY);
-  ctx.font = `900 ${font}px system-ui, "Noto Sans TC", sans-serif`;
-  ctx.fillText(state, x + pad + labelW + gap, midY);
-
-  const edge = flip ? y : y + boxH;
-  const tipY = flip ? y - boxH * 0.42 : y + boxH + boxH * 0.42;
-  ctx.beginPath();
-  ctx.moveTo(tipX - boxH * 0.22, edge);
-  ctx.lineTo(tipX + boxH * 0.22, edge);
-  ctx.lineTo(tipX, tipY);
-  ctx.closePath();
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-}
-let surveyDeadline = 0;
-let surveyRaf = null;
-let surveyHideTimer = null;
-
-/** 選項綁定的道具名稱。取自目前場景的道具清單，換主題時名稱會跟著換。 */
-function spotLabel(propId) {
-  if (!propId) return null;
-  const prop = PROPS.find((p) => p.id === propId);
-  const items = activeScene?.constructor?.ITEMS;
-  return items?.[propId]?.[1] ?? (prop ? propId : null);
-}
-
-/**
- * 選項是否每一個都綁了場景裡的地點。
- *
- * 全綁了就不在橫幅上列選項 —— 它們改畫在場景裡各自的家具旁（drawSurveySpots）。
- * 這同時省掉橫幅四分之三的高度，並把「我選這個要走去哪」直接答在畫面上，
- * 而那正是這類題目的重點：答案不是按鈕，是走過去。
- */
-function optionsAreOnStage(options) {
-  return Array.isArray(options) && options.length > 0
-    && options.every((o) => o?.spot && PROPS.some((p) => p.id === o.spot));
-}
-
-function renderSurveyOptions(state) {
-  const wrap = document.getElementById('sv-opts');
-  wrap.replaceChildren();
-  if (optionsAreOnStage(state.options)) return;
-  const total = Math.max(1, state.totalAnswers);
-
-  state.options.forEach((opt, i) => {
-    const row = document.createElement('div');
-    row.className = 'q-opt';
-    row.style.background = QUIZ_CHOICES[i].color;
-
-    const fill = document.createElement('i');
-    fill.className = 'fill';
-    fill.style.width = `${Math.round((state.counts[i] / total) * 100)}%`;
-
-    const g = document.createElement('span');
-    g.className = 'g';
-    g.textContent = QUIZ_CHOICES[i].glyph;
-
-    const t = document.createElement('span');
-    t.className = 't';
-    t.textContent = opt.label;   // 題目與選項可能由主辦者輸入，一律 textContent
-
-    row.append(fill, g, t);
-
-    // 綁了道具的選項標出地點：之後的集合任務就是走這個道具，
-    // 先讓全場在答題時就看見「答這個會被叫去哪裡」
-    const where = spotLabel(opt.spot);
-    if (where) {
-      const s = document.createElement('span');
-      s.className = 'spot';
-      s.textContent = where;
-      row.append(s);
-    }
-
-    const c = document.createElement('span');
-    c.className = 'c';
-    c.textContent = `${state.counts[i]} 人`;
-    row.append(c);
-
-    wrap.append(row);
-  });
-}
-
-function animateSurveyBar() {
-  cancelAnimationFrame(surveyRaf);
-  const bar = document.getElementById('sv-timebar');
-  const fill = document.getElementById('sv-timefill');
-  const step = () => {
-    if (!surveyState) return;
-    const left = Math.max(0, surveyDeadline - Date.now());
-    const ratio = surveyState.durationMs > 0 ? left / surveyState.durationMs : 0;
-    fill.style.width = `${(ratio * 100).toFixed(1)}%`;
-    bar.classList.toggle('urgent', left < 5000);
-    if (left > 0) surveyRaf = requestAnimationFrame(step);
-  };
-  step();
-}
-
-function showSurvey(state, { closed = false, durationMs = null } = {}) {
-  clearTimeout(surveyHideTimer);
-  surveyState = { ...state, durationMs: durationMs ?? surveyState?.durationMs ?? state.durationMs ?? 0 };
-  syncPendingChoice();
-  if (!closed) {
-    surveyDeadline = Date.now() + (state.remainingMs ?? 0);
-    animateSurveyBar();
-  }
-  document.getElementById('sv-no').textContent = `問卷 ${state.index ?? ''}`.trim();
-  document.getElementById('sv-state').textContent = closed ? '結果' : '作答中';
-  document.getElementById('sv-title').textContent = state.question;
-  // 要到場才算的題目，橫幅上報的是到位人數 —— 那才是這一題的進度，
-  // 「按了幾個」在這種題目裡只是中途狀態
-  const answered = state.totalAnswers ?? state.answered ?? 0;
-  const foot = document.getElementById('sv-foot');
-  if (state.requireArrival) {
-    foot.replaceChildren(
-      document.createTextNode('已到位 '),
-      Object.assign(document.createElement('b'), { textContent: String(state.totalArrived ?? 0) }),
-      document.createTextNode(` / ${answered} 人`),
-    );
-  } else {
-    foot.replaceChildren(
-      document.createTextNode('已作答 '),
-      Object.assign(document.createElement('b'), { textContent: String(answered) }),
-      document.createTextNode(' 人'),
-    );
-  }
-  renderSurveyOptions({
-    options: state.options,
-    counts: state.counts ?? new Array(state.options.length).fill(0),
-    totalAnswers: state.totalAnswers ?? 0,
-  });
-  syncBanners();
-  if (closed) {
-    cancelAnimationFrame(surveyRaf);
-    document.getElementById('sv-timefill').style.width = '0%';
-    // 收題後把分佈留在畫面上一段時間再收起 —— 那張長條圖就是這一題的成果，
-    // 立刻消失的話現場只會看到題目閃了一下
-    surveyHideTimer = setTimeout(hideSurvey, 15000);
-  }
-}
-
-function hideSurvey() {
-  clearTimeout(surveyHideTimer);
-  cancelAnimationFrame(surveyRaf);
-  surveyState = null;
-  syncPendingChoice();
-  syncBanners();
-}
 
 /** 倒數條用動畫影格更新，與角色渲染同一個時鐘，不另外開計時器 */
 function animateTimebar() {
@@ -1703,3 +1170,146 @@ function renderRanks(rows) {
     ol.append(li);
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// 文字雲（主持人提問，參與者用手機輸入）
+// ─────────────────────────────────────────────────────────────
+// 版面：詞依票數由大到小，從中心沿阿基米德螺旋找第一個不重疊的位置。
+// 每次更新整片重排，但同一個詞沿用同一個 DOM 元素，位置與字級的變化交給
+// CSS transition —— 票數變多時字慢慢放大、旁邊的詞讓開，看起來是「長出來」的。
+// 新詞以 wc-pop 動畫彈出。伺服器已節流（約 300ms 一次），這裡不再節流。
+
+const wcEl = document.getElementById('wordcloud');
+const wcArea = document.getElementById('wc-area');
+/** text → 元素 */
+const wcNodes = new Map();
+let wcWords = [];
+let wcHideTimer = null;
+const wcMeasure = document.createElement('canvas').getContext('2d');
+// 與 UI 同一組暖色系；顏色依詞決定（同一個詞每次同色），不依名次 —— 名次一變就換色會很花
+const WC_COLORS = ['#C4462A', '#1F7268', '#3A2E27', '#B07A12', '#3A6A88', '#8E4A6E', '#4F7A3A'];
+const wcColor = (text) => {
+  let h = 0;
+  for (const ch of text) h = (h * 31 + ch.codePointAt(0)) | 0;
+  return WC_COLORS[Math.abs(h) % WC_COLORS.length];
+};
+
+function showWordCloud(state) {
+  clearTimeout(wcHideTimer);
+  wcEl.classList.remove('closed');
+  for (const n of wcNodes.values()) n.remove();
+  wcNodes.clear();
+  wcWords = [];
+  document.getElementById('wc-title').textContent = state.question;   // 主持人輸入的題目
+  document.getElementById('wc-hint').textContent = '拿起手機，輸入你的答案！';
+  wcEl.hidden = false;
+  updateWordCloud(state);
+}
+
+function updateWordCloud(cloud) {
+  if (wcEl.hidden) return;
+  document.getElementById('wc-meta').textContent = `${cloud.participants ?? 0} 人作答`;
+  wcWords = cloud.words ?? [];
+  layoutWordCloud();
+}
+
+/** 收題：留著最終的雲 30 秒，讓主持人挑幾個詞問「誰寫了這個？」，再收起 */
+function closeWordCloud(result) {
+  if (wcEl.hidden) return;
+  if (result?.words) wcWords = result.words.slice(0, WORDCLOUD.maxShown);
+  wcEl.classList.add('closed');
+  document.getElementById('wc-meta').textContent = `${result?.participants ?? 0} 人作答・已收題`;
+  document.getElementById('wc-hint').textContent = result?.words?.length ? '誰寫了這個？' : '這題沒有人作答';
+  layoutWordCloud();
+  clearTimeout(wcHideTimer);
+  wcHideTimer = setTimeout(() => { wcEl.hidden = true; }, 30_000);
+}
+
+function layoutWordCloud() {
+  const W = wcArea.clientWidth;
+  const H = wcArea.clientHeight;
+  if (!W || !H) return;
+  const words = wcWords;
+  const max = Math.max(1, ...words.map((w) => w.count));
+  const min = Math.min(max, ...words.map((w) => w.count));
+  // 字級：最大詞約佔區域高度的 1/4，最小 22px。以平方根壓縮差距 ——
+  // 線性的話一個 10 票的詞會把其他詞擠成看不見的小字
+  const top = Math.min(H * 0.24, W * 0.12, 150);
+  const base = Math.max(22, Math.min(40, top * 0.32));
+  const sizeOf = (count) => (max === min ? Math.min(top, base * 1.6) : base + (top - base) * Math.sqrt((count - min) / (max - min)));
+
+  let placed = null;
+  // 排不下時整體縮小再排，最多五次：寧可小一點，也不要有詞消失
+  for (let shrink = 1, tries = 0; tries < 5 && !placed; tries++, shrink *= 0.84) {
+    placed = placeWords(words, (c) => sizeOf(c) * shrink, W, H);
+  }
+  placed = placed ?? placeWords(words, (c) => sizeOf(c) * 0.4, W, H, { allowSkip: true });
+
+  const seen = new Set();
+  for (const p of placed) {
+    seen.add(p.text);
+    let el = wcNodes.get(p.text);
+    if (!el) {
+      el = document.createElement('span');
+      el.className = 'wc-word';
+      el.textContent = p.text;   // 參與者輸入的文字，一律 textContent
+      el.style.color = wcColor(p.text);
+      wcArea.append(el);
+      wcNodes.set(p.text, el);
+    }
+    el.style.fontSize = `${p.size}px`;
+    el.style.setProperty('--x', `${Math.round(p.x)}px`);
+    el.style.setProperty('--y', `${Math.round(p.y)}px`);
+  }
+  // 被主持人隱藏或掉出前 N 名的詞：淡出後移除
+  for (const [text, el] of wcNodes) {
+    if (seen.has(text)) continue;
+    wcNodes.delete(text);
+    el.style.opacity = '0';
+    setTimeout(() => el.remove(), 400);
+  }
+}
+
+/**
+ * 螺旋排版。回傳每個詞的左上角座標與字級；有詞排不下時回 null（呼叫端縮小重排）。
+ * 詞框用 canvas measureText 量，與畫面上同一種字型。
+ */
+function placeWords(words, sizeFor, W, H, { allowSkip = false } = {}) {
+  const font = getComputedStyle(wcArea).fontFamily || 'sans-serif';
+  const boxes = [];
+  const out = [];
+  const pad = 6;
+  for (const w of words) {
+    const size = Math.round(sizeFor(w.count));
+    wcMeasure.font = `800 ${size}px ${font}`;
+    const bw = wcMeasure.measureText(w.text).width + pad * 2;
+    const bh = size * 1.18 + pad;
+    let spot = null;
+    // 阿基米德螺旋：r = a·θ。橫向拉寬（ratio）讓雲是橫的橢圓，配合投影畫面的比例
+    const ratio = W / H;
+    for (let t = 0; t < 1200; t++) {
+      const theta = t * 0.18;
+      const r = 3.2 * theta;
+      const cx = W / 2 + r * Math.cos(theta) * Math.max(1, ratio * 0.75);
+      const cy = H / 2 + r * Math.sin(theta);
+      const x = cx - bw / 2;
+      const y = cy - bh / 2;
+      if (x < 0 || y < 0 || x + bw > W || y + bh > H) {
+        if (r > Math.max(W, H)) break;
+        continue;
+      }
+      if (boxes.some((b) => x < b.x + b.w && x + bw > b.x && y < b.y + b.h && y + bh > b.y)) continue;
+      spot = { x, y };
+      break;
+    }
+    if (!spot) {
+      if (allowSkip) continue;
+      return null;
+    }
+    boxes.push({ x: spot.x, y: spot.y, w: bw, h: bh });
+    out.push({ text: w.text, size, x: spot.x + pad, y: spot.y + pad / 2 });
+  }
+  return out;
+}
+
+addEventListener('resize', () => { if (!wcEl.hidden) layoutWordCloud(); });

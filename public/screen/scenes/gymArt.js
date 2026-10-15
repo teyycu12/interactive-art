@@ -366,7 +366,7 @@ export function paintGymProp(c, p, kind, elapsed, reduced) {
     }
     if (active && !reduced) ball(Math.sin(t * 4) * 20, -130 - Math.abs(Math.sin(t * 6)) * 14, 9);
   } else if (kind === 'basket') {
-    // Equipment basket: the harvest round's drop-off point in this theme.
+    // Equipment basket.
     box(-w / 2, -48, w, 54, '#c69a6c'); rect(-w / 2, -48, w, 6, '#dcb487');
     for (let x = -w / 2 + 8; x < w / 2; x += 12) rect(x, -42, 3, 46, G.woodDark);
     for (let y = -36; y < 4; y += 12) rect(-w / 2 + 4, y, w - 8, 2, G.woodDark);
