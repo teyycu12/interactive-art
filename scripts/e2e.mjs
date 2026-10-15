@@ -689,7 +689,7 @@ function joinPhone(name) {
     ws, name, welcome: null, code: null, mission: null, results: [], confirmReq: null,
     quiz: null, acks: [], quizResult: null, scores: [],
     treasureStart: null, heats: [], treasureFound: null, raw: [],
-    survey: null, surveyAcks: [], surveyClosed: null,
+    survey: null, surveyAcks: [], surveyClosed: null, social: null,
   };
   ws.on('open', () => ws.send(JSON.stringify({ type: 'CLIENT_JOIN', name, avatar: AVATAR })));
   ws.on('message', (d) => {
@@ -709,6 +709,7 @@ function joinPhone(name) {
     if (m.type === 'SURVEY_QUESTION') box.survey = m.survey;
     if (m.type === 'SURVEY_ACK') box.surveyAcks.push(m);
     if (m.type === 'SURVEY_CLOSED') box.surveyClosed = m.result;
+    if (m.type === 'SOCIAL_SELF') box.social = m;
     // 保留原始字串，供「座標絕不外洩到手機」的檢查
     if (m.type?.startsWith('TREASURE')) box.raw.push(d.toString());
   });
@@ -1176,9 +1177,15 @@ host.on('message', (d) => {
   await sleep(200);
   check('主辦端按「已處理」後檢舉從清單移除', dmReports.at(-1)?.length === 0);
 
+  // 「今天遇見的人」：兩人前面配對過；阿賓還沒回過私訊，只有小美傳不算聊過
+  const viaOf = (phone, id) => phone.social?.peers?.find((p) => p.id === id)?.via ?? null;
+  check('配對過的人在「今天遇見的人」名單上', viaOf(amy, bId)?.join() === 'pair', JSON.stringify(amy.social));
+
   // 封鎖：之後的訊息靜默丟棄，寄件人看到的仍是成功；封鎖是單向的
   ben.ws.send(JSON.stringify({ type: 'MSG_BLOCK', userId: aId }));
   await sleep(2100);
+  check('封鎖後雙方的「今天遇見的人」都拿掉對方（紀念卡會被分享出去）',
+    viaOf(amy, bId) === null && viaOf(ben, aId) === null, JSON.stringify([amy.social, ben.social]));
   const before = inboxB.length;
   dm(amy, bId, '被封鎖後還在傳');
   await sleep(300);
@@ -1196,6 +1203,9 @@ host.on('message', (d) => {
   dm(ben, aId, '我還是可以傳給你');
   await sleep(300);
   check('解除封鎖後可以再傳給對方', inboxA.at(-1)?.text === '我還是可以傳給你');
+  check('解除封鎖後名單回來；對方回過私訊才記成「傳過訊息」',
+    viaOf(amy, bId)?.join() === 'pair,message' && viaOf(ben, aId)?.join() === 'pair,message',
+    JSON.stringify([viaOf(amy, bId), viaOf(ben, aId)]));
 
   // 留一則檢舉給下面的踢人測試：被踢之後 fromPresent 要變成 false
   dm(amy, bId, '');   // 空訊息不送出、不吃額度

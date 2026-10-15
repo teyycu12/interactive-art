@@ -43,6 +43,8 @@ import { TreasureHunt } from './treasure.js';
 import { HarvestRelay } from './harvest.js';
 import { HARVEST, HARVEST_PLAN } from '../shared/harvest.js';
 import { SocialGraph } from './socialgraph.js';
+import { Encounters } from './encounters.js';
+import { VIA } from '../shared/encounters.js';
 import { PairingSession } from './pairing.js';
 import { Greetings } from './greetings.js';
 import { BingoRound, BINGO_ERRORS, STRANGER } from './bingo.js';
@@ -74,6 +76,8 @@ const bingo = new BingoRound();
 const topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
+/** 今天遇見的人（手機名單與紀念卡）。比圖譜寬：揮手、乾杯、同桌也算，見 encounters.js */
+const encounters = new Encounters();
 // 揮手要尊重私訊的封鎖：封鎖了卻還能讓對方手機一直跳出「某某在跟你揮手」，封鎖就沒有意義
 const greetings = new Greetings({ ...GREET, isBlocked: (by, target) => messages.isBlocked(by, target) });
 const quiz = new QuizSession();
@@ -103,6 +107,8 @@ const snapshot = store.load();
 if (snapshot) {
   scores.hydrate(snapshot.scores);
   graph.hydrate(snapshot.graph);
+  if (Array.isArray(snapshot.encounters)) encounters.hydrate(snapshot.encounters);
+  else encounters.seedFromGraph(snapshot.graph);
   missions.hydrate(snapshot.missions);
   quiz.hydrate(snapshot.quiz);
   survey.hydrate(snapshot.survey);
@@ -152,6 +158,7 @@ const snapshotData = () => ({
   hostKey: HOST_KEY,
   scores: scores.export(),
   graph: graph.export(),
+  encounters: encounters.export(),
   missions: missions.export(),
   quiz: quiz.export(),
   survey: survey.export(),
@@ -564,6 +571,8 @@ function handleHarvestHand(ws, isTake) {
     });
     return;
   }
+  // 從別人手上接過來才算兩人交集；從地上撿起來不算
+  if (isTake && res.from && res.from !== agentId) meetUp(res.from, agentId, VIA.HARVEST);
   // 交接是離散事件，立刻廣播而不等節流：按下去到畫面上換手之間的延遲，
   // 現場會讀成「沒按到」而再按一次
   blastAll(EV.HARVEST_STATE, { round: harvest.publicView() });
@@ -681,6 +690,11 @@ function handleBingoClaim(ws, msg) {
   // 被填進去的人也要知道：「剛剛那個人原來是在玩賓果」—— 這通常就是下一段對話的開頭
   const cell = bingo.cardOf(from).cells[r.cell];
   sendToAgent(target, EV.BINGO_TAGGED, { byName: nameOf(from), label: cell.cond.label });
+  // 只記在輸碼的這一方（理由見 encounters.js）
+  if (encounters.noteOneWay(from, target, VIA.BINGO)) {
+    sendSocialSelf(from);
+    markDirty();
+  }
   pushBingoState();
   markDirty();
 }
@@ -725,6 +739,7 @@ function stepTopics(now) {
     blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: deal.question });
     console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${deal.question}」`);
   }
+  for (const [a, b] of topics.seatedPairs(now)) meetUp(a, b, VIA.TOPIC);
 }
 
 function sendHarvestCatchUp(ws, agentId) {
@@ -953,6 +968,7 @@ function detachAgent(agentId, { forget = false } = {}) {
     survey.forget(agentId);
     bingo.forget(agentId);
     messages.forget(agentId);
+    encounters.forget(agentId);
     markDirty();
   }
 }
@@ -993,6 +1009,7 @@ function greetDone(kind, outcome, a, b) {
   blast(screens, EV.STAGE_GREET, { kind, a, b });
   // 回揮的那一方此時頭上已經有揮手圖示；先揮的那一方可能已經消失了，補上
   stage.applyAction(a, kind, { force: true });
+  meetUp(a, b, kind === 'WAVE' ? VIA.WAVE : VIA.CHEERS);
   console.log(`[greet] ${nameOf(a)} × ${nameOf(b)}　${kind === 'WAVE' ? '互相揮手' : '碰杯'}`);
 }
 
@@ -1118,6 +1135,7 @@ function handlePairConfirm(ws, msg) {
   linksDirty = true;
   // 雙方各自看到「我認識了誰」—— 手機端在進場後除了搖桿與分數之外
   // 看不到任何社交狀態，但那正是這場活動真正在累積的東西。
+  encounters.meet(result.from, result.to, VIA.PAIR);
   sendSocialSelf(result.from);
   sendSocialSelf(result.to);
   markDirty();
@@ -1276,6 +1294,12 @@ function handleDirectMessage(ws, msg) {
   send(ws, EV.MSG_RESULT, { ok: true, to: msg.to, ref });
   if (!result.delivered) return;
   const { message } = result;
+  // 對方回過才算兩人聊過；單方面傳不算
+  if (encounters.wrote(message.from, message.to)) {
+    sendSocialSelf(message.from);
+    sendSocialSelf(message.to);
+    markDirty();
+  }
   // 只送給收件人。不廣播、不進大螢幕、不給主辦端 —— 一般私訊只有兩個當事人看得到
   sendToAgent(message.to, EV.MSG_RECEIVE, {
     message: { id: message.id, from: message.from, fromName: nameOf(message.from), text: message.text, at: message.at },
@@ -1751,13 +1775,22 @@ wss.on('connection', (ws) => {
 
       case EV.MSG_BLOCK:
         if (ws.role !== 'controller' || !ws.agentId) return;
-        if (messages.block(ws.agentId, msg.userId, messagePresence)) console.log(`[block] ${nameOf(ws.agentId)} 封鎖了 ${nameOf(msg.userId) || msg.userId}`);
+        if (messages.block(ws.agentId, msg.userId, messagePresence)) {
+          console.log(`[block] ${nameOf(ws.agentId)} 封鎖了 ${nameOf(msg.userId) || msg.userId}`);
+          // 封鎖是雙向從名單上拿掉的：兩邊都要重送
+          sendSocialSelf(ws.agentId);
+          sendSocialSelf(msg.userId);
+        }
         send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(ws.agentId) });
         break;
 
       case EV.MSG_UNBLOCK:
         if (ws.role !== 'controller' || !ws.agentId) return;
-        if (messages.unblock(ws.agentId, msg.userId)) console.log(`[block] ${nameOf(ws.agentId)} 解除封鎖 ${nameOf(msg.userId) || msg.userId}`);
+        if (messages.unblock(ws.agentId, msg.userId)) {
+          console.log(`[block] ${nameOf(ws.agentId)} 解除封鎖 ${nameOf(msg.userId) || msg.userId}`);
+          sendSocialSelf(ws.agentId);
+          sendSocialSelf(msg.userId);
+        }
         send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(ws.agentId) });
         break;
 
@@ -2290,18 +2323,32 @@ const graphEdges = () => graph.export().edges.map((e) => ({ a: e.a, b: e.b, at: 
 /** 圖譜有變動、待廣播。與 stage.rosterDirty 同樣的節流策略 */
 let linksDirty = true;
 
-/** 推送「我認識了誰」給單一參與者。帶對方姓名，手機端才顯示得出來。 */
+/**
+ * 推送「今天遇見的人」給單一參與者。帶對方姓名，手機端才顯示得出來。
+ *
+ * 讀 encounters 不讀圖譜（理由見 encounters.js）。順序由伺服器排好，手機照順序畫。
+ * 封鎖雙向濾掉：紀念卡會被分享出去，不能讓封鎖對象的名字和肖像出現在上面。
+ */
 function sendSocialSelf(agentId) {
-  const ids = [...graph.neighbors(agentId)];
+  const hidden = (id) => messages.isBlocked(agentId, id) || messages.isBlocked(id, agentId);
+  const list = encounters.peersOf(agentId, { hidden });
   sendToAgent(agentId, EV.SOCIAL_SELF, {
-    count: ids.length,
-    peers: ids.map((id) => {
+    count: list.length,
+    peers: list.map(({ id, via }) => {
       // 已經斷線被回收的人不在 stage 上，但身分目錄還記得 —— 原本這裡只查 stage，
       // 「今天認識的人」裡先走的那幾位會變成沒有名字的空格
       const peer = stage.agents.get(id) ?? directory.get(id);
-      return { id, name: peer?.name ?? '', avatar: peer?.avatar ?? null };
+      return { id, name: peer?.name ?? '', avatar: peer?.avatar ?? null, via };
     }),
   });
+}
+
+/** 兩人有了雙方都參與的互動：記帳，名單有變動才推送 */
+function meetUp(a, b, via) {
+  if (!encounters.meet(a, b, via)) return;
+  sendSocialSelf(a);
+  sendSocialSelf(b);
+  markDirty();
 }
 
 const photoRoster = () => {

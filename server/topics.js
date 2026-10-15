@@ -25,20 +25,24 @@ export class TopicTables {
    * @param {number} opts.dwellMs
    * @param {number} opts.groupCooldownMs
    * @param {number} opts.tableGapMs
+   * @param {number} [opts.sitMs] 兩人在同一張桌邊一起待滿這麼久，才算「同桌聊天」（見 seatedPairs）
    * @param {() => number} [opts.rng]
    */
-  constructor({ questions, reach, dwellMs, groupCooldownMs, tableGapMs, rng = Math.random }) {
+  constructor({ questions, reach, dwellMs, groupCooldownMs, tableGapMs, sitMs = Infinity, rng = Math.random }) {
     this.questions = questions;
     this.reach = reach;
     this.dwellMs = dwellMs;
     this.groupCooldownMs = groupCooldownMs;
     this.tableGapMs = tableGapMs;
+    this.sitMs = sitMs;
     this.rng = rng;
     this.enabled = true;
     /** 每張桌子：目前那組人、從何時起是這組人、上次發題時間 */
     this.tables = new Map();
     /** 某組人（排序後的 id）上次拿到題目的時間 */
     this.groupDealtAt = new Map();
+    /** 每張桌子邊上的每個人從何時開始坐在這裡 @type {Map<string, Map<string, number>>} */
+    this.seats = new Map();
     /** 抽題用的袋子：抽完一輪才重洗，同一場不會很快重複 */
     this.bag = [];
   }
@@ -58,6 +62,7 @@ export class TopicTables {
         .filter((a) => Math.hypot(a.x - spot.x, a.y - spot.y) <= spot.r + this.reach)
         .map((a) => a.id)
         .sort();
+      this.#seat(spot.id, ids, now);
       const st = this.tables.get(spot.id) ?? { sig: null, since: 0, dealtAt: -Infinity };
       this.tables.set(spot.id, st);
       if (ids.length < 2) {
@@ -76,6 +81,9 @@ export class TopicTables {
       this.groupDealtAt.set(sig, now);
       deals.push({ spotId: spot.id, label: spot.label, ids, question: this.#draw() });
     }
+    // 換主題後桌子跟著換，舊桌子邊上的人不能一直被當成還坐著
+    const live = new Set(spots.map((s) => s.id));
+    for (const id of this.seats.keys()) if (!live.has(id)) this.seats.delete(id);
     // 舊的組合紀錄不必永遠留著
     for (const [sig, at] of this.groupDealtAt) {
       if (now - at > this.groupCooldownMs) this.groupDealtAt.delete(sig);
@@ -85,7 +93,41 @@ export class TopicTables {
 
   setEnabled(on) {
     this.enabled = on;
-    if (!on) this.tables.clear();
+    if (!on) {
+      this.tables.clear();
+      this.seats.clear();
+    }
+  }
+
+  /**
+   * 在同一張桌邊一起待滿 sitMs 的兩人組合，給「今天遇見的人」記帳用。
+   *
+   * 不能拿發題當條件：發題的停留門檻只有 dwellMs（2 秒），走過去站一下就有。
+   * 這裡逐對計時，而不是看整桌的組合 —— 第三個人坐下來不該讓原本聊了
+   * 五十秒的兩個人重新計時。
+   *
+   * 同一對人只要還坐著，每一次呼叫都會再回報；去重交給記帳的那一方。
+   * @returns {[string, string][]}
+   */
+  seatedPairs(now = Date.now()) {
+    const pairs = [];
+    for (const seated of this.seats.values()) {
+      const list = [...seated];
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          if (now - Math.max(list[i][1], list[j][1]) >= this.sitMs) pairs.push([list[i][0], list[j][0]]);
+        }
+      }
+    }
+    return pairs;
+  }
+
+  /** 更新某張桌邊的人：新來的從現在起算，離開的移除 */
+  #seat(spotId, ids, now) {
+    const prev = this.seats.get(spotId) ?? new Map();
+    const next = new Map();
+    for (const id of ids) next.set(id, prev.get(id) ?? now);
+    this.seats.set(spotId, next);
   }
 
   #draw() {

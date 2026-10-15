@@ -22,6 +22,7 @@ import { HEAT_MAP } from '/shared/heat.js';
 import { ZONE_MAP } from '/shared/scene.js';
 import { avatarImage, avatarPortrait } from '/shared/avatarSprite.js';
 import { makeKeepsake, saveKeepsake } from './keepsake.js';
+import { encounterLabel } from '/shared/encounters.js';
 import { AvatarRenderer } from './avatarRenderer.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -1132,12 +1133,13 @@ $('#btn-retry').addEventListener('click', () => openCamera());
 $('#btn-give-up').addEventListener('click', () => fallbackToBuilder(null));
 
 /**
- * 顯示「你認識了誰」。
+ * 顯示「今天遇見了誰」。
  *
  * 這場活動真正在累積的是人與人的連結，但手機端進場後原本只有搖桿、
  * 任務與分數 —— 那份累積完全看不見。這裡把它變成參與者自己的收藏。
+ * 名單不只配對：揮手、乾杯、同桌、交接籃子都算（server/encounters.js）。
  */
-/** 最近一次的「今天認識的人」。離場之後紀念卡還要用，所以留在這裡 */
+/** 最近一次的「今天遇見的人」，伺服器已排好序。離場之後紀念卡還要用，所以留在這裡 */
 let lastPeers = [];
 
 function renderSocialStrip(msg) {
@@ -1150,8 +1152,8 @@ function renderSocialStrip(msg) {
 
   const faces = $('#ls-faces');
   faces.textContent = '';
-  // 只畫最近幾位：手機橫幅放不下更多，而數字已經說明了總數
-  for (const peer of peers.slice(-6)) {
+  // 只畫前幾位（關係最實的）：手機橫幅放不下更多，而數字已經說明了總數
+  for (const peer of peers.slice(0, 6)) {
     const sprite = peer.avatar ? avatarImage(peer.avatar) : null;
     const cell = document.createElement('span');
     cell.className = 'ls-face';
@@ -1178,7 +1180,11 @@ function openLinks() {
     const li = document.createElement('li');
     const face = Object.assign(document.createElement('span'), { className: 'lf' });
     if (peer.avatar) avatarPortrait(peer.avatar).then((c) => face.append(c)).catch(() => {});
-    li.append(face, document.createTextNode(peer.name || '（已離場）'));
+    const who = Object.assign(document.createElement('span'), { className: 'lw' });
+    who.append(document.createTextNode(peer.name || '（已離場）'));
+    const how = encounterLabel(peer.via);
+    if (how) who.append(Object.assign(document.createElement('small'), { textContent: how }));
+    li.append(face, who);
     list.append(li);
   }
   $('#keepsake-msg').hidden = true;

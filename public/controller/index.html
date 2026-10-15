@@ -278,7 +278,7 @@
     <!-- 社交連結：這場活動真正在累積的東西，但手機端原本完全看不到。
          配對成功才出現，沒有連結時不佔版面。 -->
     <button class="links-strip" id="links-strip" hidden>
-      <span class="ls-label">你認識了 <b id="ls-count">0</b> 個人</span>
+      <span class="ls-label">今天遇見了 <b id="ls-count">0</b> 個人</span>
       <span class="ls-faces" id="ls-faces"></span>
     </button>
 
@@ -359,12 +359,12 @@
 <div class="score-pop" id="score-pop" hidden></div>
 
 <!-- ── 配對面板 ─────────────────────────────────────────── -->
-<!-- 今天認識的人（社交圖譜的邊：配對時經雙方確認過的） -->
+<!-- 今天遇見的人：配對、揮手、乾杯、同桌、交接籃子、互傳訊息都算（server/encounters.js） -->
 <div class="sheet" id="links-sheet" hidden>
   <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="links-title">
     <button class="sheet-close" id="btn-links-close" aria-label="關閉">✕</button>
-    <h2 id="links-title">今天認識的人</h2>
-    <p class="sheet-brief">這些是你在現場實際碰面、互相確認過的人。</p>
+    <h2 id="links-title">今天遇見的人</h2>
+    <p class="sheet-brief">今天在現場跟你有過互動的人，配對過的排在最前面。</p>
     <ul class="links-list" id="links-list"></ul>
     <button class="btn-primary" id="btn-keepsake">存成紀念卡</button>
     <p class="sheet-msg" id="keepsake-msg" hidden role="status" aria-live="polite"></p>

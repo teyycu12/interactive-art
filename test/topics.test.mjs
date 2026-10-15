@@ -79,3 +79,50 @@ test('抽完一輪才重複', () => {
   }
   assert.equal(new Set(seen).size, 3);
 });
+
+// ── 同桌聊天（給「今天遇見的人」記帳用）────────────────────────
+const SIT = { ...OPTS, sitMs: 60_000 };
+
+test('兩人在同一張桌邊一起待滿 sitMs 才算同桌；發題的 2 秒門檻不夠', () => {
+  const t = new TopicTables(SIT);
+  const people = [at('a', 1050), at('b', 960)];
+  t.update(SPOT, people, 0);
+  t.update(SPOT, people, 2000);
+  assert.deepEqual(t.seatedPairs(2000), [], '已經發題了，但還不算同桌');
+  t.update(SPOT, people, 60_000);
+  assert.deepEqual(t.seatedPairs(60_000), [['a', 'b']]);
+});
+
+test('逐對計時：第三個人坐下不會讓原本那兩人重新計時', () => {
+  const t = new TopicTables(SIT);
+  t.update(SPOT, [at('a'), at('b')], 0);
+  t.update(SPOT, [at('a'), at('b'), at('c')], 50_000);
+  t.update(SPOT, [at('a'), at('b'), at('c')], 60_000);
+  assert.deepEqual(t.seatedPairs(60_000), [['a', 'b']], 'c 才坐了 10 秒');
+});
+
+test('離開桌邊就重新計時', () => {
+  const t = new TopicTables(SIT);
+  t.update(SPOT, [at('a'), at('b')], 0);
+  t.update(SPOT, [at('a'), at('b', 3000)], 40_000);   // b 走開
+  t.update(SPOT, [at('a'), at('b')], 41_000);
+  t.update(SPOT, [at('a'), at('b')], 61_000);
+  assert.deepEqual(t.seatedPairs(61_000), []);
+  assert.deepEqual(t.seatedPairs(101_000), [['a', 'b']]);
+});
+
+test('換主題後舊桌子上的人不再算坐著；關閉話題桌也清掉', () => {
+  const t = new TopicTables(SIT);
+  t.update(SPOT, [at('a'), at('b')], 0);
+  t.update([], [at('a'), at('b')], 1000);
+  assert.deepEqual(t.seatedPairs(100_000), []);
+  t.update(SPOT, [at('a'), at('b')], 0);
+  t.setEnabled(false);
+  assert.deepEqual(t.seatedPairs(100_000), []);
+});
+
+test('沒給 sitMs 就永遠不算同桌（既有呼叫端不受影響）', () => {
+  const t = new TopicTables(OPTS);
+  t.update(SPOT, [at('a'), at('b')], 0);
+  assert.deepEqual(t.seatedPairs(10_000_000), []);
+});
