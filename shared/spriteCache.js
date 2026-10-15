@@ -69,15 +69,18 @@ function withBudget(time, work) {
   return out;
 }
 
-function prepareView(src, view, skin) {
+function prepareView(src, view, skin, body) {
   const scale = WALK_HEIGHT / src.height;
   const w = Math.round(src.width * scale);
   const c = makeCanvas(w, WALK_HEIGHT);
   const ctx = c.getContext('2d');
-  ctx.imageSmoothingQuality = 'high';
+  // 最近鄰縮小：平滑縮小會把相鄰兩格混成第三種顏色，膚色、描邊都量歪
+  // （實測粉紅洋裝的膚色量成粉紅，側面整件裙子被當成手拉走）。
+  // 像素風的圖本來就是一格一色，最近鄰縮小後仍是原來的那幾種顏色
+  ctx.imageSmoothingEnabled = false;
   ctx.drawImage(src, 0, 0, w, WALK_HEIGHT);
   const img = ctx.getImageData(0, 0, w, WALK_HEIGHT);
-  const rig = buildWalkRig(img, view, { skin });
+  const rig = buildWalkRig(img, view, { skin, body });
   return { img, rig, frames: new Array(WALK_FRAMES), w };
 }
 
@@ -121,14 +124,16 @@ export function walkSprite(sprite, view, k, time) {
     entry = { version: sprite.spriteVersion, views: {} };
     walkCache.set(sprite, entry);
   }
-  // 側面與背面要用正面的膚色找手，正面先算
+  // 側面與背面要用正面的膚色與手掌高度找手，正面先算
   if (!entry.views.front) {
     const built = withBudget(time, () => prepareView(sprite, AGENT_VIEW.FRONT, null));
     if (!built) return null;
     entry.views.front = built;
   }
   if (!entry.views[v]) {
-    const built = withBudget(time, () => prepareView(src, v, entry.views.front.rig?.skin ?? null));
+    const fr = entry.views.front.rig;
+    const body = fr && { handRow: fr.handRow ?? null };
+    const built = withBudget(time, () => prepareView(src, v, fr?.skin ?? null, body));
     if (!built) return null;
     entry.views[v] = built;
   }

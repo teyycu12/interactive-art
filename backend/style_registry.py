@@ -38,6 +38,10 @@ class GenerationStyle:
     # 姿勢參考圖的產生器。樂高用梯形軀幹＋爪手的幾何，拿去餵皮克斯會把
     # 玩具比例一起帶進去，所以連它也必須隨風格換。
     pose_builder: Optional[Callable[[], Any]] = None
+    # 姿勢參考圖在 prompt 裡怎麼被描述；空字串用 garment_gen._ROLE_POSE。
+    # 像素風的姿勢圖是畫好的「素體」（同一個身材的人），要叫模型把衣服穿到
+    # 它身上，而不是只參考站姿 —— 灰色方塊的說法套在素體上會讓它變成可有可無。
+    role_pose_text: str = ""
     # 這個風格是否可以被選。
     #
     # 風格的程式碼（prompt／negative／姿勢／role 文字）可以先寫好接上線，

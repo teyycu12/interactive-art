@@ -40,10 +40,14 @@ const ARM_PAD = 2;
 // 比這個暗就算描邊
 const OUTLINE_LUMA = 110;
 
-// ── 側面的比例（姿勢參考圖：下巴 33%、領口 37%、腰 62%、鞋面 90%） ──
-const SIDE_HIP = 0.64;
+// ── 側面的比例 ──
+// 髖部在脖子到腳底的這個位置：3 頭身（脖子約 35%）落在 64%，2.2 頭身（脖子約
+// 47%）落在 71%，兩組參考圖都對得上
+const HIP_FROM_NECK = 0.45;
 // 手在這個高度範圍裡找（臉與脖子在上面、腿在下面，都不會被當成手）
 const SIDE_HAND_ROWS = [0.45, 0.74];
+// 側面的手掌可以比正面量到的再低幾格：側面的手垂在身體前面、不往外張
+const HAND_ROW_PAD = 3;
 // 腳掌佔角色高的比例：腳踝以下整塊移動，找腿的上緣時也跳過這一段
 const FEET_RATIO = 0.06;
 // 小腿：腳掌以上這麼高的一段，量它的寬度當基準
@@ -54,8 +58,11 @@ const LEG_WIDTH_RATIO = 1.6;
 const LEG_TOP_MIN = 0.55;
 // 露出的手臂（膚色）至少要這麼長才擺；只有手掌時不擺
 const SIDE_MIN_ARM = 0.12;
-// 側面遠側那隻腳（複製出來的）壓暗多少，讀得出前後
-const FAR_LEG_SHADE = 0.8;
+// 側面遠側那隻腳（複製出來的）往這個灰收多少：降低對比，讀得出在後面。
+// 不只是壓暗：黑褲子壓暗 20% 還是黑，兩隻腳疊成一團，看起來只有一隻
+// （2026-10-15 回報「腳沒有分成兩隻」）；往灰收，黑的變深灰、淺的變暗
+const FAR_LEG_SHADE = 0.75;
+const FAR_LEG_TONE = [92, 92, 100];
 
 const luma = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
 
@@ -91,9 +98,21 @@ const median = (xs) => {
 };
 
 /**
- * 膚色：正面臉部（頭的下半、中間 40%）最常見的亮色。給側面找手用。
+ * 膚色：正面臉部（頭的下半、中間 40%）最常見的膚色。給側面找手用。
  * 取量化後的眾數而不平均：平均會把眼睛、嘴巴混進去。
+ *
+ * 只收「紅 > 綠 ≥ 藍、紅比藍多出 SKIN_MIN_CHROMA」的顏色：不限的話白色
+ * 衣領、粉紅洋裝都可能比臉多（實測大螢幕上白上衣角色的膚色量成白色、粉紅
+ * 洋裝量成粉紅，側面整件裙子被當成手拉走）。粉紅的藍比綠多，白色沒有色度，
+ * 兩者都不是膚色。
  */
+const SKIN_MIN_CHROMA = 30;
+const SKIN_MIN_LUMA = 80;   // 再暗是描邊、眼睛、頭髮；深膚色的臉約 90
+
+function isSkinLike([R, G, B]) {
+  return R > G && G >= B && R - B >= SKIN_MIN_CHROMA && luma(R, G, B) >= SKIN_MIN_LUMA;
+}
+
 export function skinTone(g, neck) {
   const counts = new Map();
   const top = Math.round(neck * 0.55);
@@ -103,8 +122,7 @@ export function skinTone(g, neck) {
     for (let c = c0; c <= c1; c++) {
       if (!solidCell(g, c, r)) continue;
       const [R, G, B] = cellColor(g, c, r);
-      if (luma(R, G, B) < 110) continue;            // 描邊、眼睛、深色頭髮
-      if (R < G || R < B) continue;                 // 膚色的紅最高
+      if (!isSkinLike([R, G, B])) continue;
       const key = ((R >> 4) << 8) | ((G >> 4) << 4) | (B >> 4);
       const e = counts.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
       e.n++; e.r += R; e.g += G; e.b += B;
@@ -120,6 +138,88 @@ export function skinTone(g, neck) {
 // 被當成手
 const SKIN_TOL = 32;
 const near = (a, b, tol) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) <= tol;
+
+// 腿的顏色：一種顏色至少佔小腿這麼多才算（描邊約佔兩成，要收進來 ——
+// 黑色窄裙與膚色腿的描邊差很多，與黑褲子的描邊則一樣）
+const LEG_COLOR_SHARE = 0.1;
+const LEG_COLOR_TOL = 48;
+// 綠減藍差這麼多就不是同一種顏色：粉紅與膚色的三通道差只有 40 上下（實測
+// 粉紅洋裝 37），但膚色綠比藍多、粉紅藍比綠多，看這一項就分得開
+const HUE_TOL = 20;
+const sameColor = (a, b, tol) => near(a, b, tol) && Math.abs((a[1] - a[2]) - (b[1] - b[2])) <= HUE_TOL;
+
+/** r0…r1 這幾列（小腿）的主要顏色：量化後佔 LEG_COLOR_SHARE 以上的每一種 */
+function shinPalette(g, r0, r1) {
+  const counts = new Map();
+  let total = 0;
+  for (let r = Math.max(0, r0); r <= r1; r++) {
+    for (let c = 0; c < g.width; c++) {
+      if (!solidCell(g, c, r)) continue;
+      const [R, G, B] = cellColor(g, c, r);
+      const key = ((R >> 4) << 8) | ((G >> 4) << 4) | (B >> 4);
+      const e = counts.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
+      e.n++; e.r += R; e.g += G; e.b += B;
+      counts.set(key, e);
+      total++;
+    }
+  }
+  return [...counts.values()].filter((e) => e.n >= total * LEG_COLOR_SHARE).map((e) => [e.r / e.n, e.g / e.n, e.b / e.n]);
+}
+
+// 連續這麼多列的主色都不是腿的顏色，才算碰到下襬。只看一列會被腳踝擋下：
+// 那裡有鞋口、襪子、腳踝的陰影，常常一列的主色就是小腿沒有的顏色
+const HEM_ROWS = 3;
+
+/** 一列裡最常見的顏色（量化後的眾數）；空的列回傳 null */
+function rowMode(g, r) {
+  const counts = new Map();
+  let best = null;
+  for (let c = 0; c < g.width; c++) {
+    if (!solidCell(g, c, r)) continue;
+    const rgb = cellColor(g, c, r);
+    const key = ((rgb[0] >> 4) << 8) | ((rgb[1] >> 4) << 4) | (rgb[2] >> 4);
+    const e = counts.get(key) ?? { n: 0, rgb };
+    e.n++;
+    counts.set(key, e);
+    if (!best || e.n > best.n) best = e;
+  }
+  return best?.rgb ?? null;
+}
+
+/**
+ * 下襬：從 from 往上到 to，第一段連續 HEM_ROWS 列主色都不是腿的顏色的地方，
+ * 回傳那一段最下面的一列（裙子、短褲、上衣的最下緣）；找不到回傳 -1。
+ */
+function findHem(g, from, to, legColors) {
+  let run = 0;
+  for (let r = from; r >= to; r--) {
+    const mode = rowMode(g, r);
+    if (mode && !legColors.some((k) => sameColor(mode, k, LEG_COLOR_TOL))) {
+      if (++run >= HEM_ROWS) return r + HEM_ROWS - 1;
+    } else run = 0;
+  }
+  return -1;
+}
+
+// 一列裡膚色佔這麼多才算露出來的腿。描邊（腿自己最暗的那一階）約佔兩成；
+// 長褲前面垂著手掌時，手掌佔不到一半
+const BARE_SHARE = 0.6;
+const BARE_TOL = 80;   // 腿上的陰影比臉暗一階，比找手的容差寬
+
+/**
+ * 這一列是露出來的腿。每一段的頭尾兩格（輪廓的描邊）不算；不用亮度排除
+ * 描邊：黑褲子整件都暗，一排除就只剩前面垂著的手掌，反而判成光腿
+ */
+function bareRow(g, r, skin) {
+  let n = 0, hit = 0;
+  for (const [a, b] of rowRuns(g, r)) {
+    for (let c = a + 1; c < b; c++) {
+      n++;
+      if (sameColor(cellColor(g, c, r), skin, BARE_TOL)) hit++;
+    }
+  }
+  return n > 0 && hit >= n * BARE_SHARE;
+}
 
 /**
  * 給分析用的網格：手與身體之間那幾格小小的白色當成空的。
@@ -243,16 +343,19 @@ function frontRig(g, skin) {
 
   // 手：與腳反向。inward：往身體中線的方向（左手往右、右手往左）
   const legTop = seg.crotch ?? Math.round(H * 0.8);
+  let handRow = null;
   for (const [side, name, sign, inward] of [[-1, 'armL', -1, 1], [1, 'armR', 1, -1]]) {
     const arm = frontArm(ga, g, skin, side, seg.neck, legTop);
     if (!arm) continue;
+    handRow = Math.max(handRow ?? 0, arm.bottom);
     const idx = add({ name, pivot: arm.top, bottom: arm.bottom, lift: FRONT_ARM_LIFT, inward: inward * FRONT_ARM_IN, sign, z: 0 });
     for (const [r, a, b] of arm.rows) {
       for (let c = a; c <= b; c++) if (solidCell(g, c, r)) label[r * W + c] = idx;
     }
   }
 
-  return { kind: 'lift', label, regions, fill: null };
+  // 給側面用的手掌高度（格的列）。側面自己量不出來：手貼在身體前面分不出手掌
+  return { kind: 'lift', label, regions, fill: null, handRow };
 }
 
 /**
@@ -326,7 +429,7 @@ function frontArm(ga, g, skin, side, neck, legTop) {
  * segment 的手臂偵測靠「手與身體之間的縫」，側面的手貼在身體前面，沒有縫，
  * 所以改用膚色找手，再沿著手往上量出手臂。
  */
-function sideRig(g, skin) {
+function sideRig(g, skin, body = {}) {
   const H = g.height;
   const W = g.width;
   const label = new Int16Array(W * H).fill(-1);
@@ -335,7 +438,11 @@ function sideRig(g, skin) {
 
   let bottom = H - 1;
   while (bottom > 0 && !rowExtent(g, bottom)) bottom--;
-  const hip = Math.round(H * SIDE_HIP);
+  // 髖部：脖子到腳底之間固定的位置。固定佔全身的比例只對一種頭身比成立 ——
+  // 3 頭身的髖部約在 64%，2.2 頭身約 71%，參考圖集換了之後新舊角色同時在場上。
+  // 不用正面的胯下：寬褲的兩腿只有褲管底部分開，量到的「胯下」其實是褲腳
+  const neck = findNeckRow(g);
+  const hip = Math.round(neck + (bottom - neck) * HIP_FROM_NECK);
 
   // ── 腿的上緣：從腳往上（跳過腳掌），一路走到輪廓明顯比小腿寬的那一列 ──
   // 寬出來的就是裙子、短褲、長版上衣，腿從它底下露出來。
@@ -348,9 +455,18 @@ function sideRig(g, skin) {
   const shinRows = [];
   for (let r = feetTop - 1; r >= feetTop - Math.round(H * SHIN_RATIO); r--) if (width(r)) shinRows.push(width(r));
   const shinW = median(shinRows) ?? 0;
-  let legTop = feetTop;
+  // 寬度擋不住窄裙：側面的窄裙、短裙只比大腿寬一點，腿的上緣一路爬進裙子，
+  // 整件裙子被當成腿剪開擺動（現場回報「裙子側面變褲子」）。所以再看顏色：
+  // 腿是小腿那一段的顏色（褲管、絲襪、靴子）或膚色，往上碰到別的顏色就是
+  // 下襬 —— 長裙、短裙、短褲都一樣，腿從下襬底下開始擺。褲子一路同色，
+  // 找不到下襬，照舊靠寬度停在腰
+  const legColors = shinPalette(g, feetTop - Math.round(H * SHIN_RATIO), feetTop - 1);
+  if (skin) legColors.push(skin);
   const ceiling = Math.round(H * LEG_TOP_MIN);
-  while (legTop - 1 >= ceiling && width(legTop - 1) && width(legTop - 1) <= shinW * LEG_WIDTH_RATIO) legTop--;
+  const hem = findHem(g, feetTop - 1, ceiling, legColors);
+  let legTop = feetTop;
+  while (legTop - 1 >= ceiling && legTop - 1 > hem && width(legTop - 1)
+    && width(legTop - 1) <= shinW * LEG_WIDTH_RATIO) legTop--;
 
   // ── 腿 ──
   // 有東西蓋住大腿時（裙子、短褲、長版上衣）腿從它底下擺（關節就是腿露出來的
@@ -391,8 +507,16 @@ function sideRig(g, skin) {
   // 「很破碎」；真人走路裙襬本來也幾乎不動，動的是腳
 
   // ── 手：膚色、在手的高度、最大的一塊 ──
-  // 手只在腿的上方找：短褲、短裙露出的大腿也是膚色，而且比手大
-  const arm = skin ? sideArm(g, skin, legTop - 1) : null;
+  // 露出大腿時（短褲、短裙）手只在腿的上方找：大腿也是膚色，而且比手大。
+  // 腿沒露出來（長褲）就不限：褲子的上緣在腰，手掌垂在骨盆旁、落在腿的範圍
+  // 裡，限在腿的上方會把手掌切掉，只擺上半截手臂（現場回報「手臂截肢」）
+  // 看膝蓋一帶（手掌垂不到的高度），不看腿的最上面：長褲前面垂著手掌時，
+  // 最上面幾列一半是手，會被當成光腿
+  const kneeTop = Math.max(legTop, Math.round(H * SIDE_HAND_ROWS[1]) + 1);
+  let bare = 0, knee = 0;
+  if (skin) for (let r = kneeTop; r < feetTop; r++, knee++) if (bareRow(g, r, skin)) bare++;
+  const bareLegs = bare * 2 > knee;
+  const arm = skin ? sideArm(g, skin, bareLegs ? legTop - 1 : H - 1, body.handRow) : null;
   if (arm) {
     // fillBehind：手擺開後露出的身體要補顏色（pixelLabels 逐像素列算）
     const idx = add({ name: 'arm', pivot: arm.top, bottom: arm.bottom, swing: arm.swing, sign: -1, z: 1, fillBehind: true });
@@ -405,11 +529,15 @@ function sideRig(g, skin) {
   return { kind: 'swing', label, regions };
 }
 
-function sideArm(g, skin, maxRow) {
+function sideArm(g, skin, maxRow, handRow = null) {
   const H = g.height;
   const W = g.width;
-  const r0 = Math.round(H * SIDE_HAND_ROWS[0]);
-  const r1 = Math.min(maxRow, Math.round(H * SIDE_HAND_ROWS[1]));
+  // 找手的範圍：脖子以下（大頭的角色下巴在 45% 上下，固定從 45% 找會把臉與脖子
+  // 當成手），到正面量到的手掌再往下幾格（手垂到 77% 的大頭角色，固定停在 74%
+  // 會把手掌切掉，原地留下一團殘影）。正面量不到才用固定比例
+  const neckRow = findNeckRow(g);
+  const r0 = Math.max(Math.round(H * SIDE_HAND_ROWS[0]), neckRow + 2);
+  const r1 = Math.min(maxRow, handRow != null ? handRow + HAND_ROW_PAD : Math.round(H * SIDE_HAND_ROWS[1]));
   const match = new Uint8Array(W * H);
   for (let r = r0; r <= r1; r++) {
     for (let c = 0; c < W; c++) if (solidCell(g, c, r) && near(cellColor(g, c, r), skin, SKIN_TOL)) match[r * W + c] = 1;
@@ -441,13 +569,15 @@ function sideArm(g, skin, maxRow) {
   // 不固定多拿幾格：手臂在側面常貼著衣服的前緣，多拿的那幾格是衣服，
   // 會跟著手一起被拉走（實測裙子前緣被撕下一塊）。手以上（袖子）沿用最上面
   // 那一列的寬度
+  // 深色只在 ARM_PAD 格內就結束時才是描邊；再往外還是深色的是黑衣服（手掌
+  // 垂在黑褲子前面），收進來的話整條褲管跟著手走，原地兩側都沒有衣服可補色
   const dark = (c, r) => solidCell(g, c, r) && luma(...cellColor(g, c, r)) < OUTLINE_LUMA;
-  const grow = (r, [a, b]) => {
-    let lo = a, hi = b;
-    for (let i = 0; i < ARM_PAD && dark(lo - 1, r); i++) lo--;
-    for (let i = 0; i < ARM_PAD && dark(hi + 1, r); i++) hi++;
-    return [lo, hi];
+  const outline = (r, from, step) => {
+    let k = 0;
+    while (k <= ARM_PAD && dark(from + step * k, r)) k++;
+    return k <= ARM_PAD ? k : 0;
   };
+  const grow = (r, [a, b]) => [a - outline(r, a - 1, -1), b + outline(r, b + 1, 1)];
   const rows = new Map();
   for (const j of best) {
     const c = j % W, r = Math.floor(j / W);
@@ -456,7 +586,6 @@ function sideArm(g, skin, maxRow) {
   }
   // 往上沿著膚色接回肩膀：找手只從手的高度開始找，無袖的手臂上半截在範圍外，
   // 量長度、擬直線都要用整隻手臂
-  const neckRow = findNeckRow(g);
   for (let r = Math.min(...rows.keys()) - 1; r > neckRow + 1; r--) {
     const below = rows.get(r + 1);
     let lo = -1, hi = -1;
@@ -501,7 +630,8 @@ function sideArm(g, skin, maxRow) {
 
 /**
  * 分析一張圖。view：'front' | 'back' | 'side'（側面朝右）。
- * 側面需要膚色（opts.skin，從正面的 rig.skin 取）。圖是空的回傳 null；
+ * 側面需要膚色（opts.skin，從正面的 rig.skin 取）與手掌高度（opts.body =
+ * { handRow }，從正面的 rig 取；沒有就用固定比例）。圖是空的回傳 null；
  * 分析不出任何會動的部位時 regions 是空的，walkFrame 會原樣照畫。
  */
 export function buildWalkRig(img, view, opts = {}) {
@@ -509,7 +639,7 @@ export function buildWalkRig(img, view, opts = {}) {
   if (!g) return null;
   // 膚色：正面自己算；背面與側面用正面的（背面看不到臉）
   const skin = view === 'front' ? skinTone(g, findNeckRow(g)) : (opts.skin ?? null);
-  const rig = view === 'side' ? sideRig(g, skin) : frontRig(g, skin);
+  const rig = view === 'side' ? sideRig(g, skin, opts.body) : frontRig(g, skin);
   rig.label = growLabels(g, rig.label);
   rig.g = g;
   rig.view = view;
@@ -653,7 +783,10 @@ function pixelLabels(img, rig, skin) {
     fillRGB = new Int32Array(height).fill(-1);
     const rowCounts = new Array(height);
     const search = Math.round(g.cell * 3);
-    const cloth = (i) => opaque(i) && pix[i] < 0 && pl(i) >= OUTLINE_LUMA && !skinPx(i);
+    // 深色也算衣服：黑褲子整件都比描邊的門檻暗，排除的話手掌從褲子前面擺開，
+    // 原地補不出顏色，留下一個洞（實測黑寬褲）。描邊只佔一兩格，取眾數不會選到它。
+    // 腿的像素也算：手掌垂在骨盆旁時兩側都是褲子，而褲子標成腿
+    const cloth = (i) => opaque(i) && pix[i] !== armIdx && !skinPx(i);
     for (let y = 0; y < height; y++) {
       let xa = -1, xb = -1;
       for (let x = 0; x < width; x++) {
@@ -713,7 +846,7 @@ export function walkFrame(img, rig, s) {
     const s4 = (sy * width + sx) * 4;
     if (data[s4 + 3] <= 0) return;
     const d4 = (dy * width + dx) * 4;
-    out[d4] = data[s4] * shade; out[d4 + 1] = data[s4 + 1] * shade; out[d4 + 2] = data[s4 + 2] * shade;
+    for (let c = 0; c < 3; c++) out[d4 + c] = data[s4 + c] * shade + (shade < 1 ? FAR_LEG_TONE[c] * (1 - shade) : 0);
     out[d4 + 3] = data[s4 + 3];
   };
   const py = (r) => g.y0 + r * cell;     // 格的上緣（像素）
@@ -740,7 +873,7 @@ export function walkFrame(img, rig, s) {
     const R = regions[i];
     if (!staticDone && R.z >= 0) { drawStatic(); staticDone = true; }
     const amt = R.sign * s;
-    // alias：複製別的區塊（側面遠側的腳）；shade：壓暗
+    // alias：複製別的區塊（側面遠側的腳）；shade：往 FAR_LEG_TONE 收多少
     const own = R.alias ?? i;
     const shade = R.shade ?? 1;
     const top = py(R.pivot);

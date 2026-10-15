@@ -81,6 +81,11 @@ ACCEPTED_SUFFIXES = {".png", ".webp"}
 
 FULL_BODY_PREFIX = "full_body_"
 MATERIAL_PREFIX = "material_"
+# 三視圖（像素風 2026-10-15 起）：參考圖 turnaround_*、素體 pose_turnaround
+TURNAROUND_PREFIXES = ("turnaround_", "pose_turnaround")
+TURNAROUND_FIGURES = 3
+# 拼 sheet 時三視圖縮成 2/3，人物剩約 430px；再矮臉就糊了
+TURNAROUND_MIN_HEIGHT = 560
 
 
 def _load(path: Path) -> Optional[np.ndarray]:
@@ -270,6 +275,46 @@ def _check_full_body(bgr: np.ndarray) -> Dict[str, Any]:
     }
 
 
+def _check_turnaround(bgr: np.ndarray) -> Dict[str, Any]:
+    """一張三視圖：剛好三個人、邊上沒有別的東西、腳底同一條線、夠高。
+
+    單一正面的檢查（_check_full_body）把最大那塊以外的都當雜點，用在三視圖上
+    另外兩個人會被判成「第二個角色」。這裡把夠大的幾塊都當人，數量要剛好三個。
+    """
+    background = _background_mask(bgr)
+    foreground = cv2.morphologyEx(1 - background, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(foreground, connectivity=8)
+    errors: List[str] = []
+    warnings: List[str] = []
+    if count <= 1:
+        return {"errors": ["frame is blank -- no figure found"], "warnings": [], "fingerprint": None}
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    biggest = int(areas.max())
+    figures = [i + 1 for i, a in enumerate(areas) if a >= biggest * 0.2]
+    min_area = STRAY_MIN_AREA_FRAC * bgr.shape[0] * bgr.shape[1]
+    for i, area in enumerate(areas):
+        label = i + 1
+        if label in figures or area < min_area:
+            continue
+        x, y, w, h = (int(stats[label, k]) for k in (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP,
+                                                       cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
+        warnings.append(f"detached piece at x={x} y={y} {w}x{h} ({int(area)} px) -- "
+                        "a clipped detail, or a glyph / prop that does not belong")
+    if len(figures) != TURNAROUND_FIGURES:
+        errors.append(f"found {len(figures)} figures, a turnaround has exactly {TURNAROUND_FIGURES}")
+    bottoms = [int(stats[f, cv2.CC_STAT_TOP] + stats[f, cv2.CC_STAT_HEIGHT]) for f in figures]
+    if bottoms and max(bottoms) - min(bottoms) > 3:
+        errors.append(f"feet are not on one baseline (bottoms {sorted(bottoms)})")
+    for f in figures:
+        h = int(stats[f, cv2.CC_STAT_HEIGHT])
+        if h < TURNAROUND_MIN_HEIGHT:
+            errors.append(f"a figure is only {h} px tall, below the {TURNAROUND_MIN_HEIGHT} px floor")
+    stats_bg = _background_stats(bgr, background)
+    if stats_bg.get("measurable") and stats_bg["std"] > 2.0:
+        warnings.append(f"background is not uniform (std {stats_bg['std']})")
+    return {"errors": errors, "warnings": warnings, "background": stats_bg, "fingerprint": None}
+
+
 def _check_material(bgr: np.ndarray) -> Dict[str, Any]:
     errors: List[str] = []
     warnings: List[str] = []
@@ -391,6 +436,8 @@ def main() -> int:
                 kind, checked = "material", _check_material(bgr)
             elif name.startswith(FULL_BODY_PREFIX):
                 kind, checked = "full_body", _check_full_body(bgr)
+            elif name.startswith(TURNAROUND_PREFIXES):
+                kind, checked = "turnaround", _check_turnaround(bgr)
             else:
                 kind, checked = "unknown", {"errors": [], "warnings": [
                     f"filename has neither the {FULL_BODY_PREFIX!r} nor {MATERIAL_PREFIX!r} prefix, "

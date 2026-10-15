@@ -102,6 +102,21 @@ class TestAttrLines(unittest.TestCase):
         self.assertIn("Facial hair: goatee",
                       _attr_lines({"has_beard": True, "beard_style": "goatee"}, {}))
 
+    def test_accessories_are_listed_for_every_view(self):
+        out = _attr_lines({}, {"accessories": [
+            {"kind": "crossbody_bag", "description": "black bag, strap over the right shoulder"},
+            {"kind": "hat"},
+        ]})
+        self.assertIn("every one appears in EVERY view", out)
+        self.assertIn("crossbody_bag - black bag, strap over the right shoulder", out)
+        self.assertIn("; hat", out)
+
+    def test_no_or_malformed_accessories_add_nothing(self):
+        """VLM 回傳空清單或格式不對時不寫配件那一行（不能寫出空的「配件：」）"""
+        for value in ([], None, "bag", [None, "bag", {}]):
+            with self.subTest(value=value):
+                self.assertNotIn("Accessories", _attr_lines({}, {"inner": "tshirt", "accessories": value}))
+
     def test_output_is_newline_separated_bullets(self):
         out = _attr_lines({"skin_tone": "#FFF", "hair_color": "#000"}, {})
         self.assertEqual(len(out.split("\n")), 2)
