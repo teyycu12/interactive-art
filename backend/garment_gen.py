@@ -35,9 +35,9 @@ except Exception:
     )
 
 try:
-    from backend.turnaround import fix_backward_feet, split_turnaround  # type: ignore
+    from backend.turnaround import face_right, fit_base_body, fix_backward_feet, skin_tone, split_turnaround  # type: ignore
 except Exception:  # pragma: no cover - 直接以 backend/ 為工作目錄時
-    from turnaround import fix_backward_feet, split_turnaround  # type: ignore
+    from turnaround import face_right, fit_base_body, fix_backward_feet, skin_tone, split_turnaround  # type: ignore
 
 try:
     from openai import OpenAI  # type: ignore
@@ -237,11 +237,19 @@ def _canonical_humanoid_pose(size: int = 1024) -> PILImage.Image:
     return img
 
 
-_STYLE_SHEET_WIDTH = 1024
-_STYLE_SHEET_COLUMNS = 3
-_STYLE_SHEET_CELL_ASPECT = 1.5  # the curated sets are framed 2:3 portrait
 _STYLE_REFERENCE_ROOT = Path(__file__).resolve().parents[1] / "docs" / "style_reference"
 _STYLE_SHEET_SUFFIXES = {".png", ".webp"}
+
+# 參考圖的兩種形式：(檔名前綴, sheet 寬, 欄數, 每格高 ÷ 寬)。有三視圖就用三視圖。
+#
+# 單一正面（樂高、皮克斯）：直式 2:3，三欄拼成 1024 寬。
+# 三視圖（像素，2026-10-15 起）：每張 16:9、一組「正面｜右側｜背面」，兩欄拼成
+# 2048 寬 —— 每組 1024×576，人物約 430px 高。拼成一欄的話整張變成細長條，
+# 送進模型前會依長邊縮小，人物反而更小
+_STYLE_SHEET_LAYOUTS = (
+    ("turnaround_", 2048, 2, 9 / 16),
+    ("full_body_", 1024, 3, 1.5),
+)
 
 _style_sheet_cache: Dict[str, Optional[PILImage.Image]] = {}
 
@@ -259,18 +267,22 @@ def _build_style_reference_sheet(set_id: str) -> Optional[PILImage.Image]:
     directory = _STYLE_REFERENCE_ROOT / set_id
     if not directory.is_dir():
         return None
-    paths = sorted(
-        path for path in directory.glob("full_body_*")
-        if path.suffix.lower() in _STYLE_SHEET_SUFFIXES
-    )
+    paths: List[Path] = []
+    for prefix, sheet_w, max_columns, cell_aspect in _STYLE_SHEET_LAYOUTS:
+        paths = sorted(
+            path for path in directory.glob(f"{prefix}*")
+            if path.suffix.lower() in _STYLE_SHEET_SUFFIXES
+        )
+        if paths:
+            break
     if not paths:
         return None
 
-    columns = min(_STYLE_SHEET_COLUMNS, len(paths))
-    cell_w = _STYLE_SHEET_WIDTH // columns
-    cell_h = int(cell_w * _STYLE_SHEET_CELL_ASPECT)
+    columns = min(max_columns, len(paths))
+    cell_w = sheet_w // columns
+    cell_h = int(cell_w * cell_aspect)
     rows = -(-len(paths) // columns)
-    sheet = PILImage.new("RGB", (_STYLE_SHEET_WIDTH, cell_h * rows), (254, 254, 253))
+    sheet = PILImage.new("RGB", (sheet_w, cell_h * rows), (254, 254, 253))
 
     for index, path in enumerate(paths):
         try:
@@ -283,7 +295,7 @@ def _build_style_reference_sheet(set_id: str) -> Optional[PILImage.Image]:
         # Centre a short final row rather than leaving it hanging to the left,
         # so no figure reads as more important than the others.
         in_row = min(columns, len(paths) - row * columns)
-        left = (_STYLE_SHEET_WIDTH - in_row * cell_w) // 2 + column * cell_w
+        left = (sheet_w - in_row * cell_w) // 2 + column * cell_w
         sheet.paste(figure, (left + (cell_w - figure.width) // 2,
                              row * cell_h + (cell_h - figure.height) // 2))
     return sheet
@@ -882,7 +894,12 @@ _PIXAR_PROMPT_TEMPLATE = (
 
 _ROLE_PERSON = (
     "the source person. This is WHO the figure is: their face, their skin tone, "
-    "their hair, their actual garments and their actual colours."
+    "their hair, their actual garments and their actual colours. "
+    # 照片是最強的一張圖，模型會連真人的頭身比一起抄：同一批角色有的 3 頭身、
+    # 有的快 5 頭身，站在一起個頭不一（2026-10-15 現場回報）。體型交給姿勢參考
+    # 措辭不寫「pose reference」：那是姿勢圖那一行專屬的名字，測試與模型都靠它對到第幾張
+    "NOT their real-life body proportions or height: every figure shares the one "
+    "build of the neutral pose image, however tall or slim the person is."
 )
 _ROLE_DETAIL = "close-up crops of that same person. Same authority as Image 1, detail only."
 _ROLE_POSE = (
@@ -940,6 +957,7 @@ def _compose_inputs(
     style_sheet: Optional[PILImage.Image],
     pose_image: Optional[PILImage.Image] = None,
     role_style_text: str = "",
+    role_pose_text: str = "",
 ) -> Tuple[List[str], str]:
     """Pair every attachment with its role, numbered from what is actually sent.
 
@@ -952,7 +970,7 @@ def _compose_inputs(
     parts: List[Tuple[str, str]] = [(person_url, _ROLE_PERSON)]
     if detail_sheet is not None:
         parts.append((_pil_to_data_url(detail_sheet), _ROLE_DETAIL))
-    parts.append((_pil_to_data_url(pose_image or _canonical_lego_pose()), _ROLE_POSE))
+    parts.append((_pil_to_data_url(pose_image or _canonical_lego_pose()), role_pose_text or _ROLE_POSE))
     if style_sheet is not None:
         parts.append((_pil_to_data_url(style_sheet), role_style_text or _ROLE_STYLE))
 
@@ -994,6 +1012,18 @@ def _attr_lines(face_data: Optional[Dict[str, Any]], outfit_data: Optional[Dict[
         lines.append(f"- Lower garment: {o['lower']}")
     if o.get("lower_color"):
         lines.append(f"- Lower colour: {o['lower_color']}")
+    # 配件寫成清單送進去：三視圖裡背包、斜背包的背帶時有時無（現場回報
+    # 「正面背面有背帶，側面沒有」），模型只看照片時不會每一面都記得畫
+    accessories = [
+        a for a in (o.get("accessories") or [])
+        if isinstance(a, dict) and (a.get("kind") or a.get("description"))
+    ]
+    if accessories:
+        items = "; ".join(
+            " - ".join(str(a[k]) for k in ("kind", "description") if a.get(k))
+            for a in accessories
+        )
+        lines.append(f"- Accessories (every one appears in EVERY view): {items}")
 
     return "\n".join(lines) if lines else "- (no extra attributes — infer from the photo)"
 
@@ -1072,6 +1102,7 @@ def generate_full_character_png(
             _style_reference_sheet(style.reference_set),
             pose_image=style.pose_builder() if style.pose_builder else None,
             role_style_text=style.role_style_text,
+            role_pose_text=style.role_pose_text,
         )
         prompt += role_text
         api_result = _call_image_chat_multi(
@@ -1098,12 +1129,28 @@ def generate_full_character_png(
             if remove_bg:
                 b64 = _remove_white_background(b64, shield_mask=shield_mask)
                 views = {k: _remove_white_background(v, shield_mask=None) for k, v in views.items()}
+                skin = skin_tone(b64)
                 if "side" in views:
+                    # 模型偶爾把側面整個畫成朝左（大螢幕假設朝右，往右走就變倒著走）。
+                    # 看臉的位置，膚色用正面量的（淺色頭髮也像膚色）。要先於鞋子：
+                    # 整個人朝左時鞋尖也朝左，先翻鞋子就變成頭朝左、腳朝右
+                    views["side"], mirrored = face_right(views["side"], skin)
+                    if mirrored:
+                        print("[garment_gen] turnaround: side view faced left, mirrored")
                     # 模型偶爾把側面的鞋子畫反（人朝右、鞋尖朝左）。要在去背之後：
                     # 判斷靠透明輪廓
                     views["side"], flipped = fix_backward_feet(views["side"])
                     if flipped:
                         print("[garment_gen] turnaround: side-view feet were backwards, flipped")
+                if style.turnaround:
+                    # 模型常照真人照片的比例畫（4 頭身、腿很長）；不重生，直接壓回
+                    # 素體的頭身比，每個人同一個物種（見 turnaround.fit_base_body）
+                    fitted, scale = fit_base_body({"front": b64, **views}, skin)
+                    if scale is not None:
+                        b64 = fitted.pop("front")
+                        views = fitted
+                        out["base_body_scale"] = round(scale, 3)
+                        print(f"[garment_gen] turnaround: body below the chin scaled x{scale:.2f} to the base body")
             out["body_png"] = b64
             # 側面（朝右）與背面：只有三視圖切出剛好三個人時才有
             for name, png in views.items():
@@ -1159,18 +1206,16 @@ register_style(GenerationStyle(
 
 # 角色在像素網格上的高度（格）。
 #
-# 90 是**策展參考圖自己的格距**（原圖角色高約 713px、一格約 8px），不是挑出來的。
-# 先前設 64 是從投影機的可讀性反推的：大螢幕上角色只有 130~170 個裝置像素高，
-# 64 格時一格約 2~3 個裝置像素，最能看出「這是像素畫」。實際做出來被否決了 ——
-# 64 格把臉壓成馬賽克，而這件作品的核心是「參與者認得出那是自己」。
+# 75 是**策展參考圖自己的格距**（2026-10-15 換成三視圖那組：角色高約 640~665px、
+# 一格約 8.6px），不是挑出來的。前一組單一正面的參考圖是 90 格、3 頭身；新的一組
+# 頭更大（約 2.2 頭身），臉的格數反而比 90 格那組多，不會壓成馬賽克。
 #
-# 取 90 的代價要知道：投影機上一格只剩 1.5~1.9 個裝置像素，遠看會比 64 格柔，
-# 顆粒感主要靠手機確認頁（那裡角色有近 2000 個實際像素高）成立。
+# 先前設 64 是從投影機的可讀性反推的，實際做出來被否決了 —— 64 格把 3 頭身的臉
+# 壓成馬賽克，而這件作品的核心是「參與者認得出那是自己」。
 #
-# 同一個數字必須同時出現在三個地方：這裡（prompt）、`_canonical_pixel_pose()`
-# （姿勢參考圖）、以及 INTAKE.md（策展圖規格）。對不上時模型會同時收到
-# 兩種格距，輸出的格子大小就會每張都不一樣。
-PIXEL_ART_GRID_HEIGHT = 90
+# 同一個數字必須同時出現在 prompt 與 INTAKE.md（策展圖規格）。對不上時模型會
+# 同時收到兩種格距，輸出的格子大小就會每張都不一樣。
+PIXEL_ART_GRID_HEIGHT = 75
 
 # 最深階的墨色下限。刻意與 public/screen/scenes/pixelKit.js 的 INK 同一支：
 # 角色會站在像素廚房／辦公室前面，兩邊的黑若不同調，角色會像貼上去的。
@@ -1181,131 +1226,30 @@ PIXEL_ART_GRID_HEIGHT = 90
 PIXEL_INK = "#302A2D"
 
 
-def _canonical_pixel_pose(size: int = 1024) -> PILImage.Image:
-    """Neutral reference geometry drawn ON the pixel grid, at the curated set's
-    own proportions.
+# 素體三視圖：姿勢參考圖（Image 3）。
+#
+# 這張是**畫好的人**，不是灰色方塊：同一個身材、同一個畫風，穿最素的衣服。
+# 模型的工作變成「把照片裡的衣服穿到這個身體上」，每個人的身高、頭身比、手腳
+# 長度都來自同一個身體 —— 30 個人同時生成、不能重生的場合，個頭要靠它一次就對。
+#
+# 之前是程式畫的灰色方塊（3 頭身）：沒有臉、沒有畫風，模型把它當抽象提示，
+# 真人照片的比例常常贏過它，同一批角色有 3 頭身也有快 5 頭身（2026-10-15 回報）。
+#
+# 素體是生圖模型照參考圖集畫的，再用 scripts/prepare_turnaround_reference.py 整成
+# 與參考圖同一個比例尺（來源見 _original/layout.json 與 INTAKE.md）。
+PIXEL_BASE_BODY = _STYLE_REFERENCE_ROOT / "2026q3_pixel_curated" / "pose_turnaround.png"
 
-    The other two pose builders draw at full resolution; this one is drawn at
-    ``PIXEL_ART_GRID_HEIGHT`` and scaled up with NEAREST so every edge in the
-    reference lands exactly on a grid line.  Drawing it smooth would be the same
-    class of mistake as giving the Pixar pose a black contour: the pose image is
-    only supposed to carry stance and body-part count, but an anti-aliased edge
-    also carries "this species has soft edges" -- the one thing this style must
-    not have.
-
-    Proportions are measured from the curated sheet rather than chosen: head
-    (with hair) to the chin at 33% of total height, collar 37%, waist 62%, top
-    of the shoes 90% -- about **three heads tall**.  The first version of this
-    builder drew 4.4 heads, which disagreed with the sheet; the model resolved
-    that disagreement by ignoring both and producing a realistic 7-head figure.
-    Pose and proportion are the prompt's to decide, so they have to be stated
-    here as clearly as the sheet states its craft.
-    """
-    grid = PIXEL_ART_GRID_HEIGHT
-    img = PILImage.new("RGB", (grid, grid), "white")
-    d = ImageDraw.Draw(img)
-    ink = (48, 42, 45)
-    body = (188, 190, 196)
-    skin = (226, 194, 162)
-    hair = (74, 60, 58)
-    shoe = (78, 78, 84)
-
-    def block(x0, y0, x1, y1, fill):
-        """One outlined block: dark border, flat fill inside.  No gradients."""
-        d.rectangle((x0, y0, x1 - 1, y1 - 1), fill=ink)
-        if x1 - x0 > 2 and y1 - y0 > 2:
-            d.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=fill)
-
-    # Head fills the top third and is nearly as wide as the shoulders -- that
-    # width is what separates this proportion from a small head on a big body.
-    block(31, 1, 59, 31, skin)
-    d.rectangle((32, 2, 57, 9), fill=hair)
-    block(41, 28, 49, 35, skin)          # neck; the collar lands at 37%
-    block(33, 33, 57, 59, body)          # torso; the waist lands at 62%
-    block(27, 35, 34, 54, body)          # arms hang ~15 degrees out
-    block(56, 35, 63, 54, body)
-    block(26, 52, 34, 60, skin)          # hands as separate blocks at the wrists
-    block(56, 52, 64, 60, skin)
-    # Legs with a clear two-cell gap.  A one-cell gap survives on the grid but
-    # disappears the moment the sheet is downscaled into the send.
-    block(36, 58, 44, 82, body)
-    block(46, 58, 54, 82, body)
-    # Shoes wider than the leg above them, and separated from each other.
-    block(34, 81, 44, 90, shoe)
-    block(46, 81, 56, 90, shoe)
-
-    return img.resize((size, size), PILImage.NEAREST)
+_pixel_base_body_cache: Dict[str, PILImage.Image] = {}
 
 
-# 三視圖姿勢參考的畫布：90 格高、16:9（與 image_config 的輸出比例一致）
-PIXEL_TURNAROUND_GRID_WIDTH = 160
-
-
-def _canonical_pixel_turnaround(size: int = 1024) -> PILImage.Image:
-    """The same neutral geometry as ``_canonical_pixel_pose``, drawn three times:
-    front, right-side profile (facing right), back -- the layout the prompt asks for.
-
-    The pose image is the one input that carries composition.  The curated sheet
-    shows single front-facing figures; if the pose image also showed one figure,
-    the only voice asking for three views would be the prompt, and the model
-    settles a two-against-one disagreement by drawing one figure.
-
-    Proportions are the front pose's (three heads tall, chin at 33%, collar 37%,
-    waist 62%, shoe tops 90%); every view shares the same baseline.
-    """
-    grid = PIXEL_ART_GRID_HEIGHT
-    cols = PIXEL_TURNAROUND_GRID_WIDTH
-    img = PILImage.new("RGB", (cols, grid), "white")
-    d = ImageDraw.Draw(img)
-    ink = (48, 42, 45)
-    body = (188, 190, 196)
-    skin = (226, 194, 162)
-    hair = (74, 60, 58)
-    shoe = (78, 78, 84)
-
-    def block(x0, y0, x1, y1, fill):
-        d.rectangle((x0, y0, x1 - 1, y1 - 1), fill=ink)
-        if x1 - x0 > 2 and y1 - y0 > 2:
-            d.rectangle((x0 + 1, y0 + 1, x1 - 2, y1 - 2), fill=fill)
-
-    def front_or_back(dx: int, face: bool) -> None:
-        # Coordinates are _canonical_pixel_pose's, shifted by dx.
-        block(31 + dx, 1, 59 + dx, 31, skin if face else hair)
-        if face:
-            d.rectangle((32 + dx, 2, 57 + dx, 9), fill=hair)
-        block(41 + dx, 28, 49 + dx, 35, skin)
-        block(33 + dx, 33, 57 + dx, 59, body)
-        block(27 + dx, 35, 34 + dx, 54, body)
-        block(56 + dx, 35, 63 + dx, 54, body)
-        block(26 + dx, 52, 34 + dx, 60, skin)
-        block(56 + dx, 52, 64 + dx, 60, skin)
-        block(36 + dx, 58, 44 + dx, 82, body)
-        block(46 + dx, 58, 54 + dx, 82, body)
-        block(34 + dx, 81, 44 + dx, 90, shoe)
-        block(46 + dx, 81, 56 + dx, 90, shoe)
-
-    def profile(c: int) -> None:
-        # Facing right: hair over the back (left) of the head, face and toes to the right.
-        block(c - 12, 1, c + 14, 31, skin)
-        d.rectangle((c - 11, 2, c + 12, 9), fill=hair)
-        d.rectangle((c - 11, 2, c + 1, 27), fill=hair)
-        block(c + 13, 17, c + 16, 22, skin)          # nose
-        d.rectangle((c + 7, 15, c + 9, 18), fill=ink)  # the one visible eye
-        block(c - 3, 28, c + 5, 35, skin)            # neck
-        block(c - 7, 33, c + 8, 59, body)            # torso: half as deep as wide
-        block(c - 7, 58, c + 1, 82, body)            # far leg, a little behind
-        block(c - 8, 81, c + 3, 90, shoe)
-        block(c, 58, c + 8, 82, body)                # near leg, a little ahead
-        block(c - 1, 81, c + 12, 90, shoe)           # toes point right
-        block(c - 2, 35, c + 5, 54, body)            # near arm over the torso
-        block(c - 2, 52, c + 5, 60, skin)
-
-    front_or_back(27 - 45, face=True)
-    profile(80)
-    front_or_back(133 - 45, face=False)
-
-    scale = size / grid
-    return img.resize((round(cols * scale), size), PILImage.NEAREST)
+def _pixel_base_body() -> PILImage.Image:
+    """素體三視圖。檔案不在時直接報錯（生成失敗、退回捏臉）：
+    退回別的姿勢圖會換成另一套比例，生出來的角色個頭不一，而且不會報錯。"""
+    key = str(PIXEL_BASE_BODY)
+    if key not in _pixel_base_body_cache:
+        with PILImage.open(PIXEL_BASE_BODY) as image:
+            _pixel_base_body_cache[key] = image.convert("RGB")
+    return _pixel_base_body_cache[key]
 
 
 _PIXEL_NEGATIVE = (
@@ -1332,7 +1276,7 @@ _PIXEL_NEGATIVE = (
     "background, NO cell borders across the background. "
     "NO realistic adult body proportions, NO 6-head, 7-head or 8-head figure, "
     "NO small head on a long body, NO slender elongated limbs, NO fashion-plate "
-    "proportions - the head fills the top third of the figure. "
+    "proportions - the head fills nearly the top half of the figure. "
     # 這裡曾寫著「只能一個人、不准側面、不准三視圖」—— 三視圖上線時漏改，
     # 和 prompt 開頭互相矛盾。模型兩邊都想滿足，結果畫成一張設計稿：三個人
     # 照畫，再鋪滿格線、加黑框（2026-10-14 實測）。
@@ -1376,10 +1320,25 @@ _PIXEL_PROMPT_TEMPLATE = (
     "- PROFILE view: the head, nose and toes point to the right; one eye shows; "
     "the hair covers the back of the head; the body is about as deep as the "
     "front view's torso is wide divided by two; the near arm hangs in front of "
-    "the torso and the legs stand one slightly ahead of the other.\n"
+    # 側面兩腿一前一後疊著畫（中間沒有空白），走路分析分不出兩隻，複製出的遠側腿
+    # 把兩隻都帶著走，走起來是一團（2026-10-15 回報「腳沒有分成兩隻」）。素體的
+    # 側面本來就是一條腿；遠側那隻由走路動畫自己生出來
+    "the torso; the far leg is hidden exactly behind the near leg, so the profile "
+    "shows ONE straight leg and ONE shoe with the toes pointing right, like the "
+    "base body's profile.\n"
     "- BACK view: no face at all - the back of the head is hair (or the "
     "person's head covering); show the back of every garment, with no front "
-    "fastenings, prints or pockets that belong to the front.\n\n"
+    "fastenings, prints or pockets that belong to the front.\n"
+    # 背帶、背包在三面之間時有時無（2026-10-15 現場回報）：「一致」這種抽象
+    # 要求模型不會逐面檢查，要把每一種配件在每一面長什麼樣子講出來
+    "- ACCESSORIES stay on in EVERY view, never dropped from one: a crossbody or "
+    "shoulder bag shows its strap across the chest in the front view, the strap "
+    "over the shoulder and the bag at the hip in the profile, and the strap "
+    "across the back in the back view; a backpack shows both shoulder straps in "
+    "the front view, the pack behind the back in the profile and the whole pack "
+    "in the back view; a hat, cap or scarf keeps the same shape and colour in all "
+    "three; glasses show their frame arm to the ear in the profile. An accessory "
+    "that is not in the photo appears in no view.\n\n"
 
     "### DETECTED CHARACTER ATTRIBUTES:\n"
     "{attrs}\n\n"
@@ -1388,24 +1347,28 @@ _PIXEL_PROMPT_TEMPLATE = (
     "1. **Grid**: The whole figure is built from identical square cells on ONE "
     "uniform grid. The figure is about " + str(PIXEL_ART_GRID_HEIGHT) + " cells "
     "tall from the top of the hair to the sole of the shoe, so one cell is "
-    "roughly 1.1% of the figure's height. Every shape, every edge and every "
+    "roughly 1.3% of the figure's height. Every shape, every edge and every "
     "colour change snaps to a cell boundary. Nothing is ever drawn smaller than "
     "one whole cell.\n"
     "2. **Proportions & Pose**: The FRONT view is strictly front-facing and "
     "symmetric. Neutral stance in every view: arms relaxed about 15 degrees out from the sides, "
     "hands visible as distinct blocks at the wrists, legs straight and parallel.\n"
-    "   **This is a deliberately cute, big-headed character, about THREE heads "
-    "tall.** The head INCLUDING the hair fills the whole TOP THIRD of the figure: "
-    "the chin sits at 33% of total height and the head is nearly as wide as the "
-    "shoulders. Below it, the collar sits near 37% of total height, the waist "
-    "near 62%, and the top of the shoes near 90%. The legs are short and the "
-    "limbs are chunky - this is NOT a realistic adult figure and NOT a slender "
-    "6-to-8-head sprite; a small head on a long body is the single most common "
-    "way to get this style wrong.\n"
+    # 比例量自參考圖集（2026-10-15 那組三視圖），也是素體的比例。三邊（這裡、
+    # 素體、參考圖）對不上時模型會誰都不聽，直接畫成寫實比例
+    "   **This is a deliberately cute, big-headed chibi character, about two and "
+    "a quarter heads tall - EXACTLY the build of the base body in the pose "
+    "image.** The head INCLUDING the hair reaches down to about 45% of total "
+    "height and is wider than the shoulders. Below it, the collar sits near 49% "
+    "of total height, the waist near 72%, and the top of the shoes near 92%. "
+    "The legs are short and the limbs are chunky - this is NOT a realistic adult "
+    "figure and NOT a slender 3-to-8-head sprite; a small head on a long body is "
+    "the single most common way to get this style wrong. Every participant gets "
+    "this same height and build, however tall, short or slim they are in the "
+    "photograph.\n"
     "   When the lower body is trousered or bare, keep a CLEAR VISIBLE VERTICAL "
     "GAP of at least two cells between the legs from hip to ankle; a one-piece "
     "garment reaching below the hip closes that gap instead.\n"
-    "3. **Head & Face**: The head is about 30 cells tall, so the face carries "
+    "3. **Head & Face**: The head is about 34 cells tall, so the face carries "
     "real detail: two large eyes each with a visible white and a dark iris, a "
     "nose of one or two cells, a small mouth, and eyebrows when the person has "
     "distinct ones. Keep every one of those marks made of whole cells - large "
@@ -1456,7 +1419,9 @@ _PIXEL_PROMPT_TEMPLATE = (
 )
 
 _ROLE_STYLE_PIXEL = (
-    "a style reference sheet of DIFFERENT characters drawn in the target style. "
+    "a style reference sheet of DIFFERENT characters drawn in the target style, "
+    "each one as a three-view turnaround - front, right profile, back - in "
+    "EXACTLY the layout to draw. "
     "This sheet is the PRIMARY authority on how anything is built and finished, "
     "**and on how tall the head is relative to the body** - copy that head-to-body "
     "proportion exactly. Beyond proportion it decides: "
@@ -1471,9 +1436,22 @@ _ROLE_STYLE_PIXEL = (
     "another separated by one cell. Where a design rule above and this sheet "
     "disagree about grid size, palette discipline, outline or garment "
     "construction, FOLLOW THE SHEET. Pose, body-part count and which garments the "
-    "figure wears are not the sheet's to decide. The sheet shows single "
-    "front-facing figures; that is NOT the layout to copy - still draw the "
-    "three-view turnaround described above, front, right profile and back."
+    "figure wears are not the sheet's to decide. Copy how each view is drawn: "
+    "the profile's single eye and nose, the back of the head as hair, how a "
+    "garment and an accessory continue around the body from one view to the next."
+)
+
+# 素體（Image 3）的說法。_ROLE_POSE 是寫給灰色方塊的（「顏色與空白沒有意義」），
+# 素體是一個畫好的人，要明講：身材照抄、衣服髮型膚色換成照片裡的人
+_ROLE_POSE_PIXEL = (
+    "the BASE BODY: one neutral mannequin character drawn in the target style as "
+    "a three-view turnaround, front, right profile and back. Every figure is built "
+    "on exactly this body: copy its height on the image, its head size and "
+    "head-to-body proportion, its shoulder width, arm and leg length, its stance "
+    "in each view and the three-view layout. Then dress it as the source person - "
+    "their face, skin tone, hair and garments replace the mannequin's plain grey "
+    "clothes, short brown hair and skin; none of those belong to the output. Its "
+    "trousers only show where legs go: a skirt or dress follows the person's garment."
 )
 
 
@@ -1484,12 +1462,16 @@ register_style(GenerationStyle(
     supported_modes=frozenset({"full_character"}),
     reference_set="2026q3_pixel_curated",
     role_style_text=_ROLE_STYLE_PIXEL,
-    pose_builder=_canonical_pixel_turnaround,
+    pose_builder=_pixel_base_body,
+    role_pose_text=_ROLE_POSE_PIXEL,
     turnaround=True,
-    # 切好的正面：正常 0.35–0.49（16 張），多畫半個人那張 0.62，方格紙背景 1.0
-    max_aspect=0.56,
-    # 三個 3 頭身的角色並排約需 1.6:1，16:9 剛好；1344x768 時角色高約 700px、
-    # 一格約 7.8px，正是策展原圖自己的格距（INTAKE.md）。正方形的話三個人
+    # 切好的正面（寬 ÷ 高）。3 頭身那組：正常 0.35–0.49，多畫半個人那張 0.62，
+    # 方格紙背景 1.0。2026-10-15 換成約 2.2 頭身：頭比肩寬，參考圖的正面就有
+    # 0.46–0.60（蓬鬆捲髮那張最寬），沿用 0.56 會把正常的角色判成 too_wide 重生。
+    # 兩個人黏在一起約 1.0 以上
+    max_aspect=0.75,
+    # 三個角色並排約需 1.6:1，16:9 剛好；1344x768 時角色高約 650px、
+    # 一格約 8.6px，正是策展原圖自己的格距（INTAKE.md）。正方形的話三個人
     # 擠在一起，每個人只剩約 600px 高。
     generation_params={"full_character": {"extra_body": {"image_config": {"aspect_ratio": "16:9"}}}},
 ))

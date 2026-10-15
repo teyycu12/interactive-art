@@ -18,7 +18,10 @@ import pytest
 from PIL import Image as PILImage
 
 from backend import garment_gen
-from backend.turnaround import find_figures, fix_backward_feet, split_turnaround
+from backend.turnaround import (
+    BASE_BODY_CHIN, SQUASH_RANGE, chin_fraction, face_right, find_figures, fit_base_body,
+    fix_backward_feet, skin_tone, split_turnaround,
+)
 
 import service
 
@@ -217,6 +220,140 @@ class BackwardFeetTests(unittest.TestCase):
         self.assertEqual(fix_backward_feet(src), (src, False))
 
 
+SKIN = (236, 186, 150)
+BLOND = (205, 160, 80)    # 淺金髮：紅多藍少，「看起來像膚色」
+
+
+def _profile(facing: str, hair=(30, 25, 25)) -> str:
+    """去背後的側面（RGBA）：頭（後腦勺頭髮＋臉）、身體、腿。facing：臉朝哪邊。"""
+    arr = np.zeros((900, 400, 4), dtype=np.uint8)
+    arr[20:380, 100:300] = (*hair, 255)              # 頭（含髮），約 40%
+    face = slice(180, 290) if facing == "right" else slice(110, 220)
+    arr[120:370, face] = (*SKIN, 255)                # 臉在朝向的那一側
+    arr[380:880, 150:250] = (*GRAY, 255)
+    return _rgba_to_b64(arr)
+
+
+def _front(hair=(30, 25, 25)) -> str:
+    arr = np.zeros((900, 400, 4), dtype=np.uint8)
+    arr[20:380, 100:300] = (*hair, 255)
+    arr[150:370, 130:270] = (*SKIN, 255)
+    arr[380:880, 120:280] = (*GRAY, 255)
+    return _rgba_to_b64(arr)
+
+
+class FaceRightTests(unittest.TestCase):
+    """實測（2026-10-15）：模型把側面整個畫成朝左，大螢幕往右走時倒著走。"""
+
+    def test_left_facing_profile_is_mirrored_and_keeps_transparency(self):
+        out, mirrored = face_right(_profile("left"), skin_tone(_front()))
+        self.assertTrue(mirrored)
+        arr = np.asarray(PILImage.open(io.BytesIO(base64.b64decode(out))))
+        self.assertEqual(arr.shape[2], 4, "去背後的圖要留著透明度")
+        self.assertEqual(arr[5, 5, 3], 0, "背景要是透明的，不能變成黑底")
+        self.assertEqual(tuple(arr[200, 250, :3]), SKIN, "鏡像後臉在右邊")
+
+    def test_right_facing_profile_is_left_alone(self):
+        src = _profile("right")
+        self.assertEqual(face_right(src, skin_tone(_front())), (src, False))
+
+    def test_blond_hair_is_not_taken_for_the_face(self):
+        # 不用正面的膚色時，淺金髮整顆頭都「像膚色」，分不出臉在哪邊
+        out, mirrored = face_right(_profile("left", BLOND), skin_tone(_front(BLOND)))
+        self.assertTrue(mirrored)
+
+    def test_front_skin_tone_is_the_face_not_the_hair(self):
+        tone = skin_tone(_front(BLOND))
+        self.assertTrue(all(abs(a - b) <= 8 for a, b in zip(tone, SKIN)), tone)
+
+
+BEIGE = (214, 212, 181)   # 米色上衣：紅多藍少，也「看起來像膚色」
+
+
+def _person(chin, height=900, width=400, shirt=GRAY, brows=False, alpha=True):
+    """一個站著的人：頭髮、臉（下巴在 chin，以身高為單位）、上衣、褲子。
+
+    alpha=False 時畫在白底上（給整張三視圖用）。"""
+    arr = np.zeros((height, width, 4), dtype=np.uint8)
+    if not alpha:
+        arr[...] = (255, 255, 255, 255)
+    top, bottom = 20, height - 20
+    h = bottom - top
+    chin_y = top + int(chin * h)
+    arr[top:chin_y, 100:300] = (30, 25, 25, 255)                         # 頭髮
+    arr[top + int(h * 0.1):chin_y, 130:270] = (*SKIN, 255)              # 臉
+    if brows:
+        # 眉毛、眼睛橫過臉（1 格多高），只剩眉心一條膚色連著：那幾列的臉窄得
+        # 像脖子，下巴不能停在這裡
+        y = top + int(h * 0.1) + int((chin_y - top) * 0.3)
+        arr[y:y + 14, 130:190] = (30, 25, 25, 255)
+        arr[y:y + 14, 210:270] = (30, 25, 25, 255)
+    arr[chin_y:top + int(h * 0.7), 120:280] = (*shirt, 255)              # 上衣
+    arr[top + int(h * 0.7):bottom, 140:260] = (*GRAY, 255)              # 褲子
+    return arr
+
+
+def _chin_of(b64):
+    return chin_fraction(b64)
+
+
+def _height(b64):
+    rows = np.nonzero((np.asarray(_decode(b64))[:, :, 3] > 0).any(axis=1))[0]
+    return rows[-1] - rows[0] + 1
+
+
+class BaseBodyFitTests(unittest.TestCase):
+    """模型常照真人照片的比例畫（下巴在 28% 的 4 頭身），每個人個頭不一
+    （2026-10-16 現場回報）。不重生：下巴以下壓回素體的頭身比。"""
+
+    def test_constant_matches_the_base_body(self):
+        """BASE_BODY_CHIN 量自素體；換素體沒改數字的話，每個角色都被壓到舊比例。"""
+        sheet = PILImage.open(garment_gen.PIXEL_BASE_BODY).convert("RGB")
+        x0, x1, _, _ = find_figures(sheet)[0]
+        rgb = np.asarray(sheet)
+        alpha = np.where(rgb.min(axis=2) > 240, 0, 255).astype(np.uint8)
+        front = np.dstack([rgb, alpha])[:, x0:x1]
+        self.assertAlmostEqual(chin_fraction(_rgba_to_b64(np.ascontiguousarray(front))), BASE_BODY_CHIN, delta=0.01)
+
+    def test_chin_is_measured(self):
+        self.assertAlmostEqual(_chin_of(_rgba_to_b64(_person(0.3))), 0.3, delta=0.01)
+
+    def test_brows_across_the_face_do_not_stop_at_the_eyes(self):
+        self.assertAlmostEqual(_chin_of(_rgba_to_b64(_person(0.3, brows=True))), 0.3, delta=0.01)
+
+    def test_skin_is_sampled_on_the_face_of_a_tall_figure(self):
+        """4 頭身的角色，原本的取樣段（20%~42%）落在米色上衣上，下巴整個找錯。"""
+        tone = skin_tone(_rgba_to_b64(_person(0.25, shirt=BEIGE)))
+        self.assertTrue(all(abs(a - b) <= 8 for a, b in zip(tone, SKIN)), tone)
+
+    def test_tall_figure_is_squashed_to_the_base_body(self):
+        views = {name: _rgba_to_b64(_person(0.28)) for name in ("front", "side", "back")}
+        out, scale = fit_base_body(views)
+        self.assertIsNotNone(scale)
+        self.assertLess(scale, 1)
+        self.assertAlmostEqual(_chin_of(out["front"]), BASE_BODY_CHIN, delta=0.01)
+        # 頭一格都不動，只動下巴以下
+        head = np.asarray(_decode(views["front"]))[:255]
+        self.assertTrue((np.asarray(_decode(out["front"]))[:255] == head).all())
+        # 三面同一個倍率：換面時個頭不能忽大忽小
+        self.assertEqual({_height(out[name]) for name in out}, {_height(out["front"])})
+
+    def test_on_model_figure_is_left_alone(self):
+        views = {"front": _rgba_to_b64(_person(BASE_BODY_CHIN))}
+        self.assertEqual(fit_base_body(views), (views, None))
+
+    def test_extreme_figure_is_only_partly_squashed(self):
+        """下巴 0.2 硬壓到 0.42 會壓成一團，倍率有下限。"""
+        _, scale = fit_base_body({"front": _rgba_to_b64(_person(0.2))})
+        self.assertEqual(scale, SQUASH_RANGE[0])
+
+    def test_figure_without_a_face_is_left_alone(self):
+        arr = _person(0.3)
+        arr[(arr[:, :, :3] == SKIN).all(axis=2)] = (*GRAY, 255)
+        views = {"front": _rgba_to_b64(arr)}
+        self.assertEqual(fit_base_body(views), (views, None))
+
+
 class GenerateSplitsBeforeBackgroundRemovalTests(unittest.TestCase):
     """整條 generate_full_character_png：三個人都要活過去背。"""
 
@@ -237,6 +374,17 @@ class GenerateSplitsBeforeBackgroundRemovalTests(unittest.TestCase):
             img = _decode(out[key])
             alpha = np.asarray(img)[:, :, 3]
             self.assertGreater((alpha > 0).sum(), 1000, f"{key} 被去背刪光了")
+
+    def test_pixel_is_fitted_to_the_base_body(self):
+        """接在管線裡：模型照真人比例畫的 4 頭身，出來是素體的頭身比。"""
+        person = _person(0.28, alpha=False)[:, :, :3]
+        gap = np.full((900, 100, 3), 255, dtype=np.uint8)
+        sheet = np.concatenate([gap, person, gap, person, gap, person, gap], axis=1)
+        out = self._run(_rgba_to_b64(np.dstack([sheet, np.full(sheet.shape[:2], 255, np.uint8)])))
+        self.assertTrue(out["ok"])
+        self.assertLess(out["base_body_scale"], 1)
+        self.assertAlmostEqual(chin_fraction(out["body_png"]), BASE_BODY_CHIN, delta=0.01)
+        self.assertEqual(_height(out["side_png"]), _height(out["body_png"]))
 
     def test_other_styles_do_not_split(self):
         out = self._run(_sheet([(150, 400), (700, 880), (1150, 1400)]), style_id="lego")
@@ -277,8 +425,31 @@ class PixelTurnaroundAgreementTests(unittest.TestCase):
         for phrase in ("NO grid lines", "NO frame", "never drawn"):
             self.assertIn(phrase, prompt)
 
-    def test_role_text_says_the_sheet_is_not_the_layout(self):
-        self.assertIn("NOT the layout to copy", self.style.role_style_text)
+    def test_prompt_spells_out_each_accessory_in_every_view(self):
+        # 背帶、背包在三面之間時有時無：要逐面講出配件長什麼樣，不是只說「一致」
+        prompt = self.style.full_prompt_template
+        self.assertIn("ACCESSORIES stay on in EVERY view", prompt)
+        for phrase in ("strap across the back in the back view", "pack behind the back in the profile"):
+            self.assertIn(phrase, prompt)
+
+    def test_photo_does_not_set_body_proportions(self):
+        # 照片會把真人的頭身比一起帶進來，同一批角色個頭不一
+        self.assertIn("NOT their real-life body proportions", garment_gen._ROLE_PERSON)
+        # 「pose reference」是姿勢圖那一行專屬的名字，照片那一行不能出現
+        self.assertNotIn("pose reference", garment_gen._ROLE_PERSON)
+
+    def test_role_text_says_the_sheet_is_the_layout(self):
+        # 參考圖改成三視圖之後，排法就是要抄的；舊說法（「sheet 不是構圖」）
+        # 留著會叫模型別學側面與背面怎麼畫
+        self.assertIn("EXACTLY the layout to draw", self.style.role_style_text)
+        self.assertNotIn("NOT the layout to copy", self.style.role_style_text)
+
+    def test_pose_role_says_dress_the_base_body(self):
+        # 素體不是灰色方塊：要叫模型照抄身材、換掉衣服髮型膚色
+        role = self.style.role_pose_text
+        self.assertIn("BASE BODY", role)
+        self.assertIn("copy its height", role)
+        self.assertIn("none of those belong to the output", role)
 
     def test_other_styles_stay_single_view(self):
         for sid in ("lego", "pixar"):

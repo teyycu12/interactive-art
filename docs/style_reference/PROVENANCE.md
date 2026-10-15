@@ -24,7 +24,7 @@
 |---|---|---|
 | `2026q3_owner_curated/` | `lego`（樂高） | 5 |
 | `2026q3_pixar_figma/` | `pixar`（皮克斯） | 6 |
-| `2026q3_pixel_curated/` | `pixel`（像素） | 6（另有 `_original/` 6 張未加工檔） |
+| `2026q3_pixel_curated/` | `pixel`（像素） | 4 張三視圖＋1 張素體（另有 `_original/` 未加工檔；2026-10-15 前是 6 張單一正面） |
 
 **這不是訓練資料。** 沒有任何權重被更新。這些圖是 **prompt-time 條件輸入**：
 `backend/garment_gen.py` 的 `_build_style_reference_sheet()` 每次生成時把它們拼成
@@ -43,26 +43,31 @@
 | 檔案 | 來源 | 授權 | 屬於哪幾組 |
 |---|---|---|---|
 | full_body_01_plain_shorthair.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 樂高 |
-| full_body_01_tee_denim.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 皮克斯、像素 |
-| full_body_02_tailored_suit.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 樂高、皮克斯、像素 |
-| full_body_03_dress_drape.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 樂高、皮克斯、像素 |
+| full_body_01_tee_denim.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 皮克斯 |
+| full_body_02_tailored_suit.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 樂高、皮克斯 |
+| full_body_03_dress_drape.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 樂高、皮克斯 |
 | full_body_04_layered_jacket.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 樂高 |
-| full_body_04_layered_hoodie.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 皮克斯、像素 |
+| full_body_04_layered_hoodie.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 皮克斯 |
 | full_body_05_volume_hair.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 樂高 |
-| full_body_05_shorts_bare_legs.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 皮克斯、像素 |
-| full_body_06_long_coat.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 皮克斯、像素 |
+| full_body_05_shorts_bare_legs.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 皮克斯 |
+| full_body_06_long_coat.png | Elser AI 生成（免費帳號） | Elser ToS：非商業重製不在 5.2(i) 射程內 | 皮克斯 |
+| turnaround_01.png | 專案提供的三視圖原圖 `_original/full_body_01.png`（2026-10-15），生成工具待補 |  | 像素 |
+| turnaround_02.png | 專案提供的三視圖原圖 `_original/full_body_02.png`（2026-10-15），生成工具待補 |  | 像素 |
+| turnaround_03.png | 專案提供的三視圖原圖 `_original/full_body_03.png`（2026-10-15），生成工具待補 |  | 像素 |
+| turnaround_04.png | 專案提供的三視圖原圖 `_original/full_body_04.png`（2026-10-15），生成工具待補 |  | 像素 |
+| pose_turnaround.png | Gemini 3.1 Flash Image（經 OpenRouter）依 turnaround_01–04 生成的素體，2026-10-15；原檔 `_original/base_body.png` |  | 像素（姿勢參考） |
 
 ## 來源
 
 | 項目 | 樂高（owner_curated） | 皮克斯（pixar_figma） | 像素（pixel_curated） |
 |---|---|---|---|
-| 取得方式 | 自行以 AI 生圖工具生成 | 同左 | 同左 |
-| 來源工具 | Elser（Elser AI），免費帳號<br>https://www.elser.ai/zh-TW | 同左 | 同左 |
-| 取得日期 | 2026-08-22 | 2026 年 8–9 月 | 2026-09-24 前後 |
-| 原始檔規格 | 1344×768 WebP，橫式，EXIF/XMP 皆已無資料 | — | 1344×768 WebP，橫式（實測） |
-| 出貨檔規格 | 576×864 PNG，直式單人 | PNG，直式單人 | 1023×1533 PNG，角色約 1430px 高（原圖 ×2 最近鄰）|
+| 取得方式 | 自行以 AI 生圖工具生成 | 同左 | 專案提供的三視圖；素體以 Gemini 3.1 Flash Image 照它們生成 |
+| 來源工具 | Elser（Elser AI），免費帳號<br>https://www.elser.ai/zh-TW | 同左 | 三視圖：待補；素體：OpenRouter → Google |
+| 取得日期 | 2026-08-22 | 2026 年 8–9 月 | 2026-10-15 |
+| 原始檔規格 | 1344×768 WebP，橫式，EXIF/XMP 皆已無資料 | — | 1344×768 PNG，橫式三視圖（實測） |
+| 出貨檔規格 | 576×864 PNG，直式單人 | PNG，直式單人 | 1536×864 PNG，三視圖，角色 636–665px 高（不縮放）|
 | 加工 | 裁切為直式單人構圖、**移除浮水印** | 裁切為直式單人構圖 | 見〈像素組的後製〉 |
-| 原始檔保留位置 | `2026q3_owner_curated/_original_watermarked/`（帶浮水印，5 張） | 未保留 | `2026q3_pixel_curated/_original/`（6 張） |
+| 原始檔保留位置 | `2026q3_owner_curated/_original_watermarked/`（帶浮水印，5 張） | 未保留 | `2026q3_pixel_curated/_original/`（4 張＋素體原檔＋`layout.json`） |
 
 > 檔案本身查不到任何來源線索——metadata 是空的。這幾欄只有專案擁有者能填。
 > 皮克斯組的取得日期與原始檔規格仍是空的；下次動到那組時補上。
@@ -104,34 +109,24 @@
 
 ## 像素組的後製
 
-原始圖是「像素風插畫」而不是像素畫：格距浮動、邊緣帶反鋸齒、7000–22000 種顏色，
-六張左上角都有一塊約 32×32 的灰色暈影，`check_reference_set.py` 六張全部 FAIL。
-直接當 sheet 會教錯 —— sheet 在 prompt 裡是工藝的最高權威，模型會學到
-「格子可以不一致、邊緣可以是軟的」，正好是這個風格唯一不能鬆的兩件事。
+2026-10-15 換成三視圖那一組（前一組 6 張單一正面已整組移除，只在 git 歷史裡）。
+原圖是 1344×768 的三視圖，排法各張不同（有的背面在最左、有的側面朝左），03 是灰底。
 
 ```bash
-python scripts/pixelize_reference.py \
+python scripts/prepare_turnaround_reference.py \
     docs/style_reference/2026q3_pixel_curated/_original \
     --out docs/style_reference/2026q3_pixel_curated
 ```
 
-1. 只留最大的連通區塊（清掉角落暈影）
-2. 裁到角色、背景壓成純白 `#FFFFFF`
-3. ×2 最近鄰放大，置中貼到 1023×1533 純白畫框
+1. 背景（連到圖邊、亮而無色的像素，含灰底與角落暈影）壓成純白，零碎污點清掉
+2. 依 `_original/layout.json` 標出每個人是哪一面，朝左的側面鏡像成朝右
+3. 依「正面｜右側｜背面」重排到 1536×864，腳底同一條線、間距相同
 
-**畫面內容沒有被更動**：與原圖逐像素比對，平均差 0.57/255，差異全部來自
-背景（254 → 255）與被清掉的角落暈影。
+**人物本身的像素沒有被更動，也沒有縮放**（四張原圖是同一個比例尺）。素體
+（`pose_turnaround.png`）例外：它是另外生成的，以最近鄰縮放到 02 正面的高度。
 
-加工前後：**6 張全部 FAIL → 6 張全部 PASS**。
-
-**走過兩條死路，都記在這裡以免有人再走一次**：先重新定格到 64 格 → 臉變馬賽克；
-改成 90 格（原圖自己的格距）→ 仍然糊，因為原圖格距是浮動的（一格 7.9~8.1px、
-每張偏移不同），硬切成整數列必定混到隔壁格（邊緣密度 0.056 → 0.045）。
-量化也不能做：中位切割照面積分配色票，64 色時**綠眼睛變成藍眼睛**，256 色仍偏青。
-這種來源的圖只能洗，不能重畫。
-
-**沒有做的事**：沒有補一格輪廓。機械式加的輪廓會把雙腿之間僅有的 2 格間隙填掉，
-讓兩條腿併成一根柱子 —— 那是這組圖最該教對的事。要輪廓的話得手工畫。
+不重新定格、不量化：前一組走過那兩條死路（重新定格把格子混糊、量化把綠眼睛換成藍眼睛），
+這種「像素風插畫」來源的圖只能洗，不能重畫。
 
 ## 已知品質限制
 
@@ -145,19 +140,15 @@ python scripts/pixelize_reference.py \
    雖明文禁止髮色轉移，但單一色帶重複 5 次是否造成偏壓，需要用
    `STYLE_REFERENCE_MODE=off` 做 A/B 實測，不能用推論的。
 
-### 像素組（2026-09-24 加工後量測）
+### 像素組（2026-10-15 那組三視圖）
 
-1. **`06_long_coat` 的雙腿幾乎沒有間隙**：大衣下襬蓋到約 80% 高度，露出的褲管
-   只在 88% 處才分開，間隙約 1.6 格。`04_layered_hoodie` 的間隙也偏窄
-   （0.5–1.9 格，規格要求 ≥2 格）。樂高那組正是栽在「雙腿併成一根柱子」，
-   這兩張若日後重生請一併修掉。
-2. **格距偏細，投影機上顆粒感會變弱**：角色原生約 89~90 格，投影到 1920×1080
-   時一格只剩 1.5~1.9 個裝置像素。這是為了保住臉部細節而接受的取捨
-   （粗到 64 格時臉會變馬賽克），投影驗收時要特別看。
-   另外這六張仍帶有原始 WebP 的有損壓縮雜色（每張 7000–22000 色），
-   刻意不量化 —— 量化會改掉虹膜顏色，見上節。
-3. **青綠色出現兩次**（03 的洋裝、06 的內搭）。重複兩次還不到會滲色的程度，
-   但重生時換掉其中一個更安全。
+1. **格距浮動、邊緣帶反鋸齒**：一格約 8.6px 上下，是生圖工具的像素風插畫，不是逐格手繪。
+   刻意不重新定格（見上節）。
+2. **沒有短褲、光腿的範例**：裙子那張（04）是蓬裙，腿幾乎被蓋住。參與者穿短褲、短裙時，
+   大面積皮膚的色階只能靠 prompt；日後補圖時加一張。
+3. **素體是生成的**：比例照參考圖，但只有一個體型。若實測發現壯的、瘦的參與者都被畫成
+   同一個寬度，那是素體在起作用（身高與頭身比本來就要它定死）；寬度若需要保留差異，
+   要在 prompt 裡另外講。
 
 ## 下載者須知
 

@@ -144,7 +144,7 @@ GAP_MAX_WIDTH_CELLS = 2.5
 GAP_SIDE_RATIO = (0.08, 0.36)   # 離這一列輪廓外緣的距離（輪廓寬的比例）
 GAP_MIN_ASPECT = 1.3            # 高 ÷ 平均寬
 GAP_MIN_HEIGHT_CELLS = 1.2      # 比這矮的是雜點（裙子上的一小格淺灰），不是縫
-CELLS_PER_FIGURE = 90     # 與 garment_gen.PIXEL_ART_GRID_HEIGHT 同值
+CELLS_PER_FIGURE = 75     # 與 garment_gen.PIXEL_ART_GRID_HEIGHT 同值
 
 
 def _enclosed_gaps(rgb: np.ndarray, side_view: bool) -> np.ndarray:
@@ -267,6 +267,95 @@ def split_turnaround(png_b64: str) -> Tuple[Optional[dict], int]:
     return {name: crop(i) for i, name in enumerate(VIEW_ORDER)}, 3
 
 
+# ── 側面整個人朝左 ──
+#
+# 實測（2026-10-15）模型偶爾把側面整個畫成朝左（臉、領帶、鞋尖都朝左），
+# 參考圖與素體明明都朝右。大螢幕假設側面朝右（往左走時才鏡像），朝左的側面
+# 往右走時就是倒著走 —— 現場回報「頭是反的」。
+#
+# 看臉：頭那一段裡，膚色（臉）偏在哪一邊，人就朝哪邊；後腦勺是頭髮。只看頭
+# 不看腳：鞋子畫反是另一件事（下面的 fix_backward_feet），兩者要分開判斷。
+FACE_ZONE = 0.42          # 頭：最上面這麼高（以角色高為單位，2.2 頭身的下巴約 45%）
+FACE_OFFSET = 0.06        # 臉的中心偏離頭的中心這麼多（頭寬的比例）才算朝哪邊
+FACE_MIN_PIXELS = 0.02    # 頭那一段裡膚色少於這個比例（光頭戴帽、全被頭髮蓋住）就不判斷
+
+
+SKIN_TOL = 60             # 與正面膚色的三通道差總和（臉上的陰影比基準暗一階）
+# 量膚色的那一段（以角色高為單位）。要落在臉上，不管角色畫成幾頭身：2.2 頭身
+# 的臉約 12%~45%，模型偶爾畫成 4 頭身時臉只到 25% 左右。原本取 20%~42%，
+# 4 頭身的角色量到的是米色上衣（2026-10-16 實測），下巴整個找錯
+SKIN_SAMPLE = (0.12, 0.30)
+
+
+def _decode_rgba(png_b64: str) -> PILImage.Image:
+    """去背後的圖要留著透明度（_decode 是給切圖前的白底整張圖用的，會轉成 RGB）。"""
+    if "," in png_b64[:64]:
+        png_b64 = png_b64.split(",", 1)[1]
+    return PILImage.open(io.BytesIO(base64.b64decode(png_b64))).convert("RGBA")
+
+
+def _skin_like(r: np.ndarray, g: np.ndarray, b: np.ndarray) -> np.ndarray:
+    luma = r * 0.299 + g * 0.587 + b * 0.114
+    return (r > g) & (g >= b) & (r - b >= 30) & (luma >= 80)
+
+
+def skin_tone(front_b64: str) -> Optional[Tuple[int, int, int]]:
+    """正面臉上最常見的膚色：頭那一段、中間三成寬，量化後的眾數。
+
+    側面判朝向要用它，不能只靠「看起來像膚色」：淺金、棕色的頭髮也是紅多藍少，
+    整顆頭都像臉，判不出朝向（實測亞麻金捲髮那張參考圖）。"""
+    arr = np.asarray(_decode_rgba(front_b64)).astype(np.int16)
+    solid = arr[..., 3] > 128
+    rows = np.where(solid.any(axis=1))[0]
+    cols = np.where(solid.any(axis=0))[0]
+    if rows.size == 0:
+        return None
+    h = rows[-1] - rows[0] + 1
+    w = cols[-1] - cols[0] + 1
+    y0, y1 = rows[0] + int(h * SKIN_SAMPLE[0]), rows[0] + int(h * SKIN_SAMPLE[1])
+    x0, x1 = cols[0] + int(w * 0.35), cols[0] + int(w * 0.65)
+    patch = arr[y0:y1, x0:x1]
+    r, g, b = patch[..., 0], patch[..., 1], patch[..., 2]
+    mask = (patch[..., 3] > 128) & _skin_like(r, g, b)
+    if mask.sum() < 20:
+        return None
+    keys = (r[mask] >> 4) * 256 + (g[mask] >> 4) * 16 + (b[mask] >> 4)
+    best = np.bincount(keys).argmax()
+    pick = keys == best
+    return tuple(int(c[mask][pick].mean()) for c in (r, g, b))
+
+
+def face_right(png_b64: str, skin: Optional[Tuple[int, int, int]] = None) -> Tuple[str, bool]:
+    """側面朝左時整張左右鏡像成朝右。回傳 (圖, 有沒有鏡像)。
+
+    skin：正面量到的膚色（skin_tone）。沒有時退回「看起來像膚色」，頭髮是淺色
+    時可能判不出來 —— 判不出來就不動，不會反過來把朝右的翻成朝左。"""
+    img = _decode_rgba(png_b64)
+    arr = np.asarray(img).astype(np.int16)
+    solid = arr[..., 3] > 128
+    rows = np.where(solid.any(axis=1))[0]
+    if rows.size == 0:
+        return png_b64, False
+    top, bottom = rows[0], rows[-1]
+    head = slice(top, top + int((bottom - top + 1) * FACE_ZONE))
+    band = solid[head]
+    cols = np.where(band.any(axis=0))[0]
+    if cols.size == 0:
+        return png_b64, False
+    r, g, b = arr[head, :, 0], arr[head, :, 1], arr[head, :, 2]
+    face = band & _skin_like(r, g, b)
+    if skin is not None:
+        face &= (np.abs(r - skin[0]) + np.abs(g - skin[1]) + np.abs(b - skin[2])) <= SKIN_TOL
+    if face.sum() < band.sum() * FACE_MIN_PIXELS:
+        return png_b64, False
+    width = cols[-1] - cols[0] + 1
+    centre = (cols[0] + cols[-1]) / 2
+    face_x = np.nonzero(face)[1].mean()
+    if face_x >= centre - width * FACE_OFFSET:
+        return png_b64, False
+    return _encode(img.transpose(PILImage.FLIP_LEFT_RIGHT)), True
+
+
 # ── 側面的鞋子畫反 ──
 #
 # 實測（2026-10-14）模型畫側面時偶爾把鞋子畫反：人朝右，靴子的鞋尖朝左、
@@ -343,3 +432,102 @@ def fix_backward_feet(png_b64: str) -> Tuple[str, bool]:
     buf = io.BytesIO()
     PILImage.fromarray(arr, "RGBA").save(buf, "PNG")
     return base64.b64encode(buf.getvalue()).decode("ascii"), True
+
+
+# ── 壓回素體的頭身比 ──
+#
+# 素體、參考圖、prompt 三邊都說 2.2 頭身，模型還是常照真人照片的比例畫：同一批
+# 角色下巴落在身高的 28%~42%（2026-10-16 量最近幾十個），站在一起個頭不一。
+# 樂高、皮克斯沒有這問題，那兩種「物種」的身體模型早就背熟了；Q 版像素沒有
+# 標準身材，生成這一步保證不了。現場 30 人同時生成、不重生，所以在這裡收：
+# 頭不動，下巴以下整段垂直縮放，讓下巴落在素體的位置 —— 每個人都是同一個物種，
+# 不看真人比例。只縮垂直：左右也縮的話長髮在下巴那一列會斷一截。
+#
+# 以後若做矮／中／高三種素體，換 target 就好（各量自己的素體）。
+BASE_BODY_CHIN = 0.42      # 素體正面的下巴（以角色高為單位），用 chin_fraction 量的
+SQUASH_RANGE = (0.5, 1.3)  # 縮放倍率上下限：再扁就是一團（下巴 0.2 的那種只收一部分）
+SQUASH_MIN_CHANGE = 0.04   # 差不到這麼多就不動，省得每張都被重新取樣
+FACE_NARROW = 0.6          # 臉的寬掉到最寬的這個比例以下，就是下巴以下（脖子）
+FACE_GAP_CELLS = 1.5       # 比這短的窄段是眉毛、眼睛把臉切開，不是脖子
+
+
+def chin_fraction(front_b64: str, skin: Optional[Tuple[int, int, int]] = None) -> Optional[float]:
+    """正面的下巴在身高的哪裡（0 = 頭頂，1 = 鞋底）。量不到（臉被遮住、沒有膚色）回傳 None。
+
+    臉 = 頭那一段裡最大一塊膚色。從它最寬的那列往下，左右跨度持續窄掉的地方就是
+    下巴。用跨度不用格數：眼睛、眉毛在臉中間，格數會掉，跨度不會。"""
+    import cv2
+
+    arr = np.asarray(_decode_rgba(front_b64)).astype(np.int16)
+    solid = arr[..., 3] > 128
+    rows = np.where(solid.any(axis=1))[0]
+    if rows.size == 0:
+        return None
+    top, bottom = int(rows[0]), int(rows[-1])
+    h = bottom - top + 1
+    if skin is None:
+        skin = skin_tone(front_b64)
+    if skin is None:
+        return None
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    face = solid & _skin_like(r, g, b)
+    face &= (np.abs(r - skin[0]) + np.abs(g - skin[1]) + np.abs(b - skin[2])) <= SKIN_TOL
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(face.astype(np.uint8), connectivity=4)
+    head_end = top + int(h * 0.6)
+    best = max(
+        (i for i in range(1, count) if stats[i, cv2.CC_STAT_TOP] < head_end),
+        key=lambda i: stats[i, cv2.CC_STAT_AREA], default=0,
+    )
+    if not best:
+        return None
+    comp = labels == best
+    comp_rows = np.where(comp.any(axis=1))[0]
+    y0, y1 = int(comp_rows[0]), int(comp_rows[-1])
+    span = np.zeros(arr.shape[0])
+    for y in range(y0, y1 + 1):
+        xs = np.nonzero(comp[y])[0]
+        if xs.size:
+            span[y] = xs[-1] - xs[0] + 1
+    widest = y0 + int(np.argmax(span[y0:y1 + 1]))
+    narrow = span < span[widest] * FACE_NARROW
+    gap = max(2, int(h / CELLS_PER_FIGURE * FACE_GAP_CELLS))
+    y = widest
+    while y <= y1:
+        # 窄下去之後一直窄到臉的底，或窄了夠長一段：那就是脖子
+        if narrow[y] and (narrow[y:y1 + 1].all() or narrow[y:min(y + gap, y1 + 1)].all()):
+            break
+        y += 1
+    return (y - top) / h
+
+
+def squash_below(png_b64: str, chin: float, scale: float) -> str:
+    """下巴（以角色高為單位）以上不動，以下整段垂直縮放 scale 倍（最近鄰，像素格不糊）。"""
+    arr = np.asarray(_decode_rgba(png_b64))
+    rows = np.where((arr[..., 3] > 0).any(axis=1))[0]
+    if rows.size == 0:
+        return png_b64
+    top, bottom = int(rows[0]), int(rows[-1])
+    cut = top + int(round(chin * (bottom - top + 1)))
+    body = arr[cut:bottom + 1]
+    new_h = max(1, int(round(body.shape[0] * scale)))
+    pick = np.minimum((np.arange(new_h) / scale).astype(int), body.shape[0] - 1)
+    out = np.concatenate([arr[:cut], body[pick]], axis=0)
+    return _encode(PILImage.fromarray(np.ascontiguousarray(out), "RGBA"))
+
+
+def fit_base_body(
+    views: dict, skin: Optional[Tuple[int, int, int]] = None, target: float = BASE_BODY_CHIN,
+) -> Tuple[dict, Optional[float]]:
+    """把三視圖（{"front", "side", "back"}，去背後）壓回素體的頭身比。
+
+    回傳 (views, 縮放倍率)；量不到下巴或差不多時倍率為 None、圖不動。三面用正面
+    量到的同一個下巴位置與倍率：三面同一次生成、同一個比例尺，分開量的話背面
+    沒有臉，側面的臉只有半張。"""
+    chin = chin_fraction(views["front"], skin)
+    if chin is None or not 0 < chin < 1:
+        return views, None
+    scale = chin * (1 - target) / (target * (1 - chin))
+    scale = min(max(scale, SQUASH_RANGE[0]), SQUASH_RANGE[1])
+    if abs(scale - 1) < SQUASH_MIN_CHANGE:
+        return views, None
+    return {name: squash_below(png, chin, scale) for name, png in views.items()}, scale

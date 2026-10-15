@@ -89,10 +89,20 @@ def analyze_outfit(base64_image: str) -> Dict[str, Any]:
             "inner_color": "#HEXCODE",
             "outer_color": "#HEXCODE" (or null if none),
             "lower_color": "#HEXCODE",
-            "has_pattern": true | false
+            "has_pattern": true | false,
+            "accessories": [
+                {
+                    "kind": "crossbody_bag" | "shoulder_bag" | "backpack" | "hat" | "glasses" | "scarf" | "necklace" | "other",
+                    "description": "a short phrase: colour, and how it is worn or carried"
+                }
+            ]
         }
-        
+
         Make your best guess. For "inner", if they just have a t-shirt, choose "tshirt".
+        "accessories" lists every bag, hat, pair of glasses, scarf or necklace the person
+        wears or carries, e.g. {"kind": "crossbody_bag", "description": "small black bag,
+        strap from the right shoulder across the chest, bag at the left hip"}.
+        Use an empty list when there are none. Never list watches, rings or earrings.
         For colors, provide the dominant hex code for that clothing part.
         If there is no outer layer, set "outer" to "none" and "outer_color" to null.
         Respond ONLY with the JSON object, no markdown formatting like ```json or other text.

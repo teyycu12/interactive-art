@@ -1,0 +1,32 @@
+{
+  "_comment": "每張原圖由左到右是哪一面。side-left = 側面朝左（整理時鏡像成朝右）。base_body.png 是素體（姿勢參考），由生圖模型照四張參考圖畫的，height 對齊到參考圖的比例尺（短髮的 02 正面高 636px）。整理腳本：scripts/prepare_turnaround_reference.py",
+  "full_body_01.png": [
+    "back",
+    "front",
+    "side-left"
+  ],
+  "full_body_02.png": [
+    "front",
+    "back",
+    "side-right"
+  ],
+  "full_body_03.png": [
+    "back",
+    "front",
+    "side-right"
+  ],
+  "full_body_04.png": [
+    "back",
+    "front",
+    "side-left"
+  ],
+  "base_body.png": {
+    "views": [
+      "front",
+      "side-right",
+      "back"
+    ],
+    "out": "pose_turnaround.png",
+    "height": 636
+  }
+}

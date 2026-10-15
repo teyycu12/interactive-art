@@ -17,6 +17,31 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 REFERENCE_ROOT = REPO_ROOT / "docs" / "style_reference"
 
 
+def _pixel_turnarounds():
+    return sorted((REFERENCE_ROOT / get_style("pixel").reference_set).glob("turnaround_*"))
+
+
+def _front_box_image(image):
+    """正面（最左那個人）的 (上緣, 高, 腳底)。"""
+    from backend.turnaround import find_figures
+
+    _, _, y0, y1 = find_figures(image)[0]
+    return y0, y1 - y0, y1 - 1
+
+
+def _front_box(path):
+    with PILImage.open(path) as image:
+        return _front_box_image(image)
+
+
+def _front_aspect(path):
+    from backend.turnaround import find_figures
+
+    with PILImage.open(path) as image:
+        x0, x1, y0, y1 = find_figures(image)[0]
+    return (x1 - x0) / (y1 - y0)
+
+
 class StyleRegistryTests(unittest.TestCase):
     def test_installed_styles_load(self):
         self.assertEqual(get_style("lego").style_id, "lego")
@@ -52,9 +77,14 @@ class AspectGateTests(unittest.TestCase):
     """寬高比上限跟著風格走：像素有，樂高不能有（爪手讓正常人偶就有 0.6）。"""
 
     def test_pixel_has_a_width_gate_between_normal_and_two_figures(self):
+        """門檻要比參考圖集最寬的正面寬（頭身比改了，正常的寬度跟著變），
+        又要比兩個人黏在一起（約 1.0）窄。量參考圖，不寫死數字：換圖時
+        門檻沒跟著改，正常的角色會被判 too_wide 重生，而且不會報錯。"""
         gate = get_style("pixel").max_aspect
         self.assertIsNotNone(gate)
-        self.assertTrue(0.49 < gate < 0.62, "正常像素人偶最寬 0.49，多畫半個人 0.62")
+        widest = max(_front_aspect(path) for path in _pixel_turnarounds())
+        self.assertGreater(gate, widest + 0.05, f"參考圖的正面最寬 {widest:.2f}")
+        self.assertLess(gate, 0.9, "兩個人黏在一起約 1.0，要擋得下來")
 
     def test_lego_has_no_width_gate(self):
         self.assertIsNone(get_style("lego").max_aspect)
@@ -146,8 +176,8 @@ class StyleAssetsTests(unittest.TestCase):
                 directory = REFERENCE_ROOT / style["referenceSet"]
                 self.assertTrue(directory.is_dir(), f"{directory} 不存在")
                 self.assertTrue(
-                    list(directory.glob("full_body_*")),
-                    f"{directory} 裡沒有 full_body_* —— sheet 會靜默退回不送",
+                    list(directory.glob("full_body_*")) or list(directory.glob("turnaround_*")),
+                    f"{directory} 裡沒有 full_body_* 或 turnaround_* —— sheet 會靜默退回不送",
                 )
 
     def test_prompts_and_pose_references_are_not_shared(self):
@@ -240,22 +270,22 @@ class PixelStyleTests(unittest.TestCase):
         intake = (REFERENCE_ROOT / "2026q3_pixel_curated" / "INTAKE.md").read_text(encoding="utf-8")
         self.assertIn(str(grid), intake, "INTAKE.md 要求的格數和 prompt 不一致")
 
-    def test_pose_reference_is_drawn_on_the_grid(self):
-        """姿勢參考圖自己必須是像素畫。
+    def test_base_body_is_on_the_reference_scale(self):
+        """素體（姿勢參考）與參考圖集同一個比例尺：正面一樣高、腳底同一條線。
 
-        它若畫成平滑的，就會一邊叫模型「每個邊緣都貼齊格線」，一邊附上一張
-        反鋸齒的圖當範本。和皮克斯那張姿勢圖不能有黑輪廓是同一類錯誤。
+        素體是另外生成再縮放的；比例尺對不上時，模型同時收到兩種身高，
+        個頭又會不一 —— 而那正是換成素體要解決的事。
         """
-        grid = garment_gen.PIXEL_ART_GRID_HEIGHT
-        pose = garment_gen._canonical_pixel_pose(size=grid * 8)
-        shrunk = pose.resize((grid, grid), PILImage.NEAREST)
-        self.assertEqual(
-            shrunk.resize(pose.size, PILImage.NEAREST).tobytes(),
-            pose.tobytes(),
-            "姿勢參考圖有不貼齊格線的像素 —— 它被平滑縮放過了",
-        )
-        self.assertLessEqual(len(pose.getcolors(maxcolors=256) or []), 8,
-                             "姿勢參考圖的顏色階數應該很少（沒有漸層）")
+        pose = get_style("pixel").pose_builder()
+        self.assertEqual(pose.size, (1536, 864))
+        heights = [_front_box(path)[1] for path in _pixel_turnarounds()]
+        base_top, base_h, base_bottom = _front_box_image(pose)
+        # 參考圖的總高差在頭髮（蓬鬆捲髮最高），身體一樣大；素體是短髮，
+        # 對齊的是短髮那張
+        self.assertGreaterEqual(base_h, min(heights) * 0.97)
+        self.assertLessEqual(base_h, max(heights) * 1.03)
+        for path in _pixel_turnarounds():
+            self.assertEqual(_front_box(path)[2], base_bottom, f"{path.name} 的腳底不在同一條線")
 
     def test_ink_matches_the_big_screen_pixel_scenes(self):
         """角色的輪廓色與大螢幕像素場景的墨色是同一支。
@@ -287,24 +317,32 @@ class PixelStyleTests(unittest.TestCase):
         self.assertIn("dithering", negative)
         self.assertIn("lego minifigure", negative, "要明確否掉玩具讀法")
 
-    def test_reference_images_keep_the_sheet_friendly_frame(self):
-        """六張參考圖的畫框必須是 1023x1533 PNG。
+    def test_reference_turnarounds_are_in_the_output_layout(self):
+        """參考圖是三視圖，排法與生成的輸出相同：1536x864、剛好三個人、
+        正面｜右側｜背面、腳底同一條線。
 
-        `_build_style_reference_sheet()` 會把每張縮進 341x511（整張的 1/3）。
-        1023x1533 剛好整除，格線才不會在拼 sheet 那一步被 LANCZOS 糊掉。
-        生圖工具的原始輸出是 1344x768 橫式，直接放進來的話角色只會占到格子
-        高度的三分之一 —— 而這兩種失誤都不會報錯，只會讓 sheet 教錯東西。
-        整理工具是 scripts/pixelize_reference.py。
+        參考圖排法與輸出不同時，模型要自己想側面背面怎麼畫，比例就在那裡
+        跑掉（2026-10-15 改成三視圖的原因）。原圖排法各張不同，整理工具是
+        scripts/prepare_turnaround_reference.py。
         """
-        directory = REFERENCE_ROOT / get_style("pixel").reference_set
-        images = sorted(directory.glob("full_body_*"))
-        self.assertEqual(len(images), 6, "六張全身圖是這個風格的定義，不能少")
+        from backend.turnaround import find_figures
+
+        images = _pixel_turnarounds()
+        self.assertIn(len(images), (3, 4), "三到四張三視圖")
+        self.assertFalse(
+            list((REFERENCE_ROOT / get_style("pixel").reference_set).glob("full_body_*")),
+            "舊的單一正面圖要拿掉：兩種排法同時存在，拼 sheet 只會挑一種",
+        )
         for path in images:
             with self.subTest(image=path.name):
                 self.assertEqual(path.suffix, ".png",
                                  "失真壓縮會直接汙染 edge_density 與 local_contrast")
                 with PILImage.open(path) as image:
-                    self.assertEqual(image.size, (1023, 1533))
+                    self.assertEqual(image.size, (1536, 864))
+                    figures = find_figures(image)
+                self.assertEqual(len(figures), 3)
+                bottoms = [y1 for _, _, _, y1 in figures]
+                self.assertLessEqual(max(bottoms) - min(bottoms), 3, "三個人的腳底要在同一條線")
 
 
 if __name__ == "__main__":
