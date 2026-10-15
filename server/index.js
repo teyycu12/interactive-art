@@ -23,7 +23,7 @@ import { WebSocketServer } from 'ws';
 import { randomBytes, timingSafeEqual, X509Certificate } from 'node:crypto';
 
 import {
-  EV, ACTIONS, STAGE, SYNC_FPS, PAIR_ERRORS, MISSION_TYPES,
+  EV, ACTIONS, PAIR_MISSION_IDS, STAGE, SYNC_FPS, PAIR_ERRORS, MISSION_TYPES,
   CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS,
   SCORE_SOURCES, EVENT_INFO, GREET_OUTCOME,
 } from '../shared/protocol.js';
@@ -65,6 +65,7 @@ import {
   defaultBingoFacts, validateBingoFacts, BINGO_FACTS_ASK, BINGO_ASK_MS,
 } from '../shared/bingoFacts.js';
 import { EventLog, sessionName, sessionKind, generationIdOf } from './eventlog.js';
+import { pairRule, traitCatalog, buildRule, feasibility, GatherTracker } from './missionRules.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -948,9 +949,7 @@ function handleJoin(ws, msg) {
 
   // 補送目前的任務狀態與配對碼，讓中途進場的人立刻能參與
   send(ws, EV.PAIR_CODE, { code: pairing.register(agent.id) });
-  for (const m of missions.announcements()) {
-    send(ws, EV.MISSION_ANNOUNCE, { mission: m, progress: missions.progressOf(m.id, agent.id) });
-  }
+  for (const m of missions.actives) send(ws, EV.MISSION_ANNOUNCE, missionAnnounceFor(agent.id, m));
   // 問答進行中就補送題目。剩餘時間由伺服器算，所以晚到的人拿到的是
   // 真正剩下的秒數，而不是從頭開始的完整倒數。
   if (quiz.isActive) sendQuestion(ws);
@@ -1107,58 +1106,172 @@ function greetDone(kind, outcome, a, b) {
 // 配對任務處理
 // ─────────────────────────────────────────────────────────────
 /** 走配對流程的任務型別。COLOR_HUNT 只是多一道顏色條件，驗證模型與 PAIRING 相同 */
-const PAIR_MISSION_TYPES = new Set(['PAIRING', 'COLOR_HUNT']);
+const PAIR_MISSION_TYPES = new Set(PAIR_MISSION_IDS);
+
+/** 任務條件判定要用的場上資料（missionRules.js 的 RuleCtx） */
+const ruleCtx = {
+  avatarOf: (id) => stage.get(id)?.avatar ?? null,
+  traitOf: (id, key) => traits.traitOf(id, key),
+};
+
+/** 標籤鍵的人話名稱。目前只有進場人格會寫標籤（轉場問卷已移除） */
+function traitTitle(key) {
+  return key === PERSONA_TRAIT_KEY ? '進場人格類型' : key;
+}
+
+/** 主辦端發布任務時可選的條件：場上真的有的標籤、目前場景的集合點 */
+function missionOptions() {
+  return {
+    catalog: traitCatalog([...stage.agents.keys()], (id) => traits.traitsOf(id), traitTitle),
+    spots: topicSpots().map(({ id, label }) => ({ id, label })),
+  };
+}
+
+/**
+ * 整理任務條件並檢查做不做得完。發布與發布前的檢查走同一條路，
+ * 主辦端看到的警告才會跟按下發布時伺服器的判斷一致。
+ */
+function checkMission(msg) {
+  const spec = MISSION_TYPES[msg.missionType];
+  if (!spec) return { ok: false, reason: `未知的任務型別：${msg.missionType}` };
+  const built = buildRule(spec.id, msg, missionOptions());
+  if (!built.ok) return built;
+  const target = spec.verify === 'gather' ? 1 : Number(msg.target);
+  const check = feasibility(built.rule, {
+    target,
+    agents: [...stage.agents.keys()],
+    ctx: ruleCtx,
+    connected: (a, b) => graph.neighbors(a).has(b),
+  });
+  return { ok: true, rule: built.rule, target, check };
+}
+
+/** DIFF／SAME 任務：這個人自己在那一題的答案（手機上要寫「你是 🐯 老虎」） */
+function myTraitLabel(agentId, m) {
+  const key = m?.rule?.traitKey;
+  return key ? (traits.traitOf(agentId, key)?.label ?? null) : null;
+}
+
+/** 單一參與者收到的某個任務的公告。條件裡有「你自己是哪一類」，所以每個人一份 */
+function missionAnnounceFor(agentId, m) {
+  return {
+    mission: missions.announcement(m.id),
+    progress: missions.progressOf(m.id, agentId),
+    mine: myTraitLabel(agentId, m),
+    gather: gatherView(m),
+  };
+}
+
+// ── GATHER：湊滿人數到集合點 ─────────────────────────────────
+/**
+ * 每個進行中的 GATHER 任務一個集合判定（可以同時開兩個不同集合點）。
+ * 任務結算或伺服器重開後，於主迴圈依進行中的任務重建。
+ * @type {Map<string, GatherTracker>}
+ */
+const gatherTrackers = new Map();
+
+function gatherView(m) {
+  if (m?.type !== 'GATHER') return null;
+  const inside = gatherTrackers.get(m.id)?.lastInside ?? 0;
+  return { id: m.id, spot: m.rule.spot, label: m.rule.label, need: m.rule.teamSize, inside: Math.max(0, inside) };
+}
+
+function stepGather(now) {
+  const gathers = missions.actives.filter((m) => m.type === 'GATHER');
+  for (const id of gatherTrackers.keys()) {
+    if (!gathers.some((m) => m.id === id)) gatherTrackers.delete(id);
+  }
+  for (const m of gathers) {
+    let tracker = gatherTrackers.get(m.id);
+    if (!tracker) {
+      const prop = PROPS.find((p) => p.id === m.rule.spot);
+      if (!prop) continue;
+      tracker = new GatherTracker({ spot: prop, teamSize: m.rule.teamSize, holdMs: MISSION_TYPES.GATHER.holdMs });
+      gatherTrackers.set(m.id, tracker);
+    }
+    // 斷線中的角色還留在場上（AGENT_TTL），但那個人不在現場，不能幫別人湊數
+    const out = (id) => missions.progressOf(m.id, id) >= m.target || !!stage.get(id)?.offline;
+    const r = tracker.step(stage.agents.values(), out, now);
+    if (r.completed.length) completeGather(m, r.completed);
+    if (r.changed || r.completed.length) {
+      blastAll(EV.MISSION_GATHER, { id: m.id, inside: r.inside, need: m.rule.teamSize, done: r.completed });
+    }
+  }
+}
+
+function completeGather(m, ids) {
+  for (const id of ids) {
+    const credit = missions.credit(m.id, id, { with: ids.filter((x) => x !== id) });
+    if (!credit) continue;
+    award(id, SCORING.pairCompletion, { source: SCORE_SOURCES.GATHER, ref: m.id });
+    if (credit.count === m.target) award(id, SCORING.missionFinish, { source: SCORE_SOURCES.MISSION_DONE, ref: m.id });
+    events.log('mission_progress', { mission: m.id, agent: id, count: credit.count, target: m.target, team: ids });
+    if (credit.count === m.target) events.log('mission_complete', { mission: m.id, agent: id });
+  }
+  console.log(`[mission] ${ids.map(nameOf).join('、')} 在「${m.rule.label}」集合完成`);
+  markDirty();
+  broadcastMissionState();
+}
 
 function handlePairClaim(ws, msg) {
   // 可以同時有好幾個任務：這次配對算得進哪幾個，在提交碼的當下就決定
   const pairMissions = missions.actives.filter((m) => PAIR_MISSION_TYPES.has(m.type));
   if (!pairMissions.length) {
-    send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.NO_MISSION });
+    // 進行中的只有集合任務：那要走過去，不是輸入配對碼
+    send(ws, EV.PAIR_RESULT, {
+      ok: false, reason: missions.isActive ? PAIR_ERRORS.NOT_PAIR_MISSION : PAIR_ERRORS.NO_MISSION,
+    });
     return;
   }
-  const plain = pairMissions.filter((m) => !m.colorFamily);
-  const colored = pairMissions.filter((m) => m.colorFamily);
-  let matched = [];
-  if (colored.length) {
-    const targetAgent = stage.get(pairing.peekTarget(msg.code));
-    matched = targetAgent ? colored.filter((m) => avatarMatchesFamily(targetAgent.avatar, m.colorFamily)) : [];
-    // 只有顏色任務時，顏色條件在「提交碼」這一步就擋下，而不是等對方確認 ——
-    // 讓 A 白等 30 秒才被告知「他不是紅色的」是很差的體驗，而且會佔用雙方的 pending 名額。
-    // 同時還有一般配對任務的話，顏色不符也照樣算進一般任務，不擋。
-    //
-    // ⚠ 這條路徑必須自己處理冷卻（peekTarget 不含冷卻，見該方法的說明）：
-    //   直接 return 而不記冷卻的話，攻擊者可從 COLOR_MISMATCH ↔ NOT_FOUND
-    //   的差異無限次試碼，把 claim() 的防枚舉冷卻整套繞過去。
-    if (!plain.length) {
-      if (pairing.inCooldown(ws.agentId)) {
-        send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.COOLDOWN });
-        return;
-      }
-      if (targetAgent && !matched.length) {
-        // 顏色不符是正當使用者會遇到的情況（走向了不對的人），
-        // 因此刻意不記冷卻 —— 讓他能馬上改找正確的人。
-        send(ws, EV.PAIR_RESULT, {
-          ok: false,
-          reason: PAIR_ERRORS.COLOR_MISMATCH,
-          colorFamily: colored[0].colorFamily,
-          colorFamilies: colored.map((m) => m.colorFamily),
-        });
-        events.log('pair_claim', {
-          agent: ws.agentId, peer: targetAgent.id, ok: false,
-          reason: PAIR_ERRORS.COLOR_MISMATCH, missions: colored.map((m) => m.id),
-        });
-        return;
-      }
-      // 沒有命中「顏色不符」的情況（查無此碼、或對方符合條件）一律記冷卻，
-      // 使這條預檢路徑的成本與正常的 claim() 相同
-      if (!targetAgent) pairing.noteClaim(ws.agentId);
+  // 任務條件（顏色、類型、同類／不同類）在「提交碼」這一步就判定，而不是等對方確認 ——
+  // 讓 A 白等 30 秒才被告知「他不是紅色的」是很差的體驗，而且會佔用雙方的 pending 名額。
+  // 判定本身在 missionRules.pairRule()。這次配對只算進條件成立的那幾個任務；
+  // 有一般配對任務（沒有條件）時它永遠成立，所以不會擋人。
+  //
+  // ⚠ 這條路徑必須自己處理冷卻（peekTarget 不含冷卻，見該方法的說明）：
+  //   直接 return 而不記冷卻的話，攻擊者可從「條件不符」↔ NOT_FOUND
+  //   的差異無限次試碼，把 claim() 的防枚舉冷卻整套繞過去。
+  const allConditional = pairMissions.every((m) => m.rule && m.rule.type !== 'PAIRING');
+  const targetAgent = stage.get(pairing.peekTarget(msg.code));
+  const self = targetAgent?.id === ws.agentId;
+  const verdicts = pairMissions.map((m) => ({
+    m, why: targetAgent && !self ? pairRule(m.rule, ws.agentId, targetAgent.id, ruleCtx) : null,
+  }));
+  const matched = verdicts.filter((v) => !v.why).map((v) => v.m);
+  if (allConditional) {
+    if (pairing.inCooldown(ws.agentId)) {
+      send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.COOLDOWN });
+      return;
     }
+    if (targetAgent && !self && !matched.length) {
+      // 條件不符是正當使用者會遇到的情況（走向了不對的人），
+      // 因此刻意不記冷卻 —— 讓他能馬上改找正確的人。
+      const colored = pairMissions.filter((m) => m.colorFamily);
+      const traitKey = pairMissions.find((m) => m.rule?.traitKey)?.rule.traitKey;
+      send(ws, EV.PAIR_RESULT, {
+        ok: false,
+        reason: verdicts[0].why,
+        colorFamily: colored[0]?.colorFamily ?? undefined,
+        colorFamilies: colored.length ? colored.map((m) => m.colorFamily) : undefined,
+        // DIFF／SAME：對方是哪一類要說出來 —— 「他也是老虎」比「不符合」好懂，
+        // 而這個資訊對方本來就會當面講（條件本來就是靠問的）
+        peerLabel: traitKey ? (traits.traitOf(targetAgent.id, traitKey)?.label ?? undefined) : undefined,
+      });
+      events.log('pair_claim', {
+        agent: ws.agentId, peer: targetAgent.id, ok: false,
+        reason: verdicts[0].why, missions: pairMissions.map((m) => m.id),
+      });
+      return;
+    }
+    // 沒有命中「條件不符」的情況（查無此碼、或對方符合條件）一律記冷卻，
+    // 使這條預檢路徑的成本與正常的 claim() 相同
+    if (!targetAgent) pairing.noteClaim(ws.agentId);
   }
   const result = pairing.claim(ws.agentId, msg.code, Date.now(),
-    [...plain, ...matched].map((m) => m.id));
+    matched.map((m) => m.id));
   events.log('pair_claim', {
     agent: ws.agentId, peer: result.target, ok: result.ok,
-    reason: result.ok ? undefined : result.reason, missions: [...plain, ...matched].map((m) => m.id),
+    reason: result.ok ? undefined : result.reason, missions: matched.map((m) => m.id),
   });
   if (!result.ok) {
     send(ws, EV.PAIR_RESULT, { ok: false, reason: result.reason });
@@ -1510,11 +1623,32 @@ async function captureForHost(ws) {
 // ─────────────────────────────────────────────────────────────
 function handleHostMessage(ws, msg) {
   switch (msg.type) {
+    case EV.HOST_CHECK_MISSION: {
+      // 主辦端每改一次表單就問一次。沒帶型別時只回可選的條件（標籤、集合點）
+      const checked = msg.missionType ? checkMission(msg) : null;
+      send(ws, EV.HOST_MISSION_CHECK, {
+        seq: msg.seq ?? null,
+        options: missionOptions(),
+        check: checked?.ok ? checked.check : null,
+        error: checked && !checked.ok ? checked.reason : null,
+      });
+      break;
+    }
+
     case EV.HOST_PUBLISH_MISSION: {
+      const checked = checkMission(msg);
+      if (!checked.ok) { send(ws, EV.HOST_REJECT, { reason: checked.reason }); return; }
+      // 沒有任何一組人做得完的任務，預設不發：發下去只會讓全場找半天找不到。
+      // 主辦端確認過（force）才放行 —— 例如人還沒到齊就想先把任務掛上去。
+      if (checked.check.level === 'block' && msg.force !== true) {
+        send(ws, EV.HOST_REJECT, { reason: `現在沒有人做得完：${checked.check.summary}`, check: checked.check });
+        return;
+      }
       const result = missions.publish({
         type: msg.missionType,
-        target: msg.target,
-        colorFamily: msg.colorFamily ?? null,
+        target: checked.target,
+        colorFamily: checked.rule.colorFamily ?? null,
+        rule: checked.rule,
         durationMs: msg.durationMs ?? 0,
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
@@ -1523,14 +1657,17 @@ function handleHostMessage(ws, msg) {
       events.log('mission_publish', {
         mission: result.mission.id, type: result.mission.type, title: result.mission.title,
         target: result.mission.target, colorFamily: result.mission.colorFamily ?? undefined,
+        rule: result.mission.rule, feasible: checked.check.canFinish,
         durationMs: result.mission.durationMs || undefined, present: stage.agents.size,
         concurrent: missions.actives.length,
       });
       markDirty();
-      // 公告同時推送至手機與大螢幕。只送新的這一個：其他進行中的任務各端本來就有
-      const ann = missions.announcement(result.mission.id);
-      for (const sock of controllers.values()) send(sock, EV.MISSION_ANNOUNCE, { mission: ann, progress: 0 });
-      blast(screens, EV.MISSION_ANNOUNCE, { mission: ann });
+      // 公告同時推送至手機與大螢幕。只送新的這一個：其他進行中的任務各端本來就有。
+      // 手機每人一份：同類／不同類要寫出「你是哪一類」
+      for (const [id, sock] of controllers) send(sock, EV.MISSION_ANNOUNCE, missionAnnounceFor(id, result.mission));
+      blast(screens, EV.MISSION_ANNOUNCE, {
+        mission: missions.announcement(result.mission.id), gather: gatherView(result.mission),
+      });
       broadcastMissionState();
       break;
     }
@@ -1804,7 +1941,11 @@ wss.on('connection', (ws) => {
         }
         if (bingo.isActive) send(ws, EV.BINGO_STATE, { round: bingoPublicView() });
         // 進行中的任務（可以好幾個）：投影機中途重開時，上緣的「進行中：」一列要接回來
-        for (const m of missions.announcements()) send(ws, EV.MISSION_ANNOUNCE, { mission: m });
+        // 集合任務還要接回地上那一圈與目前人數
+        for (const m of missions.actives) {
+          send(ws, EV.MISSION_ANNOUNCE, { mission: missions.announcement(m.id), gather: gatherView(m) });
+          send(ws, EV.MISSION_STATE, { mission: missions.state(m.id, stage.agents.size) });
+        }
         for (const st of missions.states(stage.agents.size)) send(ws, EV.MISSION_STATE, { mission: st });
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
         // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
@@ -1993,6 +2134,7 @@ wss.on('connection', (ws) => {
 
       case EV.HOST_PUBLISH_MISSION:
       case EV.HOST_CLOSE_MISSION:
+      case EV.HOST_CHECK_MISSION:
       case EV.HOST_START_BINGO:
       case EV.HOST_END_BINGO:
       case EV.HOST_SET_TOPICS:
@@ -2144,6 +2286,7 @@ const loop = startTicker({
     // 限時任務到點結算，與問答同樣由主迴圈推進：setTimeout 在事件迴圈
     // 被拖慢時會延後觸發，而這裡的時間到必須與大螢幕上的倒數一致。
     for (const id of missions.expired(now)) closeMission('time', id);
+    stepGather(now);
 
     // 文字雲：有新答案時才廣播，最快每 300ms 一次。三十個人同時送出時
     // 逐則廣播等於每秒上百份整片雲，而大螢幕的動畫本來就跟不上那麼快。

@@ -737,3 +737,27 @@ td.export { white-space: nowrap; }
 .mission-list .hint { margin: 0 0 10px; }
 .mission-list .btn-danger { width: 100%; }
 #mission-live[hidden] { display: none; }
+
+/* ── 任務：條件選單與發布前檢查 ───────────────────────────
+   兩個選單疊在同一個 .field 裡（先選題、再選類型），第二個與上一個留點距離 */
+#mission-trait-value, #mission-team { margin-top: 8px; }
+#mission-spot-field > span + span { margin-top: 12px; }
+.field .hint { margin: 8px 0 0; }
+
+/* 發布前檢查。三種狀態只用邊框與文字色區分，字一律用 -ink 版本（見 UI-STYLING.md）：
+   這一行是主辦端按下發布前唯一的「現在發得出去嗎」資訊 */
+.mission-check {
+  margin: 0 0 14px; padding: 10px 12px;
+  border: 2px solid var(--line); border-radius: 12px;
+  background: var(--sunk); font-size: 13px;
+}
+.mission-check[hidden] { display: none; }
+.mission-check b { display: block; font-size: 14px; }
+.mission-check ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink-soft); }
+.mission-check ul:empty { display: none; }
+.mission-check.ok { border-color: var(--teal); }
+.mission-check.ok b { color: var(--teal-ink); }
+.mission-check.warn { border-color: var(--accent); }
+.mission-check.warn b { color: var(--accent-ink); }
+.mission-check.block { border-color: var(--danger); background: #FBEDEB; }
+.mission-check.block b { color: var(--danger); }

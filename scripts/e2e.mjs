@@ -1018,17 +1018,63 @@ await sleep(300);
   await sleep(300);
   check('COLOR_HUNT 缺少顏色時被拒絕', hostRejects.length > 0);
 
+  // 場上沒有人是紅色的：沒有人做得完的任務預設擋下，主辦端確認後（force）才發
+  hostRejects = [];
   host.send(JSON.stringify({
     type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1,
     colorFamily: 'RED',
+  }));
+  await sleep(300);
+  check('沒有人做得完的任務預設擋下，並說明原因',
+    hostRejects.at(-1)?.check?.level === 'block' && /做得完/.test(hostRejects.at(-1)?.reason ?? ''),
+    hostRejects.at(-1)?.reason);
+  host.send(JSON.stringify({
+    type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1,
+    colorFamily: 'RED', force: true,
   }));
   await sleep(400);
   check('手機收到帶顏色的任務公告',
     amy.mission?.mission?.colorFamily === 'RED',
     amy.mission?.mission?.colorFamily);
 
+  // 投影機在任務進行中重開：要接回任務橫幅（原本漏了，要等下一個任務才會出現）
+  {
+    const late = new WebSocket(URL);
+    const got = [];
+    late.on('message', (d) => got.push(JSON.parse(d).type));
+    late.on('open', () => late.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
+    await sleep(400);
+    check('大螢幕中途連上時補送進行中的任務', got.includes('MISSION_ANNOUNCE') && got.includes('MISSION_STATE'));
+    late.close();
+  }
+
   host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
   await sleep(200);
+}
+
+// ── 發布前檢查（server/missionRules.js 的 feasibility）──────────
+{
+  const replies = [];
+  host.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'HOST_MISSION_CHECK') replies.push(m);
+  });
+  host.send(JSON.stringify({ type: 'HOST_CHECK_MISSION', missionType: 'PAIRING', target: 1, seq: 41 }));
+  await sleep(300);
+  const r = replies.find((m) => m.seq === 41);
+  check('發布前檢查回報做不做得完', ['ok', 'warn', 'block'].includes(r?.check?.level) && typeof r?.check?.summary === 'string',
+    JSON.stringify(r?.check));
+  check('發布前檢查附上可選的條件（標籤、集合點）',
+    Array.isArray(r?.options?.catalog) && Array.isArray(r?.options?.spots));
+
+  host.send(JSON.stringify({ type: 'HOST_CHECK_MISSION', missionType: 'GATHER', spot: 'nowhere', teamSize: 3, seq: 42 }));
+  await sleep(300);
+  check('集合點不在目前場景時，檢查直接說明原因', /集合點/.test(replies.find((m) => m.seq === 42)?.error ?? ''));
+
+  hostRejects = [];
+  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'DIFF_TRAIT', traitKey: 'no_such_key', target: 1 }));
+  await sleep(300);
+  check('沒人答過的題目不能拿來發同類／不同類任務', hostRejects.length > 0, hostRejects.at(-1)?.reason);
 }
 
 // ── 私訊 ──────────────────────────────────────────────────
@@ -1154,7 +1200,8 @@ host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
 await sleep(400);
 check('任務結算後可再發布新任務',
   (() => {
-    host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'PAIRING', target: 2 }));
+    // force：這時場上的人彼此都配對過了，主辦端確認後照樣發（見上面 COLOR_HUNT 那段）
+    host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'PAIRING', target: 2, force: true }));
     return true;
   })());
 await sleep(400);
@@ -1167,13 +1214,15 @@ check('新任務已生效', hostStates.at(-1)?.missions?.[0]?.target === 2, `tar
   const other = COLOR_FAMILIES.find((f) => !avatarMatchesFamily(AVATAR, f.id));
   const missionsNow = () => hostStates.at(-1)?.missions ?? [];
 
-  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1, colorFamily: mine.id }));
+  // force：這時場上的人彼此都配對過了，發布前檢查會擋（見上面 COLOR_HUNT 那段）
+  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1, colorFamily: mine.id, force: true }));
   await sleep(300);
   check('可以同時發布第二個任務', missionsNow().length === 2, missionsNow().map((m) => m.title).join('、'));
   let rejectsBefore = hostRejects.length;
-  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'PAIRING', target: 3 }));
+  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'PAIRING', target: 3, force: true }));
   await sleep(200);
-  check('同樣的任務不能重複開', hostRejects.length === rejectsBefore + 1 && missionsNow().length === 2, hostRejects.at(-1)?.reason);
+  check('同樣的任務不能重複開', hostRejects.length === rejectsBefore + 1 && missionsNow().length === 2
+    && /已經在進行中/.test(hostRejects.at(-1)?.reason ?? ''), hostRejects.at(-1)?.reason);
 
   // 一次配對同時算進符合的兩個任務；配對分只給一次，達標獎勵每個任務各給一次
   const tA = joinPhone('任務甲');
@@ -1188,7 +1237,7 @@ check('新任務已生效', hostStates.at(-1)?.missions?.[0]?.target === 2, `tar
   check('配對分只給一次，達標獎勵照任務各算（20 ＋ 顏色任務達標 50）', r1?.points === 70, `points=${r1?.points}`);
 
   // 顏色不符的任務不算進去，但同時開著的一般配對任務照算
-  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1, colorFamily: other.id }));
+  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1, colorFamily: other.id, force: true }));
   await sleep(300);
   const otherId = missionsNow().find((m) => m.colorFamily === other.id)?.id;
   const tC = joinPhone('任務丙');
@@ -1325,7 +1374,7 @@ await stopServer();
     `${evs[0]?.ev} … ${evs.at(-1)?.ev}`);
   const missing = ['join', 'disconnect', 'leave', 'mode_change', 'pair_claim', 'pair_confirm',
     'mission_publish', 'mission_progress', 'mission_close', 'quiz_start', 'quiz_answer',
-    'quiz_reveal', 'treasure_start', 'survey_start', 'survey_answer', 'theme_change',
+    'quiz_reveal', 'wordcloud_start', 'wordcloud_answer', 'wordcloud_close', 'theme_change',
     'message', 'persona', 'message_report']
     .filter((k) => !kinds.has(k));
   check('前半段走過的玩法都留下事件', missing.length === 0, `缺 ${missing.join('、')}`);

@@ -39,6 +39,8 @@ export const EV = {
   HOST_STATE: 'HOST_STATE',                   // Server → Host：參與者與任務現況
   HOST_PUBLISH_MISSION: 'HOST_PUBLISH_MISSION', // Host → Server：發布任務
   HOST_CLOSE_MISSION: 'HOST_CLOSE_MISSION',   // Host → Server：結算並關閉任務
+  HOST_CHECK_MISSION: 'HOST_CHECK_MISSION',   // Host → Server：發布前檢查這個任務現在做不做得完
+  HOST_MISSION_CHECK: 'HOST_MISSION_CHECK',   // Server → Host：檢查結果＋可選的條件（場上的標籤、集合地點）
   HOST_KICK: 'HOST_KICK',                     // Host → Server：踢除參與者
   HOST_TAKE_PHOTO: 'HOST_TAKE_PHOTO',         // Host → Server：拍大合照（定位→合成）
   HOST_PHOTO_STATE: 'HOST_PHOTO_STATE',       // Server → Host：合照進度與結果
@@ -50,6 +52,7 @@ export const EV = {
   MISSION_STATE: 'MISSION_STATE',             // Server → All：進度更新
   MISSION_COMPLETE: 'MISSION_COMPLETE',       // Server → All：完成事件，觸發大螢幕回饋
   MISSION_CLOSED: 'MISSION_CLOSED',           // Server → All：任務結束
+  MISSION_GATHER: 'MISSION_GATHER',           // Server → All：GATHER 任務集合點目前站了幾個還沒完成的人
 
   // ── 配對任務 ──────────────────────────────────────────
   PAIR_CODE: 'PAIR_CODE',                     // Server → Phone：下發本輪配對碼
@@ -201,7 +204,62 @@ export const MISSION_TYPES = {
      */
     param: 'colorFamily',
   },
+  /*
+   * 以下三種的條件都取自參與者身上的標籤（目前是進場人格，見 server/traits.js）。
+   * 標籤只有本人知道、畫面上看不出來 —— 不開口問就不可能完成，這正是它們存在的理由
+   * （見 docs/notes/INTERACTION-DESIGN.md「這個機制需不需要開口講話」）。
+   * 驗證模型與 PAIRING 相同（交換配對碼＋對方確認），條件在提交碼時就先檢查，
+   * 判定邏輯在 server/missionRules.js。
+   */
+  TRAIT_HUNT: {
+    id: 'TRAIT_HUNT',
+    label: '找某一類的人配對',
+    brief: '找一位屬於指定類型的參與者，交換配對碼 —— 看不出來，得開口問',
+    defaultTarget: 2,
+    maxTarget: 10,
+    param: 'trait',       // { key, value }：主辦端從場上已有的標籤裡挑
+  },
+  DIFF_TRAIT: {
+    id: 'DIFF_TRAIT',
+    label: '找跟你不同類的人配對',
+    brief: '找一位跟你類型不同的參與者，交換配對碼 —— 跨出自己的小圈圈',
+    defaultTarget: 2,
+    maxTarget: 10,
+    param: 'traitKey',    // 比哪一題（標籤的鍵）
+  },
+  SAME_TRAIT: {
+    id: 'SAME_TRAIT',
+    label: '找跟你同類的人配對',
+    brief: '找一位跟你類型相同的參與者，交換配對碼 —— 先找到自己人',
+    defaultTarget: 1,
+    maxTarget: 10,
+    param: 'traitKey',
+  },
+  /*
+   * 湊人數集合：N 個「還沒完成」的人同時站在指定地點才算，每人完成一次。
+   * 已完成的人留在原地不會幫後來的人湊數 —— 否則第一組到了之後，之後每個人
+   * 走過去就自動完成，不必再找任何人。湊人這件事本身就得開口
+   * （「我們還差一個，你要不要過來？」）。
+   */
+  GATHER: {
+    id: 'GATHER',
+    label: '湊滿人數到指定地點',
+    brief: '找齊指定人數，一起走到大螢幕上的集合點',
+    defaultTarget: 1,
+    maxTarget: 1,
+    param: 'spot',        // 目前場景的集合點（shared/themes.js 的 spots）＋ teamSize
+    verify: 'gather',
+    teamSize: { min: 2, max: 8, default: 3 },
+    /** 人數湊齊之後要一起站滿這麼久才算，免得有人只是路過 */
+    holdMs: 2000,
+    /** 集合點的範圍：道具半徑再加這麼多（世界座標）。伺服器判定與大螢幕畫的圈共用，兩邊才對得上 */
+    reachRadius: 45,
+  },
 };
+
+/** 靠交換配對碼完成的任務型別（其餘如 GATHER 由伺服器的座標判定） */
+export const PAIR_MISSION_IDS = Object.values(MISSION_TYPES)
+  .filter((t) => (t.verify ?? 'pair') === 'pair').map((t) => t.id);
 
 /**
  * 即時問答的格式限制。
@@ -263,12 +321,14 @@ export const SCORE_SOURCES = {
   TREASURE: 'TREASURE',       // 找到寶藏（已移除的玩法）
   HARVEST: 'HARVEST',         // 採水果接力完成（已移除的玩法）
   BINGO: 'BINGO',             // 人物賓果填格、連線、全滿
+  GATHER: 'GATHER',           // GATHER 任務：湊滿人數到集合點
 };
 
 /** 積分來源的顯示文案，集中定義避免三端各寫一套 */
 export const SCORE_LABELS = {
   PAIR: '完成配對',
   MISSION_DONE: '任務達標',
+  GATHER: '集合完成',
   QUIZ: '答對問答',
   TREASURE: '找到寶藏',
   HARVEST: '採收接力',
@@ -286,6 +346,12 @@ export const PAIR_ERRORS = {
   DECLINED: 'DECLINED',
   EXPIRED: 'EXPIRED',
   COLOR_MISMATCH: 'COLOR_MISMATCH',  // COLOR_HUNT：對方身上沒有指定的顏色
+  TRAIT_MISMATCH: 'TRAIT_MISMATCH',  // TRAIT_HUNT：你們兩個都不是要找的那一類
+  NOT_DIFFERENT: 'NOT_DIFFERENT',    // DIFF_TRAIT：對方跟你是同一類
+  NOT_SAME: 'NOT_SAME',              // SAME_TRAIT：對方跟你不是同一類
+  NO_TRAIT_SELF: 'NO_TRAIT_SELF',    // DIFF／SAME：你自己還沒答過那一題，沒有可以比的
+  NO_TRAIT_PEER: 'NO_TRAIT_PEER',    // DIFF／SAME：對方還沒答過那一題
+  NOT_PAIR_MISSION: 'NOT_PAIR_MISSION', // 這個任務不是靠交換配對碼完成的（GATHER）
 };
 
 /** 社交動作白名單（技術文件 M1 §操控輸入發送規格） */

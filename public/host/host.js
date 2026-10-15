@@ -86,6 +86,12 @@ function handle(msg, key) {
 
     case EV.HOST_STATE:
       renderState(msg);
+      // 場上的人或他們的標籤變了，可選的條件與「做不做得完」也跟著變
+      requestMissionCheck({ quiet: true });
+      break;
+
+    case EV.HOST_MISSION_CHECK:
+      renderMissionCheck(msg);
       break;
 
     case EV.STAGE_THEME:
@@ -652,6 +658,7 @@ function buildColorPicker() {
     btn.addEventListener('click', () => {
       pickedColor = f.id;
       syncColorPicker();
+      requestMissionCheck();
     });
     box.append(btn);
   }
@@ -668,10 +675,101 @@ function syncBrief() {
   const t = missionTypes.find((m) => m.id === $('#mission-type').value);
   $('#mission-brief').textContent = t?.brief ?? '';
   if (t?.defaultTarget) $('#mission-target').value = t.defaultTarget;
-  // 只有需要顏色參數的型別才顯示選單，避免主辦端誤以為每種任務都要選色
+  // 只顯示這個型別用得到的條件，避免主辦端誤以為每種任務都要選色、選題
   $('#mission-color-field').hidden = t?.param !== 'colorFamily';
+  $('#mission-trait-field').hidden = t?.param !== 'trait' && t?.param !== 'traitKey';
+  $('#mission-trait-value').hidden = t?.param !== 'trait';
+  $('#mission-spot-field').hidden = t?.param !== 'spot';
+  // 集合任務每人只完成一次，目標次數沒有意義
+  $('#mission-target-field').hidden = t?.verify === 'gather';
+  if (t?.teamSize) {
+    const team = $('#mission-team');
+    team.min = t.teamSize.min; team.max = t.teamSize.max;
+    if (!team.value) team.value = t.teamSize.default;
+  }
+  renderTraitValues();
+  requestMissionCheck();
 }
 $('#mission-type').addEventListener('change', syncBrief);
+
+// ── 任務條件的選項與發布前檢查 ─────────────────────────────
+/** 伺服器回報的可選條件：場上的標籤（catalog）與目前場景的集合點（spots） */
+let missionOpts = { catalog: [], spots: [] };
+/** 最近一次對「目前表單」的檢查結果；發布時據此決定要不要先確認 */
+let missionCheck = null;
+let checkSeq = 0;
+let checkTimer = null;
+let lastQuietCheck = 0;
+
+/** 依伺服器的選項重建下拉選單，盡量保留原本選的那一個 */
+function fillSelect(sel, items, toOption) {
+  const keep = sel.value;
+  sel.replaceChildren();
+  for (const item of items) {
+    const [value, text] = toOption(item);
+    const o = document.createElement('option');
+    o.value = value;
+    o.textContent = text;   // 題目與選項可能由主辦者輸入，一律 textContent
+    sel.append(o);
+  }
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+}
+
+function renderTraitValues() {
+  const key = missionOpts.catalog.find((k) => k.key === $('#mission-trait-key').value);
+  fillSelect($('#mission-trait-value'), key?.values ?? [], (v) => [v.value, `${v.label}（${v.count} 人）`]);
+}
+
+function renderMissionOptions(opts) {
+  missionOpts = opts ?? missionOpts;
+  fillSelect($('#mission-trait-key'), missionOpts.catalog, (k) => [k.key, `${k.title}（${k.answered} 人答過）`]);
+  $('#mission-trait-empty').hidden = missionOpts.catalog.length > 0;
+  renderTraitValues();
+  fillSelect($('#mission-spot'), missionOpts.spots, (sp) => [sp.id, sp.label]);
+  $('#mission-spot-empty').hidden = missionOpts.spots.length > 0;
+}
+
+/**
+ * 請伺服器檢查目前表單。表單一變就問（稍微延遲，連續打字只問一次）；
+ * 參與者名冊每次更新也問，但最多兩秒一次 —— HOST_STATE 一秒可能來好幾則。
+ */
+function requestMissionCheck({ quiet = false } = {}) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !authed) return;
+  if (quiet && Date.now() - lastQuietCheck < 2000) return;
+  if (quiet) lastQuietCheck = Date.now();
+  clearTimeout(checkTimer);
+  checkTimer = setTimeout(() => {
+    checkSeq += 1;
+    ws.send(JSON.stringify({ ...missionStep().msg, type: EV.HOST_CHECK_MISSION, seq: checkSeq }));
+  }, quiet ? 0 : 200);
+}
+
+function renderMissionCheck(msg) {
+  renderMissionOptions(msg.options);
+  // 晚到的舊結果不要蓋掉新的（連續改表單時，回覆順序不保證）
+  if (msg.seq !== null && msg.seq !== checkSeq) return;
+  missionCheck = msg.check;
+  const box = $('#mission-check');
+  if (!msg.check && !msg.error) { box.hidden = true; return; }
+  box.hidden = false;
+  const level = msg.error ? 'block' : msg.check.level;
+  box.className = `mission-check ${level}`;
+  $('#mission-check-summary').textContent = msg.error
+    ?? `${{ ok: '✓', warn: '⚠', block: '✕' }[level]} ${msg.check.summary}`;
+  const ul = $('#mission-check-notes');
+  ul.replaceChildren();
+  for (const note of msg.check?.notes ?? []) {
+    const li = document.createElement('li');
+    li.textContent = note;
+    ul.append(li);
+  }
+}
+
+for (const id of ['#mission-target', '#mission-team']) $(id).addEventListener('input', () => requestMissionCheck());
+for (const id of ['#mission-trait-value', '#mission-spot', '#mission-duration']) {
+  $(id).addEventListener('change', () => requestMissionCheck());
+}
+$('#mission-trait-key').addEventListener('change', () => { renderTraitValues(); requestMissionCheck(); });
 
 (function buildMissionDurations() {
   const sel = $('#mission-duration');
@@ -690,16 +788,34 @@ function missionStep() {
   const durationMs = Number($('#mission-duration').value);
   const color = t?.param === 'colorFamily'
     ? COLOR_FAMILIES.find((f) => f.id === pickedColor) : null;
+  const key = $('#mission-trait-key').value;
+  const keyInfo = missionOpts.catalog.find((k) => k.key === key);
+  const value = $('#mission-trait-value').value;
+  const valueLabel = keyInfo?.values.find((v) => v.value === value)?.label;
+  const spot = $('#mission-spot').value;
+  const spotLabel = missionOpts.spots.find((sp) => sp.id === spot)?.label;
+  const teamSize = Number($('#mission-team').value);
+  // 節目單上的那一行要看得出條件：「找某一類的人・🦉 貓頭鷹」
+  const detail = {
+    colorFamily: color?.label,
+    trait: valueLabel,
+    traitKey: keyInfo?.title,
+    spot: spotLabel && `${spotLabel}・${teamSize} 人一組`,
+  }[t?.param];
   return {
     kind: 'mission',
-    label: [t?.label ?? '任務', color?.label, `每人 ${target} 次`, durationMs ? `${durationMs / 60000} 分鐘` : null]
-      .filter(Boolean).join('・'),
+    label: [t?.label ?? '任務', detail, t?.verify === 'gather' ? null : `每人 ${target} 次`,
+      durationMs ? `${durationMs / 60000} 分鐘` : null].filter(Boolean).join('・'),
     msg: {
       type: EV.HOST_PUBLISH_MISSION,
       missionType: $('#mission-type').value,
       target,
-      // 不需要顏色的型別送 null，伺服器會忽略
+      // 用不到的條件送 null，伺服器只看這個型別需要的那一項
       colorFamily: color ? pickedColor : null,
+      trait: t?.param === 'trait' && key && value ? { key, value } : null,
+      traitKey: t?.param === 'traitKey' && key ? key : null,
+      spot: t?.param === 'spot' ? spot : null,
+      teamSize: t?.param === 'spot' ? teamSize : null,
       durationMs,
     },
   };
@@ -707,7 +823,14 @@ function missionStep() {
 
 $('#btn-publish').addEventListener('click', () => {
   lastAction = 'mission';
-  ws?.send(JSON.stringify(missionStep().msg));
+  const step = missionStep().msg;
+  // 檢查結果是「沒有人做得完」時先問一句，確認了才帶 force 送出
+  // （例如人還沒到齊、想先把任務掛上去）。伺服器端同樣會擋，這裡只是先講清楚。
+  if (missionCheck?.level === 'block') {
+    if (!confirm(`現在沒有人做得完這個任務：\n${missionCheck.summary}\n\n仍要發布嗎？`)) return;
+    step.force = true;
+  }
+  ws?.send(JSON.stringify(step));
 });
 
 /**

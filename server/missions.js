@@ -22,6 +22,28 @@ import { COLOR_FAMILY_MAP } from '../shared/colorFamily.js';
 /** 同時進行中的任務上限：再多手機的任務橫幅與大螢幕的「進行中」一列就放不下了 */
 export const MAX_ACTIVE_MISSIONS = 4;
 
+/**
+ * 兩個任務「一樣」的判定依據：型別加上條件本身，不含顯示用的文字。
+ * 「找貓頭鷹」與「找老虎」可以同時開，兩個「找貓頭鷹」不行。
+ */
+function ruleKey(rule) {
+  return JSON.stringify([
+    rule.type, rule.colorFamily ?? null, rule.trait?.key ?? null, rule.trait?.value ?? null,
+    rule.traitKey ?? null, rule.spot ?? null,
+  ]);
+}
+
+function titleOf(spec, rule) {
+  switch (spec.id) {
+    case 'COLOR_HUNT': return `找${rule.label}的人配對`;
+    case 'TRAIT_HUNT': return `找「${rule.label}」的人配對`;
+    case 'GATHER': return `${rule.teamSize} 人到${rule.label}集合`;
+    case 'DIFF_TRAIT':
+    case 'SAME_TRAIT': return `${spec.label}（依${rule.title}）`;
+    default: return spec.label;
+  }
+}
+
 export class MissionBoard {
   constructor() {
     /** @type {object[]} 進行中的任務，依發布順序 */
@@ -34,7 +56,7 @@ export class MissionBoard {
    * 發布任務。
    * @returns {{ok: true, mission: object} | {ok: false, reason: string}}
    */
-  publish({ type, target, colorFamily = null, durationMs = 0, now = Date.now() }) {
+  publish({ type, target, colorFamily = null, rule = null, durationMs = 0, now = Date.now() }) {
     if (this.actives.length >= MAX_ACTIVE_MISSIONS) {
       return { ok: false, reason: `同時最多 ${MAX_ACTIVE_MISSIONS} 個任務，請先結算一個` };
     }
@@ -55,9 +77,13 @@ export class MissionBoard {
         return { ok: false, reason: `未知的顏色：${colorFamily}` };
       }
       param = colorFamily;
+    } else if (spec.param && rule?.type !== spec.id) {
+      // 標籤與集合點要對照場上現況才驗得了，由呼叫端先以 missionRules.buildRule() 整理好
+      return { ok: false, reason: '任務條件不完整' };
     }
 
-    if (this.actives.some((m) => m.type === spec.id && m.colorFamily === param)) {
+    const finalRule = rule ?? (param ? { type: spec.id, colorFamily: param, label: COLOR_FAMILY_MAP[param].label } : { type: spec.id });
+    if (this.actives.some((m) => ruleKey(m.rule ?? { type: m.type, colorFamily: m.colorFamily }) === ruleKey(finalRule))) {
       return { ok: false, reason: '同樣的任務已經在進行中' };
     }
 
@@ -71,11 +97,13 @@ export class MissionBoard {
     const mission = {
       id: `msn_${randomUUID().slice(0, 8)}`,
       type: spec.id,
-      // 顏色任務的標題帶上顏色：兩個顏色任務同時開著時，三端才分得出是哪一個
-      title: param ? `找${COLOR_FAMILY_MAP[param].label}的人配對` : spec.label,
+      // 標題帶上條件（顏色、類型、集合點）：同型別的兩個任務同時開著時，三端才分得出是哪一個
+      title: titleOf(spec, finalRule),
       brief: spec.brief,
       target: n,
       colorFamily: param,
+      /** 條件（missionRules.buildRule 的結果）。PAIRING 為 { type } */
+      rule: finalRule,
       publishedAt: now,
       closedAt: null,
       /** 限時任務的截止時間；不限時為 null */
@@ -143,6 +171,7 @@ export class MissionBoard {
     return {
       id: m.id, type: m.type, title: m.title, brief: m.brief, target: m.target,
       colorFamily: m.colorFamily ?? null,
+      rule: m.rule ?? { type: m.type },
     };
   }
 
@@ -165,10 +194,11 @@ export class MissionBoard {
     }
     return {
       id: m.id,
-      title: m.title,
       type: m.type,
+      title: m.title,
       colorFamily: m.colorFamily ?? null,
       target: m.target,
+      rule: m.rule ?? { type: m.type },
       finished,          // 已達標人數
       participating: m.progress.size,
       totalCompletions,
@@ -211,6 +241,7 @@ export class MissionBoard {
       brief: m.brief,
       target: m.target,
       colorFamily: m.colorFamily ?? null,
+      rule: m.rule ?? { type: m.type },
       publishedAt: m.publishedAt,
       closedAt: m.closedAt,
       endsAt: m.endsAt ?? null,

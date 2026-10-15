@@ -1527,6 +1527,29 @@ function showPairMsg(text, ok = false) {
   pairMsg.hidden = false;
 }
 
+/**
+ * 任務條件，寫成一句走動時記得住的話。
+ * 同類／不同類一定要先講「你是哪一類」—— 參與者多半不記得自己進場時被分成什麼。
+ */
+function missionCondition({ mission, progress, mine, inside }) {
+  const r = mission?.rule;
+  if (!r) return null;
+  switch (r.type) {
+    case 'COLOR_HUNT': return `找身上有${r.label}的人`;
+    case 'TRAIT_HUNT': return `找「${r.label}」的人（${r.title}）—— 看不出來，要開口問`;
+    case 'DIFF_TRAIT': return mine
+      ? `你是「${mine}」，去找不是的人`
+      : `你還沒答過「${r.title}」，這個任務沒辦法參加`;
+    case 'SAME_TRAIT': return mine
+      ? `你是「${mine}」，去找同樣是的人`
+      : `你還沒答過「${r.title}」，這個任務沒辦法參加`;
+    case 'GATHER': return progress >= mission.target
+      ? `你已經在「${r.label}」集合完成 ✓`
+      : `到「${r.label}」湊滿 ${r.teamSize} 人　現在 ${inside} 人（看大螢幕上的圈）`;
+    default: return null;
+  }
+}
+
 function renderMission() {
   const list = [...missions.values()];
   if (!list.length) { banner.hidden = true; return; }
@@ -1534,6 +1557,14 @@ function renderMission() {
   const single = list.length === 1 ? list[0].mission : null;
   const fracOf = ({ mission: m, progress }) => `${progress} / ${m.target}${progress >= m.target ? ' ✓' : ''}`;
   $('#mb-title').textContent = single ? single.title : `${list.length} 個任務：${list.map((x) => x.mission.title).join('・')}`;
+  // 任務條件（找哪一類、你是哪一類、到哪集合）。這是走動時唯一要記住的事，放在橫幅上
+  const conds = list.map(missionCondition).filter(Boolean);
+  $('#mb-cond').hidden = !conds.length;
+  $('#mb-cond').textContent = conds.join('\n');
+  // 只有集合任務時不交換配對碼：配對碼那一行與「點此輸入」都收起來，免得有人一直點
+  const onlyGather = list.every((x) => x.mission.rule?.type === 'GATHER');
+  $('#mb-code-row').hidden = onlyGather;
+  banner.classList.toggle('is-gather', onlyGather);
   $('#mb-code').textContent = myCode;
   $('#pair-mycode').textContent = myCode;
   $('#pair-title').textContent = single ? single.title : `${list.length} 個任務同時進行`;
@@ -1941,9 +1972,28 @@ function handleMissionMessage(msg) {
       break;
 
     case EV.MISSION_ANNOUNCE:
-      if (msg.mission?.id) missions.set(msg.mission.id, { mission: msg.mission, progress: msg.progress ?? 0 });
+      if (msg.mission?.id) {
+        missions.set(msg.mission.id, {
+          mission: msg.mission, progress: msg.progress ?? 0,
+          // DIFF／SAME：伺服器告訴這支手機「你在那一題是哪一類」；GATHER：集合點現在站了幾個人
+          mine: msg.mine ?? null, inside: msg.gather?.inside ?? 0,
+        });
+      }
       renderMission();
       break;
+
+    case EV.MISSION_GATHER: {
+      const entry = missions.get(msg.id);
+      if (!entry) break;
+      entry.inside = msg.inside;
+      if (msg.done?.includes(myId)) {
+        entry.progress = entry.mission.target;
+        showToast(`在「${entry.mission.rule?.label ?? '集合點'}」集合完成！`);
+        navigator.vibrate?.([40, 60, 40]);
+      }
+      renderMission();
+      break;
+    }
 
     case EV.MISSION_CLOSED:
       // 只收掉結算的那一個；其他進行中的任務照常
@@ -2013,6 +2063,22 @@ function setPairSubmitting(on) {
   if (on) pairSubmitTimer = setTimeout(() => setPairSubmitting(false), 35000);
 }
 
+/** 帶著對方是哪一類的失敗原因：「他也是老虎」比「不符合條件」好懂 */
+function pairFailText(msg) {
+  const r = [...missions.values()].find((x) => x.mission.rule?.type === 'TRAIT_HUNT')?.mission.rule;
+  switch (msg.reason) {
+    case PAIR_ERRORS.TRAIT_MISMATCH: return `對方不是「${r?.label ?? '指定的類型'}」，再問問別人。`;
+    case PAIR_ERRORS.NOT_DIFFERENT: return msg.peerLabel
+      ? `對方也是「${msg.peerLabel}」，要找跟你不一樣的人。` : '對方跟你是同一類，要找不一樣的人。';
+    case PAIR_ERRORS.NOT_SAME: return msg.peerLabel
+      ? `對方是「${msg.peerLabel}」，跟你不一樣，再找找。` : '對方跟你不是同一類，再找找。';
+    case PAIR_ERRORS.NO_TRAIT_SELF: return '你還沒答過這一題，這個任務沒辦法配對。';
+    case PAIR_ERRORS.NO_TRAIT_PEER: return '對方還沒答過這一題，找答過的人。';
+    case PAIR_ERRORS.NOT_PAIR_MISSION: return '這個任務不用交換配對碼，湊齊人數到集合點就好。';
+    default: return null;
+  }
+}
+
 function handlePairResult(msg) {
   if (msg.ok && msg.pending) {
     showPairMsg('已送出，等待對方確認…', true);
@@ -2033,13 +2099,17 @@ function handlePairResult(msg) {
     setTimeout(() => { if (!sheet.hidden) closeSheet(); }, 1800);
     return;
   }
-  showPairMsg(PAIR_MESSAGES[msg.reason] ?? '配對失敗，請再試一次。');
+  showPairMsg(pairFailText(msg) ?? PAIR_MESSAGES[msg.reason] ?? '配對失敗，請再試一次。');
   closeConfirmPair();
 }
 
 // ── 配對面板 ──────────────────────────────────────────────
 function openSheet() {
   if (!missions.size) return;
+  if ([...missions.values()].every((x) => x.mission.rule?.type === 'GATHER')) {
+    showToast('這個任務不用交換配對碼，湊齊人數一起走到集合點就好');
+    return;
+  }
   pairMsg.hidden = true;
   pairInput.value = '';
   sheet.hidden = false;

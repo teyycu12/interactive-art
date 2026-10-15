@@ -579,6 +579,8 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .mb-prog.done { color: var(--ok-ink); }
+.mb-cond { font-size: 13px; font-weight: 700; color: var(--ink); line-height: 1.45; white-space: pre-line; }   /* 同時好幾個任務時一個條件一行 */
+.mb-cond[hidden], .mb-code[hidden] { display: none; }
 .mb-code { font-size: 12px; font-weight: 500; color: var(--ink-soft); }
 .mb-code b {
   font-family: ui-monospace, Consolas, monospace;

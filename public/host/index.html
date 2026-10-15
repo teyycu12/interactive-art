@@ -119,7 +119,21 @@
           <span>要找的顏色</span>
           <div class="color-picker" id="mission-color" role="group" aria-label="要找的顏色"></div>
         </div>
-        <label class="field">
+        <!-- 標籤類任務的條件。選項只列場上真的有人有的（伺服器的 HOST_MISSION_CHECK） -->
+        <div class="field" id="mission-trait-field" hidden>
+          <span>依哪一題分類</span>
+          <select id="mission-trait-key" aria-label="依哪一題分類"></select>
+          <select id="mission-trait-value" aria-label="要找哪一類" hidden></select>
+          <p class="hint" id="mission-trait-empty" hidden>場上還沒有人答過進場問卷或轉場問卷，先問一題才有類型可以選。</p>
+        </div>
+        <div class="field" id="mission-spot-field" hidden>
+          <span>集合地點</span>
+          <select id="mission-spot" aria-label="集合地點"></select>
+          <p class="hint" id="mission-spot-empty" hidden>目前的場景沒有集合點，換一個有號碼牌桌的場景。</p>
+          <span>每組人數</span>
+          <input type="number" id="mission-team" min="2" max="8" value="3">
+        </div>
+        <label class="field" id="mission-target-field">
           <span>每人目標次數</span>
           <input type="number" id="mission-target" min="1" max="10" value="2">
         </label>
@@ -127,6 +141,11 @@
           <span>時間限制</span>
           <select id="mission-duration"></select>
         </label>
+        <!-- 發布前檢查：現在發下去，有幾個人做得完（server/missionRules.js 的 feasibility） -->
+        <div class="mission-check" id="mission-check" role="status" aria-live="polite" hidden>
+          <b id="mission-check-summary"></b>
+          <ul id="mission-check-notes"></ul>
+        </div>
         <div class="row-actions">
           <button class="btn-primary" id="btn-publish">發布任務</button>
           <button class="btn-ghost" data-rs-add="mission">加入節目單</button>

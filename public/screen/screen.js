@@ -10,7 +10,7 @@
  * 投影畫面上不留任何按鈕或快捷鍵。
  */
 
-import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, QUIZ_PHASE, EMOTE_GLYPH } from '/shared/protocol.js';
+import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, QUIZ_PHASE, EMOTE_GLYPH, MISSION_TYPES } from '/shared/protocol.js';
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
 import { OBSTACLES, PROPS } from '/shared/scene.js';
 import { WORDCLOUD } from '/shared/wordcloud.js';
@@ -323,8 +323,22 @@ function connect() {
         break;
 
       case EV.MISSION_ANNOUNCE:
+        if (msg.gather && msg.mission?.id) gatherStates.set(msg.mission.id, msg.gather);
         showMission(msg.mission);
         break;
+
+      case EV.MISSION_GATHER: {
+        const g = gatherStates.get(msg.id);
+        if (!g) break;
+        g.inside = msg.inside;
+        if (msg.done?.length) {
+          toast(`${msg.done.length} 人在「${g.label}」集合完成！`);
+          sfx.play('pair');
+          const t = performance.now();
+          for (const id of msg.done) pulse.set(id, t);
+        }
+        break;
+      }
 
       case EV.MISSION_STATE:
         showMissionProgress(msg.mission);
@@ -343,6 +357,7 @@ function connect() {
         break;
 
       case EV.MISSION_CLOSED:
+        if (msg.id) gatherStates.delete(msg.id); else gatherStates.clear();
         closeMissionShown(msg.id);
         toast(`任務結束　共 ${msg.totalCompletions} 次配對`);
         break;
@@ -698,6 +713,7 @@ function render(now) {
       STAGE.width * scale - m * 2, STAGE.height * scale - m * 2);
   }
 
+  drawGatherZones();
 
   // 位置內插
   for (const a of latest) {
@@ -807,6 +823,7 @@ function render(now) {
     if (a.offline) drawOffline(ctx, pos, { height });
   }
 
+  drawGatherLabels();
   drawTopicBubbles(now);
 
   if (debug) updateHud();
@@ -1030,6 +1047,76 @@ function renderQuizOptions(revealed = null, counts = null) {
     }
     wrap.append(row);
   });
+}
+
+// ── GATHER 任務的集合點 ─────────────────────────────────────
+/**
+ * 進行中的集合任務：任務 id → 集合點與人數。可以同時開兩個不同集合點。
+ * @type {Map<string, {spot: string, label: string, need: number, inside: number}>}
+ */
+const gatherStates = new Map();
+const GATHER_COLOR = '#457B9D';
+
+/**
+ * 集合點地上那一圈。範圍與伺服器判定相同（道具半徑 + MISSION_TYPES.GATHER.reachRadius），
+ * 站進圈裡才算 —— 兩邊各算各的話，會出現「畫面上明明在圈裡卻不算」。
+ */
+function drawGatherZones() {
+  for (const g of gatherStates.values()) drawGatherZone(g);
+}
+
+function drawGatherZone(gatherState) {
+  const prop = PROPS.find((p) => p.id === gatherState.spot);
+  if (!prop) return;
+  const pos = toScreen(prop);
+  const reach = (prop.r ?? 0) + MISSION_TYPES.GATHER.reachRadius;
+  const rx = Math.abs(toScreen({ x: prop.x + reach, y: prop.y }).x - pos.x);
+  const ry = Math.abs(toScreen({ x: prop.x, y: prop.y + reach }).y - pos.y) || rx * 0.6;
+  if (!(rx > 0)) return;
+  const full = gatherState.inside >= gatherState.need;
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(pos.x, pos.y, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = `${GATHER_COLOR}${full ? '4D' : '26'}`;
+  ctx.fill();
+  ctx.lineWidth = Math.max(3, rx * (full ? 0.07 : 0.055));
+  ctx.strokeStyle = GATHER_COLOR;
+  // 湊齊了換實線（同問卷集合點）：線的虛實在場地另一端也分得出來
+  if (!full) ctx.setLineDash([rx * 0.13, rx * 0.085]);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** 集合點上方的牌子：「1號桌　2 / 3 人」 */
+function drawGatherLabels() {
+  for (const g of gatherStates.values()) drawGatherLabel(g);
+}
+
+function drawGatherLabel(gatherState) {
+  const prop = PROPS.find((p) => p.id === gatherState.spot);
+  if (!prop) return;
+  const pos = toScreen(prop);
+  const h = characterHeightAt(prop);
+  const font = Math.max(12, h * 0.28);
+  const text = `${gatherState.label}　${gatherState.inside} / ${gatherState.need} 人`;
+  ctx.save();
+  ctx.font = `800 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  const pad = font * 0.6;
+  const w = ctx.measureText(text).width + pad * 2;
+  const boxH = font + pad * 1.2;
+  const x = pos.x - w / 2;
+  const y = pos.y - h * 1.15 - boxH;
+  ctx.fillStyle = GATHER_COLOR;
+  ctx.strokeStyle = 'rgba(47,42,38,.85)';
+  ctx.lineWidth = Math.max(1.5, h * 0.025);
+  roundRect(ctx, x, y, w, boxH, boxH / 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#FFFFFF';   // 白字壓 #457B9D 是 4.59:1
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, pos.x, y + boxH / 2);
+  ctx.restore();
 }
 
 
