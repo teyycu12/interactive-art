@@ -320,6 +320,8 @@
       <p class="lede">謝謝參與。你仍然會出現在活動的大合照裡。</p>
     </div>
     <div class="foot">
+      <!-- 離場時最容易想帶走東西：自己的角色與今天認識的人 -->
+      <button class="btn-ghost" id="btn-keepsake-farewell">存下今天的紀念卡</button>
       <button class="btn-primary" id="btn-rejoin">重新進場</button>
     </div>
   </section>
@@ -357,6 +359,18 @@
 <div class="score-pop" id="score-pop" hidden></div>
 
 <!-- ── 配對面板 ─────────────────────────────────────────── -->
+<!-- 今天認識的人（社交圖譜的邊：配對時經雙方確認過的） -->
+<div class="sheet" id="links-sheet" hidden>
+  <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="links-title">
+    <button class="sheet-close" id="btn-links-close" aria-label="關閉">✕</button>
+    <h2 id="links-title">今天認識的人</h2>
+    <p class="sheet-brief">這些是你在現場實際碰面、互相確認過的人。</p>
+    <ul class="links-list" id="links-list"></ul>
+    <button class="btn-primary" id="btn-keepsake">存成紀念卡</button>
+    <p class="sheet-msg" id="keepsake-msg" hidden role="status" aria-live="polite"></p>
+  </div>
+</div>
+
 <!-- 人物賓果卡。條件只有本人知道的（人格類型）就非開口問不可 -->
 <div class="sheet" id="bingo-sheet" hidden>
   <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="bingo-title">

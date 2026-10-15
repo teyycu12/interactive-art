@@ -21,6 +21,7 @@ import { COLOR_FAMILY_MAP } from '/shared/colorFamily.js';
 import { HEAT_MAP } from '/shared/heat.js';
 import { ZONE_MAP } from '/shared/scene.js';
 import { avatarImage, avatarPortrait } from '/shared/avatarSprite.js';
+import { makeKeepsake, saveKeepsake } from './keepsake.js';
 import { AvatarRenderer } from './avatarRenderer.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -1136,9 +1137,13 @@ $('#btn-give-up').addEventListener('click', () => fallbackToBuilder(null));
  * 這場活動真正在累積的是人與人的連結，但手機端進場後原本只有搖桿、
  * 任務與分數 —— 那份累積完全看不見。這裡把它變成參與者自己的收藏。
  */
+/** 最近一次的「今天認識的人」。離場之後紀念卡還要用，所以留在這裡 */
+let lastPeers = [];
+
 function renderSocialStrip(msg) {
   const strip = $('#links-strip');
   const peers = Array.isArray(msg?.peers) ? msg.peers : [];
+  lastPeers = peers;
   if (peers.length === 0) { strip.hidden = true; return; }
 
   $('#ls-count').textContent = String(msg.count ?? peers.length);
@@ -1163,10 +1168,63 @@ function renderSocialStrip(msg) {
   strip.hidden = false;
 }
 
-$('#links-strip').addEventListener('click', () => {
-  // 目前只做提示；完整名單留待有需求時再展開成面板
-  showToast('這些是你在現場實際碰面並互相確認過的人');
-});
+// ── 今天認識的人與紀念卡（public/controller/keepsake.js）────────
+const linksSheet = $('#links-sheet');
+
+function openLinks() {
+  const list = $('#links-list');
+  list.replaceChildren();
+  for (const peer of lastPeers) {
+    const li = document.createElement('li');
+    const face = Object.assign(document.createElement('span'), { className: 'lf' });
+    if (peer.avatar) avatarPortrait(peer.avatar).then((c) => face.append(c)).catch(() => {});
+    li.append(face, document.createTextNode(peer.name || '（已離場）'));
+    list.append(li);
+  }
+  $('#keepsake-msg').hidden = true;
+  linksSheet.hidden = false;
+  pushOverlay(linksSheet, { onEscape: closeLinks, restoreTo: $('#links-strip') });
+}
+
+function closeLinks() {
+  if (linksSheet.hidden) return;
+  linksSheet.hidden = true;
+  popOverlay(linksSheet);
+}
+
+/** 畫紀念卡並交給系統分享或下載。兩顆按鈕（名單面板、離場頁）共用 */
+async function saveTodayCard(btn, msgEl) {
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = '製作中…';
+  try {
+    const card = await makeKeepsake({
+      name: displayName,
+      avatar: config,
+      persona: PERSONA_RESULT_MAP[personaAnswers?.resultId] ?? null,
+      peers: lastPeers,
+    });
+    const how = await saveKeepsake(card, `紀念卡-${displayName}.png`);
+    if (how === 'downloaded') (msgEl ? showKeepsakeMsg : showToast)('已下載紀念卡。iPhone 會開新分頁，長按圖片即可儲存。');
+  } catch {
+    (msgEl ? showKeepsakeMsg : showToast)('紀念卡沒做成，請再試一次。');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+function showKeepsakeMsg(text) {
+  const el = $('#keepsake-msg');
+  el.textContent = text;
+  el.hidden = false;
+}
+
+$('#links-strip').addEventListener('click', openLinks);
+$('#btn-links-close').addEventListener('click', closeLinks);
+linksSheet.addEventListener('click', (e) => { if (e.target === linksSheet) closeLinks(); });
+$('#btn-keepsake').addEventListener('click', (e) => saveTodayCard(e.currentTarget, $('#keepsake-msg')));
+$('#btn-keepsake-farewell').addEventListener('click', (e) => saveTodayCard(e.currentTarget, null));
 
 // ── 捏臉 ──────────────────────────────────────────────────
 $('#btn-random').addEventListener('click', () => { config = randomAvatarConfig(); refresh(); });
@@ -1958,6 +2016,7 @@ $('#btn-confirm-exit').addEventListener('click', () => {
   clearInterval(bingoTimer);
   closeBingo();
   renderBingo();
+  closeLinks();
   quiz = null;
   myChoice = null;
   closeQuiz();
@@ -1984,6 +2043,8 @@ $('#btn-confirm-exit').addEventListener('click', () => {
 $('#btn-rejoin').addEventListener('click', () => {
   hasLeft = false;
   reconnectDelay = 500;
+  // 重新進場是全新的角色：上一個角色認識的人不能留在新角色的名單與紀念卡上
+  renderSocialStrip({ peers: [] });
   showScreen('entry');
   syncStartButton();
 });

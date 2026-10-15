@@ -2284,7 +2284,9 @@ function sendSocialSelf(agentId) {
   sendToAgent(agentId, EV.SOCIAL_SELF, {
     count: ids.length,
     peers: ids.map((id) => {
-      const peer = stage.agents.get(id);
+      // 已經斷線被回收的人不在 stage 上，但身分目錄還記得 —— 原本這裡只查 stage，
+      // 「今天認識的人」裡先走的那幾位會變成沒有名字的空格
+      const peer = stage.agents.get(id) ?? directory.get(id);
       return { id, name: peer?.name ?? '', avatar: peer?.avatar ?? null };
     }),
   });
