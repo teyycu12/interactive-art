@@ -1325,7 +1325,8 @@ await stopServer();
     `${evs[0]?.ev} … ${evs.at(-1)?.ev}`);
   const missing = ['join', 'disconnect', 'leave', 'mode_change', 'pair_claim', 'pair_confirm',
     'mission_publish', 'mission_progress', 'mission_close', 'quiz_start', 'quiz_answer',
-    'quiz_reveal', 'treasure_start', 'survey_start', 'survey_answer', 'theme_change']
+    'quiz_reveal', 'treasure_start', 'survey_start', 'survey_answer', 'theme_change',
+    'message', 'persona', 'message_report']
     .filter((k) => !kinds.has(k));
   check('前半段走過的玩法都留下事件', missing.length === 0, `缺 ${missing.join('、')}`);
   const joins = evs.filter((e) => e.ev === 'join');
@@ -1855,6 +1856,18 @@ check('引導端點擋下過大的影格',
     JSON.stringify({ second: second.welcomed, late: late.log }));
   for (const b of [...crowd, first, second, late]) b.w.close();
   await sleep(200);
+}
+
+
+// 重開之後才走到的玩法（賓果、候補、話題桌）也要留下事件。
+// 揮手／乾杯的成功（greet）這套 e2e 走不到：只有一個人對空氣乾杯
+{
+  const kinds = new Set(readEvents().map((e) => e.ev));
+  const missing = ['bingo_start', 'bingo_claim', 'bingo_end',
+    'waitlist_join', 'topic_card'].filter((k) => !kinds.has(k));
+  check('後半段走過的玩法也都留下事件', missing.length === 0, `缺 ${missing.join('、')}`);
+  check('私訊事件不含內容',
+    readEvents().filter((e) => e.ev === 'message').every((e) => !('text' in e)));
 }
 
 finish();

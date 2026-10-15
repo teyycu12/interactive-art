@@ -464,6 +464,7 @@ function applyPersona(agentId, raw) {
   const result = scorePersona(personaQuiz, raw.answers);
   if (!result) return;
   traits.setTrait(agentId, PERSONA_TRAIT_KEY, { value: result.id, label: `${result.emoji} ${result.name}`, at: Date.now() });
+  events.log('persona', { agent: agentId, type: result.id });
   markDirty();
 }
 
@@ -677,6 +678,7 @@ function startBingo(ws, msg) {
   } else {
     for (const id of ids) sendBingoCard(id);
   }
+  events.log('bingo_start', { players: ids.length, durationMs: durationMs ?? undefined });
   pushBingoState();
   console.log(`[bingo] 開始　${ids.length} 人${durationMs ? `　限時 ${durationMs / 60000} 分鐘` : ''}`);
 }
@@ -692,6 +694,10 @@ function endBingo(by = 'host') {
     .filter((s) => s.lines === best.lines && (best.lines > 0 || s.filled === best.filled))
     .map((s) => nameOf(s.id)).filter(Boolean);
   blastAll(EV.BINGO_ENDED, { winners, by });
+  events.log('bingo_end', {
+    by, winners: winners.length,
+    lines: top.map((t) => t.lines), filled: top.map((t) => t.filled),
+  });
   pushBingoState();
   console.log(`[bingo] 結束${by === 'time' ? '（時間到）' : ''}　${winners.join('、') || '無人得分'}`);
 }
@@ -707,9 +713,18 @@ function handleBingoClaim(ws, msg) {
   if (pairing.inCooldown(from, now)) { reply({ ok: false, reason: BINGO_ERRORS.COOLDOWN }); return; }
   pairing.noteClaim(from, now);
   const target = pairing.peekTarget(msg.code, now);
-  if (!target) { reply({ ok: false, reason: BINGO_ERRORS.NOT_FOUND }); return; }
+  if (!target) {
+    events.log('bingo_claim', { agent: from, ok: false, reason: BINGO_ERRORS.NOT_FOUND });
+    reply({ ok: false, reason: BINGO_ERRORS.NOT_FOUND });
+    return;
+  }
 
   const r = bingo.claim(from, msg.cell, target);
+  events.log('bingo_claim', {
+    agent: from, peer: target, cell: msg.cell, ok: r.ok,
+    reason: r.ok ? undefined : r.reason,
+    newLines: r.ok ? r.newLines : undefined, full: r.ok ? r.full : undefined,
+  });
   if (!r.ok) { reply({ ok: false, reason: r.reason }); return; }
   bingoFilled(from, target, r, reply);
   // 被填進去的人也要知道：「剛剛那個人原來是在玩賓果」—— 這通常就是下一段對話的開頭。
@@ -822,6 +837,7 @@ function stepTopics(now) {
       });
     }
     blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: deal.question });
+    events.log('topic_card', { spot: deal.spotId, agents: deal.ids, question: deal.question });
     console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${deal.question}」`);
   }
   for (const [a, b] of topics.seatedPairs(now)) meetUp(a, b, VIA.TOPIC);
@@ -956,6 +972,7 @@ function handleJoin(ws, msg) {
     entry: isCV ? 'photo' : (ENTRY_ROUTES.has(msg.entry) ? msg.entry : 'builder'),
     genReq: isCV ? generationIdOf(agent.avatar) : undefined,
     rejoin,
+    fromWaitlist: ws.fromWaitlist || undefined,
     present: stage.agents.size,
   });
   loggedMode.set(agent.id, agent.mode);
@@ -980,6 +997,8 @@ function enqueueAudience(ws, msg) {
   if (!audienceQueue.includes(ws)) {
     audienceQueue.push(ws);
     console.log(`[audience] 人滿，排入候補　候補 ${audienceQueue.length} 人`);
+    // 候補的人還沒有 agentId，用暱稱與排位記；進場後的 join 會帶 fromWaitlist
+    events.log('waitlist_join', { name: sanitizeName(msg.name) ?? undefined, position: audienceQueue.length });
   }
   pushAudiencePositions();
   pushHostState();
@@ -1010,6 +1029,7 @@ function promoteAudience() {
     if (w.readyState !== w.OPEN || w.role !== 'audience') continue;
     w.role = null;
     w.promoting = true;
+    w.fromWaitlist = true;
     try {
       handleJoin(w, w.pendingJoin);
     } finally {
@@ -1061,6 +1081,7 @@ function handleWave(agentId, targetId) {
     sendToAgent(agentId, EV.GREET_RESULT, { kind: 'WAVE', outcome: GREET_OUTCOME.NOBODY });
   } else if (r.kind === 'invite') {
     if (!r.silent) sendToAgent(r.to, EV.GREET_INVITE, { fromId: r.from, fromName: nameOf(r.from) });
+    events.log('greet_invite', { agent: r.from, peer: r.to, silent: r.silent || undefined });
     sendToAgent(r.from, EV.GREET_RESULT, {
       kind: 'WAVE', outcome: GREET_OUTCOME.SENT, otherName: nameOf(r.to),
     });
@@ -1074,6 +1095,8 @@ function greetDone(kind, outcome, a, b) {
   sendToAgent(a, EV.GREET_RESULT, { kind, outcome, otherName: nameOf(b) });
   sendToAgent(b, EV.GREET_RESULT, { kind, outcome, otherName: nameOf(a) });
   blast(screens, EV.STAGE_GREET, { kind, a, b });
+  // 「要對方回應才算數」的那一刻：社交圖譜之外，第二種「兩人有互動」的證據
+  events.log('greet', { kind, agent: a, peer: b });
   // 回揮的那一方此時頭上已經有揮手圖示；先揮的那一方可能已經消失了，補上
   stage.applyAction(a, kind, { force: true });
   meetUp(a, b, VIA.WAVE);
@@ -1391,6 +1414,8 @@ function handleDirectMessage(ws, msg) {
   }
   // 被封鎖時一樣回報成功（理由見 messages.js 開頭），只是不轉送
   send(ws, EV.MSG_RESULT, { ok: true, to: msg.to, ref });
+  // 只記誰寫給誰，**不記內容** —— 私訊只屬於兩個當事人（同上方不給主辦端的理由）
+  events.log('message', { agent: from, peer: msg.to, delivered: result.delivered });
   if (!result.delivered) return;
   const { message } = result;
   // 對方回過才算兩人聊過；單方面傳不算
@@ -1411,6 +1436,7 @@ function handleMessageReport(ws, msg) {
   // 名字在檢舉當下記下來：寄件人之後若被移除，主辦端仍要知道是誰
   entry.fromName = nameOf(entry.from);
   entry.toName = nameOf(entry.to);
+  events.log('message_report', { agent: entry.to, peer: entry.from });
   console.log(`[report] ${entry.toName} 檢舉了 ${entry.fromName} 的私訊`);
   pushMessageReports();
 }
