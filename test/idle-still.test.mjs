@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { stepAgent } from '../server/arbiter.js';
 import { Stage } from '../server/state.js';
 import {
-  MAX_SPEED, IDLE_MOTION, ALPHA_DECAY_MS, MAX_AGENTS, FACING_DWELL_MS,
+  MAX_SPEED, IDLE_MOTION, ALPHA_DECAY_MS, MAX_AGENTS, FACING_DWELL_MS, PERSONAL_SPACE,
 } from '../server/config.js';
 import { OBSTACLES } from '../shared/scene.js';
 import { AGENT_STATE } from '../shared/protocol.js';
@@ -36,8 +36,10 @@ describe("靜止待機（IDLE_MOTION='still'）", { skip: IDLE_MOTION !== 'still
     const stage = new Stage();
     const agents = [];
     // 用 MAX_AGENTS 而非寫死數量（見 CLAUDE.md 的人數上限說明）
+    // 排成兩列、彼此相隔超過個人空間（PERSONAL_SPACE）。原本排成一列每隔 110，
+    // 第 18 個之後的 x 超出舞台寬、被夾到邊上疊在同一點 —— 角色之間沒有碰撞時看不出來
     for (let i = 0; i < MAX_AGENTS; i++) {
-      agents.push(makeAgent(stage, { x: 700 + i * 110, y: 750 }));
+      agents.push(makeAgent(stage, { x: 600 + (i % 15) * 110, y: 520 + Math.floor(i / 15) * 230 }));
     }
 
     // 先跑一步讓剛體修正把（若有的話）與道具重疊的角色推到表面上，
@@ -275,4 +277,51 @@ describe("靜止待機（IDLE_MOTION='still'）", { skip: IDLE_MOTION !== 'still
     const dist = Math.hypot(agent.x - 1200, agent.y - 800);
     assert.ok(dist < 20, `應抵達定位，距離 ${dist.toFixed(1)}`);
   });
+
+  // ── 個人空間（config.js 的 PERSONAL_SPACE）──────────────────────
+  // 靜止模式關掉了 Boids 的分離力，角色原本可以完全疊在同一點：
+  // 30 人走向同一處，大螢幕上看起來只剩一個人。
+  test('停著的人疊在一起會被慢慢推開，推開後就停住', () => {
+    const stage = new Stage();
+    const a = makeAgent(stage, { x: 1200, y: 600 });
+    const b = makeAgent(stage, { x: 1200, y: 600 });   // 完全疊在同一點
+    const agents = [a, b];
+    let now = 1_000_000;
+    for (let i = 0; i < 90; i++) {
+      now += 33;
+      for (const x of agents) stepAgent(x, agents, 0.033, now);
+    }
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    assert.ok(d >= PERSONAL_SPACE.distance - 3, `應分開到個人空間以外，實得 ${d}`);
+    const held = { x: a.x, y: a.y };
+    for (let i = 0; i < 90; i++) {
+      now += 33;
+      for (const x of agents) stepAgent(x, agents, 0.033, now);
+    }
+    assert.ok(Math.hypot(a.x - held.x, a.y - held.y) < 1e-6, '分開之後不再漂移');
+  });
+
+  test('推搖桿的人不會被擋：是停著的人讓開', () => {
+    const stage = new Stage();
+    const walker = makeAgent(stage, { x: 1000, y: 600, inputX: 1, inputY: 0, inputIntensity: 1 });
+    const idle = makeAgent(stage, { x: 1100, y: 600 });
+    const agents = [walker, idle];
+    let now = 1_000_000;
+    for (let i = 0; i < 45; i++) {
+      now += 33;
+      walker.lastInputAt = now;
+      for (const x of agents) stepAgent(x, agents, 0.033, now);
+    }
+    assert.ok(walker.x > 1150, `推桿的人應該走得過去，停在 ${walker.x}`);
+    assert.ok(Math.abs(walker.y - 600) < 1e-6, '推桿的人不應被擠偏');
+  });
+
+  test('被挪開時回報 WALK，畫面上是走開而不是站著滑過去', () => {
+    const stage = new Stage();
+    const a = makeAgent(stage, { x: 1200, y: 600 });
+    const b = makeAgent(stage, { x: 1210, y: 600 });
+    stepAgent(a, [a, b], 0.033, 1_000_033);
+    assert.equal(a.state, AGENT_STATE.WALK);
+  });
 });
+

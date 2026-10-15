@@ -9,27 +9,54 @@
 
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { STAGE, AGENT_STATE, AGENT_MODE, AGENT_VIEW } from '../shared/protocol.js';
-import { OBSTACLES, obstacleDistance, zoneAt } from '../shared/scene.js';
+import { OBSTACLES, WALLS, obstacleDistance, zoneAt } from '../shared/scene.js';
 import { avatarLook } from '../shared/avatars.js';
 import {
   EMOTE_DURATION_MS, EMOTE_COOLDOWN_MS, AGENT_TTL_MS, INPUT_DEADZONE,
-  MAX_AGENTS,
+  MAX_AGENTS, BOUNDARY_MARGIN, PERSONAL_SPACE,
 } from './config.js';
 import { stepAgent } from './arbiter.js';
 
+/** 室內的範圍：東西兩道牆之間，再扣掉邊界回推帶 */
+const INDOOR = (() => {
+  const xs = WALLS.map((w) => w.x);
+  const pad = BOUNDARY_MARGIN * 0.5;
+  return {
+    x0: Math.min(...xs) + pad, x1: Math.max(...xs) - pad,
+    y0: BOUNDARY_MARGIN, y1: STAGE.height - BOUNDARY_MARGIN,
+  };
+})();
+
 /**
- * 挑一個不落在道具內的出生點。
+ * 挑一個出生點：不落在道具內，並且離場上其他人愈遠愈好。
+ *
  * 實測直接隨機有約 1.5% 的機率生在沙發或盆栽裡，
  * 雖然剛體修正會在第一個 tick 把角色彈出來，但觀眾看得到那一下。
+ *
+ * 原本只生在舞台正中 40%×40% 那一塊（約全圖 16%），30 人進場後就算都沒動，
+ * 也有十幾對疊在一起。現在在整個室內抽幾個候選點，取離最近的人最遠的那一個
+ * （best-candidate 取樣）—— 新來的人自然補進空位，不會跟別人疊在一起。
+ *
+ * @param {{x: number, y: number}[]} others 場上已有的角色
  */
-function spawnPoint() {
-  for (let i = 0; i < 30; i++) {
-    const x = STAGE.width * (0.3 + Math.random() * 0.4);
-    const y = STAGE.height * (0.3 + Math.random() * 0.4);
+function spawnPoint(others = []) {
+  let best = null;
+  let bestGap = -1;
+  for (let i = 0; i < 40; i++) {
+    const x = INDOOR.x0 + Math.random() * (INDOOR.x1 - INDOOR.x0);
+    const y = INDOOR.y0 + Math.random() * (INDOOR.y1 - INDOOR.y0);
     // 多留一點餘裕，避免出生就緊貼道具邊緣
-    if (!OBSTACLES.some((o) => obstacleDistance(o, x, y) < o.r + 30)) return { x, y };
+    if (OBSTACLES.some((o) => obstacleDistance(o, x, y) < o.r + 30)) continue;
+    let gap = Infinity;
+    for (const a of others) gap = Math.min(gap, Math.hypot(a.x - x, a.y - y));
+    if (gap > bestGap) {
+      best = { x, y };
+      bestGap = gap;
+    }
+    // 已經夠空了就不必再挑：人少時不要每個人都被丟到最角落
+    if (gap >= PERSONAL_SPACE.distance * 3) break;
   }
-  return { x: STAGE.width / 2, y: STAGE.height / 2 };
+  return best ?? { x: STAGE.width / 2, y: STAGE.height / 2 };
 }
 
 /** 定時安全比較，避免以回應時間差逐字元試出 token */
@@ -74,7 +101,7 @@ export class Stage {
       // 只在 CLIENT_WELCOME 中單獨回傳給該角色本人的連線。
       rejoinToken: keepToken ?? randomBytes(16).toString('hex'),
       // 位置與實際速度
-      ...spawnPoint(),
+      ...spawnPoint([...this.agents.values()]),
       vx: 0,
       vy: 0,
       // 完整朝向角（弧度）。出生時面向觀眾（π/2 = 邏輯平面 +y）：

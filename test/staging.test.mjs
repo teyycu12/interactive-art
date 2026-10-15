@@ -47,6 +47,20 @@ describe('出生點', () => {
     }
   });
 
+  test('人一多也不會生在別人身上：新來的人補進空位', () => {
+    const stage = new Stage();
+    const agents = [];
+    for (let i = 0; i < 30; i++) agents.push(stage.addAgent({ name: `T${i}`, avatar: AVATAR }));
+    let closest = Infinity;
+    for (let i = 0; i < agents.length; i++) {
+      for (let j = i + 1; j < agents.length; j++) {
+        closest = Math.min(closest, Math.hypot(agents[i].x - agents[j].x, agents[i].y - agents[j].y));
+      }
+    }
+    // 原本只生在正中 40%×40%，30 人時最近兩人常常不到 20
+    assert.ok(closest > 90, `最近的兩人只相隔 ${Math.round(closest)}`);
+  });
+
   test('出生點仍在場域範圍內', () => {
     const stage = new Stage();
     for (let i = 0; i < 200; i++) {
