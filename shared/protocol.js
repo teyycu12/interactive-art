@@ -28,6 +28,7 @@ export const EV = {
   STAGE_META: 'STAGE_META',         // 場域尺寸等靜態資訊（連線時送一次）
   STAGE_ROSTER: 'STAGE_ROSTER',     // 參與者名冊（僅在有人加入/離開時送）
   STAGE_TOPIC: 'STAGE_TOPIC',       // 話題桌發題：{spotId, question}，大螢幕在那張桌子旁顯示題目
+  STAGE_BINGO: 'STAGE_BINGO',       // 人物賓果填了一格：{ a: 填格的人, b: 被填的人 }，大螢幕在兩人之間畫一道光
   STAGE_GREET: 'STAGE_GREET',       // 兩人互相揮手或碰杯成功：{ kind, a, b }，大螢幕在兩人之間畫一道連線
   STAGE_SYNC: 'STAGE_SYNC',         // 空間狀態廣播（30 FPS）
   STAGE_LINKS: 'STAGE_LINKS',       // 社交圖譜的邊（僅在有人配對成功時送）
@@ -101,7 +102,7 @@ export const EV = {
   BINGO_RESULT: 'BINGO_RESULT',               // Server → Phone：填格結果 {ok, reason?, name?, newLines?, full?}
   BINGO_TAGGED: 'BINGO_TAGGED',               // Server → Phone：有人把你填進他的卡 {byName, label, offer: {label}|null}
   BINGO_STATE: 'BINGO_STATE',                 // Server → Screen/Host：進度排行 {round}（null 代表沒有進行中的一輪）
-  BINGO_ENDED: 'BINGO_ENDED',                 // Server → All：本輪結束 {winners}
+  BINGO_ENDED: 'BINGO_ENDED',                 // Server → All：本輪結束 {winners, by, summary: {cells, mostFound: {name, count}|null}}
   BINGO_ASK: 'BINGO_ASK',                     // Server → Phone：開局先勾自我介紹題 {facts: [{id, text}], remainingMs}
   BINGO_FACTS: 'BINGO_FACTS',                 // Phone → Server：勾了哪幾題 {yes: string[]}
   BINGO_ACCEPT: 'BINGO_ACCEPT',               // Phone → Server：收下「順便填」的邀請（BINGO_TAGGED 的 offer）
@@ -187,18 +188,8 @@ export const MISSION_TYPES = {
     defaultTarget: 2,   // 每人要完成幾次
     maxTarget: 10,
   },
-  COLOR_HUNT: {
-    id: 'COLOR_HUNT',
-    label: '找特定顏色的人配對',
-    brief: '找一位身上帶指定顏色的參與者，交換配對碼',
-    defaultTarget: 2,
-    maxTarget: 10,
-    /**
-     * 需要額外參數（顏色族）。主辦端據此多渲染一個顏色選單，
-     * 伺服器據此要求 msg.colorFamily 必填。
-     */
-    param: 'colorFamily',
-  },
+  // COLOR_HUNT（找特定顏色的人配對）已併入人物賓果的顏色格（2026-10-15）：
+  // 兩者做的是同一件事 —— 找人、要碼 —— 現場分不清「這組碼要輸在哪裡」。
 };
 
 /**
@@ -277,7 +268,6 @@ export const PAIR_ERRORS = {
   COOLDOWN: 'COOLDOWN',
   DECLINED: 'DECLINED',
   EXPIRED: 'EXPIRED',
-  COLOR_MISMATCH: 'COLOR_MISMATCH',  // COLOR_HUNT：對方身上沒有指定的顏色
 };
 
 /** 社交動作白名單（技術文件 M1 §操控輸入發送規格） */

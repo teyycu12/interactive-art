@@ -6,17 +6,22 @@
  * 每一格都得開口問人（「你是什麼類型？」「可以給我你的配對碼嗎？」），而且
  * **同一個人在一張卡上只能填一格**，逼你去認識不同的人。
  *
- * 條件全部取自系統本來就有的資料，不用另外問：
+ * 條件來源：
+ *   - 開局勾的自我介紹（只有本人知道 —— 非開口問不可）
  *   - 服裝顏色（大螢幕上看得到，但還是得過去要碼）
- *   - 進場人格類型（只有本人知道 —— 非開口問不可）
- *   - 轉場問卷的答案
+ *   - 進場人格類型（只有本人知道）
+ *   - 一起做一件事（乾杯、揮手、同桌，做到自動填上）
  *   - 「還不認識的人」（社交圖譜裡沒有連線）：條件不夠湊滿 9 格時補位，永遠湊得出來
  *
  * ── 防枚舉 ──
  * 填格要輸入對方的配對碼（4 位數），伺服器驗證對方符合條件。這等於一個
  * 「碼 → 這人是否符合」的查詢，沒有冷卻就能窮舉。呼叫端必須每一次嘗試都記
- * 配對的冷卻（pairing.noteClaim），不論成功失敗 —— 見 INTERACTION-DESIGN
- * 「顏色預檢不可成為枚舉管道」。本模組只管規則。
+ * 冷卻（noteClaim），不論成功失敗 —— 見 INTERACTION-DESIGN
+ * 「顏色預檢不可成為枚舉管道」。
+ *
+ * 冷卻是賓果自己的一份，不跟配對共用（原本共用：賓果輸錯一次，配對也要跟著等，
+ * 兩個一起玩時會覺得卡住）。分開之後窮舉速度最多變兩倍 —— 每 3 秒兩次，
+ * 碼每分鐘換一次，仍然遠遠來不及掃完 10000 組。
  *
  * ── 開局先問幾句自我介紹（shared/bingoFacts.js）──
  * 有自我介紹題時，一輪分兩段：先 `ask`（每人勾自己符合的，最多 askMs），
@@ -64,7 +69,20 @@ export const BINGO_LINES = (() => {
 /** 補位條件的 id。判定由呼叫端注入（需要社交圖譜） */
 export const STRANGER = 'STRANGER';
 
-/** 一張卡上同一類格子（顏色、類型、問卷、自我介紹）最多幾格 */
+/**
+ * 「一起做一件事」的格子：不輸碼，兩個人真的一起做到時由伺服器自動填上（autoFill）。
+ *
+ * 原本每一格都是同一個動詞 —— 找人、要碼、輸碼。這幾格換成「一起動起來」：
+ * 碰杯要兩人同時按、揮手要對方回揮、同桌要一起坐滿一分鐘（這三件事伺服器本來就會判定）。
+ * 輸碼填不進去（ACT_ONLY）：那等於不必真的做那件事。
+ */
+export const ACT_CONDS = [
+  { id: 'act:cheers', label: '跟你一起乾杯的人' },
+  { id: 'act:wave', label: '跟你互相揮手的人' },
+  { id: 'act:topic', label: '跟你在號碼牌桌同桌聊一分鐘的人' },
+];
+
+/** 一張卡上同一類格子（顏色、類型、問卷、自我介紹、一起做）最多幾格 */
 export const KIND_CAP = 3;
 
 /** 被找的人「順便填」的邀請多久內有效 */
@@ -84,6 +102,7 @@ export const BINGO_ERRORS = {
   NOT_FOUND: 'NOT_FOUND',  // 查無此碼（由呼叫端判定）
   COOLDOWN: 'COOLDOWN',    // 太快（由呼叫端判定）
   NO_OFFER: 'NO_OFFER',    // 「順便填」的邀請已過期或不存在
+  ACT_ONLY: 'ACT_ONLY',    // 「一起做一件事」的格子不能輸碼，要真的一起做到
 };
 
 /**
@@ -92,7 +111,11 @@ export const BINGO_ERRORS = {
  */
 
 export class BingoRound {
-  constructor() {
+  /** @param {{claimCooldownMs?: number}} [opts] */
+  constructor({ claimCooldownMs = 3000 } = {}) {
+    this.claimCooldownMs = claimCooldownMs;
+    /** 每人上次輸碼的時間。跨輪保留：結束再開一輪不該把冷卻歸零 */
+    this.lastClaimAt = new Map();
     /** @type {null | {id: string, startedAt: number, endsAt: number|null,
      *   cards: Map<string, {cells: {cond: Condition, by: string|null}[], lines: number}>,
      *   pool: Condition[]}} */
@@ -100,6 +123,16 @@ export class BingoRound {
   }
 
   get isActive() { return this.round !== null; }
+
+  /** 輸碼冷卻中嗎 */
+  inCooldown(agentId, now = Date.now()) {
+    return now - (this.lastClaimAt.get(agentId) ?? -Infinity) < this.claimCooldownMs;
+  }
+
+  /** 記一次輸碼。不論成功失敗都要記（防枚舉） */
+  noteClaim(agentId, now = Date.now()) {
+    this.lastClaimAt.set(agentId, now);
+  }
 
   /**
    * 開一輪。
@@ -230,6 +263,7 @@ export class BingoRound {
     }
     const cell = card.cells[cellIndex];
     if (cell.by) return { ok: false, reason: BINGO_ERRORS.FILLED };
+    if (kindOf(cell.cond.id) === 'act') return { ok: false, reason: BINGO_ERRORS.ACT_ONLY };
     if (targetId === fromId) return { ok: false, reason: BINGO_ERRORS.SELF };
     if (this.#uses(card, targetId) >= this.maxUses()) return { ok: false, reason: BINGO_ERRORS.USED };
     if (!this.test(targetId, cell.cond.id, fromId)) return { ok: false, reason: BINGO_ERRORS.MISMATCH };
@@ -239,6 +273,25 @@ export class BingoRound {
     const newLines = lines - card.lines;
     card.lines = lines;
     return { ok: true, cell: cellIndex, newLines, full: card.cells.every((c) => c.by) };
+  }
+
+  /**
+   * 兩人一起做到了某件事（ACT_CONDS）：agentId 卡上那一格還空著就填上 other。
+   * 照一般的「同一人最多幾格」限制；不成立時回 null（不是錯誤，只是不用填）。
+   * @returns {{ok: true, cell: number, newLines: number, full: boolean}|null}
+   */
+  autoFill(agentId, condId, otherId) {
+    const r = this.round;
+    if (!r || r.phase !== 'play' || agentId === otherId) return null;
+    const card = r.cards.get(agentId);
+    if (!card || this.#uses(card, otherId) >= this.maxUses()) return null;
+    const i = card.cells.findIndex((c) => !c.by && c.cond.id === condId);
+    if (i < 0) return null;
+    card.cells[i].by = otherId;
+    const lines = BINGO_LINES.filter((l) => l.every((j) => card.cells[j].by)).length;
+    const newLines = lines - card.lines;
+    card.lines = lines;
+    return { ok: true, cell: i, newLines, full: card.cells.every((c) => c.by) };
   }
 
   /**
@@ -266,7 +319,7 @@ export class BingoRound {
     if (!card || this.#uses(card, fromId) >= this.maxUses()) return null;
     const open = card.cells
       .map((c, i) => ({ c, i }))
-      .filter(({ c }) => !c.by && this.test(fromId, c.cond.id, targetId));
+      .filter(({ c }) => !c.by && kindOf(c.cond.id) !== 'act' && this.test(fromId, c.cond.id, targetId));
     if (!open.length) return null;
     const completes = (i) => BINGO_LINES.some((l) => l.includes(i) && l.every((j) => j === i || card.cells[j].by));
     const best = open.find(({ i }) => completes(i)) ?? open[0];
@@ -296,6 +349,24 @@ export class BingoRound {
     return [...this.round.cards].map(([id, c]) => ({
       id, lines: c.lines, filled: c.cells.filter((x) => x.by).length,
     })).sort((a, b) => b.lines - a.lines || b.filled - a.filled);
+  }
+
+  /**
+   * 結算用的全場統計：一共填了幾格、誰被最多人找到（同分取先出現的）。
+   * 「被最多人找到」是大螢幕收尾時唸的 —— 比只唸連線最多的人更像這個遊戲的意義。
+   * @returns {{cells: number, mostFound: {id: string, count: number}|null}}
+   */
+  summary() {
+    const found = new Map();
+    let cells = 0;
+    for (const card of this.round?.cards.values() ?? []) {
+      // 同一張卡上被填兩格（人少時）只算被這個人找到一次
+      for (const id of new Set(card.cells.map((c) => c.by).filter(Boolean))) found.set(id, (found.get(id) ?? 0) + 1);
+      cells += card.cells.filter((c) => c.by).length;
+    }
+    let mostFound = null;
+    for (const [id, count] of found) if (!mostFound || count > mostFound.count) mostFound = { id, count };
+    return { cells, mostFound };
   }
 
   shouldAutoEnd(now = Date.now()) {

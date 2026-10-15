@@ -1,5 +1,5 @@
 /**
- * COLOR_HUNT 任務測試
+ * 色族判定測試（原 COLOR_HUNT 任務測試；該任務已併入人物賓果的顏色格）
  *
  * 執行：node --test
  *
@@ -92,40 +92,28 @@ describe('角色顏色比對', () => {
   });
 });
 
-describe('COLOR_HUNT 任務發布', () => {
-  test('缺少顏色參數時拒絕發布', () => {
+describe('COLOR_HUNT 已停用（併入人物賓果的顏色格）', () => {
+  test('發布時被當成未知型別拒絕', () => {
     const b = new MissionBoard();
-    assert.equal(b.publish({ type: 'COLOR_HUNT', target: 2 }).ok, false);
+    assert.equal(b.publish({ type: 'COLOR_HUNT', target: 2, colorFamily: 'RED' }).ok, false);
     assert.equal(b.isActive, false);
   });
 
-  test('顏色不在白名單時拒絕發布', () => {
-    const b = new MissionBoard();
-    assert.equal(b.publish({ type: 'COLOR_HUNT', target: 2, colorFamily: 'PINK' }).ok, false);
-  });
-
-  test('合法發布後顏色會出現在公告中', () => {
-    // 手機端靠公告裡的 colorFamily 顯示「要找什麼顏色」，
-    // 漏掉這個欄位參與者就不知道任務目標。
-    const b = new MissionBoard();
-    const r = b.publish({ type: 'COLOR_HUNT', target: 2, colorFamily: 'RED' });
-    assert.ok(r.ok);
-    assert.equal(b.announcement().colorFamily, 'RED');
-    assert.equal(b.export().active.colorFamily, 'RED');
-  });
-
-  test('PAIRING 不受影響，且不會被塞進顏色', () => {
-    const b = new MissionBoard();
-    const r = b.publish({ type: 'PAIRING', target: 2 });
-    assert.ok(r.ok);
-    assert.equal(b.announcement().colorFamily, null);
+  test('舊快照裡進行中的 COLOR_HUNT 在還原時結算，紀錄留在歷史', () => {
+    const b = new MissionBoard().hydrate({
+      active: { id: 'msn_old', type: 'COLOR_HUNT', title: '找特定顏色的人配對', target: 2, progress: {}, events: [] },
+      history: [],
+    });
+    assert.equal(b.isActive, false);
+    assert.equal(b.history.at(-1).id, 'msn_old');
+    assert.ok(b.history.at(-1).closedAt > 0);
   });
 });
 
 describe('peekTarget 不產生副作用', () => {
   test('查詢不會吃掉 claim 冷卻', () => {
-    // 顏色不符的路徑會先 peek 再拒絕。若 peek 動到冷卻計時，
-    // 使用者馬上改找正確的人時會被冷卻擋下，看起來像系統壞掉。
+    // 賓果填格先 peek 查對方是誰（冷卻由賓果自己記）。若 peek 動到配對的冷卻，
+    // 玩賓果的人接著去配對時會被莫名擋下。
     const graph = new SocialGraph();
     const p = new PairingSession(graph);
     const codeA = p.register('a');
@@ -142,29 +130,5 @@ describe('peekTarget 不產生副作用', () => {
     for (const bad of ['', 'abcd', null, '123456789']) {
       assert.equal(p.peekTarget(bad), null);
     }
-  });
-});
-
-describe('顏色預檢不可成為枚舉管道', () => {
-  test('查無此碼會記冷卻，無法無限次試', () => {
-    // peekTarget 本身沒有冷卻。若「顏色不符」那條路徑直接 return
-    // 而不記冷卻，攻擊者就能從 COLOR_MISMATCH ↔ NOT_FOUND 的差異
-    // 無限次試碼，把 claim() 的防枚舉保護整套繞過去
-    // （4 位碼只有 10000 組，實測 15ms 可試完）。
-    const p = new PairingSession(new SocialGraph());
-    p.register('victim');
-    assert.equal(p.inCooldown('attacker'), false);
-    p.noteClaim('attacker');
-    assert.equal(p.inCooldown('attacker'), true);
-  });
-
-  test('顏色不符不記冷卻，正當使用者可馬上改找別人', () => {
-    // 走向了不對的人是正當使用者天天會遇到的事，不該罰他
-    const p = new PairingSession(new SocialGraph());
-    const code = p.register('someone');
-    assert.equal(p.inCooldown('me'), false);
-    // 顏色不符的分支不呼叫 noteClaim
-    assert.equal(p.peekTarget(code), 'someone');
-    assert.equal(p.inCooldown('me'), false);
   });
 });

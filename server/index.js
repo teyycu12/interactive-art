@@ -32,7 +32,7 @@ import { avatarMatchesFamily, COLOR_FAMILIES } from '../shared/colorFamily.js';
 import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
-  PERSISTENCE, VISION_HOST, VISION_PORT, GREET,
+  PERSISTENCE, VISION_HOST, VISION_PORT, GREET, PAIRING,
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
 import { RateLimiter } from './ratelimit.js';
@@ -44,7 +44,7 @@ import { Encounters } from './encounters.js';
 import { VIA } from '../shared/encounters.js';
 import { PairingSession } from './pairing.js';
 import { Greetings } from './greetings.js';
-import { BingoRound, BINGO_ERRORS, STRANGER } from './bingo.js';
+import { BingoRound, BINGO_ERRORS, STRANGER, ACT_CONDS } from './bingo.js';
 import { TopicTables } from './topics.js';
 import { TOPIC_QUESTIONS, TOPIC_TABLES } from '../shared/topics.js';
 import { PROPS } from '../shared/scene.js';
@@ -71,7 +71,7 @@ const PORT = Number(process.env.PORT) || 3000;
 
 const stage = new Stage();
 const missions = new MissionBoard();
-const bingo = new BingoRound();
+const bingo = new BingoRound({ claimCooldownMs: PAIRING.claimCooldownMs });
 const topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
@@ -563,6 +563,9 @@ function bingoPool() {
     pool.push({ id: `persona:${t.id}`, label: `進場問卷是${t.emoji}${t.name}的人` });
   }
   // 轉場問卷已移除，標籤條件只剩進場人格問卷的類型
+  // 「一起做一件事」：同桌那一格只在話題桌開著、這個場景有號碼牌桌時才放
+  const tables = topics.enabled && topicSpots().length > 0;
+  for (const c of ACT_CONDS) if (c.id !== 'act:topic' || tables) pool.push(c);
   return pool;
 }
 
@@ -575,6 +578,8 @@ function bingoTest(who, condId, from) {
   if (kind === 'color') return avatarMatchesFamily(agent.avatar, a);
   if (kind === 'persona') return traits.traitOf(who, PERSONA_TRAIT_KEY)?.value === a;
   if (kind === 'fact') return bingo.hasFact(who, a);
+  // 任何人都可能跟你一起做到；真正的判定在發生的那一刻（bingoAct）
+  if (kind === 'act') return who !== from;
   return false;
 }
 
@@ -585,7 +590,10 @@ function sendBingoCard(agentId) {
   const r = bingo.round;
   sendToAgent(agentId, EV.BINGO_CARD, {
     card: {
-      cells: card.cells.map((c) => ({ label: c.cond.label, filled: !!c.by, name: c.by ? nameOf(c.by) : null })),
+      // auto：「一起做一件事」的格子，手機上不給輸碼，提示要一起做到
+      cells: card.cells.map((c) => ({
+        label: c.cond.label, filled: !!c.by, name: c.by ? nameOf(c.by) : null, auto: c.cond.id.startsWith('act:'),
+      })),
       lines: card.lines,
     },
     remainingMs: r.endsAt ? Math.max(0, r.endsAt - Date.now()) : null,
@@ -631,6 +639,7 @@ function startBingo(ws, msg) {
 function endBingo(by = 'host') {
   if (!bingo.isActive) return;
   const top = bingo.standings();
+  const sum = bingo.summary();
   bingo.end();
   // 公布：連最多線的人（同分並列）。沒人連成線就公布填最多格的；
   // 一格都沒人填就沒有贏家 —— 否則全場 0 格同分，每個人都會被唸成贏家
@@ -638,7 +647,15 @@ function endBingo(by = 'host') {
   const winners = !best || (best.lines === 0 && best.filled === 0) ? [] : top
     .filter((s) => s.lines === best.lines && (best.lines > 0 || s.filled === best.filled))
     .map((s) => nameOf(s.id)).filter(Boolean);
-  blastAll(EV.BINGO_ENDED, { winners, by });
+  blastAll(EV.BINGO_ENDED, {
+    winners, by,
+    // 大螢幕的收尾：全場填了幾格、誰被最多人找到
+    summary: {
+      cells: sum.cells,
+      // 只被一個人找到不值得唸（而且一定一堆人同分）：至少兩個人來找才公布
+      mostFound: sum.mostFound?.count >= 2 ? { name: nameOf(sum.mostFound.id), count: sum.mostFound.count } : null,
+    },
+  });
   pushBingoState();
   console.log(`[bingo] 結束${by === 'time' ? '（時間到）' : ''}　${winners.join('、') || '無人得分'}`);
 }
@@ -650,9 +667,10 @@ function handleBingoClaim(ws, msg) {
   // 防枚舉：每一次嘗試都記配對的冷卻，不論成功失敗。
   // 否則 MISMATCH ↔ NOT_FOUND 的差異可以拿來窮舉出場上每個人的碼
   // （見 INTERACTION-DESIGN「顏色預檢不可成為枚舉管道」）
+  // 冷卻是賓果自己的一份，不跟配對共用（理由見 bingo.js 檔頭）
   const now = Date.now();
-  if (pairing.inCooldown(from, now)) { reply({ ok: false, reason: BINGO_ERRORS.COOLDOWN }); return; }
-  pairing.noteClaim(from, now);
+  if (bingo.inCooldown(from, now)) { reply({ ok: false, reason: BINGO_ERRORS.COOLDOWN }); return; }
+  bingo.noteClaim(from, now);
   const target = pairing.peekTarget(msg.code, now);
   if (!target) { reply({ ok: false, reason: BINGO_ERRORS.NOT_FOUND }); return; }
 
@@ -686,11 +704,25 @@ function bingoFilled(from, target, r, reply) {
   const points = SCORING.bingoCell + r.newLines * SCORING.bingoLine + (r.full ? SCORING.bingoFull : 0);
   award(from, points, { source: SCORE_SOURCES.BINGO });
   reply({ ok: true, name: nameOf(target), newLines: r.newLines, full: r.full });
+  // 「完成必須在共享畫布上被看見」：大螢幕在兩人之間畫一道光，跟揮手、配對同一套
+  blast(screens, EV.STAGE_BINGO, { a: from, b: target });
   sendBingoCard(from);
   // 只記在填格的這一方（理由見 encounters.js）。對方收下「順便填」時，他那邊也會記一筆
   if (encounters.noteOneWay(from, target, VIA.BINGO)) sendSocialSelf(from);
   pushBingoState();
   markDirty();
+}
+
+/**
+ * 兩人一起做到了某件事：雙方卡上「一起做」的那一格自動填上。
+ * 由揮手／碰杯成功（greetDone）與同桌滿一分鐘（stepTopics）呼叫。
+ */
+function bingoAct(a, b, condId) {
+  if (!bingo.isActive) return;
+  for (const [me, other] of [[a, b], [b, a]]) {
+    const r = bingo.autoFill(me, condId, other);
+    if (r) bingoFilled(me, other, r, (payload) => sendToAgent(me, EV.BINGO_RESULT, { ...payload, auto: true }));
+  }
 }
 
 /** 勾選自我介紹題 */
@@ -771,7 +803,10 @@ function stepTopics(now) {
     blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: deal.question });
     console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${deal.question}」`);
   }
-  for (const [a, b] of topics.seatedPairs(now)) meetUp(a, b, VIA.TOPIC);
+  for (const [a, b] of topics.seatedPairs(now)) {
+    meetUp(a, b, VIA.TOPIC);
+    bingoAct(a, b, 'act:topic');
+  }
 }
 
 function handleJoin(ws, msg) {
@@ -1026,47 +1061,17 @@ function greetDone(kind, outcome, a, b) {
   // 回揮的那一方此時頭上已經有揮手圖示；先揮的那一方可能已經消失了，補上
   stage.applyAction(a, kind, { force: true });
   meetUp(a, b, kind === 'WAVE' ? VIA.WAVE : VIA.CHEERS);
+  bingoAct(a, b, kind === 'WAVE' ? 'act:wave' : 'act:cheers');
   console.log(`[greet] ${nameOf(a)} × ${nameOf(b)}　${kind === 'WAVE' ? '互相揮手' : '碰杯'}`);
 }
 
 // ─────────────────────────────────────────────────────────────
 // 配對任務處理
 // ─────────────────────────────────────────────────────────────
-/** 走配對流程的任務型別。COLOR_HUNT 只是多一道顏色條件，驗證模型與 PAIRING 相同 */
-const PAIR_MISSION_TYPES = new Set(['PAIRING', 'COLOR_HUNT']);
-
 function handlePairClaim(ws, msg) {
-  if (!missions.isActive || !PAIR_MISSION_TYPES.has(missions.active.type)) {
+  if (!missions.isActive || missions.active.type !== 'PAIRING') {
     send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.NO_MISSION });
     return;
-  }
-
-  // 顏色條件在「提交碼」這一步就擋下，而不是等對方確認 ——
-  // 讓 A 白等 30 秒才被告知「他不是紅色的」是很差的體驗，
-  // 而且會佔用雙方的 pending 名額。
-  //
-  // ⚠ 這條路徑必須自己處理冷卻（peekTarget 不含冷卻，見該方法的說明）：
-  //   直接 return 而不記冷卻的話，攻擊者可從 COLOR_MISMATCH ↔ NOT_FOUND
-  //   的差異無限次試碼，把 claim() 的防枚舉冷卻整套繞過去。
-  if (missions.active.colorFamily) {
-    if (pairing.inCooldown(ws.agentId)) {
-      send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.COOLDOWN });
-      return;
-    }
-    const targetAgent = stage.get(pairing.peekTarget(msg.code));
-    if (targetAgent && !avatarMatchesFamily(targetAgent.avatar, missions.active.colorFamily)) {
-      // 顏色不符是正當使用者會遇到的情況（走向了不對的人），
-      // 因此刻意不記冷卻 —— 讓他能馬上改找正確的人。
-      send(ws, EV.PAIR_RESULT, {
-        ok: false,
-        reason: PAIR_ERRORS.COLOR_MISMATCH,
-        colorFamily: missions.active.colorFamily,
-      });
-      return;
-    }
-    // 沒有命中「顏色不符」的情況（查無此碼、或對方符合條件）一律記冷卻，
-    // 使這條預檢路徑的成本與正常的 claim() 相同
-    if (!targetAgent) pairing.noteClaim(ws.agentId);
   }
   const result = pairing.claim(ws.agentId, msg.code, Date.now(),
     missions.active?.id ?? null);
@@ -1430,7 +1435,6 @@ function handleHostMessage(ws, msg) {
       const result = missions.publish({
         type: msg.missionType,
         target: msg.target,
-        colorFamily: msg.colorFamily ?? null,
         durationMs: msg.durationMs ?? 0,
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }

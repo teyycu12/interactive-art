@@ -15,7 +15,6 @@
 
 import { randomUUID } from 'node:crypto';
 import { MISSION_TYPES, MISSION_DURATIONS } from '../shared/protocol.js';
-import { COLOR_FAMILY_MAP } from '../shared/colorFamily.js';
 
 export class MissionBoard {
   constructor() {
@@ -29,7 +28,7 @@ export class MissionBoard {
    * 發布任務。
    * @returns {{ok: true, mission: object} | {ok: false, reason: string}}
    */
-  publish({ type, target, colorFamily = null, durationMs = 0, now = Date.now() }) {
+  publish({ type, target, durationMs = 0, now = Date.now() }) {
     if (this.active) return { ok: false, reason: '已有進行中的任務，請先結算' };
 
     const spec = MISSION_TYPES[type];
@@ -38,16 +37,6 @@ export class MissionBoard {
     const n = Number(target);
     if (!Number.isInteger(n) || n < 1 || n > spec.maxTarget) {
       return { ok: false, reason: `目標次數須為 1 至 ${spec.maxTarget} 的整數` };
-    }
-
-    // 帶額外參數的任務型別在這裡驗證。白名單比對而非只檢查非空 ——
-    // 這個值會被送到三端顯示，且是配對判定的依據。
-    let param = null;
-    if (spec.param === 'colorFamily') {
-      if (!COLOR_FAMILY_MAP[colorFamily]) {
-        return { ok: false, reason: `未知的顏色：${colorFamily}` };
-      }
-      param = colorFamily;
     }
 
     // 限時由伺服器計時而非主辦端：主辦端的分頁可能被關掉或休眠，
@@ -63,7 +52,6 @@ export class MissionBoard {
       title: spec.label,
       brief: spec.brief,
       target: n,
-      colorFamily: param,
       publishedAt: now,
       closedAt: null,
       /** 限時任務的截止時間；不限時為 null */
@@ -118,7 +106,6 @@ export class MissionBoard {
     const m = this.active;
     return {
       id: m.id, type: m.type, title: m.title, brief: m.brief, target: m.target,
-      colorFamily: m.colorFamily ?? null,
     };
   }
 
@@ -164,6 +151,12 @@ export class MissionBoard {
 
     this.active = revive(dump.active);
     this.history = (dump.history ?? []).map(revive).filter(Boolean);
+    // 已停用的任務型別（例如併入賓果的 COLOR_HUNT）不能接著跑：手機上會掛著一個
+    // 輸不了碼的任務。當作在重開那一刻結算，紀錄照樣留在歷史裡
+    if (this.active && !MISSION_TYPES[this.active.type]) {
+      this.history.push({ ...this.active, closedAt: this.active.closedAt ?? Date.now() });
+      this.active = null;
+    }
     return this;
   }
 
@@ -175,7 +168,6 @@ export class MissionBoard {
       title: m.title,
       brief: m.brief,
       target: m.target,
-      colorFamily: m.colorFamily ?? null,
       publishedAt: m.publishedAt,
       closedAt: m.closedAt,
       endsAt: m.endsAt ?? null,

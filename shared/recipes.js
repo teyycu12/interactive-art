@@ -29,7 +29,7 @@ const wordcloud = (question) => {
 const pairing = (target, minutes) => ({
   kind: 'mission',
   label: `找一個人配對・每人 ${target} 次・${minutes} 分鐘`,
-  msg: { type: EV.HOST_PUBLISH_MISSION, missionType: 'PAIRING', target, colorFamily: null, durationMs: minutes * 60000 },
+  msg: { type: EV.HOST_PUBLISH_MISSION, missionType: 'PAIRING', target, durationMs: minutes * 60000 },
 });
 const bingo = (minutes) => ({
   kind: 'bingo',

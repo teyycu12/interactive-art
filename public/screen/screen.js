@@ -41,6 +41,9 @@ let debug = false;
  * 放在檔頭：syncBanners 會讀它，宣告若排在後面，載入途中一被呼叫就是 TDZ 錯誤、整個大螢幕白掉。
  */
 let bingoShown = null;
+/** 結束後的結算還在顯示（見 showBingoFinale） */
+let bingoFinale = false;
+const BINGO_LABEL = '人物賓果 · 找符合條件的人，問他的配對碼';
 let bingoDeadline = null;
 
 /** 短音效（public/screen/sfx.js）。開關由主辦端控制，預設開 */
@@ -182,6 +185,8 @@ let links = [];
 const sparks = [];
 /** 揮手、碰杯的光束色（陶土橘）。與配對的青綠分開：一眼分得出「認識了」與「打了招呼」 */
 const GREET_SPARK_RGB = '217, 116, 74';
+/** 賓果填格的光束色（號碼牌黃）。跟揮手、配對都分得開 */
+const BINGO_SPARK_RGB = '231, 181, 74';
 const SPARK_MS = 1400;
 const PULSE_MS = 2600;
 
@@ -322,6 +327,12 @@ function connect() {
         }
         break;
 
+      case EV.STAGE_BINGO:
+        if (typeof msg.a === 'string' && typeof msg.b === 'string') {
+          sparks.push({ a: msg.a, b: msg.b, at: performance.now(), rgb: BINGO_SPARK_RGB });
+        }
+        break;
+
       case EV.MISSION_ANNOUNCE:
         showMission(msg.mission);
         break;
@@ -375,8 +386,7 @@ function connect() {
       }
 
       case EV.BINGO_ENDED:
-        showBingo(null);
-        toast(msg.winners?.length ? `人物賓果結束！最多連線：${msg.winners.join('、')}` : '人物賓果結束！');
+        showBingoFinale(msg);
         sfx.play('fanfare');
         break;
 
@@ -939,11 +949,19 @@ let quizRaf = null;
  */
 function syncBanners() {
   document.getElementById('mission').hidden = quiz !== null || missionShown === null;
-  document.getElementById('bingo').hidden = quiz !== null || missionShown !== null || bingoShown === null;
+  // 結束後的結算（bingoFinale）也佔用賓果橫幅，見 showBingoFinale
+  document.getElementById('bingo').hidden =
+    quiz !== null || missionShown !== null || (bingoShown === null && !bingoFinale);
   measureBannerInset();
 }
 
 function showBingo(round) {
+  if (round && bingoFinale) {
+    // 收尾還沒播完就開了新的一輪：直接換回進行中的樣子
+    bingoFinale = false;
+    clearTimeout(bingoFinaleTimer);
+    document.querySelector('#bingo .m-label').textContent = BINGO_LABEL;
+  }
   bingoShown = round;
   // ask 階段倒數的是勾題目的時間，play 階段才是本輪限時
   const left = round?.phase === 'ask' ? round.askRemainingMs : round?.remainingMs;
@@ -959,6 +977,36 @@ function showBingo(round) {
     renderBingoMeta();
   }
   syncBanners();
+}
+
+/**
+ * 結束後把賓果橫幅留著當結算，約 15 秒：誰連最多線、誰被最多人找到、全場填了幾格。
+ * 原本只跳一則 4 秒的 toast —— 十分鐘的活動，收尾一閃就過，現場來不及看。
+ */
+let bingoFinaleTimer = null;
+function showBingoFinale(msg) {
+  showBingo(null);
+  const s = msg.summary ?? {};
+  if (!s.cells) {
+    toast('人物賓果結束！');
+    return;
+  }
+  const el = document.getElementById('bingo');
+  el.querySelector('.m-label').textContent = '人物賓果結束';
+  document.getElementById('bingo-lead').textContent = msg.winners?.length
+    ? `最多連線：${msg.winners.join('、')}` : '這一輪沒有人連成線';
+  document.getElementById('bingo-meta').textContent = [
+    s.mostFound?.name ? `最多人來找：${s.mostFound.name}（被 ${s.mostFound.count} 個人找到）` : null,
+    `全場一共填了 ${s.cells} 格`,
+  ].filter(Boolean).join('　·　');
+  bingoFinale = true;
+  syncBanners();
+  clearTimeout(bingoFinaleTimer);
+  bingoFinaleTimer = setTimeout(() => {
+    bingoFinale = false;
+    el.querySelector('.m-label').textContent = BINGO_LABEL;
+    syncBanners();
+  }, 15_000);
 }
 
 function renderBingoMeta() {

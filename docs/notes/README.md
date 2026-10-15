@@ -13,7 +13,7 @@
 | [GENERATION.md](GENERATION.md) | 風格四件套、VLM、切片比例、貼圖傳輸、手機同步 |
 | [FIELD-OPS.md](FIELD-OPS.md) | 場館網路、TLS 憑證與 DHCP、生成耗時、iOS 震動 |
 | [SERVER-AND-TESTS.md](SERVER-AND-TESTS.md) | `server/` 結構、e2e 不穩定成因、`IDLE_MOTION`、人數上限、CDN |
-| [INTERACTION-DESIGN.md](INTERACTION-DESIGN.md) | 玩法判準、尋寶先知模式、COLOR_HUNT、分區感知 |
+| [INTERACTION-DESIGN.md](INTERACTION-DESIGN.md) | 玩法判準、一次一個活動、尋寶先知模式、人物賓果、分區感知 |
 | [UI-STYLING.md](UI-STYLING.md) | 顏色 token 的填色／文字之分、觸控範圍與視覺尺寸分離 |
 | [LOCAL-PREVIEW.md](LOCAL-PREVIEW.md) | 本機開啟各頁面與依 PID 關閉服務 |
 

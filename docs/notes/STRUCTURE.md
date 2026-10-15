@@ -58,7 +58,7 @@
 │   ├── avatarSprite.js           # 角色圖組裝（整張圖優先，缺它才疊三張切片）
 │   ├── character.js              # 角色與名牌繪製（大螢幕與控制器共用）
 │   ├── capture-guidance.js       # 站位引導文案與指示燈判定
-│   ├── colorFamily.js            # ★ 顏色分族（COLOR_HUNT 任務，三端共用）
+│   ├── colorFamily.js            # ★ 顏色分族（人物賓果的顏色格，三端共用）
 │   ├── heat.js                   # ★ 尋寶冷熱等級與判定半徑（三端共用）
 │   ├── themes.js                 # ★ 場景主題目錄與號碼地點（1號桌…），三端共用
 │   ├── surveys.js                # ★ 轉場問卷題庫與格式限制（選項可綁道具 id）
