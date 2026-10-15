@@ -15,6 +15,7 @@ import { HEAT_LEVELS } from '/shared/heat.js';
 import { SELECTABLE_THEMES as THEMES, THEME_MAP } from '/shared/themes.js';
 import { PERSONA_TYPES, PERSONA_RESULT_MAP, PERSONA_LIMITS } from '/shared/persona.js';
 import { surveysForTheme, SURVEY_BANK_MAP } from '/shared/surveys.js';
+import { recipesForTheme } from '/shared/recipes.js';
 import { propLabel } from '/screen/scenes/registry.js';
 
 const $ = (s) => document.querySelector(s);
@@ -386,6 +387,7 @@ function pickSetupTheme(id) {
 
 function renderTheme(id) {
   currentTheme = id;
+  renderRecipes();
   const label = THEME_MAP[id]?.label ?? '';
   $('#event-scene').textContent = label ? `場景：${label}` : '';
   $('#screen-scene').textContent = label;
@@ -1755,7 +1757,7 @@ renderBank();
 const RS_KEY = 'personaflow.runSheet';
 const RS_KIND = {
   mission: '任務', survey: '問卷', treasure: '尋寶', harvest: '採水果',
-  quiz: '問答', photo: '合照', theme: '場景',
+  quiz: '問答', photo: '合照', theme: '場景', bingo: '賓果',
 };
 
 function loadRunSheet() {
@@ -1785,7 +1787,38 @@ const STEP_BUILDERS = {
   // 先知不存特定的人：排節目單的時候，那個人可能還沒進場
   treasure: () => ({ kind: 'treasure', label: '尋寶（先知隨機）', msg: { type: EV.HOST_START_TREASURE, prophetId: null } }),
   harvest: () => ({ kind: 'harvest', label: '採水果', msg: { type: EV.HOST_START_HARVEST } }),
+  bingo: () => {
+    const durationMs = Number($('#bingo-duration').value);
+    return {
+      kind: 'bingo',
+      label: `人物賓果・${durationMs ? `${durationMs / 60000} 分鐘` : '不限時'}`,
+      msg: { type: EV.HOST_START_BINGO, durationMs },
+    };
+  },
 };
+
+/** 配方範本選單：跟著目前場景換（專屬的在前，通用的在後） */
+function renderRecipes() {
+  const sel = $('#rs-recipe');
+  const list = recipesForTheme(currentTheme);
+  sel.replaceChildren(...list.map((r) => Object.assign(document.createElement('option'), {
+    value: r.id, textContent: r.name,
+  })));
+  renderRecipeBrief();
+}
+function renderRecipeBrief() {
+  const r = recipesForTheme(currentTheme).find((x) => x.id === $('#rs-recipe').value);
+  $('#rs-recipe-brief').textContent = r ? `${r.brief}（${r.steps.map((s) => RS_KIND[s.kind]).join(' → ')}）` : '';
+}
+$('#rs-recipe').addEventListener('change', renderRecipeBrief);
+$('#btn-rs-recipe').addEventListener('click', () => {
+  const r = recipesForTheme(currentTheme).find((x) => x.id === $('#rs-recipe').value);
+  if (!r) return;
+  const cur = loadRunSheet();
+  if (cur.steps.length && !confirm(`會取代目前節目單上的 ${cur.steps.length} 項，確定嗎？`)) return;
+  saveRunSheet({ steps: structuredClone(r.steps), pointer: 0 });
+  pushFeed(`節目單套用範本：${r.name}`, 'ev-plan');
+});
 for (const btn of document.querySelectorAll('[data-rs-add]')) {
   btn.addEventListener('click', () => addStep(STEP_BUILDERS[btn.dataset.rsAdd]()));
 }
@@ -1974,6 +2007,7 @@ function renderReport(format, report) {
 }
 
 renderRunSheet();
+renderRecipes();
 try { if (localStorage.getItem(PROJ_KEY) === '1') setProjector(true); } catch { /* 略 */ }
 
 // ─────────────────────────────────────────────────────────────

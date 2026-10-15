@@ -107,6 +107,15 @@
         <div class="rs-add">
           <button class="btn-ghost" id="btn-rs-add-photo">＋ 拍大合照</button>
         </div>
+        <!-- 配方範本（shared/recipes.js）：依目前場景預排好的一整套流程，套用後可再增刪 -->
+        <div class="rs-recipe">
+          <label class="field">
+            <span>從範本開始</span>
+            <select id="rs-recipe"></select>
+          </label>
+          <button class="btn-ghost" id="btn-rs-recipe">套用範本</button>
+        </div>
+        <p class="hint" id="rs-recipe-brief"></p>
         <p class="err" id="rs-err" hidden></p>
       </div>
 
@@ -277,6 +286,7 @@
         </label>
         <div class="row-actions">
           <button class="btn-primary" id="btn-bingo-start">開始賓果</button>
+          <button class="btn-ghost" data-rs-add="bingo">加入節目單</button>
         </div>
       </div>
 

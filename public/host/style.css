@@ -617,6 +617,9 @@ td.export { white-space: nowrap; }
 .rs-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; border-top: 1px dashed var(--line); padding-top: 12px; }
 .rs-add button { width: auto; padding: 6px 12px; font-size: 13px; border-width: 2px; }
 .rs-add select { width: auto; flex: 1; min-width: 120px; padding: 6px 10px; font-size: 13px; }
+.rs-recipe { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
+.rs-recipe .field { flex: 1; margin: 0; }
+.rs-recipe button { width: auto; padding: 6px 12px; font-size: 13px; border-width: 2px; }
 
 /* ── 任務倒數 ─────────────────────────────────────────── */
 .tags-inline { display: flex; gap: 6px; }
