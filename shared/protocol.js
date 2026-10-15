@@ -281,14 +281,16 @@ export const PAIR_ERRORS = {
 };
 
 /** 社交動作白名單（技術文件 M1 §操控輸入發送規格） */
-export const ACTIONS = ['CHEERS', 'HEART', 'WAVE'];
+// 愛心（HEART）已拿掉：單向、沒有對象也沒有人回應，揮手與乾杯出來之後就沒人按了。
+// 舊版手機頁面送來的 HEART 會被伺服器的白名單直接丟棄
+export const ACTIONS = ['CHEERS', 'WAVE'];
 
 /**
  * 社交動作的顯示圖示。
  * 大螢幕與手機端 POV 都要畫，放在協定層避免兩邊各存一份而漂移
  * （與 QUIZ_CHOICES 的顏色符號是同一個理由）。
  */
-export const EMOTE_GLYPH = { CHEERS: '🍻', HEART: '💗', WAVE: '👋' };
+export const EMOTE_GLYPH = { CHEERS: '🍻', WAVE: '👋' };
 
 /**
  * GREET_RESULT 的 outcome。揮手與乾杯共用（server/greetings.js）。
