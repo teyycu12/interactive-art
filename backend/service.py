@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import faulthandler
 import os
+import random
 import re
 import sys
 import threading
@@ -220,6 +221,94 @@ def _open_fallback(breaker):
             return {"ok": False, "error": "insufficient_credits"}
         return {"ok": False, "error": "circuit_open"}
     return fallback
+
+
+# ── 生圖呼叫：哪些失敗要重試、哪些算「上游掛了」 ─────────────────────────
+#
+# 2026-10-13 回報「三個人同時拍照就生不出來」。用假的生圖上游重現
+# （scripts/gen-burst/）：上游健康時排隊沒問題，問題在上游一出狀況時的反應 ——
+#   1. 429（同時太多請求）是上游在門口擋下、不收費、等幾秒就會好的拒絕，
+#      這裡卻一次都不重試，直接把人打回失敗畫面。
+#   2. 熔斷器把每一種失敗都算成「上游掛了」：一個人的三次 429、或三張模型
+#      回了文字沒回圖的照片，就讓全場 30 秒一起失敗。
+# （原因被蓋成 circuit_open 的那一半，已由 CallFailed／_open_fallback 解決。）
+#
+# garment_gen 以 SDK 的例外類別名當錯誤碼，這裡換成穩定的 snake_case。
+_UPSTREAM_CODES = {
+    "RateLimitError": "upstream_rate_limited",
+    "InternalServerError": "upstream_error",
+    "APIConnectionError": "upstream_unreachable",
+    "APITimeoutError": "upstream_timeout",
+}
+# 自動重試：上游在處理之前就拒絕，不收費，過幾秒多半就好。
+# 逾時**不在這裡** —— 那一次上游可能已經生完、已經收錢，自動重來等於付兩次。
+_RETRYABLE = {"upstream_rate_limited", "upstream_error", "upstream_unreachable"}
+# 算進熔斷器的：上游本身不能用了。429 不算（那是「慢一點」不是「掛了」，算進去的話
+# 一個人的重試就能讓全場熔斷）；模型回了文字沒回圖也不算（那是這一張照片的問題）。
+# 402 算：額度用完時讓熔斷器快速失敗，_open_fallback 會說出是額度的問題。
+_HEALTH_FAILURES = {"upstream_error", "upstream_unreachable", "upstream_timeout",
+                    "insufficient_credits"}
+# 重試間隔 2、4、8，之後每 10 秒，直到總預算用完。不設固定次數 —— 上游一次只收
+# 一個時，第三個人要等前兩個都生完（約 26 秒），固定三次（共 17 秒）的版本
+# 實測就在快輪到時放棄了。等待期間不佔生成名額。
+_RETRY_BASE_S = 2.0
+_RETRY_MAX_S = 10.0
+# 一次 /generate 從收到到回應的總預算，必須小於互動層代理的 GENERATE_TIMEOUT_MS
+# （150 秒，從送出才開始算，見 server/generateQueue.js）—— 超過的話手機早就收到
+# 逾時，這裡卻還在生、還在付錢。
+_GENERATE_BUDGET_S = float(os.environ.get("GENERATE_BUDGET_S") or 130)
+# 開始一次生圖前至少要留給它的秒數，與 garment_gen 的 API 逾時對齊
+_MIN_CALL_BUDGET_S = 50.0
+
+
+def _normalize_gen_error(out: Any) -> Dict[str, Any]:
+    if not isinstance(out, dict):
+        return {"ok": False, "error": "generation_failed"}
+    code = out.get("error")
+    if not out.get("ok") and code in _UPSTREAM_CODES:
+        out = dict(out)
+        out["error"] = _UPSTREAM_CODES[code]
+    return out
+
+
+def _call_imagegen(*args) -> Dict[str, Any]:
+    """只有上游健康類的失敗才以 CallFailed 拋給熔斷器計數，其餘原樣回傳。"""
+    out = _normalize_gen_error(generate_full_character_png(*args))
+    if not out.get("ok") and out.get("error") in _HEALTH_FAILURES:
+        raise CallFailed(out["error"], out)
+    return out
+
+
+def _imagegen_once(args: tuple, deadline: float) -> Dict[str, Any]:
+    wait = deadline - time.perf_counter() - _MIN_CALL_BUDGET_S
+    # 輪到時剩下的時間已經不夠生一張，就別再打了 —— 打了也送不回手機
+    if wait <= 0 or not _gen_semaphore.acquire(timeout=wait):
+        return {"ok": False, "error": "queue_timeout"}
+    try:
+        return _imagegen_breaker.call(
+            _call_imagegen, *args, max_retries=0,
+            fallback=_open_fallback(_imagegen_breaker),
+        )
+    finally:
+        # 名額的取還在同一個 try/finally：漏掉任何一條路徑，名額就會永久少一個，
+        # 症狀是「現場愈跑愈慢，重啟就好」，最難查的一種
+        _gen_semaphore.release()
+
+
+def _imagegen_with_retry(args: tuple, deadline: float) -> Dict[str, Any]:
+    out = _imagegen_once(args, deadline)
+    delay = _RETRY_BASE_S
+    while not out.get("ok") and out.get("error") in _RETRYABLE:
+        # 抖動：三個人同時被 429，若都等整整 2 秒就會再同時撞一次
+        pause = delay * (0.75 + 0.5 * random.random())
+        delay = min(delay * 2, _RETRY_MAX_S)
+        if time.perf_counter() + pause + _MIN_CALL_BUDGET_S > deadline:
+            break
+        print(f"[vision] 生圖被上游拒絕（{out.get('error')}），{pause:.1f} 秒後重試",
+              file=sys.stderr)
+        time.sleep(pause)
+        out = _imagegen_once(args, deadline)
+    return out
 
 
 def _vlm_result(future, label: str) -> Dict[str, Any]:
@@ -577,22 +666,16 @@ def _generate():
         return _fail("imagegen_unavailable", stage="generation")
 
     generation_start = time.perf_counter()
+    deadline = started + _GENERATE_BUDGET_S
 
     def _attempt(correction: Optional[str]) -> Dict[str, Any]:
-        # max_retries=0：熔斷器預設會自動重試一次，而這是整套系統唯一會花錢的
-        # 呼叫 —— 失敗時多付一次錢，而且那次重試不帶任何修正指令，成功率與
-        # 第一次相同。要不要重生由下方的驗證結果決定，不由熔斷器決定。
-        #
-        # with 而非 acquire/release：生圖會拋例外（熔斷器開啟、API 逾時），
-        # 手動釋放漏掉任何一條路徑，名額就會永久少一個，最後整個服務卡死 ——
-        # 而那個症狀是「現場愈跑愈慢，重啟就好」，最難查的一種。
-        with _gen_semaphore:
-            out = _imagegen_breaker.call(
-                _raise_on_failure, generate_full_character_png,
-                rgb_full, body_poly, face_data, outfit_data, True, regions, style_id, correction,
-                max_retries=0,
-                fallback=_open_fallback(_imagegen_breaker),
-            )
+        # 熔斷器的 max_retries=0：它預設會自動重試一次，而這是整套系統唯一會花錢的
+        # 呼叫 —— 失敗時多付一次錢，且那次重試不帶修正指令。自動重試只限上游在門口
+        # 就拒絕、不收費的那幾種（_RETRYABLE）；要不要重生由下方的驗證結果決定。
+        out = _imagegen_with_retry(
+            (rgb_full, body_poly, face_data, outfit_data, True, regions, style_id, correction),
+            deadline,
+        )
         if isinstance(out, dict) and out.get("body_png"):
             out = dict(out)
             out["body_png"] = add_transparent_margin(out["body_png"])
@@ -628,7 +711,8 @@ def _generate():
     _history_call(record_attempt, request_id, phase="full_character",
                   attempt_index=0, result=gen, validation=validation)
 
-    if max_retries and gen.get("ok") and not validation.get("passed"):
+    if (max_retries and gen.get("ok") and not validation.get("passed")
+            and time.perf_counter() + _MIN_CALL_BUDGET_S < deadline):
         # 重生時帶上修正指令 —— 缺腿就要求雙腿雙腳完整，出框就要求置中留白。
         # 不帶指令的重試等於再擲一次同樣的骰子。
         retries = 1

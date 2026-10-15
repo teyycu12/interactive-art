@@ -1025,6 +1025,13 @@ const SCAN_ERRORS = {
   circuit_open: '生成服務暫時過載。',
   // 402：等一下不會好，要有人去儲值。寫明「通知工作人員」，現場才不會一直重拍
   insufficient_credits: '生成額度用完了，請通知工作人員。',
+  // 上游生圖 API 回報的原因（service.py 的 _UPSTREAM_CODES）。429／5xx 已經在
+  // 生成服務裡重試到預算用完，到這裡代表真的一直不行
+  upstream_rate_limited: '現在同時拍照的人比較多，再按一次重拍。',
+  upstream_error: '生成服務剛剛出了點狀況，再按一次重拍。',
+  upstream_unreachable: '生成服務連不上外部網路，請通知工作人員。',
+  upstream_timeout: '生成等太久逾時了。',
+  queue_timeout: '排隊的人太多，等太久了。',
   no_person: '照片裡沒有偵測到人。',
 };
 

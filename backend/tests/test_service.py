@@ -8,7 +8,6 @@ import base64
 import io
 import os
 import re
-import sys
 
 import numpy as np
 import pytest
@@ -36,21 +35,7 @@ def _photo_b64():
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-@pytest.fixture(autouse=True)
-def _isolate_history(tmp_path, monkeypatch):
-    # 生成紀錄一律導走。原本每跑一次就往正式的 backend/logs 寫十幾筆假紀錄
-    # （circuit_open、slice_failed: disk full…），主辦端的「角色生成紀錄」
-    # 與成功率會把它們當成真的現場失敗。autouse 是因為有幾則測試
-    # 不經 client fixture、自己建 test_client。
-    #
-    # 從 service 手上的函式反查模組，而不是 import backend.generation_history：
-    # service 以 `from generation_history import ...` 匯入，兩條路徑在 pytest
-    # 底下是兩個不同的模組物件，改錯那一個等於沒改（同 style_registry 的坑）。
-    if service._HISTORY:
-        history = sys.modules[service.start_run.__module__]
-        monkeypatch.setattr(history, "_DB_PATH", tmp_path / "history.sqlite3")
-        monkeypatch.setattr(history, "_OUTPUT_DIR", tmp_path / "history_generated")
-        monkeypatch.setattr(history, "_INPUT_DIR", tmp_path / "history_inputs")
+# 生成紀錄導到暫存目錄：見 conftest.py 的 isolate_history（全部測試共用）。
 
 
 @pytest.fixture
@@ -552,5 +537,97 @@ class TestSessionName:
         seen = {}
         monkeypatch.setattr(service, "start_run",
                             lambda request_id, **kw: seen.update(kw))
+        monkeypatch.setattr(service, "generate_full_character_png",
+                            lambda *a, **k: {"ok": True, "body_png": _png_b64()})
         client.post("/generate", json={"image": _photo_b64()})
         assert seen.get("experiment_id") == "live-1019"
+
+
+class TestUpstreamFailures:
+    """多人同時生成時的上游失敗（2026-10 實測「三個人同時拍照就生不出來」）。
+
+    用假上游重現後確認：429 一次都不重試、熔斷器把每種失敗都算成「上游掛了」，
+    而且真正的原因一律被寫成 circuit_open。這裡把修正後的行為釘住。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fast_retries(self, monkeypatch):
+        # 熔斷器是模組層級的單例，前一個測試留下的失敗次數不能帶進下一個
+        service._imagegen_breaker.reset()
+        # 重試的等待縮到幾毫秒；行為一樣，測試不必真的等 2、4、8 秒
+        monkeypatch.setattr(service, "_RETRY_BASE_S", 0.001)
+        monkeypatch.setattr(service, "_RETRY_MAX_S", 0.001)
+        monkeypatch.setattr(service, "_MIN_CALL_BUDGET_S", 0.0)
+
+    @staticmethod
+    def _sequence(monkeypatch, results):
+        calls = []
+
+        def _gen(*a, **k):
+            calls.append(1)
+            return results[min(len(calls), len(results)) - 1]
+
+        monkeypatch.setattr(service, "generate_full_character_png", _gen)
+        return calls
+
+    def test_rate_limit_is_retried_until_it_succeeds(self, client, monkeypatch):
+        """429 是上游在門口擋下、不收錢的拒絕，排一下就會好 —— 不能直接打回失敗。"""
+        calls = self._sequence(monkeypatch, [
+            {"ok": False, "error": "RateLimitError"},
+            {"ok": False, "error": "RateLimitError"},
+            {"ok": True, "body_png": _png_b64()},
+        ])
+        body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+        assert body["ok"] is True
+        assert len(calls) == 3
+
+    def test_rate_limits_do_not_trip_the_breaker(self, client, monkeypatch):
+        """429 是「慢一點」不是「掛了」：一個人的重試不能讓全場一起熔斷。"""
+        self._sequence(monkeypatch, [{"ok": False, "error": "RateLimitError"}] * 5
+                       + [{"ok": True, "body_png": _png_b64()}])
+        body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+        assert body["ok"] is True
+        assert service._imagegen_breaker.state == "CLOSED"
+
+    def test_timeout_reports_real_cause_and_is_not_retried(self, client, monkeypatch):
+        """逾時那一次上游可能已經生完、已經收錢，自動重來等於付兩次。
+        而且回報的必須是 upstream_timeout，不是蓋掉原因的 circuit_open。"""
+        calls = self._sequence(monkeypatch, [{"ok": False, "error": "APITimeoutError"}])
+        body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+        assert body["error"] == "upstream_timeout"
+        assert len(calls) == 1
+
+    def test_breaker_opens_only_after_repeated_upstream_outages(self, client, monkeypatch):
+        calls = self._sequence(monkeypatch, [{"ok": False, "error": "APITimeoutError"}])
+        errors = [client.post("/generate", json={"image": _photo_b64()}).get_json()["error"]
+                  for _ in range(4)]
+        assert errors == ["upstream_timeout"] * 3 + ["circuit_open"]
+        assert len(calls) == 3, "熔斷後不該再打上游"
+
+    def test_content_failure_does_not_trip_the_breaker(self, client, monkeypatch):
+        """模型回了文字沒回圖，是這一張照片的問題，不是上游掛了。"""
+        self._sequence(monkeypatch, [{"ok": False, "error": "generation_failed"}])
+        for _ in range(4):
+            body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+            assert body["error"] == "generation_failed"
+        assert service._imagegen_breaker.state == "CLOSED"
+
+    def test_gives_up_before_the_proxy_does(self, client, monkeypatch):
+        """總預算用完就停：手機那頭的代理 150 秒就逾時了，再生下去沒有人收、還要付錢。"""
+        monkeypatch.setattr(service, "_GENERATE_BUDGET_S", 0.0)
+        calls = self._sequence(monkeypatch, [{"ok": True, "body_png": _png_b64()}])
+        body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+        assert body["error"] == "queue_timeout"
+        assert calls == []
+
+    def test_slot_is_released_on_every_path(self, client, monkeypatch):
+        """名額漏還一個，現場就會「愈跑愈慢，重啟就好」。"""
+        # 一直 429 時會重試到總預算用完；預算縮短，測試才不會真的跑上兩分鐘
+        monkeypatch.setattr(service, "_GENERATE_BUDGET_S", 0.3)
+        before = service._gen_semaphore._value
+        for err in ("RateLimitError", "APITimeoutError", "generation_failed"):
+            self._sequence(monkeypatch, [{"ok": False, "error": err}])
+            client.post("/generate", json={"image": _photo_b64()})
+        self._sequence(monkeypatch, [{"ok": True, "body_png": _png_b64()}])
+        client.post("/generate", json={"image": _photo_b64()})
+        assert service._gen_semaphore._value == before

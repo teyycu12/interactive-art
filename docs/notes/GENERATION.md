@@ -458,3 +458,36 @@ garment_gen 把風格註冊進其中一份，service.py 從另一份查詢，查
 本地模擬會讓使用者低頭看到自己穿牆、抬頭卻看見角色卡在牆邊。
 伺服器狀態過期時收斂到靜止，不以最後速度外推（否則角色會飄出場外）。
 
+### 上游一出狀況時：重試 429、熔斷器只算「上游掛了」（2026-10-15）
+
+`scripts/gen-burst/`：假的生圖上游＋獨立一份生成服務（:5077），**不花錢**、不碰 :5055、
+不寫帳本（`scripts/gen_load_test.py` 則是打真的 API、會花錢的那一支）。
+上游健康時 3 人、8 人同時都會成功；問題在上游出狀況時這裡怎麼反應：
+
+| 假上游 | main（10/15） | 改之後 |
+|---|---|---|
+| 一次只收 1 個，其餘回 429（3 人同時） | 1/3，失敗的人 0.5 秒就被打回（`RateLimitError`） | 3/3 |
+| 每三次一次 502（5 人） | 4/5（`InternalServerError`） | 5/5 |
+| 每次 48 秒，超過 SDK 的 45 秒 | 0/3（`APITimeoutError`） | 0/3（`upstream_timeout`，刻意不重試） |
+
+`service.py` 的 `_imagegen_*`：
+
+1. **429／5xx／連線錯誤自動重試**，間隔 2、4、8、10、10… 秒直到總預算用完，
+   等待時**不佔**生成名額。逾時不重試 —— 那一次可能已經生完、已經收費。
+   既有的「失敗不自動重生、要不要重生由驗證決定」（`test_paid_call_does_not_auto_retry_on_failure`）
+   仍然成立：只重試上游在門口就拒絕、不收費的那幾種。
+2. **熔斷器只算上游本身不能用**（逾時、5xx、連線、402）。429 不算 —— 一個人的三次重試
+   就能讓全場熔斷；「模型回了文字沒回圖」也不算，那是這一張照片的問題。
+3. SDK 的例外類別名換成穩定的碼（`upstream_rate_limited`／`upstream_timeout`…），手機各有文案。
+4. 總預算 `_GENERATE_BUDGET_S`（130 秒）必須小於互動層的 `GENERATE_TIMEOUT_MS`（150 秒，
+   從送出才開始算，見 `server/generateQueue.js`）；剩下的時間不夠生一張就回 `queue_timeout`。
+
+**還沒驗證的**：上游真正的同時上限是多少。實測前用真金鑰三支手機同時拍一次，
+看帳本的 `error_code` 有沒有 `upstream_rate_limited`。
+
+**測試不可以打到真的生圖 API**：開發機的 `.env` 有真金鑰，忘了替換
+`generate_full_character_png` 的測試會真的生一張圖、真的付錢，測試照樣是綠的
+（2026-10-13 發生過）。`backend/tests/conftest.py` 的 `no_paid_image_calls` 清掉金鑰；
+`isolate_history` 把生成紀錄導到暫存目錄（原本只在 test_service.py，
+`test_turnaround.py` 每跑一次仍往正式帳本寫兩筆）。
+
