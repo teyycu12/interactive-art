@@ -1570,9 +1570,164 @@ function showTreasureResult(text) {
   showToast(text);
 }
 
+// ─────────────────────────────────────────────────────────────
+// 人物賓果（server/bingo.js）
+// ─────────────────────────────────────────────────────────────
+// 卡是私人的：條件寫在自己手機上，要找的人得自己去問。
+// 填格用的是對方的配對碼 —— 與配對任務同一組碼，因此也受同一份冷卻限制。
+
+/** @type {{cells: {label: string, filled: boolean, name: string|null}[], lines: number}|null} */
+let bingoCard = null;
+let bingoDeadline = null;
+let bingoPick = null;
+let bingoTimer = null;
+const bingoSheet = $('#bingo-sheet');
+const bingoInput = $('#bingo-input');
+
+const BINGO_ERROR_TEXT = {
+  NO_ROUND: '這一輪已經結束了。',
+  NO_CARD: '你還沒有賓果卡，稍等一下再試。',
+  BAD_CELL: '請先點選要填的那一格。',
+  FILLED: '這一格已經填過了。',
+  SELF: '不能填自己喔。',
+  USED: '這個人已經填在你卡上的另一格了 —— 每格要找不同的人。',
+  MISMATCH: '這個人不符合這一格的條件，再問問別人。',
+  NOT_FOUND: '查無這組配對碼，請對方再唸一次（碼每分鐘會換）。',
+  COOLDOWN: '慢一點，等 3 秒再送。',
+};
+
+function renderBingo() {
+  const banner = $('#bingo-banner');
+  if (!bingoCard) {
+    banner.hidden = true;
+    return;
+  }
+  const filled = bingoCard.cells.filter((c) => c.filled).length;
+  banner.hidden = false;
+  $('#bingo-prog').textContent = `${filled} / 9${bingoCard.lines ? `　連線 ${bingoCard.lines}` : ''}`;
+  $('#bingo-mycode').textContent = myCode;
+
+  const grid = $('#bingo-grid');
+  grid.replaceChildren();
+  bingoCard.cells.forEach((c, i) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `bingo-cell${c.filled ? ' filled' : ''}`;
+    btn.setAttribute('aria-pressed', String(bingoPick === i));
+    if (c.filled) {
+      btn.disabled = true;
+      btn.append(
+        Object.assign(document.createElement('span'), { className: 'who', textContent: c.name || '已填' }),
+        Object.assign(document.createElement('span'), { className: 'cond', textContent: c.label }),
+      );
+    } else {
+      btn.textContent = c.label;
+      btn.addEventListener('click', () => pickBingoCell(i));
+    }
+    grid.append(btn);
+  });
+}
+
+function pickBingoCell(i) {
+  bingoPick = i;
+  $('#bingo-msg').hidden = true;
+  $('#bingo-entry-label').textContent = `「${bingoCard.cells[i].label}」：輸入他的配對碼`;
+  $('#bingo-entry').hidden = false;
+  bingoInput.value = '';
+  renderBingo();
+  setTimeout(() => bingoInput.focus(), 50);
+}
+
+function showBingoMsg(text) {
+  const el = $('#bingo-msg');
+  el.textContent = text;
+  el.hidden = !text;
+}
+
+function openBingo() {
+  if (!bingoCard) return;
+  bingoSheet.hidden = false;
+  renderBingo();
+  pushOverlay(bingoSheet, { onEscape: closeBingo, restoreTo: $('#bingo-banner') });
+}
+
+function closeBingo() {
+  if (bingoSheet.hidden) return;
+  bingoSheet.hidden = true;
+  bingoInput.blur();
+  popOverlay(bingoSheet);
+}
+
+function tickBingoTimer() {
+  const el = $('#bingo-timer');
+  if (!bingoDeadline) { el.textContent = ''; return; }
+  const left = Math.max(0, bingoDeadline - Date.now());
+  el.textContent = `剩 ${Math.floor(left / 60000)} 分 ${String(Math.floor(left / 1000) % 60).padStart(2, '0')} 秒`;
+}
+
+$('#bingo-banner').addEventListener('click', openBingo);
+$('#btn-bingo-close').addEventListener('click', closeBingo);
+bingoSheet.addEventListener('click', (e) => { if (e.target === bingoSheet) closeBingo(); });
+bingoInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('#btn-bingo-submit').click(); }
+});
+$('#btn-bingo-submit').addEventListener('click', () => {
+  const code = bingoInput.value.trim();
+  if (bingoPick === null) { showBingoMsg(BINGO_ERROR_TEXT.BAD_CELL); return; }
+  if (!/^\d{4}$/.test(code)) { showBingoMsg('配對碼是 4 位數字。'); return; }
+  sendMsg(EV.BINGO_CLAIM, { cell: bingoPick, code });
+});
+
+/** @returns {boolean} 是否處理了這則訊息 */
+function handleBingoMessage(msg) {
+  switch (msg.type) {
+    case EV.BINGO_CARD:
+      bingoCard = msg.card;
+      bingoDeadline = msg.remainingMs == null ? null : Date.now() + msg.remainingMs;
+      clearInterval(bingoTimer);
+      if (bingoDeadline) bingoTimer = setInterval(tickBingoTimer, 1000);
+      tickBingoTimer();
+      renderBingo();
+      return true;
+
+    case EV.BINGO_RESULT:
+      if (msg.ok) {
+        bingoPick = null;
+        $('#bingo-entry').hidden = true;
+        showBingoMsg('');
+        vibrate([30, 40, 30]);
+        showToast(msg.full ? '全卡完成！🎉'
+          : msg.newLines ? `連成一線！和 ${msg.name} 填好了`
+          : `填好了：${msg.name}`);
+      } else {
+        showBingoMsg(BINGO_ERROR_TEXT[msg.reason] ?? '沒填成功，請再試一次。');
+      }
+      return true;
+
+    case EV.BINGO_TAGGED:
+      // 被填的人知道「剛剛那個人原來在玩賓果」—— 通常就是下一段對話的開頭
+      showToast(`${msg.byName} 把你填進了賓果：「${msg.label}」`);
+      vibrate([20, 60, 20]);
+      return true;
+
+    case EV.BINGO_ENDED:
+      bingoCard = null;
+      bingoPick = null;
+      clearInterval(bingoTimer);
+      closeBingo();
+      renderBingo();
+      showToast(msg.winners?.length ? `賓果結束！${msg.winners.join('、')} 最多連線` : '賓果結束！');
+      return true;
+
+    default:
+      return false;
+  }
+}
+
 function handleMissionMessage(msg) {
   // 問答與積分自成一組，先讓它們處理；沒接走的才往下當任務訊息
   if (handleQuizMessage(msg)) return;
+  if (handleBingoMessage(msg)) return;
 
   switch (msg.type) {
     case EV.GREET_INVITE:
@@ -1586,6 +1741,8 @@ function handleMissionMessage(msg) {
     case EV.PAIR_CODE:
       myCode = msg.code;
       renderMission();
+      // 賓果卡上也印著自己的碼（別人要填你時用），每分鐘輪換時要跟著換
+      renderBingo();
       break;
 
     case EV.MISSION_ANNOUNCE:
@@ -1791,6 +1948,12 @@ $('#btn-confirm-exit').addEventListener('click', () => {
   renderMission();
   closeSheet();
   closeConfirmPair();
+  // 賓果卡也要收：漏關任何一層，#app 的 inert 解不開，離場畫面就不能操作（UI-STYLING）
+  bingoCard = null;
+  bingoPick = null;
+  clearInterval(bingoTimer);
+  closeBingo();
+  renderBingo();
   quiz = null;
   myChoice = null;
   closeQuiz();

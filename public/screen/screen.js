@@ -38,6 +38,12 @@ const COLOR_SWARM = '#457B9D';
 const CHARACTER_HEIGHT = 150;   // 邏輯座標下的角色高度
 
 let debug = false;
+/**
+ * 目前的賓果進度（BINGO_STATE），null 代表沒有進行中的一輪。
+ * 放在檔頭：syncBanners 會讀它，宣告若排在後面，載入途中一被呼叫就是 TDZ 錯誤、整個大螢幕白掉。
+ */
+let bingoShown = null;
+let bingoDeadline = null;
 
 /** 短音效（public/screen/sfx.js）。開關由主辦端控制，預設開 */
 const sfx = new Sfx();
@@ -377,6 +383,20 @@ function connect() {
 
       case EV.HARVEST_STATE:
         harvestRound = msg.round;
+        break;
+
+      case EV.BINGO_STATE: {
+        // 有人新連成一線：響一聲（BINGO_STATE 每填一格都會來，只有線數變多才響）
+        const prevTop = bingoShown?.top?.[0]?.lines ?? 0;
+        showBingo(msg.round);
+        if ((msg.round?.top?.[0]?.lines ?? 0) > prevTop) sfx.play('pair');
+        break;
+      }
+
+      case EV.BINGO_ENDED:
+        showBingo(null);
+        toast(msg.winners?.length ? `人物賓果結束！最多連線：${msg.winners.join('、')}` : '人物賓果結束！');
+        sfx.play('treasure');
         break;
 
       case EV.HARVEST_DONE:
@@ -1095,8 +1115,35 @@ function syncBanners() {
   surveyEl.hidden = surveyState === null || quiz !== null;
   document.getElementById('mission').hidden =
     quiz !== null || surveyState !== null || missionShown === null;
+  // 頂端同時只放一條：問答 > 問卷 > 任務 > 賓果
+  document.getElementById('bingo').hidden =
+    quiz !== null || surveyState !== null || missionShown !== null || bingoShown === null;
   measureBannerInset();
 }
+
+function showBingo(round) {
+  bingoShown = round;
+  bingoDeadline = round?.remainingMs == null ? null : Date.now() + round.remainingMs;
+  if (round) {
+    const lead = round.top.filter((t) => t.lines > 0 && t.lines === round.top[0].lines);
+    document.getElementById('bingo-lead').textContent = lead.length
+      ? `最多連線：${lead.map((t) => t.name).join('、')}（${lead[0].lines} 線）`
+      : '還沒有人連成一線';
+    renderBingoMeta();
+  }
+  syncBanners();
+}
+
+function renderBingoMeta() {
+  if (!bingoShown) return;
+  const parts = [`${bingoShown.players} 人參加`];
+  if (bingoDeadline) {
+    const left = Math.max(0, bingoDeadline - Date.now());
+    parts.push(`剩 ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`);
+  }
+  document.getElementById('bingo-meta').textContent = parts.join('　·　');
+}
+setInterval(renderBingoMeta, 1000);
 
 /**
  * 把目前可見的橫幅高度讓給它，場景縮到剩下的空間。
@@ -1104,7 +1151,7 @@ function syncBanners() {
  * 量實際高度而不是寫死：題目長度、選項字數、是否顯示集合地點都會改變高度，
  * 寫死的值在最長的那一題上就會重新蓋到角色 —— 而那一題正是最需要看清楚的。
  */
-const BANNER_IDS = ['quiz', 'survey', 'mission'];
+const BANNER_IDS = ['quiz', 'survey', 'mission', 'bingo'];
 const BANNER_GAP = 14;   // 橫幅與房間上緣之間留一點縫，免得看起來黏在一起
 
 function measureBannerInset() {

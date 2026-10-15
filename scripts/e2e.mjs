@@ -1579,6 +1579,61 @@ const huge = Buffer.alloc(2 * 1024 * 1024, 0x20);
 check('引導端點擋下過大的影格',
   await postApi('/api/preview', huge) === 'frame_too_large');
 
+// ── 人物賓果 ──────────────────────────────────────────────
+{
+  const capture = (box) => {
+    box.bingo = { card: null, results: [], tagged: [], ended: null };
+    box.ws.on('message', (d) => {
+      const m = JSON.parse(d);
+      if (m.type === 'BINGO_CARD') box.bingo.card = m.card;
+      if (m.type === 'BINGO_RESULT') box.bingo.results.push(m);
+      if (m.type === 'BINGO_TAGGED') box.bingo.tagged.push(m);
+      if (m.type === 'BINGO_ENDED') box.bingo.ended = m;
+    });
+    return box;
+  };
+  const pA = capture(joinPhone('賓果甲'));
+  const pB = capture(joinPhone('賓果乙'));
+  await sleep(500);
+  // 前面的段落已經把 host 關掉了，這裡自己開一條
+  const bHost = new WebSocket(URL);
+  await new Promise((res) => bHost.on('open', res));
+  bHost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(300);
+  bHost.send(JSON.stringify({ type: 'HOST_START_BINGO' }));
+  await sleep(400);
+  check('開局時每人拿到一張 9 格的卡', pA.bingo.card?.cells?.length === 9 && pB.bingo.card?.cells?.length === 9);
+
+  // 測試角色的衣服是 #E76F51（紅色族），兩人之間也沒有連線：這兩種格子乙一定符合
+  const fits = (c) => !c.filled && (c.label === '衣服有紅色的人' || c.label === '找一個你還不認識的人');
+  const first = pA.bingo.card.cells.findIndex(fits);
+  pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: first, code: pB.code }));
+  await sleep(300);
+  check('輸入對方的碼、對方符合就填上', pA.bingo.results.at(-1)?.ok === true && pA.bingo.card.cells[first].name === '賓果乙',
+    JSON.stringify(pA.bingo.results.at(-1)));
+  check('被填進去的人收到通知', pB.bingo.tagged.at(-1)?.byName === '賓果甲');
+
+  // 立刻再送：冷卻擋下（防枚舉配對碼）
+  const second = pA.bingo.card.cells.findIndex((c, i) => i !== first && !c.filled);
+  pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: second, code: pB.code }));
+  await sleep(200);
+  check('連續填格受配對冷卻限制', pA.bingo.results.at(-1)?.reason === 'COOLDOWN', JSON.stringify(pA.bingo.results.at(-1)));
+
+  // 冷卻過後，同一個人不能再填第二格
+  await sleep(3100);
+  pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: second, code: pB.code }));
+  await sleep(300);
+  check('同一個人在一張卡上只能填一格', pA.bingo.results.at(-1)?.reason === 'USED', JSON.stringify(pA.bingo.results.at(-1)));
+
+  bHost.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
+  await sleep(300);
+  bHost.close();
+  check('結束時全場收到結果', pA.bingo.ended !== null && Array.isArray(pB.bingo.ended?.winners), JSON.stringify(pA.bingo.ended));
+  pA.ws.close();
+  pB.ws.close();
+  await sleep(200);
+}
+
 // ── 候補名單（人滿時）──────────────────────────────────────
 // 放在最後：會把場上補滿到上限，不能影響前面的任何一段。
 {

@@ -1609,3 +1609,34 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   color: var(--ink);
   margin: 4px 0 8px;
 }
+
+/* ── 人物賓果 ──────────────────────────────────────────── */
+/* 跟任務橫幅同一個樣子，左側那條換成鼠尾草綠：一眼分得出是另一件事 */
+.bingo-banner { box-shadow: inset 6px 0 0 var(--ok), var(--drop); background: var(--wall-tint); }
+.bingo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: 10px 0 12px;
+}
+/* 每格都是按鈕：44px 觸控下限之上，條件字要放得下兩三行 */
+.bingo-cell {
+  min-height: 72px;
+  padding: 6px 4px;
+  border: 2px solid var(--ink);
+  border-radius: var(--r-sm);
+  background: #FFFCF5;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  text-align: center;
+}
+.bingo-cell[aria-pressed="true"] { outline: 3px solid var(--accent); outline-offset: 1px; }
+.bingo-cell.filled { background: var(--wall-tint); border-style: dashed; }
+.bingo-cell.filled .who { font-size: 13px; font-weight: 800; color: var(--ok-ink); }
+.bingo-cell.filled .cond { font-weight: 500; color: var(--ink-soft); font-size: 11px; }
+.bingo-entry { display: flex; gap: 8px; align-items: flex-end; }
+.bingo-entry[hidden] { display: none; }
+.bingo-entry .sheet-field { flex: 1; margin-bottom: 0; }

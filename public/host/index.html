@@ -115,6 +115,7 @@
         <button class="act-chip" data-act="survey" aria-pressed="false">轉場問卷<i class="live-dot" hidden></i></button>
         <button class="act-chip" data-act="treasure" aria-pressed="false">尋寶<i class="live-dot" hidden></i></button>
         <button class="act-chip" data-act="harvest" aria-pressed="false">採水果<i class="live-dot" hidden></i></button>
+        <button class="act-chip" data-act="bingo" aria-pressed="false">人物賓果<i class="live-dot" hidden></i></button>
         <button class="act-chip" data-act="quiz" aria-pressed="false">即時問答<i class="live-dot" hidden></i></button>
       </div>
 
@@ -251,6 +252,44 @@
       </div>
 
       <p class="err" id="treasure-err" hidden></p>
+    </div>
+
+    <!-- 人物賓果（server/bingo.js）-->
+    <div class="panel act-panel" data-act="bingo" hidden>
+      <h2>人物賓果</h2>
+      <div id="bingo-idle">
+        <p class="hint">每人一張 3×3 卡，每格「找一個〔條件〕的人」，輸入對方的配對碼才算。
+          <b>同一個人只能填一格</b>，連成一線有加分。</p>
+        <details class="howto">
+          <summary>玩法說明</summary>
+          <p>條件取自現場已有的資料：衣服顏色、進場問卷的類型、轉場問卷的答案。
+            類型只有本人知道，所以一定得開口問；條件湊不滿時會補「找一個你還不認識的人」。
+            建議先跑過進場問卷或一題轉場問卷，卡片會更有變化。</p>
+        </details>
+        <label class="field">
+          <span>限時</span>
+          <select id="bingo-duration">
+            <option value="0">不限時（由主持人結束）</option>
+            <option value="300000">5 分鐘</option>
+            <option value="600000" selected>10 分鐘</option>
+            <option value="900000">15 分鐘</option>
+          </select>
+        </label>
+        <div class="row-actions">
+          <button class="btn-primary" id="btn-bingo-start">開始賓果</button>
+        </div>
+      </div>
+
+      <div id="bingo-live" hidden>
+        <div class="live-head">
+          <b>賓果進行中</b>
+          <span class="tag" id="bingo-left">—</span>
+        </div>
+        <ol class="bingo-top" id="bingo-top"></ol>
+        <button class="btn-danger" id="btn-bingo-end">結束本輪</button>
+      </div>
+
+      <p class="err" id="bingo-err" hidden></p>
     </div>
 
     <!-- 採水果（籃子接力）-->

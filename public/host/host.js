@@ -142,6 +142,15 @@ function handle(msg, key) {
       renderHarvest(msg.round, msg.reason);
       break;
 
+    case EV.BINGO_STATE:
+      renderBingo(msg.round);
+      break;
+
+    case EV.BINGO_ENDED:
+      renderBingo(null);
+      pushFeed(`人物賓果結束　${msg.winners?.length ? `最多連線：${msg.winners.join('、')}` : '沒有人連成線'}`, 'ev-pair');
+      break;
+
     case EV.HARVEST_DONE:
       renderHarvest(null);
       pushFeed(`採收完成　${msg.helperNames.join('、')}　各 +${msg.points}`, 'ev-pair');
@@ -275,6 +284,7 @@ const ERR_SLOT = {
   quiz: '#quiz-err',
   treasure: '#treasure-err',
   harvest: '#harvest-err',
+  bingo: '#bingo-err',
   mission: '#mission-err',
   runsheet: '#rs-err',
   report: '#report-err',
@@ -936,6 +946,41 @@ function renderHarvest(round, reason) {
   }
 }
 
+/**
+ * 賓果面板。與採收同樣是事件驅動，重整時由 HOST_AUTH 的 BINGO_STATE 補送接回。
+ * 只顯示進度前幾名 —— 卡片內容是參與者私人的，主辦端也不需要看。
+ */
+let bingoDeadlineAt = null;
+let bingoCountdown = null;
+function renderBingo(round) {
+  $('#bingo-idle').hidden = !!round;
+  $('#bingo-live').hidden = !round;
+  clearInterval(bingoCountdown);
+  if (!round) return;
+  bingoDeadlineAt = round.remainingMs == null ? null : Date.now() + round.remainingMs;
+  const tick = () => {
+    if (!bingoDeadlineAt) { $('#bingo-left').textContent = `${round.players} 人參加`; return; }
+    const left = Math.max(0, bingoDeadlineAt - Date.now());
+    $('#bingo-left').textContent = `${round.players} 人　剩 ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`;
+  };
+  tick();
+  if (bingoDeadlineAt) bingoCountdown = setInterval(tick, 1000);
+  const ol = $('#bingo-top');
+  ol.replaceChildren(...round.top.map((t) => Object.assign(document.createElement('li'), {
+    textContent: `${t.name}　連線 ${t.lines}　已填 ${t.filled}/9`,
+  })));
+}
+
+$('#btn-bingo-start').addEventListener('click', () => {
+  lastAction = 'bingo';
+  ws?.send(JSON.stringify({ type: EV.HOST_START_BINGO, durationMs: Number($('#bingo-duration').value) }));
+});
+
+$('#btn-bingo-end').addEventListener('click', () => {
+  if (!confirm('確定要結束這一輪賓果嗎？')) return;
+  ws?.send(JSON.stringify({ type: EV.HOST_END_BINGO }));
+});
+
 $('#btn-harvest-start').addEventListener('click', () => {
   lastAction = 'harvest';
   ws?.send(JSON.stringify({ type: EV.HOST_START_HARVEST }));
@@ -1314,6 +1359,7 @@ const LIVE_VIEW = {
   survey: '#survey-live',
   treasure: '#treasure-live',
   harvest: '#harvest-live',
+  bingo: '#bingo-live',
   quiz: '#quiz-live',
 };
 
