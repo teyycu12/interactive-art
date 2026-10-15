@@ -1095,26 +1095,16 @@ await sleep(300);
   host.off('message', onHost);
 }
 
-// ── COLOR_HUNT 任務 ───────────────────────────────────────
+// ── COLOR_HUNT 已併入人物賓果 ──────────────────────────────
 {
   hostRejects = [];
+  const before = amy.mission;
   host.send(JSON.stringify({
-    type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1,
+    type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1, colorFamily: 'RED',
   }));
   await sleep(300);
-  check('COLOR_HUNT 缺少顏色時被拒絕', hostRejects.length > 0);
-
-  host.send(JSON.stringify({
-    type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1,
-    colorFamily: 'RED',
-  }));
-  await sleep(400);
-  check('手機收到帶顏色的任務公告',
-    amy.mission?.mission?.colorFamily === 'RED',
-    amy.mission?.mission?.colorFamily);
-
-  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
-  await sleep(200);
+  check('找顏色任務已停用：發布被拒絕，手機沒收到公告', hostRejects.length > 0 && amy.mission === before,
+    hostRejects.at(-1));
 }
 
 // ── 私訊 ──────────────────────────────────────────────────
@@ -1683,6 +1673,12 @@ check('引導端點擋下過大的影格',
   };
   const pA = capture(joinPhone('賓果甲'));
   const pB = capture(joinPhone('賓果乙'));
+  // 開頭那條大螢幕連線在「重開伺服器」那段就斷了，這裡自己開一條
+  const bScreen = new WebSocket(URL);
+  await new Promise((res) => bScreen.on('open', res));
+  bScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' }));
+  const screenBingo = [];
+  bScreen.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'STAGE_BINGO' || m.type === 'BINGO_ENDED') screenBingo.push(m); });
   await sleep(500);
   // 前面的段落已經把 host 關掉了，這裡自己開一條
   const bHost = new WebSocket(URL);
@@ -1734,6 +1730,8 @@ check('引導端點擋下過大的影格',
   await sleep(300);
   check('輸入對方的碼、對方勾過這一題就填上', pA.bingo.results.at(-1)?.ok === true && pA.bingo.card.cells[first].name === '賓果乙',
     JSON.stringify(pA.bingo.results.at(-1)));
+  check('大螢幕在兩人之間畫一道光', screenBingo.some((m) => m.type === 'STAGE_BINGO'
+    && m.a === pA.welcome.userId && m.b === pB.welcome.userId), JSON.stringify(screenBingo));
   // 甲的衣服是紅色、兩人也沒有配對連線：乙卡上「衣服有紅色」或「還不認識的人」甲一定符合
   check('被填進去的人收到通知，並被邀請順便把對方填上', pB.bingo.tagged.at(-1)?.byName === '賓果甲' && !!pB.bingo.tagged.at(-1)?.offer?.label,
     JSON.stringify(pB.bingo.tagged.at(-1)));
@@ -1750,7 +1748,7 @@ check('引導端點擋下過大的影格',
   const second = pA.bingo.card.cells.findIndex((c, i) => i !== first && !c.filled);
   pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: second, code: pB.code }));
   await sleep(200);
-  check('連續填格受配對冷卻限制', pA.bingo.results.at(-1)?.reason === 'COOLDOWN', JSON.stringify(pA.bingo.results.at(-1)));
+  check('連續填格受冷卻限制（防枚舉配對碼）', pA.bingo.results.at(-1)?.reason === 'COOLDOWN', JSON.stringify(pA.bingo.results.at(-1)));
 
   // 冷卻過後再填同一個人：10 人以上不行；人少時可以（否則 9 格永遠填不滿）
   await sleep(3100);
@@ -1767,6 +1765,11 @@ check('引導端點擋下過大的影格',
   await sleep(300);
   bHost.close();
   check('結束時全場收到結果', pA.bingo.ended !== null && Array.isArray(pB.bingo.ended?.winners), JSON.stringify(pA.bingo.ended));
+  const finale = screenBingo.find((m) => m.type === 'BINGO_ENDED')?.summary;
+  // 甲、乙互相各被找到一次：只被一個人找到不公布
+  check('結算帶全場填了幾格；被找不到兩次就不唸「最多人來找」', finale?.cells >= 3 && finale?.mostFound === null,
+    JSON.stringify(finale));
+  bScreen.close();
 
   // 一格都沒人填就結束：不能把全場 0 格同分的人都唸成贏家
   const h2 = new WebSocket(URL);

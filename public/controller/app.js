@@ -17,7 +17,6 @@ import {
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
 } from '/shared/capture-guidance.js';
-import { COLOR_FAMILY_MAP } from '/shared/colorFamily.js';
 import { HEAT_MAP } from '/shared/heat.js';
 import { ZONE_MAP } from '/shared/scene.js';
 import { avatarImage, avatarPortrait } from '/shared/avatarSprite.js';
@@ -1494,7 +1493,6 @@ const PAIR_MESSAGES = {
   [PAIR_ERRORS.COOLDOWN]: '太快了，休息一下再試。',
   [PAIR_ERRORS.DECLINED]: '對方沒有確認這次配對。',
   [PAIR_ERRORS.EXPIRED]: '配對逾時，請重新輸入。',
-  [PAIR_ERRORS.COLOR_MISMATCH]: '這位的身上沒有指定的顏色，再找找看。',
 };
 
 function showPairMsg(text, ok = false) {
@@ -1511,19 +1509,6 @@ function renderMission() {
   $('#pair-mycode').textContent = myCode;
   $('#pair-title').textContent = mission.title;
   $('#pair-brief').textContent = mission.brief ?? '';
-
-  // COLOR_HUNT：把要找的顏色放在最顯眼的位置。
-  // 只寫在 brief 裡不夠 —— 那行字在小螢幕上會被當成說明略過，
-  // 而顏色是這個任務唯一需要記住的東西。
-  const fam = mission.colorFamily ? COLOR_FAMILY_MAP[mission.colorFamily] : null;
-  const chip = $('#mission-color-chip');
-  if (chip) {
-    chip.hidden = !fam;
-    if (fam) {
-      chip.textContent = `${fam.glyph} 找身上有${fam.label}的人`;
-      chip.style.setProperty('--chip', fam.swatch);
-    }
-  }
 
   const done = myProgress >= mission.target;
   const frac = `${myProgress} / ${mission.target}`;
@@ -1751,6 +1736,7 @@ const BINGO_ERROR_TEXT = {
   SELF: '不能填自己喔。',
   USED: '這個人在你卡上已經填夠多格了，去找別人吧。',
   NO_OFFER: '這次的「順便填」已經過期了，請直接輸入他的配對碼。',
+  ACT_ONLY: '這一格要真的一起做到才會自動填上，不能輸碼。',
   MISMATCH: '這個人不符合這一格的條件，再問問別人。',
   NOT_FOUND: '查無這組配對碼，請對方再唸一次（碼每分鐘會換）。',
   COOLDOWN: '慢一點，等 3 秒再送。',
@@ -1786,6 +1772,14 @@ function renderBingo() {
         Object.assign(document.createElement('span'), { className: 'who', textContent: c.name || '已填' }),
         Object.assign(document.createElement('span'), { className: 'cond', textContent: c.label }),
       );
+    } else if (c.auto) {
+      // 「一起做一件事」：不給輸碼，做到了伺服器會自動填上
+      btn.classList.add('auto');
+      btn.append(
+        Object.assign(document.createElement('span'), { className: 'cond', textContent: c.label }),
+        Object.assign(document.createElement('span'), { className: 'hint', textContent: '一起做到就自動填上' }),
+      );
+      btn.addEventListener('click', () => showBingoMsg('這一格不用輸碼：找個人一起做到，就會自動填上。'));
     } else {
       btn.textContent = c.label;
       btn.addEventListener('click', () => pickBingoCell(i));
@@ -1876,6 +1870,14 @@ function handleBingoMessage(msg) {
       return true;
 
     case EV.BINGO_RESULT:
+      if (msg.ok && msg.auto) {
+        // 一起做到而自動填上：只提示，不動輸碼欄 —— 使用者可能正在輸別格的碼
+        vibrate([30, 40, 30]);
+        showToast(msg.full ? '全卡完成！🎉'
+          : msg.newLines ? `連成一線！和 ${msg.name} 一起做到了`
+          : `和 ${msg.name} 一起做到了，賓果自動填上一格`);
+        return true;
+      }
       if (msg.ok) {
         bingoPick = null;
         $('#bingo-entry').hidden = true;

@@ -30,11 +30,11 @@ python -m pytest backend/tests
 
 # 一個人也能把場域填滿，實際玩一輪（開發／調校用，現場請勿使用）
 npm run bots -- --count 9          # 湊滿 10 人，自己佔 1 個
-npm run bots -- --colors           # 每種色族各保證一隻（測顏色任務）
+npm run bots -- --colors           # 每種色族各保證一隻（測賓果的顏色格）
 
 # 人物匯入台：把過去生成過的角色放回場上，每個都能單獨操控
 # （開發／調校用，現場請勿使用 —— 匯入的角色一樣佔 MAX_AGENTS 名額）
-python scripts/asset_colors.py     # 先補色票，不跑的話顏色任務會依假色判定
+python scripts/asset_colors.py     # 先補色票，不跑的話賓果的顏色格會依假色判定
 # 然後開 http://localhost:3000/dev/ ，輸入主辦端通行密鑰
 
 # 匯出／匯入單一角色：主辦端「系統 → 角色生成紀錄」每列有「圖檔」（去背 PNG）

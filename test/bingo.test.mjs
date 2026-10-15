@@ -5,7 +5,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BingoRound, BINGO_ERRORS, BINGO_LINES, STRANGER } from '../server/bingo.js';
+import { BingoRound, BINGO_ERRORS, BINGO_LINES, STRANGER, ACT_CONDS } from '../server/bingo.js';
 
 // 測試用的人與條件：每個人身上有一組條件 id
 const PEOPLE = {
@@ -280,4 +280,77 @@ describe('被找的人順便填', () => {
     g.claim('b', 1, 'd');
     assert.equal(g.offerFor('b', 'a', 0).cell, 2, '第一橫列只差第 2 格');
   });
+});
+
+describe('一起做一件事的格子（自動填上）', () => {
+  // 卡上只放「一起乾杯」與 STRANGER：任何其他人都「可能」一起乾杯
+  const anyone = (who, cond, from) => who !== from;
+  function withAct() {
+    const g = new BingoRound();
+    g.start(['a', 'b', 'c'], [ACT_CONDS[0]], anyone, { now: 0 });
+    return g;
+  }
+  const actCell = (g, id) => g.cardOf(id).cells.findIndex((c) => c.cond.id === 'act:cheers');
+
+  test('不能輸碼填：要真的一起做到', () => {
+    const g = withAct();
+    assert.equal(g.claim('a', actCell(g, 'a'), 'b').reason, BINGO_ERRORS.ACT_ONLY);
+  });
+
+  test('一起做到時自動填上；同一格不會再被填', () => {
+    const g = withAct();
+    const i = actCell(g, 'a');
+    const r = g.autoFill('a', 'act:cheers', 'b');
+    assert.equal(r.ok, true);
+    assert.equal(r.cell, i);
+    assert.equal(g.cardOf('a').cells[i].by, 'b');
+    assert.equal(g.autoFill('a', 'act:cheers', 'c'), null, '那一格已經填了');
+  });
+
+  test('卡上沒有那一格、還在問自我介紹、對象是自己時不填', () => {
+    const g = withAct();
+    assert.equal(g.autoFill('a', 'act:wave', 'b'), null);
+    assert.equal(g.autoFill('a', 'act:cheers', 'a'), null);
+    const h = new BingoRound();
+    h.start(['a', 'b'], [ACT_CONDS[0]], anyone, { now: 0, facts: ['會游泳', '養過貓', '能吃辣'] });
+    assert.equal(h.autoFill('a', 'act:cheers', 'b'), null);
+  });
+
+  test('「順便填」不會邀請一起做的格子', () => {
+    const g = new BingoRound();
+    g.start(['a', 'b'], [ACT_CONDS[0]], anyone, { now: 0 });
+    // b 的卡只剩一起乾杯那格空著
+    for (const [i, c] of g.cardOf('b').cells.entries()) if (c.cond.id !== 'act:cheers') c.by = 'x';
+    assert.equal(g.offerFor('b', 'a', 0), null);
+  });
+});
+
+describe('結算統計', () => {
+  test('全場填了幾格、誰被最多人找到（同一張卡被填兩格只算一次）', () => {
+    const g = new BingoRound();
+    g.start(['a', 'b', 'c', 'd'], [], test_, { now: 0 });   // 全部 STRANGER
+    g.claim('a', 0, 'd');
+    g.claim('a', 1, 'd');   // 4 人時一人可填 3 格；d 在 a 卡上兩格只算被 a 找到一次
+    g.claim('b', 0, 'd');
+    g.claim('c', 0, 'a');
+    assert.deepEqual(g.summary(), { cells: 4, mostFound: { id: 'd', count: 2 } });
+  });
+
+  test('沒人填就沒有最多人找的人', () => {
+    const g = new BingoRound();
+    g.start(['a', 'b'], [], test_, { now: 0 });
+    assert.deepEqual(g.summary(), { cells: 0, mostFound: null });
+  });
+});
+
+test('輸碼冷卻是賓果自己的一份，跨輪保留', () => {
+  const g = new BingoRound({ claimCooldownMs: 3000 });
+  assert.equal(g.inCooldown('a', 0), false);
+  g.noteClaim('a', 1000);
+  assert.equal(g.inCooldown('a', 3999), true);
+  assert.equal(g.inCooldown('a', 4000), false);
+  g.start(['a', 'b'], [], test_, { now: 0 });
+  g.noteClaim('a', 5000);
+  g.end();
+  assert.equal(g.inCooldown('a', 6000), true, '結束再開一輪不該把冷卻歸零');
 });

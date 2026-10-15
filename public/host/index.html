@@ -142,11 +142,6 @@
           <select id="mission-type"></select>
         </label>
         <p class="brief" id="mission-brief"></p>
-        <!-- div 而非 label：label 裡包按鈕時，點標題字會誤選第一個顏色 -->
-        <div class="field" id="mission-color-field" hidden>
-          <span>要找的顏色</span>
-          <div class="color-picker" id="mission-color" role="group" aria-label="要找的顏色"></div>
-        </div>
         <label class="field">
           <span>每人目標次數</span>
           <input type="number" id="mission-target" min="1" max="10" value="2">
@@ -275,6 +270,7 @@
           <p>條件取自：開局勾的自我介紹、衣服顏色、進場問卷的類型、轉場問卷的答案，每類最多 3 格。
             自我介紹與類型只有本人知道，所以一定得開口問；條件湊不滿時會補「找一個你還不認識的人」。</p>
           <p>被找的人如果也需要找對方（對方剛好符合他卡上的某一格），手機會問他要不要順便填上，不必再輸碼。</p>
+          <p>有些格子是「一起做一件事」：一起乾杯、互相揮手、在號碼牌桌同桌聊一分鐘。這種格子不能輸碼，兩人真的做到時自動填上。</p>
         </details>
         <details class="persona-editor" id="bingo-facts-editor">
           <summary>自我介紹題 <span class="badge-off" id="bingo-facts-default">依場景預設</span></summary>

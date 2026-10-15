@@ -10,7 +10,6 @@ import {
   EV, MISSION_TYPES, MISSION_DURATIONS, QUIZ, QUIZ_CHOICES, QUIZ_PHASE, EVENT_INFO,
 } from '/shared/protocol.js';
 import { renderAvatarSVG, CV_FULL_PART } from '/shared/avatars.js';
-import { COLOR_FAMILIES } from '/shared/colorFamily.js';
 import { HEAT_LEVELS } from '/shared/heat.js';
 import { SELECTABLE_THEMES as THEMES, THEME_MAP } from '/shared/themes.js';
 import { PERSONA_TYPES, PERSONA_RESULT_MAP, PERSONA_LIMITS } from '/shared/persona.js';
@@ -336,9 +335,6 @@ try {
 // ─────────────────────────────────────────────────────────────
 // 任務控制
 // ─────────────────────────────────────────────────────────────
-
-/** 目前選定的顏色。COLOR_HUNT 以外的任務型別不會用到 */
-let pickedColor = COLOR_FAMILIES[0].id;
 
 // ─────────────────────────────────────────────────────────────
 // 活動設定：場景 + 活動名稱
@@ -739,41 +735,13 @@ function buildMissionTypes() {
     sel.append(opt);
   }
   syncBrief();
-  buildColorPicker();
 }
 
-function buildColorPicker() {
-  const box = $('#mission-color');
-  box.replaceChildren();
-  for (const f of COLOR_FAMILIES) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'color-swatch';
-    btn.dataset.family = f.id;
-    btn.style.setProperty('--swatch', f.swatch);
-    btn.title = f.label;
-    btn.textContent = f.label;
-    btn.addEventListener('click', () => {
-      pickedColor = f.id;
-      syncColorPicker();
-    });
-    box.append(btn);
-  }
-  syncColorPicker();
-}
-
-function syncColorPicker() {
-  for (const btn of $('#mission-color').children) {
-    btn.classList.toggle('is-picked', btn.dataset.family === pickedColor);
-  }
-}
 
 function syncBrief() {
   const t = missionTypes.find((m) => m.id === $('#mission-type').value);
   $('#mission-brief').textContent = t?.brief ?? '';
   if (t?.defaultTarget) $('#mission-target').value = t.defaultTarget;
-  // 只有需要顏色參數的型別才顯示選單，避免主辦端誤以為每種任務都要選色
-  $('#mission-color-field').hidden = t?.param !== 'colorFamily';
 }
 $('#mission-type').addEventListener('change', syncBrief);
 
@@ -792,18 +760,14 @@ function missionStep() {
   const t = missionTypes.find((m) => m.id === $('#mission-type').value);
   const target = Number($('#mission-target').value);
   const durationMs = Number($('#mission-duration').value);
-  const color = t?.param === 'colorFamily'
-    ? COLOR_FAMILIES.find((f) => f.id === pickedColor) : null;
   return {
     kind: 'mission',
-    label: [t?.label ?? '任務', color?.label, `每人 ${target} 次`, durationMs ? `${durationMs / 60000} 分鐘` : null]
+    label: [t?.label ?? '任務', `每人 ${target} 次`, durationMs ? `${durationMs / 60000} 分鐘` : null]
       .filter(Boolean).join('・'),
     msg: {
       type: EV.HOST_PUBLISH_MISSION,
       missionType: $('#mission-type').value,
       target,
-      // 不需要顏色的型別送 null，伺服器會忽略
-      colorFamily: color ? pickedColor : null,
       durationMs,
     },
   };

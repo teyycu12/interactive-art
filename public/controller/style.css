@@ -1252,18 +1252,6 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 /* 六項全通過時輔助線轉綠：參與者的視線在取景框上，餘光就能判斷，
    不必把視線移到右邊的文字。 */
 .scan-stage.is-ready { border-color: #3FAE6A; box-shadow: 0 0 0 3px rgba(63, 174, 106, .45); }
-/* COLOR_HUNT：要找的顏色。放在任務說明下方，是面板上最顯眼的一行 */
-.color-chip {
-  display: block;
-  margin: 0 0 14px;
-  padding: 11px 14px;
-  border-radius: var(--r-sm);
-  border-left: 6px solid var(--chip, #888);
-  background: color-mix(in srgb, var(--chip, #888) 14%, transparent);
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: .01em;
-}
 
 /* ── 尋寶（先知模式）───────────────────────────────────── */
 .treasure {
@@ -1635,6 +1623,9 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 }
 .bingo-cell[aria-pressed="true"] { outline: 3px solid var(--accent); outline-offset: 1px; }
 .bingo-cell.filled { background: var(--wall-tint); border-style: dashed; }
+/* 「一起做一件事」的格子：不輸碼，用黃牌色和其他格子分開 */
+.bingo-cell.auto { background: var(--tag); }
+.bingo-cell .hint { display: block; margin-top: 4px; font-size: 11px; font-weight: 600; color: var(--ink); }
 
 /* 賓果開局的自我介紹：一題一列，按一下切換。選中用牆面綠底紙色字（6.65:1） */
 .bingo-facts { display: grid; gap: 8px; margin: 10px 0 14px; }

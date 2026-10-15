@@ -1,9 +1,9 @@
 /**
  * 虛擬參與者注入器（整合版）
  *
- * 用途：一個人也能把場域填滿，實際玩一輪尋寶或顏色任務。
+ * 用途：一個人也能把場域填滿，實際玩一輪尋寶或人物賓果。
  *
- * 為什麼需要：尋寶至少要 2 人、顏色任務要場上有各種顏色的人，
+ * 為什麼需要：尋寶至少要 2 人、賓果的顏色格要場上有各種顏色的人，
  * 而「冷熱門檻的節奏對不對」「寶箱在 3D 房間裡看不看得見」這類問題
  * 測試完全測不出來 —— 只能真的玩一輪。找 10 個真人來試調參數不現實，
  * 因此讓機器人湊人數，真人只出一個（當先知或當找的人）。
@@ -15,7 +15,7 @@
  *   node scripts/bots.mjs                 # 預設 5 隻，連 localhost:3000
  *   node scripts/bots.mjs --count 9       # 湊滿 10 人（自己佔 1 個）
  *   node scripts/bots.mjs --url ws://192.168.1.5:3000
- *   node scripts/bots.mjs --colors        # 每種色族各保證一隻（測顏色任務）
+ *   node scripts/bots.mjs --colors        # 每種色族各保證一隻（測賓果的顏色格）
  *   node scripts/bots.mjs --still         # 進場後不動，只當背景
  *
  * Ctrl-C 會讓機器人主動離場，不留幽靈角色。
@@ -52,7 +52,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * 產生外觀。--colors 模式下輪流指定色族，確保場上每種顏色都有人 ——
- * 否則隨機挑色很容易整場沒有半個紫色的人，顏色任務就無解了。
+ * 否則隨機挑色很容易整場沒有半個紫色的人，賓果的顏色格就湊不出來了。
  */
 function avatarFor(index) {
   if (!BY_COLOR) return randomAvatarConfig();
@@ -168,7 +168,7 @@ class Bot {
 
 // ── 主流程 ────────────────────────────────────────────────
 console.log(`\n  注入 ${COUNT} 隻虛擬參與者 → ${URL}`);
-if (BY_COLOR) console.log('  （--colors：每種色族輪流指定，確保顏色任務有解）');
+if (BY_COLOR) console.log('  （--colors：每種色族輪流指定，確保賓果的顏色格湊得出來）');
 if (STILL) console.log('  （--still：進場後不移動）');
 console.log();
 

@@ -4,12 +4,12 @@
 生成當下 slicer 會回傳 fallbackColors，但那份資料只存在於那一次的 HTTP 回應裡
 （契約 4），落地的只有 head/torso/legs/full 四張 webp。因此把過去生成的角色重新
 放回場上時，顏色就缺了一塊 —— 而 `shared/colorFamily.js` 的色族判定讀的正是
-fallbackColors.torso 與 .legs，也就是顏色任務（COLOR_HUNT）的判定依據。
+fallbackColors.torso 與 .legs，也就是人物賓果顏色格的判定依據。
 
 ── 為什麼不在前端取樣 ──
 瀏覽器拿得到 full.webp，用 canvas 取色看似更省事，但那等於把
 `backend/slicer.py` 的 sample_fallback_colors 在第二個語言再實作一次。取樣區域
-或中位數算法只要有一點差，顏色任務就會叫大家去找「紅色衣服的人」，而那個人在
+或中位數算法只要有一點差，賓果就會叫大家去找「紅色衣服的人」，而那個人在
 畫面上是藍的 —— 兩邊都不會報錯。這與切片比例的跨語言耦合是同一個坑
 （見 CLAUDE.md 開頭三條）。
 
