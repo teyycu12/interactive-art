@@ -170,6 +170,17 @@ describe('正面', () => {
     assert.ok(rig.skin, '應該找得到膚色');
     rig.skin.forEach((v, i) => assert.ok(Math.abs(v - SKIN[i]) < 8));
   });
+
+  for (const [name, rgb] of [['白色', WHITE], ['粉紅', PINK]]) {
+    test(`臉的取樣範圍裡${name}比膚色多，膚色仍是膚色（實測量成${name}，裙子被當成手）`, () => {
+      const img = frontFigure();
+      // 臉的下半大半被蓋住（白衣領、粉紅的長髮或口罩），只剩上面幾列是膚色
+      fill(img, 20, 22, 40, 29, rgb);
+      const rig = buildWalkRig(img, 'front');
+      assert.ok(rig.skin, '應該找得到膚色');
+      rig.skin.forEach((v, i) => assert.ok(Math.abs(v - SKIN[i]) < 8, `量成 ${rig.skin.map(Math.round)}`));
+    });
+  }
 });
 
 describe('長裙', () => {
@@ -277,6 +288,76 @@ describe('側面', () => {
     const rig = buildWalkRig(shortsFigure({ bareArm: false }), 'side', { skin });
     assert.ok(!names(rig).includes('arm'), names(rig).join());
     assert.ok(names(rig).includes('legFront'));
+  });
+
+  test('窄裙：裙子只比腿寬一點，腿仍從裙襬底下擺（實測整件裙子被當成腿剪開）', () => {
+    const img = canvas();
+    fill(img, 22, 0, 38, 29, SKIN);
+    fill(img, 22, 0, 30, 29, HAIR);
+    fill(img, 27, 30, 32, 32, SKIN);
+    fill(img, 23, 33, 37, 55, SHIRT);
+    fill(img, 25, 56, 34, 70, PINK);    // 窄裙：10 格寬，腿 8 格 —— 寬度分不出來
+    fill(img, 26, 71, 33, 85, SKIN);
+    fill(img, 26, 86, 37, 89, SHOE);
+    const rig = buildWalkRig(img, 'side', { skin });
+    const leg = rig.regions.find((r) => r.name === 'legFront');
+    assert.ok(leg, names(rig).join());
+    assert.ok(leg.pivot >= 71, `腿從第 ${leg.pivot} 列起，包進了裙子`);
+    const fr = walkFrame(img, rig, 1);
+    for (let y = 56 * CELL; y < 71 * CELL; y++) {
+      for (let x = 25 * CELL; x < 35 * CELL; x++) {
+        const i = (y * img.width + x) * 4;
+        assert.deepEqual([...fr.data.slice(i, i + 4)], [...img.data.slice(i, i + 4)], `裙子 (${x}, ${y}) 動了`);
+      }
+    }
+  });
+
+  test('長褲：垂在骨盆旁的手掌跟著手臂擺，擺開後原地補上褲子的顏色', () => {
+    const img = canvas();
+    fill(img, 22, 0, 38, 29, SKIN);
+    fill(img, 22, 0, 30, 29, HAIR);
+    fill(img, 27, 30, 32, 32, SKIN);
+    fill(img, 23, 33, 37, 58, SHIRT);
+    fill(img, 24, 59, 35, 85, PANTS);   // 寬褲：與小腿同色，腿的上緣一路到腰
+    fill(img, 24, 86, 38, 89, SHOE);
+    fill(img, 28, 40, 31, 63, SKIN);    // 短袖：手臂到手掌，手掌落在褲子上
+    const rig = buildWalkRig(img, 'side', { skin });
+    const arm = rig.regions.find((r) => r.name === 'arm');
+    assert.ok(arm, names(rig).join());
+    assert.ok(arm.bottom >= 63, `手只到第 ${arm.bottom} 列，手掌被切掉`);
+    const fr = walkFrame(img, rig, 1);
+    for (let y = 59 * CELL; y < 64 * CELL; y++) {
+      for (let x = 24 * CELL; x < 36 * CELL; x++) {
+        assert.ok(alphaAt(fr, x, y) > 0, `褲子上 (${x}, ${y}) 破了一個洞`);
+      }
+    }
+    // 手掌兩側的深色是褲子不是描邊，不跟著手走：褲子的輪廓外不該出現褲子的顏色
+    for (let y = 59 * CELL; y < 64 * CELL; y++) {
+      for (let x = 0; x < 24 * CELL; x++) {
+        const i = (y * img.width + x) * 4;
+        const isPants = fr.data[i + 3] && fr.data[i] === PANTS[0] && fr.data[i + 2] === PANTS[2];
+        assert.ok(!isPants, `褲子被手帶到 (${x}, ${y})`);
+      }
+    }
+  });
+
+  test('大頭（約 2.2 頭身）：腿從比較低的髖部擺，垂得比較低的手掌也算在手上', () => {
+    // 2026-10-15 參考圖集換成約 2.2 頭身。比例寫死成 3 頭身時，腿從腰上面擺、
+    // 手掌（垂到 78%）被切在 74% 之外，原地留下一團殘影
+    const img = canvas();
+    fill(img, 21, 0, 39, 40, SKIN);       // 頭到 45%
+    fill(img, 21, 0, 39, 12, HAIR);
+    fill(img, 27, 41, 32, 43, SKIN);      // 脖子
+    fill(img, 23, 44, 37, 55, SHIRT);
+    fill(img, 24, 56, 35, 85, PANTS);     // 褲頭在 62%，髖部約 70%
+    fill(img, 24, 86, 38, 89, SHOE);
+    fill(img, 28, 46, 31, 70, SKIN);      // 手臂到手掌，手掌垂到 78%
+    const rig = buildWalkRig(img, 'side', { skin, body: { handRow: 69 } });
+    const arm = rig.regions.find((r) => r.name === 'arm');
+    const leg = rig.regions.find((r) => r.name === 'legFront');
+    assert.ok(arm && leg, names(rig).join());
+    assert.ok(arm.bottom >= 70, `手只到第 ${arm.bottom} 列，手掌被切掉`);
+    assert.ok(leg.pivot >= 62, `腿從第 ${leg.pivot} 列擺，髖部還在腰上面`);
   });
 
   test('沒有膚色（正面分析不出來）時手不動，腳照樣動', () => {
