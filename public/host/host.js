@@ -964,6 +964,8 @@ function renderState(state) {
   if (state.personaSpread) renderPersonaSpread(state.personaSpread);
   syncProphetOptions();
   $('#stat-people').textContent = state.agents.length;
+  $('#stat-audience').textContent = state.audience ?? 0;
+  $('#stat-audience-box').hidden = !state.audience;
   $('#stat-edges').textContent = state.graphEdges;
   $('#people-count').textContent = state.agents.length;
   $('#tab-people-count').textContent = state.agents.length;

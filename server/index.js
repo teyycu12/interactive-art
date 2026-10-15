@@ -294,6 +294,15 @@ const screens = new Set();
 const hosts = new Set();
 /** @type {Map<string, import('ws').WebSocket>} agentId → 該參與者的連線，用於定向推送 */
 const controllers = new Map();
+/**
+ * 候補名單：人滿時進場的連線，依先後排隊（ws.role === 'audience'，ws.pendingJoin 是原本的 CLIENT_JOIN）。
+ *
+ * 原本人滿就回「現場人數已滿，請稍候再試」—— 被擋的人只能自己猜什麼時候再試，
+ * 而離場的人還會佔名額 45 秒（AGENT_TTL）。最容易直接走掉的就是這些人。
+ * 現在排進名單，主迴圈一看到空位就替排第一的人完成進場，手機不必再操作。
+ * @type {import('ws').WebSocket[]}
+ */
+const audienceQueue = [];
 
 const send = (ws, type, payload) => {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type, ...payload }));
@@ -357,6 +366,7 @@ function hostState() {
     })),
     mission: missions.state(stage.agents.size),
     graphEdges: graph.size,
+    audience: audienceQueue.length,
     quiz: quiz.publicView(),
     survey: survey.publicView(),
     quizReveal: quiz.revealView(),
@@ -637,9 +647,11 @@ function handleJoin(ws, msg) {
     agent.name = name;
     agent.avatar = avatar.value;
   } else {
-    agent = stage.addAgent({ name, avatar: avatar.value });
+    // 已經有人在排隊時，新來的人也排到後面 —— 不能趁著某人離場的那一瞬間插隊
+    const mustQueue = audienceQueue.length > 0 && !ws.promoting;
+    agent = mustQueue ? null : stage.addAgent({ name, avatar: avatar.value });
     if (!agent) {
-      send(ws, EV.CLIENT_REJECT, { reason: '現場人數已滿，請稍候再試' });
+      enqueueAudience(ws, msg);
       return;
     }
   }
@@ -688,6 +700,57 @@ function handleJoin(ws, msg) {
   });
   pushHostState();
   console.log(`[join] ${agent.name} (${agent.id})　場上人數 ${stage.agents.size}`);
+}
+
+/** 排進候補名單。同一條連線重送 CLIENT_JOIN 只更新資料，不重排 */
+function enqueueAudience(ws, msg) {
+  ws.role = 'audience';
+  ws.pendingJoin = msg;
+  if (!audienceQueue.includes(ws)) {
+    audienceQueue.push(ws);
+    console.log(`[audience] 人滿，排入候補　候補 ${audienceQueue.length} 人`);
+  }
+  pushAudiencePositions();
+  pushHostState();
+}
+
+function dropAudience(ws) {
+  const i = audienceQueue.indexOf(ws);
+  if (i === -1) return;
+  audienceQueue.splice(i, 1);
+  pushAudiencePositions();
+  pushHostState();
+}
+
+/** 每個人前面還有幾位 */
+function pushAudiencePositions() {
+  audienceQueue.forEach((w, i) => send(w, EV.AUDIENCE_WAIT, { ahead: i }));
+}
+
+/**
+ * 有空位就讓排第一的人進場。由主迴圈每個 tick 呼叫 —— 空位的來源很多
+ * （主動離場、被請出場、斷線逾時），掛在每一條路徑上遲早會漏一條。
+ */
+function promoteAudience() {
+  let moved = false;
+  while (audienceQueue.length && !stage.isFull()) {
+    const w = audienceQueue.shift();
+    moved = true;
+    if (w.readyState !== w.OPEN || w.role !== 'audience') continue;
+    w.role = null;
+    w.promoting = true;
+    try {
+      handleJoin(w, w.pendingJoin);
+    } finally {
+      w.promoting = false;
+    }
+    // 沒進成（例如名字在這段期間變得不合格）就不再排：handleJoin 已經回了 CLIENT_REJECT
+    if (w.agentId) console.log(`[audience] 候補進場　剩 ${audienceQueue.length} 人`);
+  }
+  if (moved) {
+    pushAudiencePositions();
+    pushHostState();
+  }
 }
 
 /**
@@ -1595,7 +1658,9 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    if (ws.role === 'screen') {
+    if (ws.role === 'audience') {
+      dropAudience(ws);
+    } else if (ws.role === 'screen') {
       screens.delete(ws);
     } else if (ws.role === 'host') {
       hosts.delete(ws);
@@ -1640,6 +1705,7 @@ const loop = startTicker({
   onTick(dt) {
     // 傳入社交圖譜：配對過的角色之間凝聚力較強，關係會表現為畫面上的群聚
     const zoneMoves = stage.tick(dt, graph);
+    if (audienceQueue.length) promoteAudience();
     greetings.prune(Date.now());
 
     // 分區進出。只在換區時送，不是每幀 ——

@@ -18,6 +18,7 @@ export const EV = {
   // Server → Phone
   CLIENT_WELCOME: 'CLIENT_WELCOME', // 登入確認，回傳伺服器指派的 userId
   CLIENT_REJECT: 'CLIENT_REJECT',   // 資料驗證失敗
+  AUDIENCE_WAIT: 'AUDIENCE_WAIT',   // 人滿：已排進候補名單 {ahead}，有空位會由伺服器直接讓他進場（送 CLIENT_WELCOME）
   GREET_INVITE: 'GREET_INVITE',     // 有人跟你揮手（帶 fromId，回揮時當 INPUT_ACTION 的 target）
   GREET_RESULT: 'GREET_RESULT',     // 揮手／乾杯的結果，見 GREET_OUTCOME
   CLIENT_SYNC: 'CLIENT_SYNC',       // 自己與鄰近角色的座標（15Hz，僅送該連線）

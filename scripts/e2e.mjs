@@ -1579,4 +1579,48 @@ const huge = Buffer.alloc(2 * 1024 * 1024, 0x20);
 check('引導端點擋下過大的影格',
   await postApi('/api/preview', huge) === 'frame_too_large');
 
+// ── 候補名單（人滿時）──────────────────────────────────────
+// 放在最後：會把場上補滿到上限，不能影響前面的任何一段。
+{
+  const crowd = [];
+  const join = (name) => {
+    const w = new WebSocket(URL);
+    const box = { w, log: [], welcomed: false };
+    w.on('open', () => w.send(JSON.stringify({ type: 'CLIENT_JOIN', name, avatar: AVATAR })));
+    w.on('message', (d) => {
+      const m = JSON.parse(d);
+      if (m.type === 'CLIENT_WELCOME') box.welcomed = true;
+      if (m.type === 'AUDIENCE_WAIT') box.log.push(m.ahead);
+    });
+    return box;
+  };
+  // 補到有人開始排候補為止（場上原本有幾個人不重要）
+  let first = null;
+  for (let i = 0; i < 40 && !first; i++) {
+    const b = join(`湊數${i}`);
+    await sleep(40);
+    if (b.log.length) first = b; else crowd.push(b);
+  }
+  await sleep(200);
+  check('人滿時排進候補而不是被拒絕', first !== null && first.log.at(-1) === 0, JSON.stringify(first?.log));
+  const second = join('候補乙');
+  await sleep(300);
+  check('候補名單依先後排序', second.log.at(-1) === 1, JSON.stringify(second.log));
+
+  // 有人離場：排第一的自動進場，手機不必再操作
+  crowd.find((b) => b.welcomed).w.send(JSON.stringify({ type: 'CLIENT_LEAVE' }));
+  await sleep(400);
+  check('有空位時排第一的人自動進場', first.welcomed === true);
+  check('後面的人遞補到第一位', second.log.at(-1) === 0, JSON.stringify(second.log));
+
+  // 有人在排隊時，新來的人不能趁空位插隊
+  crowd.filter((b) => b.welcomed).at(-1).w.send(JSON.stringify({ type: 'CLIENT_LEAVE' }));
+  const late = join('插隊者');
+  await sleep(500);
+  check('空位給排隊的人，不給剛來的人', second.welcomed === true && late.welcomed === false && late.log.at(-1) === 0,
+    JSON.stringify({ second: second.welcomed, late: late.log }));
+  for (const b of [...crowd, first, second, late]) b.w.close();
+  await sleep(200);
+}
+
 finish();

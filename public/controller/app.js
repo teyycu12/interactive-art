@@ -1301,6 +1301,11 @@ function connect() {
     try { msg = JSON.parse(e.data); } catch { return; }
 
     if (msg.type === EV.CLIENT_WELCOME) {
+      // 從候補名單進場：伺服器直接送 WELCOME，不必手機重新操作
+      if (closeAudienceWait()) {
+        showToast('輪到你了！已經進場');
+        vibrate([60, 40, 60, 40, 120]);
+      }
       try {
         localStorage.setItem(LS.userId, msg.userId);
         if (msg.rejoinToken) localStorage.setItem(LS.rejoinToken, msg.rejoinToken);
@@ -1328,7 +1333,10 @@ function connect() {
       // 個人視角畫的是大螢幕同一個場景的局部，主題要跟著主辦端切換
       stageTheme = msg.theme;
       renderer?.setTheme(stageTheme);
+    } else if (msg.type === EV.AUDIENCE_WAIT) {
+      showAudienceWait(msg.ahead);
     } else if (msg.type === EV.CLIENT_REJECT) {
+      closeAudienceWait();
       setStatus('資料有誤', 'warn');
       showToast(`登入失敗：${msg.reason}`);
       backToBuilder();
@@ -1357,6 +1365,37 @@ function backToBuilder() {
   showScreen('builder');
   showStep(3);
 }
+
+// ── 候補名單（人滿時）────────────────────────────────────
+const audienceWait = $('#audience-wait');
+
+function showAudienceWait(ahead) {
+  $('#audience-ahead').textContent = ahead > 0 ? `前面還有 ${ahead} 人` : '下一個就是你';
+  setStatus('候補中', 'warn');
+  if (!audienceWait.hidden) return;
+  audienceWait.hidden = false;
+  pushOverlay(audienceWait, { onEscape: leaveAudience });
+}
+
+/** @returns {boolean} 原本是否開著 */
+function closeAudienceWait() {
+  if (audienceWait.hidden) return false;
+  audienceWait.hidden = true;
+  popOverlay(audienceWait);
+  return true;
+}
+
+/** 不等了：斷開這條連線（伺服器會把他移出名單），回到捏臉頁 */
+function leaveAudience() {
+  closeAudienceWait();
+  if (ws) {
+    ws.superseded = true;
+    ws.close();
+  }
+  backToBuilder();
+}
+
+$('#btn-audience-leave').addEventListener('click', leaveAudience);
 
 // ─────────────────────────────────────────────────────────────
 // 任務與配對（規格 v3.0 §3.3）

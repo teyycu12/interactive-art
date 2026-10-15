@@ -1601,3 +1601,11 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 .zoom-pick button:disabled { opacity: .5; }
 /* 生成中與確認頁看的是定格的照片與角色，不需要縮放 */
 #scan:not([data-phase="aim"]) .zoom-pick { display: none; }
+
+/* 候補名單：「前面還有幾人」是這層唯一要一眼看到的資訊 */
+.audience-ahead {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--ink);
+  margin: 4px 0 8px;
+}

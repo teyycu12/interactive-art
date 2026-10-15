@@ -443,6 +443,18 @@
 
 <!-- 退出二次確認。用頁內對話框而非原生 confirm()：
      原生對話框在手機上樣式不受控，且會凍結整個 JS 執行緒。 -->
+<!-- 人滿時的候補。有空位時伺服器直接讓他進場（送 CLIENT_WELCOME），這層就收起來 -->
+<div class="overlay" id="audience-wait" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="audience-title" aria-describedby="audience-text">
+    <h2 id="audience-title">現場人滿，你在候補名單上</h2>
+    <p class="audience-ahead" id="audience-ahead" role="status" aria-live="polite"></p>
+    <p id="audience-text">有人離場就會自動讓你進場，不用重新操作。等的時候先看看大螢幕 —— 尋寶時也可以幫先知一起喊方向。</p>
+    <div class="dialog-actions">
+      <button class="btn-ghost" id="btn-audience-leave">先不等了</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="confirm-exit" hidden>
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
     <h2 id="confirm-title">確定要離開嗎？</h2>
