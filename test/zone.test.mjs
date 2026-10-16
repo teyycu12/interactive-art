@@ -142,8 +142,9 @@ describe('分區人數統計', () => {
     const inZone = Math.min(3, MAX_AGENTS - 1);
     for (let i = 0; i < inZone; i++) {
       const a = stage.addAgent({ name: `Z${i}`, avatar: AVATAR });
-      a.x = z.x + 30 + i * 10;
-      a.y = z.y + 30;
+      // 彼此隔開一個身寬：角色之間是剛體（resolveAgentOverlap），疊在一起會被推開
+      a.x = z.x + z.w / 2 + (i - 1) * 70;
+      a.y = z.y + z.h / 2;
     }
     const outsider = stage.addAgent({ name: '外', avatar: AVATAR });
     outsider.x = 960; outsider.y = 600;

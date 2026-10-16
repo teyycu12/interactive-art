@@ -275,8 +275,8 @@ describe('資料驗證', () => {
   test('社交動作有冷卻時間，防止洗版', () => {
     const stage = new Stage();
     const agent = makeAgent(stage);
-    assert.equal(stage.applyAction(agent.id, 'CHEERS'), true);
-    assert.equal(stage.applyAction(agent.id, 'CHEERS'), false, '冷卻期內應被拒絕');
+    assert.equal(stage.applyAction(agent.id, 'HEART'), true);
+    assert.equal(stage.applyAction(agent.id, 'HEART'), false, '冷卻期內應被拒絕');
   });
 
   test('STAGE_SYNC 快照不含捏臉外觀，以節省廣播頻寬', () => {

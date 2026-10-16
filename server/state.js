@@ -16,6 +16,7 @@ import {
   MAX_AGENTS,
 } from './config.js';
 import { stepAgent } from './arbiter.js';
+import { resolveAgentOverlap } from './boids.js';
 
 /**
  * 挑一個不落在道具內的出生點。
@@ -334,7 +335,11 @@ export class Stage {
 
     for (const agent of agents) {
       stepAgent(agent, agents, dt, now, graph ? graph.neighbors(agent.id) : null);
+    }
+    // 所有人都移動完才處理彼此的碰撞：邊走邊修正的話，先處理的人會用到別人上一幀的位置
+    resolveAgentOverlap(agents);
 
+    for (const agent of agents) {
       // 累計主動操控時長，作為 WP-C 行為 Log 與 M4 構圖加權的依據
       if (agent.alpha > 0.5) agent.activeMs += dt * 1000;
 

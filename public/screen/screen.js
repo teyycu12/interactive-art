@@ -6,7 +6,7 @@
  *   角色　　　由 shared/character.js 逐幀以變換矩陣算出步態（手機端 POV 共用同一份）
  *
  * 除錯視圖保留自 M2 開發期，用於檢查 α 權重、避障半徑與速度向量。
- * 它與清除效果、儲存畫面一樣由主辦端操作（SCREEN_SETTINGS / SCREEN_CMD；除錯視圖在「系統」分頁），
+ * 它與排行榜、音效、儲存畫面一樣由主辦端操作（SCREEN_SETTINGS；除錯視圖在「系統」分頁），
  * 投影畫面上不留任何按鈕或快捷鍵。
  */
 
@@ -53,15 +53,18 @@ const sfx = new Sfx();
 const PREVIEW = new URLSearchParams(location.search).get('preview') === '1';
 if (PREVIEW) { document.documentElement.classList.add('is-preview'); sfx.setEnabled(false); }
 
+/** 右下角積分排行：主辦端可以關掉（不想讓全場比分數時），有人得分才出現 */
+let ranksOn = true;
+let ranksCount = 0;
+const syncRanks = () => { document.getElementById('ranks').hidden = !ranksOn || ranksCount === 0; };
+
 function applySettings(settings) {
   if (!settings) return;
   debug = settings.debug === true;
   document.getElementById('hud').hidden = !debug;
   sfx.setEnabled(!PREVIEW && settings.sound !== false);
-}
-
-function runCommand(cmd) {
-  if (cmd === 'clear') activeScene?.clearEffects?.();
+  ranksOn = settings.ranks !== false;
+  syncRanks();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -256,9 +259,6 @@ function connect() {
         applySettings(msg.settings);
         break;
 
-      case EV.SCREEN_CMD:
-        runCommand(msg.cmd);
-        break;
 
       case EV.STAGE_ROSTER: {
         const seen = new Set();
@@ -380,9 +380,12 @@ function connect() {
         sfx.play('fanfare');
         break;
 
-      case EV.QUIZ_TALLY:
-        document.getElementById('q-answered').textContent = msg.answered;
+      case EV.QUIZ_TALLY: {
+        // 揭曉後這格已換成「答對 N 人」，遲到的計數直接略過
+        const el = document.getElementById('q-answered');
+        if (el) el.textContent = msg.answered;
         break;
+      }
 
       case EV.QUIZ_REVEAL:
         showReveal(msg);
@@ -429,21 +432,18 @@ connect();
 // ─────────────────────────────────────────────────────────────
 function showMission(m) {
   missionShown = m;
+  if (m) {
+    document.getElementById('m-title').textContent = m.title;
+    document.getElementById('m-prog').replaceChildren();
+  }
   syncBanners();
-  if (!m) return;
-  document.getElementById('m-title').textContent = m.title;
-  document.getElementById('m-brief').textContent = m.brief ?? '';
-  document.getElementById('m-prog').hidden = true;
 }
 
 function showMissionProgress(m) {
   if (!m) return;
-  const el = document.getElementById('m-prog');
-  el.hidden = false;
-  el.replaceChildren();
   const b = document.createElement('b');
   b.textContent = `${m.finished} / ${m.totalAgents}`;
-  el.append(b, document.createTextNode(`　人完成　·　累計 ${m.totalCompletions} 次配對`));
+  document.getElementById('m-prog').replaceChildren(b, document.createTextNode(' 人完成'));
 }
 
 function toast(text) {
@@ -687,8 +687,26 @@ function render(now) {
 
   // 依 Y 軸排序，讓視覺上較近（偏下）的角色蓋住較遠的（§6 風險 2）
   const sorted = [...latest].sort((p, q) => p.y - q.y);
-  // 名牌收集起來，等全部角色畫完再一起排（見 drawNameplates）
+
+  // 名牌先排版（避讓要看到全場的名牌才排得出來），畫的時候再跟著各自的角色一起畫：
+  // 名牌跟角色在同一個前後順序裡 —— 有人從前面經過時，後面那人的名字會被他擋住。
+  const frames = new Map();
   const plates = [];
+  for (const a of sorted) {
+    const v = view.get(a.id);
+    const pos = toScreen(v);
+    // 角色高度隨深度變化。房間最深處到最近處的相機距離差 2.45 倍，
+    // 固定高度會讓所有人畫得一樣大 —— 那是「貼紙浮在畫面上」的主因。
+    const height = characterHeightAt(v);
+    const entry = roster.get(a.id);
+    // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
+    const name = entry?.name ?? a.id;
+    const fontSize = Math.max(10, height * 0.12);
+    const { w, h } = measureNameplate(ctx, name, { fontSize });
+    frames.set(a.id, { pos, height, entry, name, fontSize });
+    plates.push({ id: a.id, x: pos.x, y: pos.y + NAMEPLATE_DROP, w, h });
+  }
+  const plateTarget = layoutNameplates(plates, { bottom: innerHeight });
 
   // 體素角色先全部畫進圖集，下面的迴圈再一個個貼回來 ——
   // 這樣名牌、箭頭與前後遮擋的順序與 2D 時完全相同
@@ -701,12 +719,7 @@ function render(now) {
   }
 
   for (const a of sorted) {
-    const v = view.get(a.id);
-    const pos = toScreen(v);
-    // 角色高度隨深度變化。房間最深處到最近處的相機距離差 2.45 倍，
-    // 固定高度會讓所有人畫得一樣大 —— 那是「貼紙浮在畫面上」的主因。
-    const height = characterHeightAt(v);
-    const entry = roster.get(a.id);
+    const { pos, height, entry, name, fontSize } = frames.get(a.id);
 
     // 剛完成配對：向外擴散的環，讓觀眾把螢幕上的事件與
     // 現場剛剛有兩個人在講話連起來
@@ -763,16 +776,10 @@ function render(now) {
 
     drawCharacter(ctx, a, pos, entry?.img,
       { time, maxSpeed: MAX_SPEED, height, voxel: voxels?.tile(a.id) });
-    // 名牌字級跟著角色一起遠小近大，否則遠處的人會頂著一塊過大的名牌
-    const name = entry?.name ?? a.id;
-    const fontSize = Math.max(10, height * 0.12);
-    const { w, h } = measureNameplate(ctx, name, { fontSize });
-    plates.push({ id: a.id, x: pos.x, y: pos.y + NAMEPLATE_DROP, w, h, pos, name, fontSize });
+    drawPlate(a.id, pos, name, fontSize, plateTarget.get(a.id));
     if (a.emote && !emoteIsPosed(entry?.img, a.emote)) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }
-
-  drawNameplates(plates);
 
   drawTopicBubbles(now);
 
@@ -781,27 +788,22 @@ function render(now) {
 }
 
 /**
- * 名牌在所有角色之後統一排版、統一繪製。
+ * 畫一個名牌：位置是避讓排版的結果（shared/nameplateLayout.js），平滑地滑到位。
  *
- * 原本名牌跟著各自的角色一起畫，30 人時有兩個問題：站在前面的角色會蓋掉後面那人
- * 的名牌，兩個人站近時名牌直接疊在一起 —— 偏偏配對任務就是要兩個人站在一起。
- * 「看著大螢幕找到自己」是這件作品的前提，讀不出名字就找不到人。
- * 排版規則見 shared/nameplateLayout.js。
+ * 跟著自己的角色畫，不是全部角色畫完才統一畫在最上層（2026-10-17 改）：名牌是角色的一部分，
+ * 有人從前面經過時，後面那人的名字被擋住才自然。代價是人擠成一團時，站在後排的
+ * 名字可能暫時被前排的人蓋住；避讓排版仍會把名牌往下、往旁邊錯開，盡量露出來。
  */
-function drawNameplates(plates) {
-  const target = layoutNameplates(plates, { bottom: innerHeight });
-  for (const p of plates) {
-    const t = target.get(p.id);
-    let cur = plateOffset.get(p.id);
-    if (!cur) {
-      // 第一次出現直接放到位，不要從原位滑過去
-      cur = { dx: t.dx, dy: t.dy };
-      plateOffset.set(p.id, cur);
-    }
-    cur.dx += (t.dx - cur.dx) * 0.2;
-    cur.dy += (t.dy - cur.dy) * 0.2;
-    drawNameplate(ctx, p.pos, p.name, { fontSize: p.fontSize, offset: cur });
+function drawPlate(id, pos, name, fontSize, target) {
+  let cur = plateOffset.get(id);
+  if (!cur) {
+    // 第一次出現直接放到位，不要從原位滑過去
+    cur = { dx: target.dx, dy: target.dy };
+    plateOffset.set(id, cur);
   }
+  cur.dx += (target.dx - cur.dx) * 0.2;
+  cur.dy += (target.dy - cur.dy) * 0.2;
+  drawNameplate(ctx, pos, name, { fontSize, offset: cur });
 }
 
 /**
@@ -933,15 +935,24 @@ let quizDeadline = 0;
 let quizRaf = null;
 
 /**
- * 題目與任務橫幅都固定在畫面上緣，同時出現會疊在一起。
- * 頂端同時只放一條：問答 > 任務 > 賓果 —— 問答有倒數與計分，最不能被蓋住。
- * （文字雲不是橫幅，是蓋在場景上的整面畫面，見 showWordCloud。）
+ * 上緣的「進行中：」一列（任務、賓果）。房間往下讓出它的高度，不蓋住角色 ——
+ * 「看著大螢幕找到自己」是作品的前提（UI-STYLING「大螢幕的橫幅不可疊在場景上」）。
+ * 問答、文字雲是滿版面板，開著時會蓋在這一列上面。
  */
 function syncBanners() {
-  document.getElementById('mission').hidden = quiz !== null || missionShown === null;
-  document.getElementById('bingo').hidden = quiz !== null || missionShown !== null || bingoShown === null;
+  document.getElementById('nb-mission').hidden = missionShown === null;
+  document.getElementById('nb-bingo').hidden = bingoShown === null;
+  document.getElementById('now-bar').hidden = missionShown === null && bingoShown === null;
   measureBannerInset();
 }
+
+const NOW_BAR_GAP = 12;   // 這一列與房間上緣之間留一點縫，免得看起來黏在一起
+function measureBannerInset() {
+  const bar = document.getElementById('now-bar');
+  setStageTopInset(bar.hidden ? 0 : bar.getBoundingClientRect().bottom + NOW_BAR_GAP);
+}
+// 內容是顯示之後才填的（進度、倒數），字數一變高度可能跟著變（換行、字級）
+if (typeof ResizeObserver === 'function') new ResizeObserver(() => measureBannerInset()).observe(document.getElementById('now-bar'));
 
 function showBingo(round) {
   bingoShown = round;
@@ -949,15 +960,14 @@ function showBingo(round) {
   const left = round?.phase === 'ask' ? round.askRemainingMs : round?.remainingMs;
   bingoDeadline = left == null ? null : Date.now() + left;
   if (round?.phase === 'ask') {
-    document.getElementById('bingo-lead').textContent = '先在手機上勾一下符合你的自我介紹';
-    renderBingoMeta();
+    document.getElementById('bingo-lead').textContent = '先在手機上勾自我介紹';
   } else if (round) {
     const lead = round.top.filter((t) => t.lines > 0 && t.lines === round.top[0].lines);
     document.getElementById('bingo-lead').textContent = lead.length
       ? `最多連線：${lead.map((t) => t.name).join('、')}（${lead[0].lines} 線）`
-      : '還沒有人連成一線';
-    renderBingoMeta();
+      : '找符合條件的人，問他的配對碼';
   }
+  renderBingoMeta();
   syncBanners();
 }
 
@@ -973,35 +983,6 @@ function renderBingoMeta() {
   document.getElementById('bingo-meta').textContent = parts.join('　·　');
 }
 setInterval(renderBingoMeta, 1000);
-
-/**
- * 把目前可見的橫幅高度讓給它，場景縮到剩下的空間。
- *
- * 量實際高度而不是寫死：題目長度、選項字數、是否顯示集合地點都會改變高度，
- * 寫死的值在最長的那一題上就會重新蓋到角色 —— 而那一題正是最需要看清楚的。
- */
-const BANNER_IDS = ['quiz', 'mission', 'bingo'];
-const BANNER_GAP = 14;   // 橫幅與房間上緣之間留一點縫，免得看起來黏在一起
-
-function measureBannerInset() {
-  let bottom = 0;
-  for (const id of BANNER_IDS) {
-    const el = document.getElementById(id);
-    if (!el || el.hidden) continue;
-    bottom = Math.max(bottom, el.getBoundingClientRect().bottom);
-  }
-  setStageTopInset(bottom === 0 ? 0 : bottom + BANNER_GAP);
-}
-
-// 橫幅內容會在顯示之後才填（選項、倒數條、分佈長條），高度因此是變動的。
-// 只在 syncBanners 量一次會量到還沒填完的高度，少掉的那一截正好蓋住角色。
-if (typeof ResizeObserver === 'function') {
-  const observer = new ResizeObserver(() => measureBannerInset());
-  for (const id of BANNER_IDS) {
-    const el = document.getElementById(id);
-    if (el) observer.observe(el);
-  }
-}
 
 let missionShown = null;
 
@@ -1061,10 +1042,20 @@ function showQuestion(q) {
   quizDeadline = Date.now() + (q.remainingMs ?? 0);
   document.getElementById('q-no').textContent = `第 ${q.index} 題`;
   // 討論時間：題目先亮給全場看，但還不能作答 —— 這是要大家轉頭商量的時間
-  document.getElementById('q-state').textContent = q.phase === QUIZ_PHASE.DISCUSS ? '討論時間 · 跟旁邊的人商量' : '作答中';
+  document.getElementById('q-state').textContent = q.phase === QUIZ_PHASE.DISCUSS
+    ? '討論時間　跟旁邊的人商量一下，等一下才能作答'
+    : '拿起手機，按下你的答案！';
+  quizEl.classList.remove('revealed');
   document.getElementById('q-title').textContent = q.question;
-  document.getElementById('q-answered').textContent = q.answered ?? 0;
-  document.getElementById('q-foot').hidden = false;
+  // 重建而不是只改數字：上一題揭曉時 showReveal 把整格換成「答對 N 人」，
+  // #q-answered 已經不在了 —— 連續出題時下一題就會在這裡丟錯、選項停在上一題
+  const foot = document.getElementById('q-foot');
+  foot.replaceChildren(
+    document.createTextNode('已作答 '),
+    Object.assign(document.createElement('b'), { id: 'q-answered', textContent: String(q.answered ?? 0) }),
+    document.createTextNode(' 人'),
+  );
+  foot.hidden = false;
   renderQuizOptions();
   quizEl.hidden = false;
   syncBanners();
@@ -1074,7 +1065,8 @@ function showQuestion(q) {
 function showReveal(msg) {
   if (!quiz) return;
   cancelAnimationFrame(quizRaf);
-  document.getElementById('q-state').textContent = '正解';
+  document.getElementById('q-state').textContent = '正解揭曉';
+  quizEl.classList.add('revealed');
   document.getElementById('q-timefill').style.width = '0%';
   renderQuizOptions(msg.correctIndex, msg.counts);
 
@@ -1097,9 +1089,9 @@ function hideQuiz() {
 }
 
 function renderRanks(rows) {
-  const box = document.getElementById('ranks');
   const ol = document.getElementById('ranks-list');
-  box.hidden = rows.length === 0;
+  ranksCount = rows.length;
+  syncRanks();
   ol.replaceChildren();
 
   for (const r of rows) {

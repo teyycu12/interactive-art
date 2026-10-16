@@ -188,16 +188,18 @@ check('回報步行狀態 WALK', moving.state === 'WALK');
 check('轉向鏡像 facing = 1', moving.facing === 1);
 
 // ── 社交動作 ──────────────────────────────────────────────
-phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'CHEERS' }));
+phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'WAVE' }));
 await sleep(200);
-check('社交動作出現在 STAGE_SYNC', live()[0].emote === 'CHEERS');
-// 場上只有一個人：乾杯要兩人一起按，手機必須被告知「身邊沒有人」，不能按了沒反應
-check('獨自按乾杯時手機收到「身邊沒有人」',
-  phoneGreets.at(-1)?.kind === 'CHEERS' && phoneGreets.at(-1)?.outcome === 'NOBODY',
+check('社交動作出現在 STAGE_SYNC', live()[0].emote === 'WAVE');
+// 場上只有一個人：揮手要有對象，手機必須被告知「身邊沒有人」，不能按了沒反應
+check('獨自揮手時手機收到「身邊沒有人」',
+  phoneGreets.at(-1)?.kind === 'WAVE' && phoneGreets.at(-1)?.outcome === 'NOBODY',
   JSON.stringify(phoneGreets.at(-1)));
+await sleep(650);   // 動作冷卻（EMOTE_COOLDOWN_MS）
+phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'CHEERS' }));
 phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'DROP_TABLE' }));
 await sleep(200);
-check('白名單外的動作被丟棄', live()[0].emote === 'CHEERS');
+check('白名單外的動作被丟棄（含已移除的乾杯）', live()[0].emote === 'WAVE');
 
 // ── M2：閒置交還控制權 ────────────────────────────────────
 await sleep(4600);
@@ -556,10 +558,11 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
   check('已移除的光線與重置視角指令被忽略', settings.length === 0 && cmds.length === 0,
     JSON.stringify({ settings, cmds }));
 
+  // 清除效果已移除（大螢幕上的物件不能點了）：舊版主辦端送來也不轉發
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'clear' }));
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'debug', value: true }));
   await sleep(300);
-  check('清除效果轉發給大螢幕', cmds.includes('clear'), JSON.stringify(cmds));
+  check('已移除的清除效果指令不再轉發', !cmds.includes('clear'), JSON.stringify(cmds));
   check('除錯視圖可由主辦端打開', settings.at(-1)?.debug === true);
 
   // 投影機中途重開：要接回除錯視圖的狀態與活動名稱
@@ -586,6 +589,38 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
   await sleep(200);
   check('主辦端可以關掉大螢幕音效', settings.at(-1)?.sound === false, JSON.stringify(settings.at(-1)));
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'sound', value: true }));
+  await sleep(100);
+
+  // 配分：主持人可以在節目單頁改，改的是之後的規則
+  {
+    const views = [];
+    const onScoring = (d) => { const m = JSON.parse(d); if (m.type === 'HOST_SCORING') views.push(m); };
+    host.on('message', onScoring);
+    badHost.send(JSON.stringify({ type: 'HOST_SET_SCORING', scoring: { quizCorrect: 1 } }));
+    await sleep(150);
+    check('未認證連線不能改配分', views.length === 0);
+    const rejectsBefore = hostRejects.length;
+    host.send(JSON.stringify({ type: 'HOST_SET_SCORING', scoring: { quizCorrect: -5 } }));
+    await sleep(150);
+    check('配分填錯被拒絕並說明原因', hostRejects.length === rejectsBefore + 1 && /問答答對/.test(hostRejects.at(-1)?.reason ?? ''),
+      hostRejects.at(-1)?.reason);
+    host.send(JSON.stringify({ type: 'HOST_SET_SCORING', scoring: { pairCompletion: 7 } }));
+    await sleep(150);
+    check('主持人改的配分廣播回主辦端', views.at(-1)?.scoring?.pairCompletion === 7 && views.at(-1)?.isDefault === false,
+      JSON.stringify(views.at(-1)));
+    host.send(JSON.stringify({ type: 'HOST_SET_SCORING', scoring: null }));
+    await sleep(150);
+    check('配分可以恢復預設', views.at(-1)?.isDefault === true && views.at(-1)?.scoring?.pairCompletion === 20,
+      JSON.stringify(views.at(-1)));
+    host.off('message', onScoring);
+  }
+
+  // 積分排行：預設顯示；主辦端可以隱藏，重開的大螢幕也要接回這個狀態
+  check('大螢幕排行榜預設顯示', settings[0]?.ranks === true, JSON.stringify(settings[0]));
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'ranks', value: false }));
+  await sleep(200);
+  check('主辦端可以隱藏大螢幕排行榜', settings.at(-1)?.ranks === false, JSON.stringify(settings.at(-1)));
+  host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'ranks', value: true }));
   await sleep(100);
 }
 

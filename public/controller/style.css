@@ -442,18 +442,43 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 }
 
 
-/* 表情鍵列。與 .bar 同理只鎖 shrink，不用 flex: none（理由見上）。
-   按鍵被壓扁會直接影響點擊命中率，所以不讓它被擠，
-   但視窗極矮時仍允許整體版面正常收斂。 */
-#emotes {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
-  flex-shrink: 0;
+/* 表情鍵（愛心、揮手）：右下角上下兩顆小圓鍵，浮在場景上（2026-10-17）。
+   原本是底部一整列三顆大鍵，佔掉一截畫面；乾杯已移除。搖桿在左下，兩手各管一邊。
+   58px 仍大於 44px 的觸控下限。選擇器要帶 #controller：比 `#controller > *` 的
+   position: relative 更晚、同權重，才蓋得過去。 */
+#controller > #emotes {
+  position: absolute;
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  z-index: 3;
+  display: flex; flex-direction: column; gap: 10px;
 }
-#emotes button { padding: 12px 4px 14px; font-size: 13px; line-height: 1.5; background: #FFFCF5; }
-#emotes button em { display: block; font-size: 22px; font-style: normal; }
+#controller > #emotes button {
+  width: 58px; height: 58px; padding: 0;
+  border-radius: 50%;
+  display: grid; place-content: center; gap: 1px;
+  font-size: 10px; line-height: 1.1; background: #FFFCF5;
+}
+#controller > #emotes button em { display: block; font-size: 22px; font-style: normal; line-height: 1; }
+/* 話題卡會出現在畫面最下方，右邊讓出表情鍵的寬度，按鈕才不會被蓋住 */
+#controller > .topic-card { margin-right: 76px; }
 
 /* 「某某在跟你揮手」。用大螢幕「1號桌」那種黃牌（ink 字 8.7:1）——
-   要一眼從表情鍵上方跳出來，又不能做成蓋住搖桿的覆蓋層。 */
+   要一眼看到，又不能做成蓋住搖桿的覆蓋層。
+   固定在頂端，跟收到訊息的通知同一個位置（2026-10-17）：原本排在版面最底下，
+   夾在搖桿區與表情鍵之間，位置怪、框也跑位。 */
+#controller > #greet-invite, #controller > #bingo-offer {
+  position: fixed; z-index: 9997;
+  top: calc(10px + env(safe-area-inset-top)); left: 12px; right: 12px;
+  margin: 0;
+  box-shadow: var(--drop);
+  animation: toast-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* 同時有訊息通知、或兩種提示同時出現時，往下讓一格，不疊在一起 */
+body:has(#msg-notice:not([hidden])) #controller > #greet-invite,
+#controller > #greet-invite:not([hidden]) ~ #bingo-offer { top: calc(70px + env(safe-area-inset-top)); }
+body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ #bingo-offer { top: calc(130px + env(safe-area-inset-top)); }
+@media (prefers-reduced-motion: reduce) { #controller > #greet-invite, #controller > #bingo-offer { animation: none; } }
 .greet-invite {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   flex-shrink: 0;
@@ -527,8 +552,6 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   .bar .who b { font-size: 14px; }
   /* 搖桿區在這個高度已經沒有實際操作空間，讓它退到最小而不是佔走版面 */
   #joystick-zone { min-height: 90px; }
-  #emotes button { padding: 8px 4px; font-size: 12px; }
-  #emotes button em { font-size: 18px; }
   .agency { padding: 5px; font-size: 11px; }
 }
 
@@ -1355,15 +1378,7 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   #controller > #links-strip { grid-row: 5; }
   #controller > .agency-row { grid-row: 6; }
 
-  #emotes {
-    grid-column: 2;
-    grid-row: 2 / 8;
-    grid-template-columns: 1fr;
-    grid-auto-rows: minmax(0, auto);
-    align-content: end;
-    gap: 8px;
-  }
-  #emotes button { padding: 6px 4px 8px; }
+  /* 表情鍵沿用直式的右下角小圓鍵（絕對定位，不佔格子） */
 
   /* 狀態列在畫框內，高度要讓給場景 */
   .bar svg { height: 34px; }
@@ -1472,23 +1487,46 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 .msg-who .sheet-brief { margin: 2px 0 0; }
 .msg-avatar { flex: none; width: 52px; height: 64px; border-radius: 10px; background: var(--wall-tint); overflow: hidden; display: grid; place-items: end center; }
 .msg-avatar canvas.portrait { height: 60px; width: auto; }
-#msg-input, #reply-input {
+#msg-input {
   width: 100%; resize: none; font: inherit; font-size: 16px; line-height: 1.5;
   padding: 10px 12px; border: 2px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink);
 }
-#msg-input:focus, #reply-input:focus { outline: none; border-color: var(--ink); }
-#msg-count, #reply-count { font-weight: 500; color: var(--ink-soft); margin-left: 6px; }
-#msg-inbox .dialog { text-align: left; }
-.msg-bubble {
-  margin: 0 0 10px !important; padding: 12px 14px; border-radius: 14px; background: var(--wall-tint);
-  font-size: 17px !important; color: var(--ink) !important; line-height: 1.6; overflow-wrap: anywhere;
-}
-.msg-more { margin: 0 0 12px !important; font-size: 13px !important; color: var(--ink-soft); }
-.msg-more[hidden] { display: none; }
+#msg-input:focus { outline: none; border-color: var(--ink); }
+#msg-count { font-weight: 500; color: var(--ink-soft); margin-left: 6px; }
 .msg-safety { display: flex; justify-content: space-between; margin-top: 14px; }
 .msg-safety .btn-link { margin-left: 0; font-size: 13px; color: var(--ink-soft); }
 #btn-msg-send { width: 100%; }
-.msg-reply { margin: 0 0 10px; }
+.msg-safety .btn-link[hidden] { display: none; }
+
+/* ── 收到私訊：頂端一行通知 ──────────────────────────────
+   不擋操作的橫條，點一下打開對話；6 秒後自己收起，未讀數字留在「訊息」按鈕上。 */
+.msg-notice {
+  position: fixed; z-index: 9998;
+  top: calc(10px + env(safe-area-inset-top)); left: 12px; right: 12px;
+  display: flex; align-items: center; gap: 10px;
+  width: auto; min-height: 48px; padding: 10px 14px; margin: 0;
+  background: var(--paper); color: var(--ink); text-align: left;
+  border: 2.5px solid var(--ink); border-radius: 12px; box-shadow: var(--drop);
+  font-size: 15px; font-weight: 700;
+  animation: toast-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.msg-notice[hidden] { display: none; }
+.mn-tag { flex: none; padding: 2px 8px; border-radius: 999px; background: var(--wall); color: var(--paper); font-size: 12px; }
+.mn-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (prefers-reduced-motion: reduce) { .msg-notice { animation: none; } }
+
+/* 未讀數字：紅底白字的圓，像手機主畫面 App 圖示右上角那顆。
+   #C4453C 白字 4.9:1；這是「有人在等你回」的唯一提示，不能淡 */
+.chats-badge {
+  min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box;
+  border-radius: 999px; background: #C4453C; color: #fff;
+  font-size: 12px; font-weight: 800; line-height: 20px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.chats-badge[hidden] { display: none; }
+.btn-chats .chats-badge { position: absolute; top: -8px; right: -8px; box-shadow: 0 0 0 2px var(--paper); }
+.chats-list .ce { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.chats-list .unread .cw span { color: var(--ink); font-weight: 700; }
 
 /* ── 進場問卷 ───────────────────────────────────────────
    選項是大按鈕（≥44px）、一次一題：在等待生成的二十幾秒裡用拇指點完。 */
@@ -1651,3 +1689,45 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 .links-list .lf canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
 .links-list .lw { display: flex; flex-direction: column; gap: 2px; }
 .links-list .lw small { font-size: 11px; font-weight: 600; color: var(--ink-soft); }
+
+/* ── 聊天紀錄 ─────────────────────────────────────────────
+   對話串放在寫訊息面板裡、輸入框上方；太長時自己捲動，輸入框不會被推出畫面 */
+.chat-thread {
+  list-style: none; margin: 0 0 12px; padding: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 38dvh; overflow-y: auto;
+  background: var(--sunk); border-radius: 12px;
+}
+.chat-thread[hidden] { display: none; }
+.chat-thread li {
+  max-width: 80%; padding: 8px 12px; border-radius: 14px;
+  font-size: 15px; line-height: 1.5; color: var(--ink); overflow-wrap: anywhere;
+  background: var(--paper);
+  align-self: flex-start; border-bottom-left-radius: 4px;
+}
+.chat-thread li.mine { align-self: flex-end; background: var(--wall-tint); border-bottom-left-radius: 14px; border-bottom-right-radius: 4px; }
+.chat-thread time { display: block; font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+.chat-thread li.mine time { text-align: right; }
+#msg-safety[hidden] { display: none; }
+
+.chats-list { list-style: none; margin: 4px 0 0; padding: 0; }
+.chats-list button {
+  width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+  min-height: 64px; padding: 8px 4px; margin: 0;
+  background: none; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; box-shadow: none;
+  color: var(--ink);
+}
+.chats-list li:last-child button { border-bottom: 0; }
+.chats-list .cf { flex: none; width: 44px; height: 54px; display: grid; place-items: end center; overflow: hidden; border-radius: 8px; background: var(--wall-tint); }
+.chats-list .cf canvas { height: 50px; width: auto; }
+.chats-list .cw { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.chats-list .cw b { font-size: 15px; }
+.chats-list .cw span { font-size: 13px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chats-list time { flex: none; font-size: 12px; color: var(--ink-soft); }
+
+/* 頂端已經有通知（訊息、揮手、賓果）時，小提示往下讓，不疊在通知上 */
+body:has(#msg-notice:not([hidden])) .toast,
+body:has(#greet-invite:not([hidden])) .toast,
+body:has(#bingo-offer:not([hidden])) .toast { top: calc(76px + env(safe-area-inset-top)); }
+body:has(#msg-notice:not([hidden])):has(#greet-invite:not([hidden])) .toast,
+body:has(#greet-invite:not([hidden])):has(#bingo-offer:not([hidden])) .toast { top: calc(136px + env(safe-area-inset-top)); }

@@ -20,7 +20,6 @@ export class PixelScene {
     this.effects = new Map();
     this.nearby = new Set();
     this.light = 'day';
-    this.manualUntil = 0;
     this.reduced = matchMedia('(prefers-reduced-motion: reduce)');
     this.canvas = document.createElement('canvas');
     this.canvas.setAttribute('aria-label', `像素風互動場景：${this.constructor.TITLE}`);
@@ -40,7 +39,6 @@ export class PixelScene {
   scaleAt(x, y, height) { return Number.isFinite(x + y + height) ? height * CHARACTER_SCALE * this.zoom : 0; }
   resetCamera() { this.resize(); }
   applyLight(name) { if (['day', 'evening', 'night'].includes(name)) this.light = name; }
-  clearEffects() { this.effects.clear(); this.status.textContent = '效果已清除。'; }
   resize() {
     // 畫布仍是整個視窗（背景色要鋪滿），但房間只縮放並置中到可用區裡 ——
     // 橫幅佔掉的那一條因此不會蓋到任何角色。
@@ -51,35 +49,18 @@ export class PixelScene {
     this.dpr = Math.min(devicePixelRatio || 1, 2);
     this.canvas.width = Math.ceil(innerWidth * this.dpr);
     this.canvas.height = Math.ceil(innerHeight * this.dpr);
-    for (const [p, button] of this.buttons) {
-      const point = this.projectToScreen(p.x, p.y);
-      Object.assign(button.style, { left: `${point.x}px`, top: `${point.y - 28 * this.zoom}px`, width: `${Math.max(30, p.r * 1.5 * this.zoom)}px`, height: `${Math.max(30, (p.r + 75) * this.zoom)}px` });
-    }
   }
   makeControls() {
-    // 標題卡（活動名稱）與光線、清除效果、儲存畫面等按鈕都不在這裡：
-    // 標題卡由 screen.js 依主辦端設定的活動名稱繪製，所有場景共用；
-    // 按鈕已收進主辦端「大螢幕」面板 —— 投影畫面上的按鈕現場沒人點得到，還會被投出去。
+    // 大螢幕上不放任何可點的東西（2026-10-17）：投影畫面現場沒人點得到，原本物件上的
+    // 透明按鈕與底部「點一下物件……」的提示列都拿掉了。標題卡（活動名稱）由 screen.js
+    // 依主辦端設定繪製；大螢幕的操作都在主辦端。角色走近物件時的小動畫仍在（updateAgents）。
     this.ui = document.createElement('div');
     this.ui.className = 'scene-ui';
-    this.status = document.createElement('p');
-    this.status.className = 'scene-status'; this.status.setAttribute('role', 'status');
-    this.status.textContent = '點一下物件，或帶著角色靠近，讓場景熱鬧起來。';
-    this.ui.append(this.status);
-    this.buttons = this.props.map(p => {
-      const b = document.createElement('button');
-      b.className = 'scene-object'; b.setAttribute('aria-label', `互動：${this.item(p)[1]}`);
-      b.title = this.item(p)[1];
-      b.addEventListener('click', () => this.activate(p));
-      this.ui.append(b); return [p, b];
-    });
     this.host.append(this.ui);
   }
   item(p) { return this.constructor.ITEMS[p.id] ?? this.constructor.FALLBACK; }
   spots() { return THEME_MAP[this.constructor.THEME_ID]?.spots ?? {}; }
-  activate(p, now = performance.now(), manual = true) {
-    if (manual) this.manualUntil = now + 4500;
-    if (manual || now >= this.manualUntil) this.status.textContent = `${this.item(p)[1]} · ${this.item(p)[2]}`;
+  activate(p, now = performance.now()) {
     if (now - (this.effects.get(p.id) ?? -Infinity) < 800) return;
     this.effects.set(p.id, now);
   }
@@ -90,7 +71,7 @@ export class PixelScene {
       if (a.offline || a.mode === 'STAGED') continue;
       if (Math.hypot(a.x - p.x, a.y - p.y) < p.r + 65) {
         const key = `${a.id}:${p.id}`; next.add(key);
-        if (!this.nearby.has(key)) this.activate(p, performance.now(), false);
+        if (!this.nearby.has(key)) this.activate(p, performance.now());
       }
     }
     this.nearby = next;

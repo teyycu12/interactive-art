@@ -1,5 +1,5 @@
 /**
- * 揮手與乾杯：要對方回應才算數的社交動作。
+ * 揮手：要對方回應才算數的社交動作。
  *
  * 原本三個表情鍵都只是在自己頭上冒一個圖示：沒有對象、沒有人回應、
  * 也不改變任何事。依 INTERACTION-DESIGN「這個機制需不需要開口講話」，
@@ -8,8 +8,7 @@
  * 現在：
  *
  * - **揮手**對準最近的人。對方手機跳出「某某在跟你揮手」，回揮才算打了招呼。
- * - **乾杯**要附近兩個人在 `cheersWindowMs` 內都按，才碰得到杯。
- *   一個人按只會落空 —— 這逼人轉頭說「欸，我們一起按」，那句話就是目的。
+ * - 原本還有**乾杯**（附近兩人同時按才碰得到杯），2026-10-17 依主持人要求移除。
  *
  * **成功不寫進社交圖譜。** 圖譜的邊代表「經雙方確認的實體接觸」
  * （socialgraph.js 檔頭），配對碼保證兩人真的講過話；互相揮手是薄得多的
@@ -20,7 +19,6 @@
  * - 對方封鎖了我：照樣回我「已揮出」，但不送邀請、也不可能成功 ——
  *   告訴他「你被封鎖了」只會換來換個方式繼續騷擾。
  * - 我封鎖了對方：不選他當對象（我自己知道我封鎖了他）。
- * - 碰杯：任一方封鎖對方就不算身邊的人。
  *
  * 純邏輯：只吃角色座標與時間，不碰 WebSocket，方便測試。
  */
@@ -34,18 +32,14 @@ export class Greetings {
    * @param {object} opts
    * @param {number} opts.radius          兩人相距多近才算「身邊的人」
    * @param {number} opts.waveWindowMs    揮手後等對方回揮的時間
-   * @param {number} opts.cheersWindowMs  兩人按乾杯的時間差上限
    * @param {(by: string, target: string) => boolean} [opts.isBlocked] by 是否封鎖了 target
    */
-  constructor({ radius, waveWindowMs, cheersWindowMs, isBlocked = () => false }) {
+  constructor({ radius, waveWindowMs, isBlocked = () => false }) {
     this.radius = radius;
     this.isBlocked = isBlocked;
     this.waveWindowMs = waveWindowMs;
-    this.cheersWindowMs = cheersWindowMs;
     /** 揮手 → 等對方回揮 @type {Map<string, {to: string, until: number}>} */
     this.waves = new Map();
-    /** 已按乾杯、等人碰杯 @type {Map<string, number>} id → until */
-    this.cheers = new Map();
   }
 
   /**
@@ -84,48 +78,15 @@ export class Greetings {
     return { kind: 'invite', from: fromId, to: to.id };
   }
 
-  /**
-   * 乾杯。身邊有人在時限內也按了就碰杯，否則登記等人。
-   *
-   * @returns {{kind: 'clink', a: string, b: string}|{kind: 'waiting'}|{kind: 'nobody'}}
-   */
-  cheer(fromId, agents, now) {
-    const me = agents.get(fromId);
-    if (!me) return { kind: 'nobody' };
-
-    let best = null;
-    let bestD = Infinity;
-    for (const [id, until] of this.cheers) {
-      if (id === fromId || until < now) continue;
-      const other = agents.get(id);
-      if (!other || !this.#near(me, other) || this.#eitherBlocked(fromId, id)) continue;
-      const d = Math.hypot(other.x - me.x, other.y - me.y);
-      if (d < bestD) { best = other; bestD = d; }
-    }
-    if (best) {
-      this.cheers.delete(best.id);
-      this.cheers.delete(fromId);
-      return { kind: 'clink', a: best.id, b: fromId };
-    }
-    // 身邊一個人都沒有時直接告訴他，而不是讓他乾等時限過去
-    if (!this.#nearest(me, agents, (other) => !this.#eitherBlocked(fromId, other.id))) {
-      return { kind: 'nobody' };
-    }
-    this.cheers.set(fromId, now + this.cheersWindowMs);
-    return { kind: 'waiting' };
-  }
-
   /** 離場時清掉。否則對方會對著一個已經不在的人揮手成功 */
   drop(id) {
     this.waves.delete(id);
-    this.cheers.delete(id);
     for (const [from, w] of this.waves) if (w.to === id) this.waves.delete(from);
   }
 
   /** 清掉過期的登記。不清也不會判錯（每次都比對 until），只是避免 Map 一直長 */
   prune(now) {
     for (const [id, w] of this.waves) if (w.until < now) this.waves.delete(id);
-    for (const [id, until] of this.cheers) if (until < now) this.cheers.delete(id);
   }
 
   #eitherBlocked(a, b) {

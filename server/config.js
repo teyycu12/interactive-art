@@ -114,6 +114,15 @@ export const BOIDS = {
   affinityBonus: 1.5,
 };
 
+/**
+ * 角色之間的剛體距離（腳底圓心距，邏輯單位）：兩人再近就被擋住，不能互相穿越（2026-10-17）。
+ *
+ * 靜止模式（預設）下 Boids 的分離力不參與合成，手動操控的角色原本會直接穿過別人。
+ * 60 約是一個像素角色的身寬：小於它看起來會疊在一起，太大則兩人站不近 ——
+ * 配對、揮手、話題桌都要兩個人站在一起，不能大到像隔著一道牆。
+ */
+export const AGENT_BODY_DISTANCE = 60;
+
 // 障礙推力權重。必須高於凝聚力，否則角色會被人群拉著穿過沙發。
 export const OBSTACLE_WEIGHT = 3.0;
 
@@ -137,13 +146,12 @@ export const HEADING_TURN_RATE = 9;
 export const EMOTE_DURATION_MS = 2200;        // 頭頂氣泡顯示時長
 export const EMOTE_COOLDOWN_MS = 600;         // 單一使用者的動作發送冷卻，防洗版
 
-// 揮手與乾杯要對方回應才算數（server/greetings.js）。
+// 揮手要對方回揮才算數（server/greetings.js）。
 // radius 刻意小於 CLIENT_SYNC_RADIUS（320）：揮給的那個人一定也在自己手機的
 // 個人視角裡 —— 否則手機跳出「你跟小明揮手」，畫面上卻找不到小明是誰。
 export const GREET = {
   radius: 240,
   waveWindowMs: 8000,     // 對方要看到提示、抬頭找人、再按，給足時間
-  cheersWindowMs: 3000,   // 「一起按」要的是同時，拉長就不需要喊那一聲了
 };
 
 // ── 連線防護 ──────────────────────────────────────────────────

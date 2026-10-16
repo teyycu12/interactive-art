@@ -206,7 +206,9 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 @media (max-width: 960px) { .layout { grid-template-columns: 1fr; } }
 .main, .side { display: grid; gap: 18px; align-content: start; min-width: 0; }
 .main > [role="tabpanel"] { min-width: 0; }
-.side { position: sticky; top: 16px; }
+/* align-self: start 是必要的：grid 預設把側欄拉成跟主欄一樣高，sticky 就永遠沒有空間可以「黏住」，
+   大螢幕預覽會跟著頁面捲走（主持人捲到下面按「下一題」時就看不到大螢幕了） */
+.side { position: sticky; top: 16px; align-self: start; }
 @media (max-width: 960px) { .side { position: static; } }
 
 /* 玩法選單：一次只展開一個玩法的面板 */
@@ -230,7 +232,6 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 .howto summary:hover { color: var(--ink); }
 .howto p { margin: 6px 0 0; padding: 9px 12px; background: var(--sunk); border-radius: 9px; }
 
-.stage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; align-items: start; }
 
 .panel {
   background: var(--surface);
@@ -389,7 +390,7 @@ td.export { white-space: nowrap; }
 .btn-kick:hover { border-style: solid; border-color: var(--danger); color: var(--danger); background: var(--surface); }
 
 /* 動態流 */
-.feed { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; }
+.feed { list-style: none; margin: 0; padding: 0; max-height: min(360px, 30vh); overflow-y: auto; }
 .feed li {
   font-size: 13px;
   padding: 8px 0;
@@ -462,6 +463,8 @@ td.export { white-space: nowrap; }
 .quiz-editing[hidden] { display: none; }
 .bank .q { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bank button { width: auto; padding: 3px 10px; font-size: 12px; border-width: 2px; border-radius: 8px; }
+/* 排序箭頭沿用節目單的 .rs-mini（無框小字），蓋掉上面的按鈕框 */
+.bank .rs-mini { padding: 2px 8px; border: none; border-radius: 6px; background: none; }
 .hint.tiny { font-size: 11px; margin-bottom: 0; }
 
 /* 進行中的題目 */
@@ -555,36 +558,7 @@ td.export { white-space: nowrap; }
   border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; white-space: nowrap;
 }
 
-/* ── 投影模式 ─────────────────────────────────────────────
-   只藏東西、不改行為。藏的是「被全場看到會出事」的三樣：
-   問答編輯區（標著正解）、移除參與者的按鈕、系統分頁（花費與照片）。 */
 .topbar-right { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
-.btn-projector {
-  width: auto;
-  padding: 8px 14px;
-  font-size: 13px;
-  border-width: 2px;
-  border-color: var(--line);
-  color: var(--ink-soft);
-}
-.btn-projector[aria-pressed="true"] { background: var(--blue); border-color: var(--blue); color: #fff; }
-.projector-banner {
-  margin: -8px 0 18px;
-  padding: 9px 14px;
-  border-radius: 10px;
-  background: #E7EFF5;
-  color: #2E5670;   /* 對 #E7EFF5 約 6.7:1 */
-  font-size: 13px;
-  font-weight: 700;
-}
-.projector-banner[hidden] { display: none; }
-.projector .btn-kick,
-.projector .reports-panel,
-.projector .persona-editor,
-.projector .report-dot,
-.projector #tab-btn-system,
-.projector .quiz-editor,
-.projector .bank-load, .projector .quiz-editing { display: none; }
 
 /* ── 節目單 ───────────────────────────────────────────── */
 .rs-list { list-style: none; margin: 0 0 12px; padding: 0; counter-reset: rs; display: grid; gap: 4px; }
@@ -625,10 +599,7 @@ td.export { white-space: nowrap; }
 }
 #btn-rs-next { margin-bottom: 12px; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #btn-rs-next:disabled { background: var(--sunk); border-color: var(--line); color: var(--ink-soft); cursor: default; }
-.rs-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; border-top: 1px dashed var(--line); padding-top: 12px; }
-.rs-add button { width: auto; padding: 6px 12px; font-size: 13px; border-width: 2px; }
-.rs-add select { width: auto; flex: 1; min-width: 120px; padding: 6px 10px; font-size: 13px; }
-.rs-recipe { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
+.rs-recipe { display: flex; gap: 8px; align-items: flex-end; margin-top: 4px; border-top: 1px dashed var(--line); padding-top: 12px; }
 .rs-recipe .field { flex: 1; margin: 0; }
 .rs-recipe button { width: auto; padding: 6px 12px; font-size: 13px; border-width: 2px; }
 
@@ -644,7 +615,6 @@ td.export { white-space: nowrap; }
   border-radius: 9px; padding: 9px 12px; margin: 0 0 12px;
 }
 .report-summary[hidden] { display: none; }
-.runsheet { margin-bottom: 18px; }
 /* 不能沿用 .ev-empty：pushFeed 會把那個 class 當成佔位字刪掉 */
 .feed .ev-plan { color: var(--ink-soft); }
 
@@ -712,18 +682,48 @@ td.export { white-space: nowrap; }
   transform-origin: 0 0;
   pointer-events: none;   /* 預覽只看不點，免得誤觸大螢幕上的東西 */
 }
-.sp-frame.is-expanded {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  aspect-ratio: auto;
-  border: 0;
-  border-radius: 0;
-  background: #111;
-}
-.sp-close {
-  position: absolute; top: 14px; right: 14px; z-index: 1;
-  width: auto; padding: 8px 14px; font-size: 14px;
-  background: var(--surface);
-}
-body.sp-lock { overflow: hidden; }
+
+.sp-controls { display: grid; grid-template-columns: 1fr 1fr 56px; gap: 6px; margin-top: 10px; }
+.sp-controls .sp-sound { font-size: 20px; padding: 0; }
+.sp-controls button { width: 100%; min-height: 40px; padding: 6px 8px; font-size: 13px; border-width: 2px; border-radius: 9px; }
+.sp-controls button[aria-pressed="false"] { color: var(--ink-faint); }
+
+/* ── 連續問答 ─────────────────────────────────────────────── */
+.quiz-run-row { margin: 12px 0 6px; }
+.bank .no { flex: none; width: 1.6em; text-align: right; font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--ink-faint); }
+.quiz-add { border-top: 1px dashed var(--line); margin-top: 12px; padding-top: 10px; }
+.quiz-add > summary { cursor: pointer; font-size: 14px; font-weight: 700; color: var(--ink); padding: 6px 0; }
+.quiz-add[open] > summary { margin-bottom: 10px; }
+.quiz-run-prog { margin: 0 0 8px; font-size: 13px; font-weight: 700; color: var(--teal-ink); }
+.quiz-run-prog[hidden] { display: none; }
+#btn-quiz-next { width: 100%; }
+.quiz-actions { margin: 0 0 4px; }
+.quiz-actions [hidden] { display: none; }
+.quiz-stop { display: block; margin: 10px auto 0; }
+.quiz-stop[hidden] { display: none; }
+
+.sp-photo { width: 100%; margin-top: 8px; min-height: 44px; }
+#photo-result { margin-top: 10px; }
+
+/* 參與者、系統分頁的面板之間要有跟「活動選單」一樣的 18px 間距（原本面板直接黏在一起） */
+#tab-plan, #tab-people, #tab-system { display: grid; gap: 18px; align-content: start; }
+#tab-plan[hidden], #tab-people[hidden], #tab-system[hidden] { display: none; }
+
+/* ── 節目單頁：現在進行中 ───────────────────────────────── */
+.lc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.lc-list li { border: 2px solid var(--ink); border-radius: 12px; padding: 12px 14px; background: var(--paper); }
+.lc-head { display: flex; align-items: baseline; gap: 10px; }
+.lc-tag { flex: none; padding: 2px 10px; border-radius: 999px; background: var(--ink); color: var(--paper); font-size: 12px; font-weight: 700; }
+.lc-title { flex: 1; min-width: 0; font-size: 16px; line-height: 1.45; overflow-wrap: anywhere; }
+.lc-status { margin: 6px 0 10px; font-size: 13px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.lc-actions { display: flex; gap: 8px; }
+.lc-actions button { flex: 1; min-height: 48px; }
+.live-control #lc-empty { margin: 0; }
+
+/* ── 節目單頁：配分 ─────────────────────────────────────── */
+.scoring-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 16px; margin: 4px 0 14px; }
+.scoring-row { display: grid; grid-template-columns: 1fr 84px auto; align-items: center; gap: 8px; font-size: 14px; }
+.scoring-row input { width: 100%; padding: 6px 8px; font: inherit; text-align: right; border: 2px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); }
+.scoring-row input:focus { outline: none; border-color: var(--ink); }
+.scoring-row small { color: var(--ink-soft); }
+.scoring-panel .badge-off[hidden] { display: none; }

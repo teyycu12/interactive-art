@@ -52,6 +52,7 @@ import { QuizSession } from './quiz.js';
 import { TraitStore } from './traits.js';
 import { WordCloudSession } from './wordcloud.js';
 import { MessageRelay } from './messages.js';
+import { normalizeScoring, editableScoring } from '../shared/scoring.js';
 import {
   DEFAULT_PERSONA_QUIZ, PERSONA_TRAIT_KEY, PERSONA_RESULTS, validatePersonaQuiz, scorePersona, personaQuizVersion,
 } from '../shared/persona.js';
@@ -119,6 +120,20 @@ if (snapshot) {
 }
 
 /**
+ * 配分。預設值在 config.js；主持人在主辦端「節目單」頁改過的話落地進快照。
+ * 直接改 SCORING 物件本身：計分的地方（這個檔案、quiz.js）都讀同一個物件，改一處就全部生效。
+ */
+const SCORING_DEFAULTS = Object.freeze(editableScoring(SCORING));
+{
+  const saved = snapshot?.scoring ? normalizeScoring(snapshot.scoring, SCORING_DEFAULTS) : null;
+  if (saved?.ok) Object.assign(SCORING, saved.value);
+}
+const scoringView = () => {
+  const scoring = editableScoring(SCORING);
+  return { scoring, isDefault: Object.keys(scoring).every((k) => scoring[k] === SCORING_DEFAULTS[k]) };
+};
+
+/**
  * 大螢幕目前的場景主題。落地進快照：伺服器在活動中途重開時，
  * 投影畫面不能自己跳回預設主題，主辦端也不會記得要再選一次。
  */
@@ -137,8 +152,10 @@ let eventInfo = parseEventInfo(snapshot?.event);
  * 投影畫面上的按鈕現場沒人點得到，而且會被投出去。
  * 光線與重置視角已拿掉（光線現場用不到；重置視角只對已停用的 3D 客廳有意義），
  * 剩下的除錯視圖不落地：那是臨時檢查用的，重開後不該還開著。
+ * 「清除效果」也拿掉了（2026-10-17）：大螢幕上的物件不再能點，走近時的小動畫幾秒後自己消失。
+ * ranks：右下角的積分排行要不要顯示（主持人不想讓全場比分數時可以關）。
  */
-const screenSettings = { debug: false, sound: true };
+const screenSettings = { debug: false, sound: true, ranks: true };
 
 /**
  * 進場人格問卷的題目。主持人可在主辦端修改，落地進快照 ——
@@ -187,6 +204,7 @@ const snapshotData = () => ({
   // 預設題目不存：之後改版預設題目時，沒改過的活動才會跟著用新版
   personaQuiz: personaQuiz === DEFAULT_PERSONA_QUIZ ? null : personaQuiz,
   bingoFacts: bingoFactsCustom,
+  scoring: editableScoring(SCORING),
 });
 
 /** 狀態有變動，等下一次自動存檔 */
@@ -990,7 +1008,7 @@ function detachAgent(agentId, { forget = false } = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 揮手與乾杯（要對方回應才算數，見 server/greetings.js）
+// 揮手（要對方回揮才算數，見 server/greetings.js；乾杯已移除）
 // ─────────────────────────────────────────────────────────────
 function handleWave(agentId, targetId) {
   const r = greetings.wave(agentId, stage.agents, Date.now(), targetId);
@@ -1006,18 +1024,6 @@ function handleWave(agentId, targetId) {
   }
 }
 
-function handleCheers(agentId) {
-  const r = greetings.cheer(agentId, stage.agents, Date.now());
-  if (r.kind === 'clink') {
-    greetDone('CHEERS', GREET_OUTCOME.CLINK, r.a, r.b);
-  } else {
-    sendToAgent(agentId, EV.GREET_RESULT, {
-      kind: 'CHEERS',
-      outcome: r.kind === 'waiting' ? GREET_OUTCOME.WAITING : GREET_OUTCOME.NOBODY,
-    });
-  }
-}
-
 /** 兩人成功：雙方手機各收一則，大螢幕在兩人之間畫一道連線 */
 function greetDone(kind, outcome, a, b) {
   sendToAgent(a, EV.GREET_RESULT, { kind, outcome, otherName: nameOf(b) });
@@ -1025,8 +1031,8 @@ function greetDone(kind, outcome, a, b) {
   blast(screens, EV.STAGE_GREET, { kind, a, b });
   // 回揮的那一方此時頭上已經有揮手圖示；先揮的那一方可能已經消失了，補上
   stage.applyAction(a, kind, { force: true });
-  meetUp(a, b, kind === 'WAVE' ? VIA.WAVE : VIA.CHEERS);
-  console.log(`[greet] ${nameOf(a)} × ${nameOf(b)}　${kind === 'WAVE' ? '互相揮手' : '碰杯'}`);
+  meetUp(a, b, VIA.WAVE);
+  console.log(`[greet] ${nameOf(a)} × ${nameOf(b)}　互相揮手`);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1359,8 +1365,9 @@ function handleScreenCommand(ws, msg) {
       screenSettings.sound = msg.value === true;
       blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
       break;
-    case 'clear':
-      blast(screens, EV.SCREEN_CMD, { cmd: msg.cmd });
+    case 'ranks':
+      screenSettings.ranks = msg.value === true;
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
       break;
     case 'capture':
       captureForHost(ws);
@@ -1506,6 +1513,19 @@ function handleHostMessage(ws, msg) {
       console.log(`[bingo] 自我介紹題${bingoFactsCustom ? `已修改　${bingoFactsCustom.length} 題` : '恢復預設'}`);
       markDirty();
       blast(hosts, EV.HOST_BINGO_FACTS, bingoFactsView());
+      break;
+    }
+
+    case EV.HOST_SET_SCORING: {
+      const r = msg.scoring === null
+        ? { ok: true, value: SCORING_DEFAULTS }
+        : normalizeScoring(msg.scoring, editableScoring(SCORING));
+      if (!r.ok) { send(ws, EV.HOST_REJECT, { reason: r.reason }); return; }
+      Object.assign(SCORING, r.value);
+      console.log(`[scoring] 配分${msg.scoring === null ? '恢復預設' : '已修改'}　${JSON.stringify(r.value)}`);
+      markDirty();
+      // 已經得到的分數不重算：改的是之後的規則
+      blast(hosts, EV.HOST_SCORING, scoringView());
       break;
     }
 
@@ -1687,8 +1707,6 @@ wss.on('connection', (ws) => {
         if (!stage.applyAction(ws.agentId, msg.action)) return;
         if (msg.action === 'WAVE') {
           handleWave(ws.agentId, typeof msg.target === 'string' ? msg.target : undefined);
-        } else if (msg.action === 'CHEERS') {
-          handleCheers(ws.agentId);
         }
         break;
       }
@@ -1812,6 +1830,7 @@ wss.on('connection', (ws) => {
           scoring: SCORING,
         });
         send(ws, EV.HOST_STATE, hostState());
+        send(ws, EV.HOST_SCORING, scoringView());
         // 主題選單只由 STAGE_THEME 驅動，重整後的主辦端要靠這則才知道目前選的是哪個
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
         send(ws, EV.SCREEN_SETTINGS, { settings: screenSettings });
@@ -1852,6 +1871,7 @@ wss.on('connection', (ws) => {
       case EV.HOST_CLOSE_WORDCLOUD:
       case EV.HOST_HIDE_WORD:
       case EV.HOST_SET_BINGO_FACTS:
+      case EV.HOST_SET_SCORING:
       case EV.HOST_REQUEST_REPORT:
         // 未通過認證的連線一律忽略，不回應也不透露任何狀態
         if (ws.role !== 'host') return;

@@ -55,6 +55,6 @@ test('任務型別、次數、時長都在主辦端表單選得到的範圍內',
   }
 });
 
-test('每套都以大合照收尾', () => {
-  for (const r of RECIPES) assert.equal(r.steps.at(-1).kind, 'photo', r.id);
+test('範本不含大合照：時機由主持人看現場決定，用側欄的按鈕拍', () => {
+  for (const r of RECIPES) assert.ok(!r.steps.some((s) => s.kind === 'photo'), r.id);
 });

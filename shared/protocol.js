@@ -113,9 +113,9 @@ export const EV = {
   // ── 活動設定與大螢幕控制 ─────────────────────────────
   HOST_SETUP_EVENT: 'HOST_SETUP_EVENT',       // Host → Server：選定場景並為活動命名（進入活動編排前必填）
   STAGE_EVENT: 'STAGE_EVENT',                 // Server → Screen/Host：目前的活動名稱（尚未設定時為 null）
-  HOST_SCREEN_CMD: 'HOST_SCREEN_CMD',         // Host → Server：操作大螢幕（清除效果、除錯視圖、截圖）
+  HOST_SCREEN_CMD: 'HOST_SCREEN_CMD',         // Host → Server：操作大螢幕（排行榜、音效、除錯視圖、截圖）
   SCREEN_SETTINGS: 'SCREEN_SETTINGS',         // Server → Screen/Host：大螢幕的持續性設定（除錯視圖、音效）
-  SCREEN_CMD: 'SCREEN_CMD',                   // Server → Screen：一次性的動作（清除效果）
+  SCREEN_CMD: 'SCREEN_CMD',                   // Server → Screen：一次性的動作（目前沒有；清除效果已移除）
   HOST_SCREEN_SHOT: 'HOST_SCREEN_SHOT',       // Server → Host：「儲存畫面」的截圖
 
   // ── 私訊（點手機畫面上的角色傳文字）──────────────────
@@ -136,6 +136,8 @@ export const EV = {
   HOST_PERSONA_QUIZ: 'HOST_PERSONA_QUIZ',         // Server → Host：目前的題目（連線時補送、修改後廣播）
   HOST_SET_BINGO_FACTS: 'HOST_SET_BINGO_FACTS',   // Host → Server：修改賓果自我介紹題（facts: null 代表恢復預設）
   HOST_BINGO_FACTS: 'HOST_BINGO_FACTS',           // Server → Host：目前的自我介紹題 {facts, isDefault}
+  HOST_SET_SCORING: 'HOST_SET_SCORING',           // Host → Server：修改配分（scoring: null 代表恢復預設）
+  HOST_SCORING: 'HOST_SCORING',                   // Server → Host：目前的配分 {scoring, isDefault}（連線時補送、修改後廣播）
 
   // ── 活動報告 ─────────────────────────────────────────
   HOST_REQUEST_REPORT: 'HOST_REQUEST_REPORT', // Host → Server：要一份整場的活動報告
@@ -281,7 +283,8 @@ export const PAIR_ERRORS = {
 };
 
 /** 社交動作白名單（技術文件 M1 §操控輸入發送規格） */
-export const ACTIONS = ['CHEERS', 'HEART', 'WAVE'];
+// 乾杯已移除（2026-10-17）：EMOTE_GLYPH 與像素角色的碰杯姿勢留著，舊快照裡的動作仍畫得出來
+export const ACTIONS = ['HEART', 'WAVE'];
 
 /**
  * 社交動作的顯示圖示。

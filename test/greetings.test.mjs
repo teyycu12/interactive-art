@@ -1,5 +1,5 @@
 /**
- * 揮手與乾杯：要對方回應才算數（server/greetings.js）
+ * 揮手：要對方回應才算數（server/greetings.js）
  */
 
 import { test, describe } from 'node:test';
@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 import { Greetings } from '../server/greetings.js';
 
-const OPTS = { radius: 240, waveWindowMs: 8000, cheersWindowMs: 3000 };
+const OPTS = { radius: 240, waveWindowMs: 8000 };
 const agent = (id, x, y = 500, disconnectedAt = null) => ({ id, x, y, disconnectedAt });
 const field = (...list) => new Map(list.map((a) => [a.id, a]));
 
@@ -62,53 +62,15 @@ describe('揮手', () => {
   });
 });
 
-describe('乾杯', () => {
-  test('一個人按只是等，身邊的人在時限內也按才碰杯', () => {
-    const g = new Greetings(OPTS);
-    const agents = field(agent('A', 100), agent('B', 200));
-    assert.deepEqual(g.cheer('A', agents, 0), { kind: 'waiting' });
-    assert.deepEqual(g.cheer('B', agents, 2000), { kind: 'clink', a: 'A', b: 'B' });
-  });
-
-  test('超過時限不算一起按', () => {
-    const g = new Greetings(OPTS);
-    const agents = field(agent('A', 100), agent('B', 200));
-    g.cheer('A', agents, 0);
-    assert.deepEqual(g.cheer('B', agents, 3500), { kind: 'waiting' });
-  });
-
-  test('離得太遠的人同時按也碰不到杯', () => {
-    const g = new Greetings(OPTS);
-    const agents = field(agent('A', 100), agent('B', 900), agent('C', 1000));
-    g.cheer('A', agents, 0);  // A 身邊沒人
-    assert.deepEqual(g.cheer('B', agents, 100), { kind: 'waiting' }); // B 身邊有 C，但 C 沒按
-  });
-
-  test('身邊沒有人時回報 nobody，而不是讓他乾等', () => {
-    const g = new Greetings(OPTS);
-    assert.deepEqual(g.cheer('A', field(agent('A', 100), agent('B', 900)), 0), { kind: 'nobody' });
-  });
-
-  test('碰過杯就用掉了，第三個人不會跟著成功', () => {
-    const g = new Greetings(OPTS);
-    const agents = field(agent('A', 100), agent('B', 200), agent('C', 250));
-    g.cheer('A', agents, 0);
-    g.cheer('B', agents, 100);  // A × B
-    assert.deepEqual(g.cheer('C', agents, 200), { kind: 'waiting' });
-  });
-});
-
 test('prune 清掉過期登記', () => {
   const g = new Greetings(OPTS);
   const agents = field(agent('A', 100), agent('B', 200));
   g.wave('A', agents, 0);
-  g.cheer('A', agents, 0);
   g.prune(10_000);
   assert.equal(g.waves.size, 0);
-  assert.equal(g.cheers.size, 0);
 });
 
-test('替對方補圖示（force）不重設他的冷卻：剛被回揮就按乾杯不能被吞掉', async () => {
+test('替對方補圖示（force）不重設他的冷卻：剛被回揮就按愛心不能被吞掉', async () => {
   const { Stage } = await import('../server/state.js');
   const stage = new Stage();
   const a = stage.addAgent({
@@ -120,7 +82,7 @@ test('替對方補圖示（force）不重設他的冷卻：剛被回揮就按乾
   assert.equal(stage.applyAction(a.id, 'WAVE', { force: true }), true);
   assert.equal(a.emote.action, 'WAVE');
   assert.equal(a.emoteCount, count, '補的圖示不計次');
-  assert.equal(stage.applyAction(a.id, 'CHEERS'), true, '使用者自己的下一次按鍵不受影響');
+  assert.equal(stage.applyAction(a.id, 'HEART'), true, '使用者自己的下一次按鍵不受影響');
 });
 
 describe('尊重私訊的封鎖', () => {
@@ -143,12 +105,5 @@ describe('尊重私訊的封鎖', () => {
     const agents = field(agent('A', 100), agent('B', 150), agent('C', 250));
     assert.deepEqual(g.wave('A', agents, 0), { kind: 'invite', from: 'A', to: 'C' });
     assert.deepEqual(g.wave('A', agents, 1000, 'B'), { kind: 'invite', from: 'A', to: 'C' });
-  });
-
-  test('任一方封鎖對方就碰不成杯', () => {
-    const g = withBlocks(['B', 'A']);
-    const agents = field(agent('A', 100), agent('B', 200));
-    assert.deepEqual(g.cheer('A', agents, 0), { kind: 'nobody' });
-    assert.deepEqual(g.cheer('B', agents, 100), { kind: 'nobody' });
   });
 });

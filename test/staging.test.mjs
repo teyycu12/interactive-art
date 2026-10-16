@@ -269,10 +269,10 @@ describe('社交動作進度', () => {
   test('emoteT 隨時間由 0 遞增至 1', async () => {
     const stage = new Stage();
     const a = makeAgent(stage);
-    stage.applyAction(a.id, 'CHEERS');
+    stage.applyAction(a.id, 'HEART');
 
     const first = stage.snapshot()[0];
-    assert.equal(first.emote, 'CHEERS');
+    assert.equal(first.emote, 'HEART');
     assert.ok(first.emoteT < 0.1, `剛觸發時應接近 0，實得 ${first.emoteT}`);
 
     await new Promise((r) => setTimeout(r, 300));

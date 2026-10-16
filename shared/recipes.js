@@ -36,7 +36,7 @@ const bingo = (minutes) => ({
   label: `人物賓果・${minutes} 分鐘`,
   msg: { type: EV.HOST_START_BINGO, durationMs: minutes * 60000 },
 });
-const photo = { kind: 'photo', label: '拍大合照', msg: { type: EV.HOST_TAKE_PHOTO } };
+// 大合照不排進範本（2026-10-17）：時機由主持人看現場決定，按側欄大螢幕底下的「拍大合照」
 
 /**
  * themeId → 範本。theme 為 null 的範本任何場景都能用。
@@ -48,28 +48,28 @@ export const RECIPES = [
     theme: 'kitchen',
     name: '交誼破冰（約 30 分鐘）',
     brief: '彼此不認識的一群人：先用文字雲暖場，再一對一認識，最後聊聊今天的收穫。',
-    steps: [wordcloud('用一個詞形容你今天的心情'), pairing(2, 8), bingo(10), wordcloud('今天最難忘的一刻？'), photo],
+    steps: [wordcloud('用一個詞形容你今天的心情'), pairing(2, 8), bingo(10), wordcloud('今天最難忘的一刻？')],
   },
   {
     id: 'office_onboarding',
     theme: 'office',
     name: '新人報到・新生訓練（約 35 分鐘）',
     brief: '同一個單位的新成員：先說說期待，用賓果把人認一輪，再配對加深印象。',
-    steps: [wordcloud('你最期待在這裡學到什麼？'), bingo(10), pairing(3, 8), wordcloud('用一個詞形容這個團隊'), photo],
+    steps: [wordcloud('你最期待在這裡學到什麼？'), bingo(10), pairing(3, 8), wordcloud('用一個詞形容這個團隊')],
   },
   {
     id: 'gym_welcome',
     theme: 'gym',
     name: '社團迎新・運動會暖場（約 25 分鐘）',
     brief: '人多、動態高：先看看大家愛什麼運動，再用短配對、短賓果認識幾個人。',
-    steps: [wordcloud('你最喜歡的運動是？'), pairing(2, 5), bingo(5), photo],
+    steps: [wordcloud('你最喜歡的運動是？'), pairing(2, 5), bingo(5)],
   },
   {
     id: 'quick_icebreaker',
     theme: null,
     name: '快速破冰（約 15 分鐘）',
-    brief: '時間很短的場合：一題文字雲暖身、一輪賓果、合照收尾。任何場景都能用。',
-    steps: [wordcloud('用一個詞形容今天'), bingo(5), photo],
+    brief: '時間很短的場合：一題文字雲暖身、一輪賓果。任何場景都能用。',
+    steps: [wordcloud('用一個詞形容今天'), bingo(5)],
   },
 ];
 

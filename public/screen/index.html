@@ -78,33 +78,10 @@
     .offline .dot { animation: none; }
   }
 
-  /* 任務橫幅：任務公告必須在共享畫布上被看見（規格 v3.0 §3.1 第 05 步） */
-  .mission {
-    position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
-    background: var(--paper); border: 3px solid #E76F51; border-radius: 18px;
-    padding: 14px 30px; text-align: center; min-width: 380px;
-    box-shadow: 0 8px 28px -14px rgba(47,42,38,.4);
-  }
-  .mission[hidden] { display: none; }
-  /* 賓果橫幅：鼠尾草綠，與任務的陶土色分開。標籤字用 ink 版本（UI-STYLING：亮色不寫字） */
-  .mission.bingo { border-color: #6E9B84; }
-  .mission.bingo .m-label { color: #3D6158; }
-  .mission .m-label {
-    font-size: 11px; letter-spacing: .2em; color: #B44A2F; font-weight: 700;
-  }
-  .mission .m-title { font-size: 27px; font-weight: 900; margin: 2px 0 4px; }
-  .mission .m-brief { font-size: 13px; color: var(--soft); }
-  .mission .m-prog {
-    margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line);
-    font-size: 14px; font-weight: 700;
-  }
-  /* 深一階的橘：#E76F51 對紙色只有 2.9:1，投影到大螢幕、又隔著一整個場地看，
-     這個數字是全場在追的進度，不能是最難讀的那一個。#C4462A 為 4.65:1。 */
-  .mission .m-prog b { font-size: 19px; color: #C4462A; }
-
   /* 完成回饋：短暫浮現後淡出 */
   .toasts {
-    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    /* 離底部留高一點：遊戲畫面開著時，底下那行提示字在這個高度 */
+    position: fixed; bottom: 64px; left: 50%; transform: translateX(-50%);
     display: flex; flex-direction: column-reverse; gap: 8px; align-items: center;
     pointer-events: none;
   }
@@ -121,82 +98,68 @@
   }
   @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 
-  /* ── 即時問答 ───────────────────────────────────────────
-     投影用尺寸：最後一排的人要看得清楚，所以字級遠大於一般網頁。 */
-  /* 高度要斤斤計較：這張卡片佔掉的每一像素都是從房間身上扣的，
-     而房間縮小就是場上每個人的角色跟著縮小。字級不能動（最後一排要看得清楚），
-     能收的只有留白。 */
-  .quiz {
-    position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
-    width: min(1560px, 94vw);
-    background: var(--paper);
-    border: 4px solid var(--ink);
-    border-radius: 22px;
-    padding: 14px 28px 16px;
-    box-shadow: 0 14px 44px -18px rgba(47, 42, 38, .55);
-  }
-  .quiz[hidden] { display: none; }
-
-  /* 題目、題號、作答人數排成一行。
-     垂直堆疊時光是題頭就吃掉三行高度，而那三行的資訊量一行就放得下 ——
-     省下的每一像素都還給房間，也就是還給場上每個人的角色尺寸。 */
-  .q-line {
-    display: flex; align-items: baseline; gap: 20px;
-    margin-bottom: 10px;
-  }
-  .q-kind, .q-state {
-    flex: none;
-    font-size: 14px; font-weight: 700; letter-spacing: .12em; color: var(--soft);
-  }
-  .q-title {
-    flex: 1; min-width: 0;
-    font-size: 34px; font-weight: 900; line-height: 1.2; margin: 0;
-  }
-  .q-foot {
-    flex: none; text-align: right;
-    font-size: 17px; font-weight: 700; color: var(--soft);
-  }
-  .q-foot b { color: var(--ink); font-size: 21px; }
-
-  /* 倒數條由滿到空，投影出去比數字更容易被餘光注意到 */
-  .q-timebar { height: 10px; border-radius: 8px; background: var(--line); overflow: hidden; margin-bottom: 12px; }
-  .q-timebar i { display: block; height: 100%; width: 100%; background: #E76F51; }
-  .q-timebar.urgent i { background: #C4453C; }
-
-  .q-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .q-opts:empty { display: none; }
-  @media (min-width: 1100px) {
-    .q-opts { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
-  }
-  .q-opt {
-    display: flex; align-items: center; gap: 12px;
-    border-radius: 16px; padding: 12px 16px;
-    color: #fff; font-size: 25px; font-weight: 700;
-    border: 4px solid transparent;
-  }
-  .q-opt .g { font-size: 30px; line-height: 1; flex: none; }
-  .q-opt .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .q-opt .c {
-    font-family: ui-monospace, Consolas, monospace;
-    font-size: 22px; flex: none; opacity: .85;
-  }
-  /* 揭曉：正解描上墨框並保持飽和，其餘退到背景 */
-  .q-opt.dim { opacity: .28; }
-  .q-opt.right { border-color: var(--ink); }
-
-  /* ── 文字雲 ─────────────────────────────────────────────
-     蓋在場景上的整面紙色畫布；詞的位置由 screen.js 以螺旋排版算出，
-     位置與字級的變化交給 transition，新詞以 wc-pop 彈出 —— 「長出來」的感覺。 */
-  .wordcloud {
-    /* 比活動名稱卡、橫幅高一層：出題期間文字雲是全場焦點，左上角的名稱卡不該壓在題目上 */
+  /* ── 遊戲畫面：問答、任務、賓果、文字雲共用的滿版面板 ─────────
+     蓋在場景上的整面紙色畫布。原本問答、任務、賓果是浮在上緣的橫幅、房間讓位縮小
+     （UI-STYLING「大螢幕的橫幅不可疊在場景上」）；2026-10 統一成跟文字雲一樣滿版：
+     玩法進行中，題目與進度就是全場焦點，字級可以大到最後一排也看得清楚。
+     代價是進行中看不到房間裡的角色 —— 收題、結算後面板收起，房間回來。 */
+  .stage-panel {
+    /* 比活動名稱卡高一層：左上角的名稱卡不該壓在題目上 */
     position: fixed; inset: 18px; z-index: 4;
     display: flex; flex-direction: column;
-    background: rgba(250, 248, 245, .97);
+    /* 不透明：揭曉時淡掉的選項若透出後面的房間與排行榜，畫面會糊成一片 */
+    background: #FAF8F5;
     border: 3px solid var(--ink); border-radius: 22px;
     padding: 18px 26px 14px;
     box-shadow: 0 18px 50px -24px rgba(47, 42, 38, .55);
   }
-  .wordcloud[hidden] { display: none; }
+  .stage-panel[hidden] { display: none; }
+  .wc-meta b { color: var(--ink); font-size: 1.2em; }
+
+  /* 任務、賓果：上緣一列「進行中：」。置中、兩側留給左上角的活動名稱卡 */
+  .now-bar {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 3;
+    display: flex; align-items: center; gap: 22px;
+    max-width: calc(100vw - 360px);
+    padding: 10px 26px;
+    background: var(--paper); border: 3px solid var(--ink); border-radius: 999px;
+    box-shadow: 0 8px 28px -14px rgba(47, 42, 38, .45);
+    font-size: clamp(16px, 1.3vw, 26px); font-weight: 700; color: var(--ink);
+    white-space: nowrap;
+  }
+  .now-bar[hidden], .nb-item[hidden] { display: none; }
+  .nb-label { flex: none; color: var(--soft); }
+  .nb-item { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .nb-kind { flex: none; padding: 2px 12px; border-radius: 999px; color: #fff; font-size: .8em; }
+  .nb-mission { background: #C4462A; }
+  .nb-bingo { background: #3D6158; }
+  .nb-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* #C4462A 對紙色 4.65:1：全場在追的進度數字，不能是最難讀的那一個（#E76F51 只有 2.9:1） */
+  .nb-meta { flex: none; color: var(--soft); font-variant-numeric: tabular-nums; }
+  .nb-meta b { color: #C4462A; }
+
+  /* 即時問答：選項 2×2 撐滿中間，字級跟著畫面放大 */
+  .quiz .wc-kind { background: var(--ink); }
+  .stage-panel.quiz { z-index: 5; }   /* 跟文字雲同時開著時，問答在上（有倒數與計分） */
+  .q-timebar { flex: none; height: 14px; border-radius: 8px; background: var(--line); overflow: hidden; margin: 14px 0 16px; }
+  .q-timebar i { display: block; height: 100%; width: 100%; background: #E76F51; }
+  .q-timebar.urgent i { background: #C4453C; }
+  .q-opts { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: 16px; }
+  .q-opts:empty { display: none; }
+  .q-opt {
+    display: flex; align-items: center; gap: 22px; min-height: 0;
+    border-radius: 22px; padding: 18px 32px;
+    color: #fff; font-size: clamp(26px, 3vw, 56px); font-weight: 800;
+    border: 6px solid transparent;
+  }
+  .q-opt .g { font-size: 1.3em; line-height: 1; flex: none; }
+  .q-opt .t { flex: 1; min-width: 0; line-height: 1.25; overflow-wrap: anywhere; }
+  .q-opt .c { font-family: ui-monospace, Consolas, monospace; font-size: .8em; flex: none; opacity: .9; }
+  /* 揭曉：正解描上墨框並保持飽和，其餘退到背景 */
+  .q-opt.dim { opacity: .28; }
+  .q-opt.right { border-color: var(--ink); }
+  .quiz.revealed .wc-hint { color: var(--ink); }
+
   .wc-head { display: flex; align-items: center; gap: 16px; flex: none; }
   .wc-kind {
     flex: none; font-size: 16px; font-weight: 800; letter-spacing: .08em;
@@ -279,36 +242,41 @@
 <div id="bg3d"></div>
 <canvas id="stage"></canvas>
 
-<!-- 人物賓果：只放進度前幾名，卡片內容是參與者私人的 -->
-<div class="mission bingo" id="bingo" hidden>
-  <div class="m-label">人物賓果 · 找符合條件的人，問他的配對碼</div>
-  <div class="m-title" id="bingo-lead">—</div>
-  <div class="m-brief" id="bingo-meta">—</div>
-</div>
-
-<div class="mission" id="mission" hidden>
-  <div class="m-label">現在的任務</div>
-  <div class="m-title" id="m-title">—</div>
-  <div class="m-brief" id="m-brief">—</div>
-  <div class="m-prog" id="m-prog" hidden></div>
+<!-- ── 遊戲畫面 ───────────────────────────────────────────
+     問答、文字雲是滿版面板（.stage-panel）：題頭一行（玩法標籤・標題・人數）、
+     中間是主畫面、底下一行提示。
+     任務、賓果是上緣一列「進行中：」（2026-10-17）：參與者靠手機玩、在現場找人，
+     不需要盯著大螢幕，所以不蓋住房間；房間往下讓出這一列（stageViewport）。 -->
+<div class="now-bar" id="now-bar" hidden>
+  <span class="nb-label">進行中：</span>
+  <span class="nb-item" id="nb-mission" hidden>
+    <b class="nb-kind nb-mission">任務</b>
+    <span class="nb-text" id="m-title">—</span>
+    <span class="nb-meta" id="m-prog"></span>
+  </span>
+  <span class="nb-item" id="nb-bingo" hidden>
+    <b class="nb-kind nb-bingo">人物賓果</b>
+    <span class="nb-text" id="bingo-lead">—</span>
+    <span class="nb-meta" id="bingo-meta"></span>
+  </span>
 </div>
 
 <!-- 即時問答。題目在共享畫布上呈現，手機只是輸入裝置 —— 這與任務的
      設計原則一致：完成與結果都必須被全場看見。 -->
-<div class="quiz" id="quiz" hidden>
-  <div class="q-line">
-    <span class="q-kind" id="q-no">第 1 題</span>
-    <p class="q-title" id="q-title">—</p>
-    <span class="q-foot" id="q-foot">已作答 <b id="q-answered">0</b> 人</span>
-    <span class="q-state" id="q-state">作答中</span>
+<div class="stage-panel quiz" id="quiz" hidden>
+  <div class="wc-head">
+    <span class="wc-kind" id="q-no">第 1 題</span>
+    <p class="wc-title" id="q-title">—</p>
+    <span class="wc-meta" id="q-foot">已作答 <b id="q-answered">0</b> 人</span>
   </div>
   <div class="q-timebar" id="q-timebar"><i id="q-timefill"></i></div>
   <div class="q-opts" id="q-opts"></div>
+  <p class="wc-hint" id="q-state">作答中</p>
 </div>
 
 <!-- 文字雲（public/screen/screen.js 的 showWordCloud）。整面蓋在場景上：
      答案是這一刻全場的焦點，場景淡到後面。不顯示是誰寫的。 -->
-<div class="wordcloud" id="wordcloud" hidden>
+<div class="stage-panel wordcloud" id="wordcloud" hidden>
   <div class="wc-head">
     <span class="wc-kind">文字雲</span>
     <p class="wc-title" id="wc-title">—</p>

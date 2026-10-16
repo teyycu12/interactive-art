@@ -63,7 +63,7 @@ export class AvatarRenderer {
   constructor(canvas, avatar) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    /** 名牌目前的位移，逐幀朝避讓結果內插（同大螢幕的 drawNameplates） */
+    /** 名牌目前的位移，逐幀朝避讓結果內插（同大螢幕的 drawPlate） */
     this.plateOffset = new Map();
     this.sprite = avatar ? avatarImage(avatar) : null;
 
@@ -504,8 +504,24 @@ export class AvatarRenderer {
     const people = [...this.neighbors.values()].map((n) => ({ n, y: n.y }));
     people.push({ self: true, y: cam.y });
     people.sort((a, b) => a.y - b.y);
-    // 名牌等所有人畫完再一起排：配對時對方就站在旁邊，名牌最容易疊在一起
+
+    // 名牌先排版（避讓要看到所有名牌），畫的時候跟著各自的角色一起畫：前面的人經過時，
+    // 後面那人的名字會被擋住，跟角色本身一樣（同大螢幕 screen.js 的 drawPlate）
     const plates = [];
+    for (const p of people) {
+      if (p.self) continue;
+      const n = p.n;
+      p.pos = toScreen(n.x, n.y);
+      p.visible = !(p.pos.x < -height || p.pos.x > w + height || p.pos.y < -40 || p.pos.y > h + height);
+      // 名字：配對任務要「走向另一位參與者」，看不出誰是誰就無從找起
+      const name = this.names.get(n.id);
+      if (!p.visible || !name) continue;
+      p.name = name;
+      p.fontSize = Math.max(11, Math.round(height * 0.12));
+      const { w: pw, h: ph } = measureNameplate(ctx, name, { fontSize: p.fontSize });
+      plates.push({ id: n.id, x: p.pos.x, y: p.pos.y + NAMEPLATE_DROP, w: pw, h: ph });
+    }
+    const target = layoutNameplates(plates, { bottom: h });
 
     for (const p of people) {
       if (p.self) {
@@ -524,36 +540,33 @@ export class AvatarRenderer {
           // 步伐相位以鍵區分（shared/character.js 的 stepPhase）；自己沒有 id
           gaitKey: 'self',
         });
+        // 拍照生成的角色沒有舉手的動作畫格，動作只能靠頭上的圖示：原本只替別人畫，
+        // 按了揮手的人在自己手機上什麼都看不到（同下面鄰居的 drawEmote）
+        const myEmote = this.serverSelf?.emote;
+        if (myEmote && !emoteIsPosed(this.sprite, myEmote)) {
+          drawEmote(ctx, { x: ax, y: ay }, EMOTE_GLYPH[myEmote] ?? '·', { height });
+        }
         continue;
       }
       const n = p.n;
-      const pos = toScreen(n.x, n.y);
-      if (pos.x < -height || pos.x > w + height || pos.y < -40 || pos.y > h + height) continue;
+      const pos = p.pos;
+      if (!p.visible) continue;
       drawCharacter(ctx,
         { id: n.id, state: n.state, vx: n.vx, vy: n.vy, facing: n.facing ?? 1, heading: n.heading, view: n.view, emote: n.emote },
         pos, this.looks.get(n.id)?.sprite ?? null,
         { time: this.time, maxSpeed: MAX_SPEED, height, travel: n.travel });
       this._hit(n.id, pos, height);
-      // 名字：配對任務要「走向另一位參與者」，看不出誰是誰就無從找起
-      const name = this.names.get(n.id);
-      if (name) {
-        const fontSize = Math.max(11, Math.round(height * 0.12));
-        const { w: pw, h: ph } = measureNameplate(ctx, name, { fontSize });
-        plates.push({ id: n.id, x: pos.x, y: pos.y + NAMEPLATE_DROP, w: pw, h: ph, pos, name, fontSize });
+      if (p.name) {
+        const t = target.get(n.id);
+        let cur = this.plateOffset.get(n.id);
+        if (!cur) { cur = { dx: t.dx, dy: t.dy }; this.plateOffset.set(n.id, cur); }
+        cur.dx += (t.dx - cur.dx) * 0.2;
+        cur.dy += (t.dy - cur.dy) * 0.2;
+        drawNameplate(ctx, pos, p.name, { fontSize: p.fontSize, offset: cur });
       }
       if (n.emote && !emoteIsPosed(this.looks.get(n.id)?.sprite, n.emote)) {
         drawEmote(ctx, pos, EMOTE_GLYPH[n.emote] ?? '·', { height });
       }
-    }
-
-    const target = layoutNameplates(plates, { bottom: h });
-    for (const p of plates) {
-      const t = target.get(p.id);
-      let cur = this.plateOffset.get(p.id);
-      if (!cur) { cur = { dx: t.dx, dy: t.dy }; this.plateOffset.set(p.id, cur); }
-      cur.dx += (t.dx - cur.dx) * 0.2;
-      cur.dy += (t.dy - cur.dy) * 0.2;
-      drawNameplate(ctx, p.pos, p.name, { fontSize: p.fontSize, offset: cur });
     }
   }
 

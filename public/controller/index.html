@@ -278,6 +278,8 @@
       <!-- 震動開關。iOS 不支援 navigator.vibrate，該裝置上此鍵會隱藏。 -->
       <button class="btn-haptics" id="btn-haptics" hidden
               aria-pressed="false" aria-label="腳步震動">震動</button>
+      <!-- 聊天紀錄。傳過或收過私訊才出現（紀錄只存在這支手機，見 chatlog.js） -->
+      <button class="btn-haptics btn-chats" id="btn-chats" hidden>💬 訊息<span class="chats-badge" id="chats-badge" hidden></span></button>
     </div>
 
     <!-- 搖桿區不放說明文字：手機上那行字會被切掉又擋住場景。操作說明在上方的 #agency -->
@@ -302,7 +304,6 @@
       <button id="btn-bingo-accept">幫我填上</button>
     </div>
     <div id="emotes">
-      <button data-action="CHEERS"><em>🍻</em>乾杯</button>
       <button data-action="HEART"><em>💗</em>愛心</button>
       <button data-action="WAVE"><em>👋</em>揮手</button>
     </div>
@@ -441,6 +442,8 @@
         <p class="sheet-brief">只有對方看得到。約好了就走過去當面聊吧！</p>
       </div>
     </div>
+    <!-- 跟這個人的對話紀錄。存在這支手機上，重新整理也還在 -->
+    <ol class="chat-thread" id="chat-thread" hidden aria-label="對話紀錄"></ol>
     <!-- 點到自己封鎖過的人：要先解除封鎖才能傳 -->
     <div class="msg-blocked" id="msg-blocked" hidden>
       <p id="msg-blocked-text">你已封鎖這個人。解除封鎖後才能傳訊息給他，也會重新收到他的訊息。</p>
@@ -448,40 +451,35 @@
     </div>
     <label class="sheet-field" id="msg-field">
       <span>訊息 <small id="msg-count">0 / 60</small></span>
-      <textarea id="msg-input" rows="2" autocomplete="off" placeholder="例：我在籃球架旁邊，要不要一起組隊？"></textarea>
+      <textarea id="msg-input" rows="2" autocomplete="off" placeholder="例：你好，可以認識你嗎？"></textarea>
     </label>
     <p class="sheet-msg" id="msg-error" hidden role="alert" aria-live="assertive"></p>
     <button class="btn-primary" id="btn-msg-send">送出</button>
+    <!-- 對話開著時對方傳來的訊息直接進紀錄、不再跳收件視窗，封鎖要在這裡也按得到 -->
+    <div class="msg-safety" id="msg-safety" hidden>
+      <button class="btn-link" id="btn-msg-block">封鎖這個人</button>
+      <button class="btn-link" id="btn-msg-report" hidden>檢舉他的訊息</button>
+    </div>
   </div>
 </div>
 
-<!-- 收到私訊。一次顯示一則，其餘排隊 -->
-<div class="overlay" id="msg-inbox" hidden>
-  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="inbox-title">
-    <div class="msg-who">
-      <div class="msg-avatar" id="inbox-avatar" aria-hidden="true"></div>
-      <h2 id="inbox-title">有人傳訊息給你</h2>
-    </div>
-    <p class="msg-bubble" id="inbox-text"></p>
-    <!-- 直接在這裡回應：原訊息留在上方，不必跳到另一個面板、也不會忘了對方說什麼 -->
-    <label class="sheet-field msg-reply">
-      <span>回應 <small id="reply-count">0 / 60</small></span>
-      <textarea id="reply-input" rows="2" autocomplete="off" placeholder="例：好啊，我馬上過去！"></textarea>
-    </label>
-    <p class="sheet-msg" id="reply-error" hidden role="alert" aria-live="assertive"></p>
-    <p class="msg-more" id="inbox-more" hidden></p>
-    <div class="dialog-actions">
-      <button class="btn-ghost" id="btn-inbox-close">知道了</button>
-      <button class="btn-primary" id="btn-inbox-reply" disabled>送出回應</button>
-    </div>
-    <!-- 封鎖與檢舉刻意做成小的文字鍵、放在主要按鈕下面：要找得到，但不能在
-         按「知道了」時誤觸 -->
-    <div class="msg-safety">
-      <button class="btn-link" id="btn-inbox-block">封鎖這個人</button>
-      <button class="btn-link" id="btn-inbox-report">檢舉這則訊息</button>
-    </div>
+<!-- ── 聊天紀錄：跟每個人的對話 ──────────────────────────── -->
+<div class="sheet" id="chats-sheet" hidden>
+  <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="chats-title">
+    <button class="sheet-close" id="btn-chats-close" aria-label="關閉">✕</button>
+    <h2 id="chats-title">訊息</h2>
+    <p class="sheet-brief">對話紀錄存在這支手機上，只有你看得到。點一個人繼續聊。</p>
+    <ul class="chats-list" id="chats-list"></ul>
   </div>
 </div>
+
+<!-- 收到私訊：頂端一行通知，不跳視窗打斷（搖桿、文字雲、任務照常操作）。
+     點一下打開跟他的對話；沒點的話「訊息」按鈕右上角留著未讀數字。
+     放在 #app 外面：其他面板開著時 #app 是 inert，通知仍要點得到。 -->
+<button class="msg-notice" id="msg-notice" type="button" hidden aria-live="polite">
+  <span class="mn-tag">訊息</span>
+  <span class="mn-text" id="msg-notice-text"></span>
+</button>
 
 <!-- 進場問卷（捏臉路徑）。拍照路徑是嵌在「生成中」那一頁，捏臉沒有等待時間，改在進場前跳出 -->
 <div class="overlay" id="persona-overlay" hidden>

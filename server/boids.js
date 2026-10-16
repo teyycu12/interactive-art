@@ -18,6 +18,7 @@
 import {
   BOIDS, MAX_SPEED, MAX_FORCE, BOUNDARY_MARGIN, BOUNDARY_WEIGHT,
   OBSTACLE_WEIGHT, IDLE_MOTION,
+  AGENT_BODY_DISTANCE,
 } from './config.js';
 import { STAGE } from '../shared/protocol.js';
 import { OBSTACLES, nearestOnObstacle } from '../shared/scene.js';
@@ -196,6 +197,68 @@ export function resolveObstacleOverlap(agent) {
   }
 }
 
+
+/**
+ * 角色之間的剛體修正：重疊的兩人沿連線推開，誰都不能穿過誰。
+ *
+ * 跟道具的 resolveObstacleOverlap 同一個想法 —— 轉向力只能慢慢改速度，
+ * 硬保證要靠位置修正。差別是兩邊都會動，所以**依速度分配**推開的距離：
+ * 正在走的人被擋下、沿著對方身邊滑過去；站著的人幾乎不動。平均分攤的話，
+ * 走過去的人會把站著的人一路「推著走」，看起來像在撞人。
+ *
+ * 同時消去兩人互相靠近的速度分量（同道具），否則每一幀被推開又撞回去會抖動。
+ * 合照定位中（targetX 不為 null）的角色不參與：排隊形時本來就要站很近，
+ * 被推開就永遠到不了定位點。
+ *
+ * @param {object[]} agents 全場角色（Stage.tick 在所有人移動完之後呼叫）
+ */
+export function resolveAgentOverlap(agents, minDist = AGENT_BODY_DISTANCE) {
+  const minSq = minDist * minDist;
+  for (let i = 0; i < agents.length; i++) {
+    const a = agents[i];
+    if (a.targetX !== null) continue;
+    for (let j = i + 1; j < agents.length; j++) {
+      const b = agents[j];
+      if (b.targetX !== null) continue;
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq >= minSq) continue;
+
+      let dist = Math.sqrt(distSq);
+      if (dist === 0) {
+        // 疊在同一點（例如同時生在同一處）：任選一個方向分開
+        dx = 1; dy = 0; dist = 1e-6;
+      }
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const push = minDist - dist;
+
+      // 速度大的人讓得多；兩人都站著就各讓一半
+      const sa = Math.hypot(a.vx, a.vy);
+      const sb = Math.hypot(b.vx, b.vy);
+      const wa = sa + sb > 0 ? sa / (sa + sb) : 0.5;
+      const wb = 1 - wa;
+      a.x -= nx * push * wa;
+      a.y -= ny * push * wa;
+      b.x += nx * push * wb;
+      b.y += ny * push * wb;
+
+      // 消去朝向對方的速度分量，只留沿著對方身邊滑過去的那一份
+      const aInto = a.vx * nx + a.vy * ny;
+      if (aInto > 0) { a.vx -= aInto * nx; a.vy -= aInto * ny; }
+      const bInto = b.vx * nx + b.vy * ny;
+      if (bInto < 0) { b.vx -= bInto * nx; b.vy -= bInto * ny; }
+    }
+  }
+  // 推開之後可能被推出場外或推進道具裡：再過一次邊界與道具修正
+  for (const a of agents) {
+    if (a.targetX !== null) continue;
+    a.x = Math.max(0, Math.min(STAGE.width, a.x));
+    a.y = Math.max(0, Math.min(STAGE.height, a.y));
+    resolveObstacleOverlap(a);
+  }
+}
 
 /**
  * 靜止模式用的道具繞行速度（不經影子速度）。

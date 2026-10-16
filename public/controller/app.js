@@ -22,6 +22,7 @@ import { WORDCLOUD } from '/shared/wordcloud.js';
 import { ZONE_MAP } from '/shared/scene.js';
 import { avatarImage, avatarPortrait } from '/shared/avatarSprite.js';
 import { makeKeepsake, saveKeepsake } from './keepsake.js';
+import { ChatLog } from './chatlog.js';
 import { encounterLabel } from '/shared/encounters.js';
 import { AvatarRenderer } from './avatarRenderer.js';
 
@@ -1384,6 +1385,10 @@ function connect() {
         if (msg.rejoinToken) localStorage.setItem(LS.rejoinToken, msg.rejoinToken);
       } catch { /* 略 */ }
       myId = msg.userId;
+      // 聊天紀錄跟著角色走：接回同一個角色就接回對話，換了新角色就清掉舊的
+      chatLog.setOwner(msg.userId);
+      chatLog.dropOthers();
+      renderChatsButton();
       $('#my-name').textContent = msg.name;
       $('#my-id').textContent = msg.userId;
       setStatus('已連線', 'ok');
@@ -2255,10 +2260,9 @@ function hideTopic() {
 
 $('#topic-card').addEventListener('click', hideTopic);
 
-// ── 揮手與乾杯的回應（server/greetings.js）─────────────────
+// ── 揮手的回應（server/greetings.js）──────────────────────
 //
-// 揮手要對方回揮、乾杯要兩人一起按才算數。這裡只負責顯示：
-// 誰在跟你揮手、你揮出去了沒、碰杯成功沒。
+// 揮手要對方回揮才算數。這裡只負責顯示：誰在跟你揮手、你揮出去了沒、成功沒。
 
 let greetFrom = null;
 let greetTimer = null;
@@ -2292,17 +2296,12 @@ const GREET_TEXT = {
     [GREET_OUTCOME.MUTUAL]: (n) => `你和 ${n} 打了招呼 👋`,
     [GREET_OUTCOME.NOBODY]: () => '身邊沒有人，走近一點再揮手',
   },
-  CHEERS: {
-    [GREET_OUTCOME.WAITING]: () => '找身邊的人一起按乾杯！3 秒內',
-    [GREET_OUTCOME.CLINK]: (n) => `和 ${n} 碰杯 🍻`,
-    [GREET_OUTCOME.NOBODY]: () => '身邊沒有人可以碰杯，走近一點',
-  },
 };
 
 function showGreetResult(msg) {
   const text = GREET_TEXT[msg.kind]?.[msg.outcome];
   if (!text) return;
-  const done = msg.outcome === GREET_OUTCOME.MUTUAL || msg.outcome === GREET_OUTCOME.CLINK;
+  const done = msg.outcome === GREET_OUTCOME.MUTUAL;
   if (done) {
     hideGreetInvite();
     vibrate([40, 30, 40, 30, 80]);
@@ -2694,12 +2693,18 @@ let composeSending = false;
 const lookOf = (id) => rosterAgents.find((a) => a.id === id) ?? null;
 
 function openComposer(id, { restoreTo } = {}) {
-  const who = lookOf(id);
+  // 從聊天紀錄點進來的人可能已經不在名冊上（離場、走出畫面）：仍打開對話看紀錄，
+  // 送出時伺服器會回「對方已經離開」
+  const who = lookOf(id) ?? (chatLog.thread(id).length ? { name: chatLog.nameOf(id) || '對方', look: null } : null);
   if (!who) return;
   composeTo = id;
   composeSending = false;
   $('#msg-title').textContent = `傳訊息給 ${who.name}`;   // 自填的名字，一律 textContent
   showPortrait($('#msg-avatar'), who.look);
+  chatLog.markRead(id);
+  renderChatsButton();
+  if (noticeFrom === id) hideNotice();
+  renderThread();
   msgInput.value = '';
   updateMsgCount();
   $('#msg-error').hidden = true;
@@ -2716,6 +2721,8 @@ function renderComposerBlockState() {
   $('#msg-blocked').hidden = !blocked;
   $('#msg-field').hidden = blocked;
   $('#btn-msg-send').hidden = blocked;
+  $('#msg-safety').hidden = blocked;
+  $('#btn-msg-report').hidden = !lastFromPeer(composeTo);
   if (blocked) {
     $('#msg-blocked-text').textContent =
       `你已封鎖 ${lookOf(composeTo)?.name ?? '這個人'}。解除封鎖後才能傳訊息給他，也會重新收到他的訊息。`;
@@ -2749,8 +2756,6 @@ function closeComposer() {
   msgSheet.hidden = true;
   composeTo = null;
   popOverlay(msgSheet);
-  // 寫信期間收到的訊息先排著，寫完（或取消）才接著顯示
-  if (inboxQueue.length && !showing) showNextMessage();
 }
 
 function updateMsgCount() {
@@ -2770,7 +2775,7 @@ $('#btn-msg-send').addEventListener('click', () => {
   if (!composeTo || !text || composeSending) return;
   composeSending = true;
   $('#btn-msg-send').disabled = true;
-  sendMsg(EV.MSG_SEND, { to: composeTo, text, ref: trackSend('composer') });
+  sendMsg(EV.MSG_SEND, { to: composeTo, text, ref: trackSend('composer', composeTo, text) });
 });
 
 const MSG_ERROR_TEXT = {
@@ -2784,7 +2789,7 @@ const MSG_ERROR_TEXT = {
 };
 
 /**
- * 送出中的訊息：請求編號 → 從哪裡送的（'composer' 點角色寫的、'reply' 收件畫面的回應）。
+ * 送出中的訊息：請求編號 → 寄給誰、寫了什麼（成功才記進聊天紀錄）。
  *
  * 原本只有一個全域的 sendingFrom：從寫訊息畫面送出後、結果回來前，剛好跳出一則
  * 新訊息而他立刻回覆，第一個結果就會被當成回覆的 —— 收件畫面在回覆還沒確認前
@@ -2793,9 +2798,10 @@ const MSG_ERROR_TEXT = {
 const pendingSends = new Map();
 let sendSeq = 0;
 
-function trackSend(from) {
+function trackSend(from, to, text) {
   const ref = String(++sendSeq);
-  pendingSends.set(ref, from);
+  // 帶著收件人與內文：送出成功才記進聊天紀錄（被拒的訊息不該出現在對話裡）
+  pendingSends.set(ref, { from, to, text });
   // 等不到結果（連線層限流丟掉、斷線）時不能讓送出鍵永遠鎖著
   setTimeout(() => {
     if (pendingSends.has(ref)) onMessageResult({ ok: false, ref, reason: null });
@@ -2808,104 +2814,181 @@ function onMessageResult(msg) {
   if (msg.ref && !pendingSends.has(msg.ref)) return;
   // 舊版伺服器不帶 ref：退回「最早送出的那一則」
   const ref = msg.ref ?? pendingSends.keys().next().value;
-  const from = pendingSends.get(ref) ?? null;
+  const sent = pendingSends.get(ref) ?? null;
+  const from = sent?.from ?? null;
   pendingSends.delete(ref);
-  if (from === 'reply') replySending = false;
-  else composeSending = false;
+  composeSending = false;
   if (msg.ok) {
-    showToast('訊息已送出');
-    if (from === 'reply') showNextMessage();
-    else if (msg.to === composeTo) closeComposer();
+    if (sent?.to) {
+      chatLog.add(sent.to, { mine: true, text: sent.text, name: lookOf(sent.to)?.name });
+      renderChatsButton();
+    }
+    if (sent?.to === composeTo) {
+      // 對話留著：送出的那則出現在紀錄裡，可以接著聊
+      msgInput.value = '';
+      updateMsgCount();
+      renderThread();
+    } else {
+      showToast('訊息已送出');   // 結果回來前就關掉了對話
+    }
     return;
   }
   const text = MSG_ERROR_TEXT[msg.reason] ?? '訊息沒有送出，請再試一次。';
-  const el = $(from === 'reply' ? '#reply-error' : '#msg-error');
+  const el = $('#msg-error');
   el.textContent = text;
   el.hidden = false;
   updateMsgCount();
-  updateReplyCount();
 }
 
 // ── 收件 ──────────────────────────────────────────────────
-const inbox = $('#msg-inbox');
-/** 還沒看的訊息，依收到順序 */
-const inboxQueue = [];
-let showing = null;
+// 收到訊息不跳視窗：頂端一行通知＋「訊息」按鈕的未讀數字（像 LINE 在手機主畫面那樣）。
+// 原本是蓋住整個畫面的收件視窗，正在推搖桿、答文字雲時會被打斷；回覆、封鎖、檢舉
+// 都改在對話面板裡做。
 /** 自己封鎖了哪些人。由伺服器的 MSG_BLOCKS 同步（進場時補送），手機重整也不會忘 */
 const blockedHere = new Set();
+const notice = $('#msg-notice');
+let noticeFrom = null;
+let noticeTimer = null;
 
 function receiveMessage(m) {
   if (blockedHere.has(m.from)) return;
-  inboxQueue.push(m);
-  vibrate([20, 60, 20]);
-  // 正在打字時不跳出來打斷，只震動；送出或取消後才顯示
-  if (!showing && msgSheet.hidden) showNextMessage();
-  else updateInboxMore();
-}
-
-function showNextMessage() {
-  showing = inboxQueue.shift() ?? null;
-  if (!showing) {
-    if (!inbox.hidden) { inbox.hidden = true; popOverlay(inbox); }
+  // 正開著跟他的對話：直接出現在紀錄裡，不算未讀、也不必通知
+  const open = !msgSheet.hidden && composeTo === m.from;
+  chatLog.add(m.from, { mine: false, text: m.text, at: m.at, id: m.id, name: m.fromName, read: open });
+  renderChatsButton();
+  vibrate(open ? 20 : [20, 60, 20]);
+  if (open) {
+    renderThread();
     return;
   }
-  $('#inbox-title').textContent = `${showing.fromName || '有人'} 傳訊息給你`;
-  $('#inbox-text').textContent = showing.text;   // 對方自由輸入的文字，一律 textContent
-  showPortrait($('#inbox-avatar'), lookOf(showing.from)?.look ?? null);
-  replyInput.value = '';
-  $('#reply-error').hidden = true;
-  updateReplyCount();
-  updateInboxMore();
-  if (inbox.hidden) {
-    inbox.hidden = false;
-    pushOverlay(inbox, { onEscape: () => showNextMessage() });
-  }
-  // 焦點放在「知道了」而不是回應框：直接聚焦輸入框會在手機上立刻彈出鍵盤，
-  // 蓋住對方的訊息，而多數時候人只是想看一眼
-  $('#btn-inbox-close').focus();
+  showNotice(m);
 }
 
-function updateInboxMore() {
-  const more = $('#inbox-more');
-  more.hidden = inboxQueue.length === 0;
-  more.textContent = `還有 ${inboxQueue.length} 則訊息`;
+function showNotice(m) {
+  noticeFrom = m.from;
+  // 對方自由輸入的文字，一律 textContent
+  $('#msg-notice-text').textContent = `${m.fromName || '有人'}：${m.text}`;
+  notice.hidden = false;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(hideNotice, 6000);
 }
 
-$('#btn-inbox-close').addEventListener('click', () => showNextMessage());
-const replyInput = $('#reply-input');
-replyInput.maxLength = DIRECT_MESSAGE.maxLength;
-let replySending = false;
-
-function updateReplyCount() {
-  $('#reply-count').textContent = `${[...replyInput.value].length} / ${DIRECT_MESSAGE.maxLength}`;
-  $('#btn-inbox-reply').disabled = replySending || replyInput.value.trim().length === 0;
+function hideNotice() {
+  notice.hidden = true;
+  noticeFrom = null;
 }
-replyInput.addEventListener('input', updateReplyCount);
-replyInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('#btn-inbox-reply').click(); }
+
+notice.addEventListener('click', () => {
+  const id = noticeFrom;
+  hideNotice();
+  if (!id) return;
+  closeChats();
+  // 正在跟別人寫訊息：換到這個人的對話（openComposer 會重設面板內容）
+  openComposer(id, { restoreTo: $('#btn-chats') });
 });
-$('#btn-inbox-reply').addEventListener('click', () => {
-  const text = replyInput.value.trim();
-  if (!showing || !text || replySending) return;
-  replySending = true;
-  $('#btn-inbox-reply').disabled = true;
-  // 回應直接送給寄件人。不需要他還在名冊上 —— 伺服器會判斷他還在不在場、手機有沒有連線
-  sendMsg(EV.MSG_SEND, { to: showing.from, text, ref: trackSend('reply') });
+
+// ── 聊天紀錄（只存在這支手機，見 chatlog.js）──────────────
+const chatLog = new ChatLog((() => { try { return localStorage; } catch { return null; } })());
+const chatsSheet = $('#chats-sheet');
+
+const hhmm = (at) => {
+  const d = new Date(at);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+/** 寫訊息面板上方的對話串。沒聊過就整塊不顯示，第一次傳訊的畫面跟原本一樣 */
+function renderThread() {
+  const ol = $('#chat-thread');
+  const msgs = composeTo ? chatLog.thread(composeTo) : [];
+  ol.hidden = msgs.length === 0;
+  ol.replaceChildren(...msgs.map((m) => {
+    const li = document.createElement('li');
+    if (m.mine) li.className = 'mine';
+    li.append(m.text);   // 自由輸入的文字，一律當純文字
+    const t = document.createElement('time');
+    t.textContent = hhmm(m.at);
+    li.append(t);
+    return li;
+  }));
+  ol.scrollTop = ol.scrollHeight;
+}
+
+function renderChatsButton() {
+  $('#btn-chats').hidden = chatLog.peers().length === 0;
+  const n = chatLog.unreadTotal();
+  const badge = $('#chats-badge');
+  badge.hidden = n === 0;
+  badge.textContent = n > 99 ? '99+' : String(n);
+  $('#btn-chats').setAttribute('aria-label', n ? `訊息，${n} 則未讀` : '訊息');
+}
+
+function openChats() {
+  const list = $('#chats-list');
+  list.replaceChildren(...chatLog.peers().map((p) => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    const face = Object.assign(document.createElement('span'), { className: 'cf' });
+    const look = lookOf(p.id)?.look;
+    if (look) avatarPortrait(look).then((c) => face.append(c)).catch(() => {});
+    const who = Object.assign(document.createElement('span'), { className: 'cw' });
+    const name = lookOf(p.id)?.name ?? p.name ?? '';
+    who.append(Object.assign(document.createElement('b'), { textContent: name || '（已離場）' }));
+    who.append(Object.assign(document.createElement('span'), {
+      textContent: p.last ? `${p.last.mine ? '你：' : ''}${p.last.text}` : '',
+    }));
+    const t = Object.assign(document.createElement('time'), { textContent: p.last ? hhmm(p.last.at) : '' });
+    const end = Object.assign(document.createElement('span'), { className: 'ce' });
+    end.append(t);
+    if (p.unread) end.append(Object.assign(document.createElement('span'), { className: 'chats-badge', textContent: String(p.unread) }));
+    if (p.unread) btn.classList.add('unread');
+    btn.append(face, who, end);
+    btn.addEventListener('click', () => {
+      closeChats();
+      openComposer(p.id, { restoreTo: $('#btn-chats') });
+    });
+    li.append(btn);
+    return li;
+  }));
+  chatsSheet.hidden = false;
+  pushOverlay(chatsSheet, { onEscape: closeChats, restoreTo: $('#btn-chats') });
+}
+
+function closeChats() {
+  if (chatsSheet.hidden) return;
+  chatsSheet.hidden = true;
+  popOverlay(chatsSheet);
+}
+
+$('#btn-chats').addEventListener('click', openChats);
+$('#btn-chats-close').addEventListener('click', closeChats);
+
+// 對話開著時收到的訊息不經過收件視窗，封鎖鍵要在這裡也有
+$('#btn-msg-block').addEventListener('click', () => {
+  if (!composeTo) return;
+  const id = composeTo;
+  const name = lookOf(id)?.name ?? chatLog.nameOf(id);
+  if (!confirm(`封鎖 ${name || '這個人'}？之後不會再收到他的訊息。`)) return;
+  sendMsg(EV.MSG_BLOCK, { userId: id });
+  blockedHere.add(id);
+  chatLog.markRead(id);
+  renderChatsButton();
+  if (noticeFrom === id) hideNotice();
+  showToast(`已封鎖 ${name || '對方'}，不會再收到他的訊息`);
+  renderComposerBlockState();
 });
-$('#btn-inbox-block').addEventListener('click', () => {
-  if (!showing) return;
-  const { from, fromName } = showing;
-  sendMsg(EV.MSG_BLOCK, { userId: from });
-  blockedHere.add(from);
-  for (let i = inboxQueue.length - 1; i >= 0; i--) if (inboxQueue[i].from === from) inboxQueue.splice(i, 1);
-  showToast(`已封鎖 ${fromName || '對方'}，不會再收到他的訊息`);
-  showNextMessage();
-});
-$('#btn-inbox-report').addEventListener('click', () => {
-  if (!showing) return;
-  sendMsg(EV.MSG_REPORT, { messageId: showing.id });
+
+/** 對方最近一則訊息（檢舉用）。伺服器只留最近一段時間的原文，再舊的檢舉不到 */
+const lastFromPeer = (id) => [...chatLog.thread(id)].reverse().find((m) => !m.mine && m.id) ?? null;
+
+$('#btn-msg-report').addEventListener('click', () => {
+  if (!composeTo) return;
+  const last = lastFromPeer(composeTo);
+  if (!last) return;
+  if (!confirm(`把他最近的這則訊息檢舉給主辦方？
+「${last.text}」`)) return;
+  sendMsg(EV.MSG_REPORT, { messageId: last.id });
   showToast('已檢舉給主辦方，謝謝你告訴我們');
-  showNextMessage();
 });
 
 // ─────────────────────────────────────────────────────────────

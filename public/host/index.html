@@ -75,50 +75,21 @@
         <div class="stat"><b id="stat-edges">0</b><span>社交連結</span></div>
         <div class="stat"><b id="stat-questions">0</b><span>已出題</span></div>
       </div>
-      <!-- 主辦端畫面常常被投影出去：打開後藏起正解、移除鍵與系統分頁 -->
-      <button class="btn-projector" id="btn-projector" aria-pressed="false"
-              title="藏起問答正解、移除參與者按鈕與系統分頁">投影模式</button>
     </div>
   </header>
-  <p class="projector-banner" id="projector-banner" hidden>投影模式中：問答正解、移除按鈕與系統分頁已隱藏。出題請用題庫或節目單。</p>
 
   <nav class="tabs" role="tablist" aria-label="控制台分頁">
-    <button role="tab" id="tab-btn-play" aria-controls="tab-play" aria-selected="true">帶活動<i class="live-dot" id="play-live-dot" hidden></i></button>
+    <button role="tab" id="tab-btn-plan" aria-controls="tab-plan" aria-selected="true">節目單<i class="live-dot" id="plan-live-dot" hidden></i></button>
+    <button role="tab" id="tab-btn-play" aria-controls="tab-play" aria-selected="false" tabindex="-1">活動選單<i class="live-dot" id="play-live-dot" hidden></i></button>
     <button role="tab" id="tab-btn-people" aria-controls="tab-people" aria-selected="false" tabindex="-1">參與者 <span class="count" id="tab-people-count">0</span><i class="report-dot" id="report-dot" hidden title="有新的檢舉"></i></button>
-    <button role="tab" id="tab-btn-stage" aria-controls="tab-stage" aria-selected="false" tabindex="-1">場景與合照</button>
     <button role="tab" id="tab-btn-system" class="tab-quiet" aria-controls="tab-system" aria-selected="false" tabindex="-1">系統</button>
   </nav>
 
   <div class="layout">
    <main class="main">
 
-    <!-- ═══ 帶活動：一次只看一個玩法 ═══ -->
-    <div role="tabpanel" id="tab-play" aria-labelledby="tab-btn-play">
-      <!-- 節目單：活動前排好流程，現場只按「下一項」。存在這台電腦的瀏覽器裡（同題庫）。 -->
-      <div class="panel runsheet">
-        <div class="panel-head">
-          <h2>節目單 <span class="count" id="rs-count">0</span></h2>
-          <button class="btn-link" id="btn-rs-reset" hidden>從頭開始</button>
-        </div>
-        <p class="hint" id="rs-empty">活動前先把流程排好，現場只要按「下一項」。
-          在下面各玩法按「加入節目單」，就會照目前的設定排進來。</p>
-        <ol class="rs-list" id="rs-list"></ol>
-        <button class="btn-primary" id="btn-rs-next" hidden>下一項</button>
-        <div class="rs-add">
-          <button class="btn-ghost" id="btn-rs-add-photo">＋ 拍大合照</button>
-        </div>
-        <!-- 配方範本（shared/recipes.js）：依目前場景預排好的一整套流程，套用後可再增刪 -->
-        <div class="rs-recipe">
-          <label class="field">
-            <span>從範本開始</span>
-            <select id="rs-recipe"></select>
-          </label>
-          <button class="btn-ghost" id="btn-rs-recipe">套用範本</button>
-        </div>
-        <p class="hint" id="rs-recipe-brief"></p>
-        <p class="err" id="rs-err" hidden></p>
-      </div>
-
+    <!-- ═══ 活動選單：一次只看一個玩法 ═══ -->
+    <div role="tabpanel" id="tab-play" aria-labelledby="tab-btn-play" hidden>
       <div class="act-picker" role="group" aria-label="選擇玩法">
         <button class="act-chip" data-act="mission" aria-pressed="true">任務<i class="live-dot" hidden></i></button>
         <button class="act-chip" data-act="wordcloud" aria-pressed="false">文字雲<i class="live-dot" hidden></i></button>
@@ -271,53 +242,9 @@
     <div class="panel act-panel" data-act="quiz" hidden>
       <h2>即時問答</h2>
 
+      <!-- 先建題庫、再一次連續出題：每題公布答案後主持人只要按「下一題」，
+           不必在現場一題一題找、載入、出題（2026-10 改版）。 -->
       <div id="quiz-compose">
-       <div class="quiz-editor">
-        <label class="field">
-          <span>題目</span>
-          <input id="q-text" maxlength="80" placeholder="例：Boids 演算法的三條規則不包含哪一項？"
-                 autocomplete="off">
-        </label>
-
-        <p class="field-label">選項　<em>點左側圓圈標記正確答案</em></p>
-        <div id="q-options"></div>
-
-        <label class="field">
-          <span>作答時間</span>
-          <select id="q-duration">
-            <option value="10000">10 秒</option>
-            <option value="20000" selected>20 秒</option>
-            <option value="30000">30 秒</option>
-            <option value="60000">60 秒</option>
-          </select>
-        </label>
-
-        <!-- 討論時間：題目先亮出來但不能作答，讓人轉頭跟旁邊的人商量（Kahoot 的 team talk）。
-             預設 10 秒：原本每個人低頭各答各的，不需要開口。 -->
-        <label class="field">
-          <span>討論時間</span>
-          <select id="q-talk">
-            <option value="0">不討論，直接作答</option>
-            <option value="10000" selected>10 秒</option>
-            <option value="20000">20 秒</option>
-            <option value="30000">30 秒</option>
-          </select>
-        </label>
-
-        <div class="row-actions">
-          <button class="btn-primary" id="btn-quiz-start">出題</button>
-          <button class="btn-ghost" id="btn-quiz-save">存入題庫</button>
-          <button class="btn-ghost" data-rs-add="quiz">加入節目單</button>
-        </div>
-       </div>
-
-        <p class="quiz-editing" id="quiz-editing" hidden>
-          正在編輯題庫裡的題目，按「更新這題」存回原位。
-          <button class="btn-link" id="btn-quiz-edit-cancel">取消編輯</button>
-        </p>
-
-        <p class="hint" id="quiz-rule">答對得分，愈快得分愈高。</p>
-
         <div class="bank-head">
           <span>題庫 <b id="bank-count">0</b></span>
           <span class="bank-tools">
@@ -329,11 +256,63 @@
           <input type="file" id="bank-file" accept=".txt,text/plain" hidden>
         </div>
         <ul class="bank" id="quiz-bank"></ul>
+        <p class="hint tiny" id="bank-empty">題庫是空的。在下面「新增題目」打好題目存進來，或匯入 .txt。</p>
         <div class="bank-msg" id="bank-msg" hidden role="status"></div>
+
+        <div class="row-actions quiz-run-row">
+          <button class="btn-primary" id="btn-quiz-run" disabled>開始問答</button>
+          <!-- 排進節目單的是「用整份題庫連續問答」：跑到這一項時才讀題庫，之後改題目也會跟著更新 -->
+          <button class="btn-ghost" data-rs-add="quizrun">加入節目單</button>
+        </div>
+
+        <details class="quiz-add" id="quiz-add">
+          <summary id="quiz-add-title">新增題目</summary>
+          <div class="quiz-editor">
+          <label class="field">
+            <span>題目</span>
+            <input id="q-text" maxlength="80" placeholder="例：Boids 演算法的三條規則不包含哪一項？"
+                   autocomplete="off">
+          </label>
+
+          <p class="field-label">選項　<em>點左側圓圈標記正確答案</em></p>
+          <div id="q-options"></div>
+
+          <label class="field">
+            <span>作答時間</span>
+            <select id="q-duration">
+              <option value="10000">10 秒</option>
+              <option value="20000" selected>20 秒</option>
+              <option value="30000">30 秒</option>
+              <option value="60000">60 秒</option>
+            </select>
+          </label>
+
+          <!-- 討論時間：題目先亮出來但不能作答，讓人轉頭跟旁邊的人商量（Kahoot 的 team talk）。
+               預設 10 秒：原本每個人低頭各答各的，不需要開口。 -->
+          <label class="field">
+            <span>討論時間</span>
+            <select id="q-talk">
+              <option value="0">不討論，直接作答</option>
+              <option value="10000" selected>10 秒</option>
+              <option value="20000">20 秒</option>
+              <option value="30000">30 秒</option>
+            </select>
+          </label>
+
+            <div class="row-actions">
+              <button class="btn-primary" id="btn-quiz-save">存入題庫</button>
+            </div>
+          </div>
+          <p class="quiz-editing" id="quiz-editing" hidden>
+            正在編輯題庫裡的題目，按「更新這題」存回原位。
+            <button class="btn-link" id="btn-quiz-edit-cancel">取消編輯</button>
+          </p>
+        </details>
         <p class="hint tiny">題庫存在這台電腦的瀏覽器裡。可以下載成 .txt 用記事本修改、換電腦，再匯入回來。</p>
       </div>
 
       <div id="quiz-live" hidden>
+        <p class="quiz-run-prog" id="quiz-run-prog" hidden></p>
         <div class="live-head">
           <b id="quiz-live-q">—</b>
           <span class="tag" id="quiz-countdown">—</span>
@@ -342,19 +321,72 @@
           <div class="bar"><i id="quiz-bar"></i></div>
           <span class="mono" id="quiz-answered">0 / 0</span>
         </div>
+        <!-- 操作鍵放在題目正下方、分佈之前（2026-10-17）：原本在面板最底下，主持人要捲到頁尾才按得到
+             「下一題」，那時右側的大螢幕預覽已經捲出畫面，看不到全場現在是什麼樣子 -->
+        <div class="quiz-actions">
+          <button class="btn-primary" id="btn-quiz-reveal">提前公布答案</button>
+          <button class="btn-primary" id="btn-quiz-next" hidden>下一題</button>
+          <button class="btn-danger" id="btn-quiz-end" hidden>收題</button>
+        </div>
         <ul class="q-result" id="quiz-result"></ul>
-        <button class="btn-primary" id="btn-quiz-reveal">提前公布答案</button>
-        <button class="btn-danger" id="btn-quiz-end" hidden>收題，準備下一題</button>
+        <button class="btn-link quiz-stop" id="btn-quiz-stop" hidden>中止問答</button>
       </div>
 
       <p class="err" id="quiz-err" hidden></p>
     </div>
     </div>
 
+    <!-- ═══ 節目單：活動進行中只看這一頁就能操作（2026-10-17）═══
+         上面是正在跑的玩法與它的操作鍵（下一題、收題、結算……），中間是節目單的「下一項」，
+         下面是配分。各玩法的詳細設定仍在「活動選單」。 -->
+    <div role="tabpanel" id="tab-plan" aria-labelledby="tab-btn-plan">
+      <div class="panel live-control">
+        <h2>現在進行中</h2>
+        <ul class="lc-list" id="lc-list"></ul>
+        <p class="hint" id="lc-empty">目前沒有進行中的活動。按節目單的「下一項」，或到「活動選單」開始一個玩法。</p>
+      </div>
+
+      <!-- 節目單：活動前排好流程，現場只按「下一項」。存在這台電腦的瀏覽器裡（同題庫）。 -->
+      <div class="panel runsheet">
+        <div class="panel-head">
+          <h2>節目單 <span class="count" id="rs-count">0</span></h2>
+          <button class="btn-link" id="btn-rs-reset" hidden>從頭開始</button>
+        </div>
+        <p class="hint" id="rs-empty">活動前先把流程排好，現場只要按「下一項」。
+          在下面各玩法按「加入節目單」，就會照目前的設定排進來。</p>
+        <ol class="rs-list" id="rs-list"></ol>
+        <button class="btn-primary" id="btn-rs-next" hidden>下一項</button>
+        <!-- 配方範本（shared/recipes.js）：依目前場景預排好的一整套流程，套用後可再增刪 -->
+        <div class="rs-recipe">
+          <label class="field">
+            <span>從範本開始</span>
+            <select id="rs-recipe"></select>
+          </label>
+          <button class="btn-ghost" id="btn-rs-recipe">套用範本</button>
+        </div>
+        <p class="hint" id="rs-recipe-brief"></p>
+        <p class="err" id="rs-err" hidden></p>
+      </div>
+
+      <!-- 配分：原本是問答面板底下的一行說明，改成主持人可以調（shared/scoring.js） -->
+      <div class="panel scoring-panel">
+        <div class="panel-head">
+          <h2>配分 <span class="badge-off" id="scoring-default">預設</span></h2>
+        </div>
+        <p class="hint">改了之後，之後得的分照新的算；已經得到的分數不變。</p>
+        <div class="scoring-grid" id="scoring-fields"></div>
+        <div class="row-actions">
+          <button class="btn-ghost" id="btn-scoring-reset">恢復預設</button>
+          <button class="btn-primary" id="btn-scoring-save" disabled>儲存配分</button>
+        </div>
+        <p class="err" id="scoring-err" hidden></p>
+      </div>
+    </div>
+
     <!-- ═══ 參與者 ═══ -->
     <div role="tabpanel" id="tab-people" aria-labelledby="tab-btn-people" hidden>
     <!-- 被檢舉的私訊。主辦端看不到一般私訊，只看得到參與者按了「檢舉」的那幾則。
-         投影模式下整塊隱藏：檢舉內容可能不雅，也不該被投到全場。 -->
+         -->
     <div class="panel reports-panel" id="reports-panel" hidden>
       <h2>被檢舉的訊息 <span class="count warn" id="reports-count">0</span></h2>
       <p class="hint">參與者在手機上檢舉了收到的私訊。確認後可以把寄件人移出現場；處理完按「已處理」。</p>
@@ -405,53 +437,17 @@
     </div>
     </div>
 
-    <!-- ═══ 場景與合照 ═══ -->
-    <div role="tabpanel" id="tab-stage" aria-labelledby="tab-btn-stage" hidden>
-    <div class="stage-grid">
-    <!-- 大螢幕：原本在投影畫面右上角的按鈕收到這裡，只留現場會用的兩顆。
-         場景在「活動設定」選定，一場活動只用一個場景，所以這裡不能切換。
-         除錯視圖會把技術資訊投到全場，放在「系統」分頁，不和這兩顆擺在一起免得誤按。 -->
-    <div class="panel">
-      <h2>大螢幕</h2>
-      <p class="hint">場景：<b id="screen-scene"></b>（要換場景請按上方「修改活動設定」）</p>
-      <div class="screen-row">
-        <button class="btn-ghost" id="btn-screen-clear" title="清掉場景物件被點擊或靠近時的小動畫">清除效果</button>
-        <button class="btn-ghost" id="btn-screen-shot" title="把大螢幕當下的場景與角色存成 PNG">儲存畫面</button>
-        <button class="btn-ghost" id="btn-screen-sound" aria-pressed="true"
-                title="配對成功、找到寶藏、出題與公布答案時，大螢幕發出短音效">音效：開</button>
-      </div>
-      <p class="hint">瀏覽器不准沒被點過的頁面出聲：大螢幕右下角若出現「點一下畫面開啟音效」，在投影那台電腦上點一下畫面即可。</p>
-      <p class="hint" id="screen-status" hidden role="status"></p>
-      <p class="err" id="screen-err" hidden></p>
-    </div>
-    <div class="panel">
-      <h2>場景互動</h2>
-      <p class="hint"><b>話題桌</b>：兩人以上在號碼牌桌（「1號桌」那種）旁停留一下，手機就會跳出同一題聊天題，
-        大螢幕也會在桌邊顯示。問答、問卷、尋寶、採收進行中會自動暫停。</p>
-      <button class="btn-ghost" id="btn-topics" aria-pressed="true">話題桌：開</button>
-    </div>
-
-    <!-- 大合照 -->
-    <div class="panel">
-      <h2>大合照</h2>
-      <p class="hint">所有角色會原地定住並轉向鏡頭，就定位後自動拍攝。</p>
-      <button class="btn-primary" id="btn-photo">拍大合照</button>
-      <p class="hint" id="photo-status" hidden></p>
-      <div id="photo-result" hidden>
-        <img id="photo-img" alt="大合照">
-        <div class="photo-actions">
-          <a class="btn-ghost" id="photo-download" download>下載合照</a>
-          <img id="photo-qr" alt="下載用 QR Code">
-        </div>
-      </div>
-      <p class="err" id="photo-err" hidden></p>
-    </div>
-    </div>
-    </div>
-
     <!-- ═══ 系統：給技術人員，現場主持用不到 ═══ -->
     <div role="tabpanel" id="tab-system" aria-labelledby="tab-btn-system" hidden>
-    <!-- 大螢幕除錯：給技術人員現場排查用。打開後全場都看得到，所以不放在「場景與合照」 -->
+    <!-- 話題桌開關：「場景與合照」分頁拿掉後先藏在這裡（2026-10-17），功能照常運作（預設開）。
+         要讓主持人操作時拿掉 hidden 即可，主辦端程式仍會依 HOST_STATE 更新這顆按鈕。 -->
+    <div class="panel" hidden>
+      <h2>場景互動</h2>
+      <p class="hint"><b>話題桌</b>：兩人以上在號碼牌桌（「1號桌」那種）旁停留一下，手機就會跳出同一題聊天題，
+        大螢幕也會在桌邊顯示。問答、文字雲進行中會自動暫停。</p>
+      <button class="btn-ghost" id="btn-topics" aria-pressed="true">話題桌：開</button>
+    </div>
+    <!-- 大螢幕除錯：給技術人員現場排查用。打開後全場都看得到，所以不跟側欄的大螢幕按鈕放在一起 -->
     <div class="panel">
       <h2>大螢幕除錯</h2>
       <p class="hint">在大螢幕上疊出 α 權重、避障半徑與速度向量，排查角色移動問題用。
@@ -490,14 +486,34 @@
       <div class="panel-head">
         <h2>大螢幕</h2>
         <div class="sp-actions">
-          <button class="btn-ghost" id="btn-preview-expand">放大</button>
           <!-- 新分頁開的是真正的大螢幕（不帶 ?preview=1）：會出聲、能截圖，可以直接拖到投影機上 -->
           <a class="btn-ghost sp-open" href="/screen/" target="_blank" rel="noopener">新分頁開啟</a>
         </div>
       </div>
       <div class="sp-frame" id="sp-frame">
-        <button class="sp-close" id="btn-preview-close" hidden>關閉放大（Esc）</button>
       </div>
+      <!-- 大螢幕的操作全部放在這裡（原本在「場景與合照」分頁）：側欄每一頁都看得到。
+           場景在「活動設定」選定；除錯視圖會把技術資訊投到全場，放在「系統」分頁免得誤按。 -->
+      <div class="sp-controls">
+        <button class="btn-ghost" id="btn-screen-shot" title="把大螢幕當下的場景與角色存成 PNG">儲存畫面</button>
+        <button class="btn-ghost" id="btn-screen-ranks" aria-pressed="true"
+                title="大螢幕右下角的積分排行。不想讓全場比分數時可以隱藏">排行榜：顯示</button>
+        <button class="btn-ghost sp-sound" id="btn-screen-sound" aria-pressed="true" aria-label="大螢幕音效：開"
+                title="配對成功、出題與公布答案時，大螢幕發出短音效。投影那台電腦要先點一下大螢幕畫面才會出聲（瀏覽器的規定）">🔊</button>
+      </div>
+      <!-- 大合照：原本在「場景與合照」分頁。所有角色原地定住、轉向鏡頭，就定位後自動拍 -->
+      <button class="btn-primary sp-photo" id="btn-photo" title="所有角色會原地定住並轉向鏡頭，就定位後自動拍攝">拍大合照</button>
+      <p class="hint tiny" id="photo-status" hidden></p>
+      <div id="photo-result" hidden>
+        <img id="photo-img" alt="大合照">
+        <div class="photo-actions">
+          <a class="btn-ghost" id="photo-download" download>下載合照</a>
+          <img id="photo-qr" alt="下載用 QR Code">
+        </div>
+      </div>
+      <p class="err" id="photo-err" hidden></p>
+      <p class="hint tiny" id="screen-status" hidden role="status"></p>
+      <p class="err" id="screen-err" hidden></p>
     </div>
 
     <div class="panel">
