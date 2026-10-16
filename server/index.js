@@ -410,14 +410,14 @@ function hostState() {
       // 兩者都很小，不會讓這份狀態訊息膨脹。
       avatar: a.avatar,
       offline: a.offline,
-      progress: missions.progressOf(a.id),
+      progress: missions.progressMap(a.id),
       connections: graph.degree(a.id),
       activeMs: Math.round(a.activeMs),
       score: scores.totalOf(a.id),
       // 標籤（進場人格問卷的類型）：主辦端名冊與分組都看它
       traits: traits.traitsOf(a.id),
     })),
-    mission: missions.state(stage.agents.size),
+    missions: missions.states(stage.agents.size),
     graphEdges: graph.size,
     audience: audienceQueue.length,
     topics: topics.enabled,
@@ -455,12 +455,13 @@ function applyPersona(agentId, raw) {
 const pushHostState = () => blast(hosts, EV.HOST_STATE, hostState());
 
 /**
- * 結算目前的任務。主辦端按「結算」與限時到點走同一條路，
+ * 結算某個任務。主辦端按「結算」與限時到點走同一條路，
  * 三端收到的 MISSION_CLOSED 才會一模一樣。
  * @param {'host'|'time'} by 誰收掉的；時間到時主辦端要在動態裡看得出來
+ * @param {string} id 要結算的任務（可以同時有好幾個）
  */
-function closeMission(by = 'host') {
-  const closed = missions.close();
+function closeMission(by, id) {
+  const closed = missions.close(id);
   if (!closed) return;
   console.log(`[mission] 結算「${closed.title}」${by === 'time' ? '（時間到）' : ''}`);
   markDirty();
@@ -506,9 +507,23 @@ function broadcastScoreBoard() {
 
 /** 任務進度變動時，同步通知全場 */
 function broadcastMissionState() {
-  const state = missions.state(stage.agents.size);
-  if (state) blastAll(EV.MISSION_STATE, { mission: state });
+  for (const state of missions.states(stage.agents.size)) blastAll(EV.MISSION_STATE, { mission: state });
   pushHostState();
+}
+
+/**
+ * 問答、文字雲、人物賓果一次只能開一個（2026-10-17）：三個都要大家看大螢幕或手機作答，
+ * 疊在一起時參與者不知道該答哪一個。任務不在此限，可以跟它們同時進行、也可以同時開好幾個。
+ * @param {'quiz'|'wordcloud'|'bingo'} starting 要開始的那一個（同一種的上一輪由各自的流程處理）
+ * @returns {string|null} 擋下時給主辦端看的原因
+ */
+function busyActivity(starting) {
+  const running = [
+    ['quiz', '即時問答', quiz.isActive],
+    ['wordcloud', '文字雲', wordcloud.isActive],
+    ['bingo', '人物賓果', bingo.isActive],
+  ].find(([kind, , on]) => on && kind !== starting);
+  return running ? `「${running[1]}」還在進行中，一次只能進行一個活動（任務除外），請先結束它` : null;
 }
 
 /** 剝除控制字元並去頭尾空白。名稱會上大螢幕，控制字元會破壞排版 */
@@ -631,6 +646,8 @@ function bingoPublicView() {
 const pushBingoState = () => blast([...screens, ...hosts], EV.BINGO_STATE, { round: bingoPublicView() });
 
 function startBingo(ws, msg) {
+  const busy = busyActivity('bingo');
+  if (busy) { send(ws, EV.HOST_REJECT, { reason: busy }); return; }
   const ids = [...stage.agents.keys()];
   const durationMs = Number(msg.durationMs) > 0 ? Math.min(Number(msg.durationMs), 30 * 60 * 1000) : null;
   const bank = bingoFactsView().facts;
@@ -894,11 +911,8 @@ function handleJoin(ws, msg) {
 
   // 補送目前的任務狀態與配對碼，讓中途進場的人立刻能參與
   send(ws, EV.PAIR_CODE, { code: pairing.register(agent.id) });
-  if (missions.isActive) {
-    send(ws, EV.MISSION_ANNOUNCE, {
-      mission: missions.announcement(),
-      progress: missions.progressOf(agent.id),
-    });
+  for (const m of missions.announcements()) {
+    send(ws, EV.MISSION_ANNOUNCE, { mission: m, progress: missions.progressOf(m.id, agent.id) });
   }
   // 問答進行中就補送題目。剩餘時間由伺服器算，所以晚到的人拿到的是
   // 真正剩下的秒數，而不是從頭開始的完整倒數。
@@ -1042,40 +1056,48 @@ function greetDone(kind, outcome, a, b) {
 const PAIR_MISSION_TYPES = new Set(['PAIRING', 'COLOR_HUNT']);
 
 function handlePairClaim(ws, msg) {
-  if (!missions.isActive || !PAIR_MISSION_TYPES.has(missions.active.type)) {
+  // 可以同時有好幾個任務：這次配對算得進哪幾個，在提交碼的當下就決定
+  const pairMissions = missions.actives.filter((m) => PAIR_MISSION_TYPES.has(m.type));
+  if (!pairMissions.length) {
     send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.NO_MISSION });
     return;
   }
-
-  // 顏色條件在「提交碼」這一步就擋下，而不是等對方確認 ——
-  // 讓 A 白等 30 秒才被告知「他不是紅色的」是很差的體驗，
-  // 而且會佔用雙方的 pending 名額。
-  //
-  // ⚠ 這條路徑必須自己處理冷卻（peekTarget 不含冷卻，見該方法的說明）：
-  //   直接 return 而不記冷卻的話，攻擊者可從 COLOR_MISMATCH ↔ NOT_FOUND
-  //   的差異無限次試碼，把 claim() 的防枚舉冷卻整套繞過去。
-  if (missions.active.colorFamily) {
-    if (pairing.inCooldown(ws.agentId)) {
-      send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.COOLDOWN });
-      return;
-    }
+  const plain = pairMissions.filter((m) => !m.colorFamily);
+  const colored = pairMissions.filter((m) => m.colorFamily);
+  let matched = [];
+  if (colored.length) {
     const targetAgent = stage.get(pairing.peekTarget(msg.code));
-    if (targetAgent && !avatarMatchesFamily(targetAgent.avatar, missions.active.colorFamily)) {
-      // 顏色不符是正當使用者會遇到的情況（走向了不對的人），
-      // 因此刻意不記冷卻 —— 讓他能馬上改找正確的人。
-      send(ws, EV.PAIR_RESULT, {
-        ok: false,
-        reason: PAIR_ERRORS.COLOR_MISMATCH,
-        colorFamily: missions.active.colorFamily,
-      });
-      return;
+    matched = targetAgent ? colored.filter((m) => avatarMatchesFamily(targetAgent.avatar, m.colorFamily)) : [];
+    // 只有顏色任務時，顏色條件在「提交碼」這一步就擋下，而不是等對方確認 ——
+    // 讓 A 白等 30 秒才被告知「他不是紅色的」是很差的體驗，而且會佔用雙方的 pending 名額。
+    // 同時還有一般配對任務的話，顏色不符也照樣算進一般任務，不擋。
+    //
+    // ⚠ 這條路徑必須自己處理冷卻（peekTarget 不含冷卻，見該方法的說明）：
+    //   直接 return 而不記冷卻的話，攻擊者可從 COLOR_MISMATCH ↔ NOT_FOUND
+    //   的差異無限次試碼，把 claim() 的防枚舉冷卻整套繞過去。
+    if (!plain.length) {
+      if (pairing.inCooldown(ws.agentId)) {
+        send(ws, EV.PAIR_RESULT, { ok: false, reason: PAIR_ERRORS.COOLDOWN });
+        return;
+      }
+      if (targetAgent && !matched.length) {
+        // 顏色不符是正當使用者會遇到的情況（走向了不對的人），
+        // 因此刻意不記冷卻 —— 讓他能馬上改找正確的人。
+        send(ws, EV.PAIR_RESULT, {
+          ok: false,
+          reason: PAIR_ERRORS.COLOR_MISMATCH,
+          colorFamily: colored[0].colorFamily,
+          colorFamilies: colored.map((m) => m.colorFamily),
+        });
+        return;
+      }
+      // 沒有命中「顏色不符」的情況（查無此碼、或對方符合條件）一律記冷卻，
+      // 使這條預檢路徑的成本與正常的 claim() 相同
+      if (!targetAgent) pairing.noteClaim(ws.agentId);
     }
-    // 沒有命中「顏色不符」的情況（查無此碼、或對方符合條件）一律記冷卻，
-    // 使這條預檢路徑的成本與正常的 claim() 相同
-    if (!targetAgent) pairing.noteClaim(ws.agentId);
   }
   const result = pairing.claim(ws.agentId, msg.code, Date.now(),
-    missions.active?.id ?? null);
+    [...plain, ...matched].map((m) => m.id));
   if (!result.ok) {
     send(ws, EV.PAIR_RESULT, { ok: false, reason: result.reason });
     return;
@@ -1104,43 +1126,43 @@ function handlePairConfirm(ws, msg) {
   const a = stage.get(result.from);
   const b = stage.get(result.to);
   // 邀請發出後、確認送達前，主辦端可能已經結算舊任務並發布新的。
-  // 那筆互動屬於舊任務，不該被算進新任務的進度。
-  const sameMission = (missions.active?.id ?? null) === result.missionId;
-  const creditA = sameMission ? missions.credit(result.from, { with: result.to }) : null;
-  const creditB = sameMission ? missions.credit(result.to, { with: result.from }) : null;
-  const target = missions.active?.target ?? 0;
+  // 只記發出邀請當下算得進去、而且現在還開著的任務；新發布的任務不算。
+  const still = result.missionIds.filter((mid) => missions.get(mid));
 
-  for (const [id, credit, partner] of [
-    [result.from, creditA, b],
-    [result.to, creditB, a],
+  for (const [id, partnerId, partner] of [
+    [result.from, result.to, b],
+    [result.to, result.from, a],
   ]) {
-    // 配對本身就給分。達標獎勵只在「剛好踏到目標次數」的那一次發，
-    // 用 count === target 而不是 done —— done 在超過目標後每次都為真，
-    // 拿它當條件會讓達標的人每多配對一次就再領一次獎勵。
-    // 兩筆分數分開寫入帳本。合成一筆會讓配對的 20 分被記成 MISSION_DONE，
+    // 配對本身給一次分（不因同時算進好幾個任務而重複給）。達標獎勵每個任務各一次，
+    // 只在「剛好踏到目標次數」的那一次發：用 count === target 而不是 done ——
+    // done 在超過目標後每次都為真，拿它當條件會讓達標的人每多配對一次就再領一次獎勵。
+    // 分數分開寫入帳本。合成一筆會讓配對的 20 分被記成 MISSION_DONE，
     // bySource 統計、得分流水與手機上的來源文案就全都算錯了。
     let total = scores.totalOf(id);
     let earned = 0;
-    if (credit) {
-      const ref = missions.active?.id ?? null;
-      const detail = { with: partner?.id ?? null };
-      earned = SCORING.pairCompletion;
-      total = award(id, SCORING.pairCompletion, {
-        source: SCORE_SOURCES.PAIR, ref, detail,
-      });
-      if (credit.count === target) {
+    const detail = { with: partner?.id ?? null };
+    const progress = [];
+    for (const mid of still) {
+      const credit = missions.credit(mid, id, { with: partnerId });
+      const m = missions.get(mid);
+      progress.push({ id: mid, title: m.title, target: m.target, progress: credit.count, done: credit.done });
+      if (credit.count === m.target) {
         earned += SCORING.missionFinish;
-        total = award(id, SCORING.missionFinish, {
-          source: SCORE_SOURCES.MISSION_DONE, ref, detail,
-        });
+        total = award(id, SCORING.missionFinish, { source: SCORE_SOURCES.MISSION_DONE, ref: mid, detail });
       }
+    }
+    if (still.length) {
+      earned += SCORING.pairCompletion;
+      total = award(id, SCORING.pairCompletion, { source: SCORE_SOURCES.PAIR, ref: still[0], detail });
     }
 
     sendToAgent(id, EV.PAIR_RESULT, {
       ok: true,
       partnerName: partner?.name ?? '',
-      progress: credit?.count ?? 0,
-      done: credit?.done ?? false,
+      // 每個算進去的任務各自的進度；progress/done 是第一個任務的（舊版手機只讀這兩欄）
+      missions: progress,
+      progress: progress[0]?.progress ?? 0,
+      done: progress[0]?.done ?? false,
       points: earned,
       score: total,
     });
@@ -1404,16 +1426,13 @@ function handleHostMessage(ws, msg) {
         durationMs: msg.durationMs ?? 0,
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
-      console.log(`[mission] 發布「${result.mission.title}」目標 ${result.mission.target} 次`);
+      console.log(`[mission] 發布「${result.mission.title}」目標 ${result.mission.target} 次`
+        + `（進行中 ${missions.actives.length} 個）`);
       markDirty();
-      // 公告同時推送至手機與大螢幕
-      for (const [id, sock] of controllers) {
-        send(sock, EV.MISSION_ANNOUNCE, {
-          mission: missions.announcement(),
-          progress: missions.progressOf(id),
-        });
-      }
-      blast(screens, EV.MISSION_ANNOUNCE, { mission: missions.announcement() });
+      // 公告同時推送至手機與大螢幕。只送新的這一個：其他進行中的任務各端本來就有
+      const ann = missions.announcement(result.mission.id);
+      for (const sock of controllers.values()) send(sock, EV.MISSION_ANNOUNCE, { mission: ann, progress: 0 });
+      blast(screens, EV.MISSION_ANNOUNCE, { mission: ann });
       broadcastMissionState();
       break;
     }
@@ -1433,6 +1452,8 @@ function handleHostMessage(ws, msg) {
       break;
 
     case EV.HOST_START_WORDCLOUD: {
+      const busy = busyActivity('wordcloud');
+      if (busy) { send(ws, EV.HOST_REJECT, { reason: busy }); return; }
       // 上一題還開著就先收掉：節目單按「下一項」接著出下一題時，
       // 不該卡在「上一題還沒收」—— 那時主持人正對著全場說話。題目不合格時保留上一題。
       if (wordcloud.isActive && msg.question && String(msg.question).trim()) closeWordCloud();
@@ -1534,7 +1555,9 @@ function handleHostMessage(ws, msg) {
       break;
 
     case EV.HOST_CLOSE_MISSION:
-      closeMission();
+      // 指定 missionId 只結算那一個；沒帶（舊版主辦端）就全部結算
+      if (typeof msg.missionId === 'string') closeMission('host', msg.missionId);
+      else for (const m of [...missions.actives]) closeMission('host', m.id);
       break;
 
     case EV.HOST_REQUEST_REPORT:
@@ -1556,6 +1579,8 @@ function handleHostMessage(ws, msg) {
       break;
 
     case EV.HOST_START_QUIZ: {
+      const busy = busyActivity('quiz');
+      if (busy) { send(ws, EV.HOST_REJECT, { reason: busy }); return; }
       const result = quiz.start({
         question: msg.question,
         options: msg.options,
@@ -1669,6 +1694,9 @@ wss.on('connection', (ws) => {
           send(ws, EV.WORDCLOUD_STATE, { cloud: wordcloud.cloud() });
         }
         if (bingo.isActive) send(ws, EV.BINGO_STATE, { round: bingoPublicView() });
+        // 進行中的任務（可以好幾個）：投影機中途重開時，上緣的「進行中：」一列要接回來
+        for (const m of missions.announcements()) send(ws, EV.MISSION_ANNOUNCE, { mission: m });
+        for (const st of missions.states(stage.agents.size)) send(ws, EV.MISSION_STATE, { mission: st });
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
         // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
         send(ws, EV.STAGE_LINKS, { edges: graphEdges() });
@@ -1984,7 +2012,7 @@ const loop = startTicker({
 
     // 限時任務到點結算，與問答同樣由主迴圈推進：setTimeout 在事件迴圈
     // 被拖慢時會延後觸發，而這裡的時間到必須與大螢幕上的倒數一致。
-    if (missions.shouldAutoClose(now)) closeMission('time');
+    for (const id of missions.expired(now)) closeMission('time', id);
 
     // 文字雲：有新答案時才廣播，最快每 300ms 一次。三十個人同時送出時
     // 逐則廣播等於每秒上百份整片雲，而大螢幕的動畫本來就跟不上那麼快。

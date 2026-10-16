@@ -1478,9 +1478,13 @@ $('#btn-audience-leave').addEventListener('click', leaveAudience);
 // ─────────────────────────────────────────────────────────────
 // 任務與配對（規格 v3.0 §3.3）
 // ─────────────────────────────────────────────────────────────
-let mission = null;
+/**
+ * 進行中的任務：id → {mission, progress}。可以同時有好幾個（2026-10-17），
+ * 一次配對會同時算進符合的那幾個（伺服器判定，PAIR_RESULT.missions 帶回各自的進度）。
+ * @type {Map<string, {mission: object, progress: number}>}
+ */
+const missions = new Map();
 let myCode = '----';
-let myProgress = 0;
 
 const banner = $('#mission-banner');
 const sheet = $('#pair-sheet');
@@ -1507,34 +1511,38 @@ function showPairMsg(text, ok = false) {
 }
 
 function renderMission() {
-  if (!mission) { banner.hidden = true; return; }
+  const list = [...missions.values()];
+  if (!list.length) { banner.hidden = true; return; }
   banner.hidden = false;
-  $('#mb-title').textContent = mission.title;
+  const single = list.length === 1 ? list[0].mission : null;
+  const fracOf = ({ mission: m, progress }) => `${progress} / ${m.target}${progress >= m.target ? ' ✓' : ''}`;
+  $('#mb-title').textContent = single ? single.title : `${list.length} 個任務：${list.map((x) => x.mission.title).join('・')}`;
   $('#mb-code').textContent = myCode;
   $('#pair-mycode').textContent = myCode;
-  $('#pair-title').textContent = mission.title;
-  $('#pair-brief').textContent = mission.brief ?? '';
+  $('#pair-title').textContent = single ? single.title : `${list.length} 個任務同時進行`;
+  $('#pair-brief').textContent = single
+    ? (single.brief ?? '')
+    : '走向另一位參與者，互相交換配對碼。一次配對會同時算進符合的任務。';
 
   // COLOR_HUNT：把要找的顏色放在最顯眼的位置。
   // 只寫在 brief 裡不夠 —— 那行字在小螢幕上會被當成說明略過，
-  // 而顏色是這個任務唯一需要記住的東西。
-  const fam = mission.colorFamily ? COLOR_FAMILY_MAP[mission.colorFamily] : null;
+  // 而顏色是這個任務唯一需要記住的東西。同時有好幾個顏色任務時全部列出。
+  const fams = list.map((x) => COLOR_FAMILY_MAP[x.mission.colorFamily]).filter(Boolean);
   const chip = $('#mission-color-chip');
   if (chip) {
-    chip.hidden = !fam;
-    if (fam) {
-      chip.textContent = `${fam.glyph} 找身上有${fam.label}的人`;
-      chip.style.setProperty('--chip', fam.swatch);
+    chip.hidden = fams.length === 0;
+    if (fams.length) {
+      chip.textContent = `${fams.map((f) => f.glyph).join('')} 找身上有${fams.map((f) => f.label).join('或')}的人`;
+      chip.style.setProperty('--chip', fams[0].swatch);
     }
   }
 
-  const done = myProgress >= mission.target;
-  const frac = `${myProgress} / ${mission.target}`;
-  $('#mb-prog').textContent = done ? `${frac} ✓` : frac;
-  $('#mb-prog').classList.toggle('done', done);
-  $('#pair-progress').textContent = done
-    ? `你已經完成任務了（${frac}），還可以繼續認識新的人`
-    : `你的進度　${frac}`;
+  const allDone = list.every((x) => x.progress >= x.mission.target);
+  $('#mb-prog').textContent = list.map(fracOf).join('・');
+  $('#mb-prog').classList.toggle('done', allDone);
+  $('#pair-progress').textContent = single
+    ? (allDone ? `你已經完成任務了（${fracOf(list[0])}），還可以繼續認識新的人` : `你的進度　${fracOf(list[0])}`)
+    : list.map((x) => `${x.mission.title}　${fracOf(x)}`).join('\n');
 }
 
 // ── 分區 ──────────────────────────────────────────────────
@@ -1916,15 +1924,15 @@ function handleMissionMessage(msg) {
       break;
 
     case EV.MISSION_ANNOUNCE:
-      mission = msg.mission;
-      myProgress = msg.progress ?? 0;
+      if (msg.mission?.id) missions.set(msg.mission.id, { mission: msg.mission, progress: msg.progress ?? 0 });
       renderMission();
       break;
 
     case EV.MISSION_CLOSED:
-      mission = null;
+      // 只收掉結算的那一個；其他進行中的任務照常
+      if (msg.id) missions.delete(msg.id); else missions.clear();
       renderMission();
-      closeSheet();
+      if (!missions.size) closeSheet();
       break;
 
     case EV.PAIR_CONFIRM_REQ:
@@ -1976,7 +1984,10 @@ function handlePairResult(msg) {
     return;
   }
   if (msg.ok) {
-    myProgress = msg.progress ?? myProgress;
+    for (const p of msg.missions ?? []) {
+      const entry = missions.get(p.id);
+      if (entry) entry.progress = p.progress;
+    }
     renderMission();
     const bonus = msg.points > 0 ? `　+${msg.points} 分` : '';
     showPairMsg(`配對成功！你和 ${msg.partnerName} 建立了連結。${bonus}`, true);
@@ -1992,7 +2003,7 @@ function handlePairResult(msg) {
 
 // ── 配對面板 ──────────────────────────────────────────────
 function openSheet() {
-  if (!mission) return;
+  if (!missions.size) return;
   pairMsg.hidden = true;
   pairInput.value = '';
   sheet.hidden = false;
@@ -2085,8 +2096,7 @@ $('#btn-confirm-exit').addEventListener('click', () => {
   joyEngaged = false;
 
   // 清掉任務狀態，重新進場時會由伺服器重新公告
-  mission = null;
-  myProgress = 0;
+  missions.clear();
   renderMission();
   closeSheet();
   closeConfirmPair();

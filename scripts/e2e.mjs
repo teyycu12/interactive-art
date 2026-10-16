@@ -1146,7 +1146,76 @@ check('任務結算後可再發布新任務',
     return true;
   })());
 await sleep(400);
-check('新任務已生效', hostStates.at(-1)?.mission?.target === 2, `target=${hostStates.at(-1)?.mission?.target}`);
+check('新任務已生效', hostStates.at(-1)?.missions?.[0]?.target === 2, `target=${hostStates.at(-1)?.missions?.[0]?.target}`);
+
+// ── 同時好幾個任務；問答、文字雲、賓果一次只能一個 ──────────
+{
+  const { COLOR_FAMILIES, avatarMatchesFamily } = await import('../shared/colorFamily.js');
+  const mine = COLOR_FAMILIES.find((f) => avatarMatchesFamily(AVATAR, f.id));
+  const other = COLOR_FAMILIES.find((f) => !avatarMatchesFamily(AVATAR, f.id));
+  const missionsNow = () => hostStates.at(-1)?.missions ?? [];
+
+  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1, colorFamily: mine.id }));
+  await sleep(300);
+  check('可以同時發布第二個任務', missionsNow().length === 2, missionsNow().map((m) => m.title).join('、'));
+  let rejectsBefore = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'PAIRING', target: 3 }));
+  await sleep(200);
+  check('同樣的任務不能重複開', hostRejects.length === rejectsBefore + 1 && missionsNow().length === 2, hostRejects.at(-1)?.reason);
+
+  // 一次配對同時算進符合的兩個任務；配對分只給一次，達標獎勵每個任務各給一次
+  const tA = joinPhone('任務甲');
+  const tB = joinPhone('任務乙');
+  await sleep(700);
+  tA.ws.send(JSON.stringify({ type: 'PAIR_CLAIM', code: tB.code }));
+  await sleep(300);
+  tB.ws.send(JSON.stringify({ type: 'PAIR_CONFIRM', accept: true }));
+  await sleep(400);
+  const r1 = tA.results.at(-1);
+  check('一次配對同時算進符合的兩個任務', r1?.ok && r1.missions?.length === 2, JSON.stringify(r1?.missions));
+  check('配對分只給一次，達標獎勵照任務各算（20 ＋ 顏色任務達標 50）', r1?.points === 70, `points=${r1?.points}`);
+
+  // 顏色不符的任務不算進去，但同時開著的一般配對任務照算
+  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1, colorFamily: other.id }));
+  await sleep(300);
+  const otherId = missionsNow().find((m) => m.colorFamily === other.id)?.id;
+  const tC = joinPhone('任務丙');
+  await sleep(700);
+  await sleep(2100);   // 配對提交的冷卻
+  tA.ws.send(JSON.stringify({ type: 'PAIR_CLAIM', code: tC.code }));
+  await sleep(300);
+  tC.ws.send(JSON.stringify({ type: 'PAIR_CONFIRM', accept: true }));
+  await sleep(400);
+  const r2 = tA.results.at(-1);
+  check('顏色不符的任務不算，同時開著的其他任務照算',
+    r2?.ok && r2.missions?.length === 2 && !r2.missions.some((m) => m.id === otherId), JSON.stringify(r2));
+
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION', missionId: otherId }));
+  await sleep(300);
+  check('可以只結算其中一個任務', missionsNow().length === 2 && !missionsNow().some((m) => m.id === otherId),
+    missionsNow().map((m) => m.title).join('、'));
+
+  // 一次只能進行一個活動（任務除外）
+  host.send(JSON.stringify({ type: 'HOST_START_WORDCLOUD', question: '一次一個？' }));
+  await sleep(300);
+  rejectsBefore = hostRejects.length;
+  host.send(JSON.stringify({ type: 'HOST_START_QUIZ', question: '插進來的問答', options: ['一', '二'], correctIndex: 0, durationMs: 10000 }));
+  await sleep(200);
+  check('文字雲進行中不能開問答', hostRejects.length === rejectsBefore + 1 && /文字雲/.test(hostRejects.at(-1)?.reason ?? ''),
+    hostRejects.at(-1)?.reason);
+  host.send(JSON.stringify({ type: 'HOST_START_BINGO' }));
+  await sleep(200);
+  check('文字雲進行中不能開賓果', hostRejects.length === rejectsBefore + 2, hostRejects.at(-1)?.reason);
+  check('任務不受「一次一個」限制，照常進行', missionsNow().length === 2);
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_WORDCLOUD' }));
+  await sleep(200);
+
+  for (const t of [tA, tB, tC]) { t.ws.send(JSON.stringify({ type: 'CLIENT_LEAVE' })); t.ws.close(); }
+  // 收回只剩原本那一個配對任務，後面的測試照原樣進行
+  const colorId = missionsNow().find((m) => m.colorFamily === mine.id)?.id;
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION', missionId: colorId }));
+  await sleep(300);
+}
 
 // ── 大合照 ──────────────────────────────────────────────
 // 曾因 index.js 引用已搬到 httplayer.js 的 VISION_HOST，一按「拍大合照」

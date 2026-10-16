@@ -116,13 +116,14 @@
   .stage-panel[hidden] { display: none; }
   .wc-meta b { color: var(--ink); font-size: 1.2em; }
 
-  /* 任務、賓果：上緣一列「進行中：」。置中、兩側留給左上角的活動名稱卡 */
+  /* 任務、賓果：上緣「進行中：」，疊在場景上（房間不讓位）。置中、兩側留給左上角的活動名稱卡。
+     標題寫完整、放不下就換行 —— 會多蓋到場景一點，但比「找一…」這種看不出是什麼任務好 */
   .now-bar {
     position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 3;
-    display: flex; align-items: center; gap: 22px;
-    max-width: calc(100vw - 360px);
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 22px;
+    width: max-content; max-width: calc(100vw - 360px);
     padding: 10px 26px;
-    background: var(--paper); border: 3px solid var(--ink); border-radius: 999px;
+    background: var(--paper); border: 3px solid var(--ink); border-radius: 24px;
     box-shadow: 0 8px 28px -14px rgba(47, 42, 38, .45);
     font-size: clamp(16px, 1.3vw, 26px); font-weight: 700; color: var(--ink);
     white-space: nowrap;
@@ -130,10 +131,12 @@
   .now-bar[hidden], .nb-item[hidden] { display: none; }
   .nb-label { flex: none; color: var(--soft); }
   .nb-item { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .nb-missions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 22px; min-width: 0; }
+  .nb-missions:empty { display: none; }
   .nb-kind { flex: none; padding: 2px 12px; border-radius: 999px; color: #fff; font-size: .8em; }
   .nb-mission { background: #C4462A; }
   .nb-bingo { background: #3D6158; }
-  .nb-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .nb-text { min-width: 0; }
   /* #C4462A 對紙色 4.65:1：全場在追的進度數字，不能是最難讀的那一個（#E76F51 只有 2.9:1） */
   .nb-meta { flex: none; color: var(--soft); font-variant-numeric: tabular-nums; }
   .nb-meta b { color: #C4462A; }
@@ -245,15 +248,12 @@
 <!-- ── 遊戲畫面 ───────────────────────────────────────────
      問答、文字雲是滿版面板（.stage-panel）：題頭一行（玩法標籤・標題・人數）、
      中間是主畫面、底下一行提示。
-     任務、賓果是上緣一列「進行中：」（2026-10-17）：參與者靠手機玩、在現場找人，
-     不需要盯著大螢幕，所以不蓋住房間；房間往下讓出這一列（stageViewport）。 -->
+     任務、賓果是上緣「進行中：」（2026-10-17）：參與者靠手機玩、在現場找人，
+     不需要盯著大螢幕，所以只佔上緣一小塊，直接疊在場景上（房間大小不變）。 -->
 <div class="now-bar" id="now-bar" hidden>
   <span class="nb-label">進行中：</span>
-  <span class="nb-item" id="nb-mission" hidden>
-    <b class="nb-kind nb-mission">任務</b>
-    <span class="nb-text" id="m-title">—</span>
-    <span class="nb-meta" id="m-prog"></span>
-  </span>
+  <!-- 任務可以同時好幾個，一個一格（screen.js 的 renderMissionsBar） -->
+  <span class="nb-missions" id="nb-missions"></span>
   <span class="nb-item" id="nb-bingo" hidden>
     <b class="nb-kind nb-bingo">人物賓果</b>
     <span class="nb-text" id="bingo-lead">—</span>

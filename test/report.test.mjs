@@ -12,9 +12,9 @@ const names = { a: '小明', b: '小華', c: '小美' };
 
 function sample() {
   const missions = new MissionBoard();
-  missions.publish({ type: 'PAIRING', target: 1, now: 100 });
-  missions.credit('a'); missions.credit('b');
-  missions.close();
+  const { id: mid } = missions.publish({ type: 'PAIRING', target: 1, now: 100 }).mission;
+  missions.credit(mid, 'a'); missions.credit(mid, 'b');
+  missions.close(mid);
 
   const graph = new SocialGraph();
   graph.connect('a', 'b');

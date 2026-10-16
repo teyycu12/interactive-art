@@ -152,7 +152,6 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 .topbar .sub { margin: 2px 0 0; font-size: 13px; color: var(--teal-ink); font-weight: 600; }
 .topbar .sub.warn { color: var(--accent-ink); }
 
-.stats { display: flex; gap: 26px; }
 .stat { text-align: right; }
 .stat b {
   display: block;
@@ -180,6 +179,9 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 .tabs [role="tab"] .count { font-family: ui-monospace, Consolas, monospace; font-weight: 500; opacity: .8; }
 /* 「系統」是技術人員用的，推到最右邊、不跟主持用的分頁搶視線 */
 .tabs .tab-quiet { margin-left: auto; border-style: dashed; }
+/* 分頁在頂端列右側：不需要下方間距；「系統」跟其他分頁隔開一點就好（頂端列裡沒有剩餘空間可以推） */
+.topbar .tabs { margin-bottom: 0; }
+.topbar .tabs .tab-quiet { margin-left: 10px; }
 
 /* 進行中的玩法：切走之後仍要找得回來 */
 .live-dot {
@@ -727,3 +729,11 @@ td.export { white-space: nowrap; }
 .scoring-row input:focus { outline: none; border-color: var(--ink); }
 .scoring-row small { color: var(--ink-soft); }
 .scoring-panel .badge-off[hidden] { display: none; }
+
+/* ── 任務：進行中的卡片（可以同時好幾個）──────────────────── */
+.mission-list { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 10px; }
+.mission-list li { border: 2px solid var(--ink); border-radius: 12px; padding: 12px 14px; background: var(--paper); }
+.mission-list .live-head { margin-bottom: 8px; }
+.mission-list .hint { margin: 0 0 10px; }
+.mission-list .btn-danger { width: 100%; }
+#mission-live[hidden] { display: none; }

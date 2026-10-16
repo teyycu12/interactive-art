@@ -141,7 +141,7 @@ function handle(msg, key) {
       break;
 
     case EV.MISSION_STATE:
-      renderMission(msg.mission);
+      updateMission(msg.mission);
       break;
 
     case EV.MISSION_COMPLETE:
@@ -159,7 +159,8 @@ function handle(msg, key) {
 
     case EV.MISSION_CLOSED:
       pushFeed(`${msg.by === 'time' ? '時間到，' : ''}結算「${msg.title}」，共 ${msg.totalCompletions} 次完成`, 'ev-mission');
-      renderMission(null);
+      missionStates.delete(msg.id);
+      renderMissions();
       break;
 
     case EV.QUIZ_QUESTION:
@@ -709,49 +710,85 @@ $('#btn-publish').addEventListener('click', () => {
   ws?.send(JSON.stringify(missionStep().msg));
 });
 
-$('#btn-close').addEventListener('click', () => {
-  // 還有人沒達標時多問一句：結算之後進度就收掉了，現場沒有「取消結算」
-  const left = lastMission ? lastMission.totalAgents - lastMission.finished : 0;
-  if (left > 0 && !confirm(`還有 ${left} 人沒達標，確定要現在結算嗎？`)) return;
-  ws?.send(JSON.stringify({ type: EV.HOST_CLOSE_MISSION }));
-});
+/**
+ * 進行中的任務：id → 狀態（MISSION_STATE）加上換算好的截止時刻。可以同時好幾個（2026-10-17）。
+ * @type {Map<string, object>}
+ */
+const missionStates = new Map();
 
-let lastMission = null;
-let missionTimer = null;
-
-function renderMission(m) {
-  const idle = $('#mission-idle');
-  const live = $('#mission-live');
-  lastMission = m;
-  clearInterval(missionTimer);
-  missionTimer = null;
-  if (!m) { idle.hidden = false; live.hidden = true; return; }
-
-  // 倒數以收到狀態的當下 + remainingMs 換算（同問答），每次狀態更新都重新對齊
-  const timer = $('#live-timer');
-  timer.hidden = m.remainingMs == null;
-  if (m.remainingMs != null) {
-    const end = Date.now() + m.remainingMs;
-    const tick = () => {
-      const left = Math.max(0, Math.ceil((end - Date.now()) / 1000));
-      timer.textContent = `剩 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
-      timer.classList.toggle('urgent', left <= 30);
-    };
-    tick();
-    missionTimer = setInterval(tick, 1000);
-  }
-
-  idle.hidden = true;
-  live.hidden = false;
-  $('#live-title').textContent = m.title;
-  $('#live-target').textContent = `每人 ${m.target} 次`;
-
-  const pct = m.totalAgents > 0 ? Math.round((m.finished / m.totalAgents) * 100) : 0;
-  $('#live-bar').style.width = `${pct}%`;
-  $('#live-frac').textContent = `${m.finished} / ${m.totalAgents}`;
-  $('#live-detail').textContent =
-    `${m.participating} 人已開始，累計完成 ${m.totalCompletions} 次`;
+/** 收到一個任務的最新狀態。倒數以收到的當下 + remainingMs 換算（同問答），每次更新都重新對齊 */
+function updateMission(m) {
+  if (!m?.id) return;
+  missionStates.set(m.id, { ...m, endAt: m.remainingMs == null ? null : Date.now() + m.remainingMs });
+  renderMissions();
 }
+
+/** HOST_STATE 帶的是全部進行中任務的清單：以它為準整個重設 */
+function syncMissions(list) {
+  missionStates.clear();
+  for (const m of Array.isArray(list) ? list : []) {
+    missionStates.set(m.id, { ...m, endAt: m.remainingMs == null ? null : Date.now() + m.remainingMs });
+  }
+  renderMissions();
+}
+
+const missionLeft = (m) => (m.endAt ? Math.max(0, Math.ceil((m.endAt - Date.now()) / 1000)) : null);
+const fmtLeft = (sec) => `剩 ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+
+/** 結算某個任務。還有人沒達標時多問一句：結算之後進度就收掉了，現場沒有「取消結算」 */
+function closeMissionAsk(id) {
+  const m = missionStates.get(id);
+  const left = m ? m.totalAgents - m.finished : 0;
+  if (left > 0 && !confirm(`「${m.title}」還有 ${left} 人沒達標，確定要現在結算嗎？`)) return;
+  lastAction = 'mission';
+  ws?.send(JSON.stringify({ type: EV.HOST_CLOSE_MISSION, missionId: id }));
+}
+
+function renderMissions() {
+  const list = $('#mission-list');
+  $('#mission-live').hidden = missionStates.size === 0;
+  list.replaceChildren(...[...missionStates.values()].map((m) => {
+    const li = document.createElement('li');
+    const head = document.createElement('div');
+    head.className = 'live-head';
+    const tags = Object.assign(document.createElement('span'), { className: 'tags-inline' });
+    const sec = missionLeft(m);
+    if (sec != null) {
+      const timer = Object.assign(document.createElement('span'), { className: 'tag tag-timer', textContent: fmtLeft(sec) });
+      timer.dataset.missionTimer = m.id;
+      timer.classList.toggle('urgent', sec <= 30);
+      tags.append(timer);
+    }
+    tags.append(Object.assign(document.createElement('span'), { className: 'tag', textContent: `每人 ${m.target} 次` }));
+    head.append(Object.assign(document.createElement('b'), { textContent: m.title }), tags);
+
+    const row = Object.assign(document.createElement('div'), { className: 'progress-row' });
+    const bar = Object.assign(document.createElement('div'), { className: 'bar' });
+    const fill = document.createElement('i');
+    fill.style.width = `${m.totalAgents > 0 ? Math.round((m.finished / m.totalAgents) * 100) : 0}%`;
+    bar.append(fill);
+    row.append(bar, Object.assign(document.createElement('span'), { className: 'mono', textContent: `${m.finished} / ${m.totalAgents}` }));
+
+    const detail = Object.assign(document.createElement('p'), {
+      className: 'hint', textContent: `${m.participating} 人已開始，累計完成 ${m.totalCompletions} 次`,
+    });
+    const close = Object.assign(document.createElement('button'), { className: 'btn-danger', textContent: '結算並關閉' });
+    close.addEventListener('click', () => closeMissionAsk(m.id));
+    li.append(head, row, detail, close);
+    return li;
+  }));
+}
+
+// 倒數每秒更新文字就好，不整個重建（重建會讓滑鼠下的「結算」按鈕閃一下）
+setInterval(() => {
+  for (const el of document.querySelectorAll('[data-mission-timer]')) {
+    const m = missionStates.get(el.dataset.missionTimer);
+    const sec = m ? missionLeft(m) : null;
+    if (sec == null) continue;
+    el.textContent = fmtLeft(sec);
+    el.classList.toggle('urgent', sec <= 30);
+  }
+}, 1000);
 
 // ─────────────────────────────────────────────────────────────
 // 參與者列表
@@ -891,13 +928,11 @@ $('#btn-bingo-end').addEventListener('click', () => {
 function renderState(state) {
   roster = state.agents ?? [];
   if (state.personaSpread) renderPersonaSpread(state.personaSpread);
-  $('#stat-people').textContent = state.agents.length;
   $('#stat-audience').textContent = state.audience ?? 0;
   topicsOn = state.topics !== false;
   $('#btn-topics').setAttribute('aria-pressed', String(topicsOn));
   $('#btn-topics').textContent = topicsOn ? '話題桌：開' : '話題桌：關';
   $('#stat-audience-box').hidden = !state.audience;
-  $('#stat-edges').textContent = state.graphEdges;
   $('#people-count').textContent = state.agents.length;
   $('#tab-people-count').textContent = state.agents.length;
   $('#people-empty').hidden = state.agents.length > 0;
@@ -907,7 +942,8 @@ function renderState(state) {
   const body = $('#people-body');
   body.replaceChildren();
 
-  const target = state.mission?.target ?? 0;
+  // 每個進行中任務各自的進度，依發布順序排（同主辦端任務卡片的順序）
+  const activeMissions = Array.isArray(state.missions) ? state.missions : [];
 
   for (const a of state.agents) {
     const tr = document.createElement('tr');
@@ -934,9 +970,10 @@ function renderState(state) {
 
     const prog = document.createElement('td');
     prog.className = 'num';
-    if (target > 0) {
-      prog.textContent = `${a.progress} / ${target}`;
-      if (a.progress >= target) prog.classList.add('done');
+    if (activeMissions.length) {
+      const counts = activeMissions.map((m) => ({ n: a.progress?.[m.id] ?? 0, target: m.target }));
+      prog.textContent = counts.map((c) => `${c.n} / ${c.target}`).join('・');
+      if (counts.every((c) => c.n >= c.target)) prog.classList.add('done');
     } else {
       prog.textContent = '—';
     }
@@ -977,7 +1014,7 @@ function renderState(state) {
     body.append(tr);
   }
 
-  renderMission(state.mission);
+  syncMissions(state.missions);
 
   // 主辦端中途重新整理時，用這份現況把問答與排行榜補回畫面
   quiz = state.quiz ?? null;
@@ -1686,7 +1723,7 @@ function renderBank() {
 
 function renderQuizTally() {
   if (!quiz) return;
-  const total = Number($('#stat-people').textContent) || 0;
+  const total = roster.length;
   $('#quiz-answered').textContent = `${quiz.answered ?? 0} / ${total}`;
   $('#quiz-bar').style.width = total > 0
     ? `${Math.round(((quiz.answered ?? 0) / total) * 100)}%`
@@ -1707,7 +1744,6 @@ function renderQuiz() {
 
   compose.hidden = true;
   live.hidden = false;
-  $('#stat-questions').textContent = quiz.index;
   $('#quiz-live-q').textContent = quiz.question;
   renderQuizTally();
 
@@ -2124,10 +2160,11 @@ function liveItems() {
     items.push({ key: 'wordcloud', tag: '文字雲', title: text('#wordcloud-live-q'), status: text('#wordcloud-count'),
       actions: [{ label: '收題', target: '#btn-wordcloud-close' }] });
   }
-  if (!$('#mission-live').hidden) {
-    const timer = $('#live-timer').hidden ? '' : `　${text('#live-timer')}`;
-    items.push({ key: 'mission', tag: '任務', title: text('#live-title'), status: `${text('#live-frac')} 人完成${timer}`,
-      actions: [{ label: '結算任務', target: '#btn-close' }] });
+  for (const m of missionStates.values()) {
+    const sec = missionLeft(m);
+    items.push({ key: `mission-${m.id}`, tag: '任務', title: m.title,
+      status: `${m.finished} / ${m.totalAgents} 人完成${sec == null ? '' : `　${fmtLeft(sec)}`}`,
+      actions: [{ label: '結算任務', onClick: () => closeMissionAsk(m.id) }] });
   }
   if (!$('#bingo-live').hidden) {
     items.push({ key: 'bingo', tag: '人物賓果', title: '賓果進行中', status: text('#bingo-left'),
@@ -2161,7 +2198,7 @@ function renderLiveControl() {
         const b = document.createElement('button');
         b.className = a.primary ? 'btn-primary' : 'btn-ghost';
         b.textContent = a.label;
-        b.addEventListener('click', () => $(a.target).click());
+        b.addEventListener('click', () => (a.onClick ? a.onClick() : $(a.target).click()));
         acts.append(b);
       }
       li.append(head, status, acts);

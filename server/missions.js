@@ -8,19 +8,24 @@
  * 完成時呼叫 credit() 記帳即可。三種任務型別的驗證模型差異極大
  * （雙方確認 / 自動比對 / 人工審核），硬塞進同一套判定邏輯會失控。
  *
- * v1 限定同時只有一個進行中的任務。實體活動的節奏本來就是
- * 「宣布一項 → 大家做 → 收掉 → 下一項」，同時多工只會讓大螢幕與手機的
- * 資訊層級混亂，也讓主辦者難以掌控現場。
+ * 可以同時進行好幾個任務（2026-10-17，原本限一個）：例如「找一個人配對」與
+ * 「找穿紅色的人」同時開著，一次配對符合哪幾個就同時記進哪幾個。
+ * 上限 MAX_ACTIVE_MISSIONS 個，同一種任務（同型別、同顏色）不能重複開 ——
+ * 重複的兩個任務會讓一次配對被記兩次，手機上也分不出是哪一個。
+ * 問答、文字雲、賓果仍是一次一個（見 server/index.js 的 busyActivity）。
  */
 
 import { randomUUID } from 'node:crypto';
 import { MISSION_TYPES, MISSION_DURATIONS } from '../shared/protocol.js';
 import { COLOR_FAMILY_MAP } from '../shared/colorFamily.js';
 
+/** 同時進行中的任務上限：再多手機的任務橫幅與大螢幕的「進行中」一列就放不下了 */
+export const MAX_ACTIVE_MISSIONS = 4;
+
 export class MissionBoard {
   constructor() {
-    /** @type {object|null} 目前進行中的任務 */
-    this.active = null;
+    /** @type {object[]} 進行中的任務，依發布順序 */
+    this.actives = [];
     /** @type {object[]} 已結算的任務，供主辦端回顧與 WP-C 匯出 */
     this.history = [];
   }
@@ -30,7 +35,9 @@ export class MissionBoard {
    * @returns {{ok: true, mission: object} | {ok: false, reason: string}}
    */
   publish({ type, target, colorFamily = null, durationMs = 0, now = Date.now() }) {
-    if (this.active) return { ok: false, reason: '已有進行中的任務，請先結算' };
+    if (this.actives.length >= MAX_ACTIVE_MISSIONS) {
+      return { ok: false, reason: `同時最多 ${MAX_ACTIVE_MISSIONS} 個任務，請先結算一個` };
+    }
 
     const spec = MISSION_TYPES[type];
     if (!spec) return { ok: false, reason: `未知的任務型別：${type}` };
@@ -50,6 +57,10 @@ export class MissionBoard {
       param = colorFamily;
     }
 
+    if (this.actives.some((m) => m.type === spec.id && m.colorFamily === param)) {
+      return { ok: false, reason: '同樣的任務已經在進行中' };
+    }
+
     // 限時由伺服器計時而非主辦端：主辦端的分頁可能被關掉或休眠，
     // 那時任務仍要照宣布的時間收掉，大家才不會一直配對下去。
     const limit = Number(durationMs ?? 0);
@@ -57,10 +68,11 @@ export class MissionBoard {
       return { ok: false, reason: '不支援這個時間限制' };
     }
 
-    this.active = {
+    const mission = {
       id: `msn_${randomUUID().slice(0, 8)}`,
       type: spec.id,
-      title: spec.label,
+      // 顏色任務的標題帶上顏色：兩個顏色任務同時開著時，三端才分得出是哪一個
+      title: param ? `找${COLOR_FAMILY_MAP[param].label}的人配對` : spec.label,
       brief: spec.brief,
       target: n,
       colorFamily: param,
@@ -73,62 +85,78 @@ export class MissionBoard {
       /** @type {object[]} 完成事件流水，供大螢幕回饋與事後分析 */
       events: [],
     };
-    return { ok: true, mission: this.active };
+    this.actives.push(mission);
+    return { ok: true, mission };
   }
 
-  /** 結算並關閉目前任務 */
-  close() {
-    if (!this.active) return null;
-    this.active.closedAt = Date.now();
-    const closed = this.active;
+  /** 進行中的某個任務 */
+  get(id) {
+    return this.actives.find((m) => m.id === id) ?? null;
+  }
+
+  /** 結算並關閉某個任務 */
+  close(id, now = Date.now()) {
+    const i = this.actives.findIndex((m) => m.id === id);
+    if (i === -1) return null;
+    const [closed] = this.actives.splice(i, 1);
+    closed.closedAt = now;
     this.history.push(closed);
-    this.active = null;
     return closed;
   }
 
-  /** 限時任務是否已經到點，該由主迴圈結算 */
-  shouldAutoClose(now = Date.now()) {
-    return !!this.active?.endsAt && now >= this.active.endsAt;
+  /** 限時已到、該由主迴圈結算的任務 id */
+  expired(now = Date.now()) {
+    return this.actives.filter((m) => m.endsAt && now >= m.endsAt).map((m) => m.id);
   }
 
-  /** 任務是否進行中 */
+  /** 有沒有任何進行中的任務 */
   get isActive() {
-    return this.active !== null;
+    return this.actives.length > 0;
   }
 
   /**
-   * 為參與者記一次完成。由各任務型別的驗證器在驗證通過後呼叫。
-   * @returns {{count: number, done: boolean} | null}
+   * 為參與者在某個任務記一次完成。由各任務型別的驗證器在驗證通過後呼叫。
+   * @returns {{count: number, done: boolean} | null} 任務不存在（已結算）時回 null
    */
-  credit(agentId, detail = {}) {
-    if (!this.active) return null;
-    const count = (this.active.progress.get(agentId) ?? 0) + 1;
-    this.active.progress.set(agentId, count);
-    this.active.events.push({ agentId, at: Date.now(), ...detail });
-    return { count, done: count >= this.active.target };
+  credit(id, agentId, detail = {}) {
+    const m = this.get(id);
+    if (!m) return null;
+    const count = (m.progress.get(agentId) ?? 0) + 1;
+    m.progress.set(agentId, count);
+    m.events.push({ agentId, at: Date.now(), ...detail });
+    return { count, done: count >= m.target };
   }
 
-  progressOf(agentId) {
-    return this.active?.progress.get(agentId) ?? 0;
+  progressOf(id, agentId) {
+    return this.get(id)?.progress.get(agentId) ?? 0;
+  }
+
+  /** 某人在每個進行中任務的進度 {missionId: 次數}（主辦端名冊用） */
+  progressMap(agentId) {
+    return Object.fromEntries(this.actives.map((m) => [m.id, m.progress.get(agentId) ?? 0]));
   }
 
   /** 公告用的任務摘要（推送給手機與大螢幕） */
-  announcement() {
-    if (!this.active) return null;
-    const m = this.active;
+  announcement(id) {
+    const m = this.get(id);
+    if (!m) return null;
     return {
       id: m.id, type: m.type, title: m.title, brief: m.brief, target: m.target,
       colorFamily: m.colorFamily ?? null,
     };
   }
 
+  announcements() {
+    return this.actives.map((m) => this.announcement(m.id));
+  }
+
   /**
-   * 全場進度摘要。
+   * 某個任務的全場進度摘要。
    * @param {number} totalAgents 目前場上人數，用於計算完成率
    */
-  state(totalAgents, now = Date.now()) {
-    if (!this.active) return null;
-    const m = this.active;
+  state(id, totalAgents, now = Date.now()) {
+    const m = this.get(id);
+    if (!m) return null;
     let finished = 0;
     let totalCompletions = 0;
     for (const count of m.progress.values()) {
@@ -138,6 +166,8 @@ export class MissionBoard {
     return {
       id: m.id,
       title: m.title,
+      type: m.type,
+      colorFamily: m.colorFamily ?? null,
       target: m.target,
       finished,          // 已達標人數
       participating: m.progress.size,
@@ -148,11 +178,15 @@ export class MissionBoard {
     };
   }
 
+  states(totalAgents, now = Date.now()) {
+    return this.actives.map((m) => this.state(m.id, totalAgents, now));
+  }
+
   /**
    * 由快照還原。
    *
    * 進行中的任務連同每個人的進度一起還原 —— 伺服器在活動中途重開時，
-   * 已經配對到一半的人不該被要求從頭再來。
+   * 已經配對到一半的人不該被要求從頭再來。舊版快照只有一個 active，照樣讀得回來。
    */
   hydrate(dump) {
     if (!dump || typeof dump !== 'object') return this;
@@ -162,7 +196,8 @@ export class MissionBoard {
       events: Array.isArray(m.events) ? m.events : [],
     } : null);
 
-    this.active = revive(dump.active);
+    const actives = Array.isArray(dump.actives) ? dump.actives : (dump.active ? [dump.active] : []);
+    this.actives = actives.map(revive).filter(Boolean);
     this.history = (dump.history ?? []).map(revive).filter(Boolean);
     return this;
   }
@@ -183,7 +218,7 @@ export class MissionBoard {
       events: m.events,
     });
     return {
-      active: this.active ? dump(this.active) : null,
+      actives: this.actives.map(dump),
       history: this.history.map(dump),
     };
   }

@@ -7,7 +7,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { MissionBoard } from '../server/missions.js';
+import { MissionBoard, MAX_ACTIVE_MISSIONS } from '../server/missions.js';
 import { SocialGraph } from '../server/socialgraph.js';
 import { PairingSession } from '../server/pairing.js';
 import { PAIRING } from '../server/config.js';
@@ -57,18 +57,31 @@ describe('社交圖譜', () => {
 });
 
 describe('任務生命週期', () => {
-  test('同時只允許一項任務', () => {
+  test('可以同時進行不同的任務，但同樣的任務不能重複開', () => {
     const b = new MissionBoard();
     assert.equal(b.publish({ type: 'PAIRING', target: 2 }).ok, true);
-    const second = b.publish({ type: 'PAIRING', target: 2 });
-    assert.equal(second.ok, false, '不應允許第二項任務同時進行');
+    assert.equal(b.publish({ type: 'COLOR_HUNT', target: 1, colorFamily: 'RED' }).ok, true);
+    assert.equal(b.publish({ type: 'COLOR_HUNT', target: 1, colorFamily: 'BLUE' }).ok, true, '不同顏色算不同任務');
+    assert.equal(b.actives.length, 3);
+    const dup = b.publish({ type: 'PAIRING', target: 3 });
+    assert.equal(dup.ok, false, '同一種任務重複開會讓一次配對被記兩次');
+    assert.equal(b.publish({ type: 'COLOR_HUNT', target: 2, colorFamily: 'RED' }).ok, false);
   });
 
-  test('結算後可再發布', () => {
+  test('同時進行的任務有上限', () => {
     const b = new MissionBoard();
-    b.publish({ type: 'PAIRING', target: 2 });
-    assert.ok(b.close());
-    assert.equal(b.isActive, false);
+    const colors = ['RED', 'BLUE', 'GREEN', 'PURPLE', 'ORANGE'];
+    const results = colors.map((c) => b.publish({ type: 'COLOR_HUNT', target: 1, colorFamily: c }).ok);
+    assert.deepEqual(results, colors.map((_, i) => i < MAX_ACTIVE_MISSIONS));
+  });
+
+  test('結算其中一個，其他照常進行；結算後可再發布同一種', () => {
+    const b = new MissionBoard();
+    const p = b.publish({ type: 'PAIRING', target: 2 }).mission;
+    const c = b.publish({ type: 'COLOR_HUNT', target: 1, colorFamily: 'RED' }).mission;
+    assert.equal(b.close(p.id).id, p.id);
+    assert.deepEqual(b.actives.map((m) => m.id), [c.id]);
+    assert.equal(b.close(p.id), null, '已結算的不能再結算一次');
     assert.equal(b.publish({ type: 'PAIRING', target: 3 }).ok, true);
   });
 
@@ -83,23 +96,29 @@ describe('任務生命週期', () => {
 
   test('記帳並在達標時回報完成', () => {
     const b = new MissionBoard();
-    b.publish({ type: 'PAIRING', target: 2 });
-    assert.deepEqual(b.credit(A), { count: 1, done: false });
-    assert.deepEqual(b.credit(A), { count: 2, done: true });
-    assert.deepEqual(b.credit(A), { count: 3, done: true }, '超額仍可繼續累計');
+    const { id } = b.publish({ type: 'PAIRING', target: 2 }).mission;
+    assert.deepEqual(b.credit(id, A), { count: 1, done: false });
+    assert.deepEqual(b.credit(id, A), { count: 2, done: true });
+    assert.deepEqual(b.credit(id, A), { count: 3, done: true }, '超額仍可繼續累計');
   });
 
-  test('無進行中任務時記帳無效', () => {
+  test('任務不存在（已結算）時記帳無效；各任務的進度分開記', () => {
     const b = new MissionBoard();
-    assert.equal(b.credit(A), null);
+    assert.equal(b.credit('msn_none', A), null);
+    const p = b.publish({ type: 'PAIRING', target: 2 }).mission;
+    const c = b.publish({ type: 'COLOR_HUNT', target: 1, colorFamily: 'RED' }).mission;
+    b.credit(p.id, A);
+    b.credit(p.id, A);
+    b.credit(c.id, A);
+    assert.deepEqual(b.progressMap(A), { [p.id]: 2, [c.id]: 1 });
   });
 
   test('全場進度摘要正確', () => {
     const b = new MissionBoard();
-    b.publish({ type: 'PAIRING', target: 2 });
-    b.credit(A); b.credit(A);   // A 達標
-    b.credit(B);                // B 進行中
-    const s = b.state(5);
+    const { id } = b.publish({ type: 'PAIRING', target: 2 }).mission;
+    b.credit(id, A); b.credit(id, A);   // A 達標
+    b.credit(id, B);                    // B 進行中
+    const s = b.state(id, 5);
     assert.equal(s.finished, 1);
     assert.equal(s.participating, 2);
     assert.equal(s.totalCompletions, 3);
@@ -108,11 +127,11 @@ describe('任務生命週期', () => {
 
   test('結算後的任務進入歷史，可供匯出', () => {
     const b = new MissionBoard();
-    b.publish({ type: 'PAIRING', target: 1 });
-    b.credit(A, { with: B });
-    b.close();
+    const { id } = b.publish({ type: 'PAIRING', target: 1 }).mission;
+    b.credit(id, A, { with: B });
+    b.close(id);
     const dump = b.export();
-    assert.equal(dump.active, null);
+    assert.deepEqual(dump.actives, []);
     assert.equal(dump.history.length, 1);
     assert.equal(dump.history[0].events[0].with, B);
   });
@@ -279,18 +298,22 @@ describe('配對狀態機', () => {
 describe('限時任務', () => {
   test('不帶時間限制時不會自動結算', () => {
     const board = new MissionBoard();
-    board.publish({ type: 'PAIRING', target: 1, now: 0 });
-    assert.equal(board.shouldAutoClose(10 ** 9), false);
-    assert.equal(board.state(3, 0).remainingMs, null);
+    const { id } = board.publish({ type: 'PAIRING', target: 1, now: 0 }).mission;
+    assert.deepEqual(board.expired(10 ** 9), []);
+    assert.equal(board.state(id, 3, 0).remainingMs, null);
   });
 
   test('到點才結算，剩餘時間由伺服器算', () => {
     const board = new MissionBoard();
     const r = board.publish({ type: 'PAIRING', target: 1, durationMs: 180000, now: 1000 });
     assert.equal(r.ok, true);
-    assert.equal(board.state(3, 61000).remainingMs, 120000);
-    assert.equal(board.shouldAutoClose(180999), false);
-    assert.equal(board.shouldAutoClose(181000), true);
+    assert.equal(board.state(r.mission.id, 3, 61000).remainingMs, 120000);
+    assert.deepEqual(board.expired(180999), []);
+    assert.deepEqual(board.expired(181000), [r.mission.id]);
+    // 同時開著的另一個任務各算各的時間
+    const other = board.publish({ type: 'COLOR_HUNT', target: 1, colorFamily: 'RED', durationMs: 300000, now: 1000 });
+    assert.deepEqual(board.expired(181000), [r.mission.id]);
+    assert.deepEqual(board.expired(301000), [r.mission.id, other.mission.id]);
   });
 
   test('白名單以外的時間被拒絕', () => {
@@ -302,8 +325,15 @@ describe('限時任務', () => {
 
   test('截止時間跟著快照還原，重開伺服器後仍會到點結算', () => {
     const board = new MissionBoard();
-    board.publish({ type: 'PAIRING', target: 1, durationMs: 300000, now: 0 });
+    const { id } = board.publish({ type: 'PAIRING', target: 1, durationMs: 300000, now: 0 }).mission;
     const revived = new MissionBoard().hydrate(JSON.parse(JSON.stringify(board.export())));
-    assert.equal(revived.shouldAutoClose(300000), true);
+    assert.deepEqual(revived.expired(300000), [id]);
+  });
+
+  test('舊版快照（只有一個 active）照樣讀得回來', () => {
+    const legacy = { active: { id: 'msn_old', type: 'PAIRING', title: '找一個人配對', target: 2, progress: { [A]: 1 }, events: [] }, history: [] };
+    const revived = new MissionBoard().hydrate(legacy);
+    assert.equal(revived.actives.length, 1);
+    assert.equal(revived.progressOf('msn_old', A), 1);
   });
 });

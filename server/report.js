@@ -22,7 +22,8 @@
  * @param {number} [src.now]
  */
 export function buildReport({ missions, quiz, traits = [], wordcloud = {}, scores, graph, nameOf, isPresent, now = Date.now() }) {
-  const missionList = [...(missions.history ?? []), ...(missions.active ? [missions.active] : [])];
+  // 舊版快照只有一個 active；新版是 actives（可以同時好幾個任務）
+  const missionList = [...(missions.history ?? []), ...(missions.actives ?? (missions.active ? [missions.active] : []))];
   const quizList = [...(quiz.history ?? []), ...(quiz.current ? [quiz.current] : [])];
   const cloudList = wordcloud.history ?? [];
   const edges = graph.edges ?? [];

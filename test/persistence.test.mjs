@@ -219,26 +219,26 @@ describe('各模組的還原', () => {
 
   test('任務：進行中的任務連同每個人的進度一起還原', () => {
     const m = new MissionBoard();
-    m.publish({ type: 'PAIRING', target: 2 });
-    m.credit(A, { with: B });
-    m.credit(A, { with: 'usr_cccc' });
-    m.credit(B, { with: A });
+    const { id } = m.publish({ type: 'PAIRING', target: 2 }).mission;
+    m.credit(id, A, { with: B });
+    m.credit(id, A, { with: 'usr_cccc' });
+    m.credit(id, B, { with: A });
 
     const r = new MissionBoard().hydrate(m.export());
     assert.equal(r.isActive, true);
-    assert.equal(r.progressOf(A), 2);
-    assert.equal(r.progressOf(B), 1);
-    assert.equal(r.state(2).finished, 1);
-    assert.equal(r.announcement().title, '找一個人配對');
+    assert.equal(r.progressOf(id, A), 2);
+    assert.equal(r.progressOf(id, B), 1);
+    assert.equal(r.state(id, 2).finished, 1);
+    assert.equal(r.announcement(id).title, '找一個人配對');
   });
 
   test('任務：還原後可以繼續記帳與結算', () => {
     const m = new MissionBoard();
-    m.publish({ type: 'PAIRING', target: 2 });
-    m.credit(A);
+    const { id } = m.publish({ type: 'PAIRING', target: 2 }).mission;
+    m.credit(id, A);
     const r = new MissionBoard().hydrate(m.export());
-    assert.deepEqual(r.credit(A), { count: 2, done: true });
-    assert.ok(r.close());
+    assert.deepEqual(r.credit(id, A), { count: 2, done: true });
+    assert.ok(r.close(id));
     assert.equal(r.isActive, false);
     assert.equal(r.history.length, 1);
   });
@@ -279,8 +279,8 @@ describe('各模組的還原', () => {
     const g = new SocialGraph();
     g.connect(A, B);
     const m = new MissionBoard();
-    m.publish({ type: 'PAIRING', target: 2 });
-    m.credit(A);
+    const { id: mid } = m.publish({ type: 'PAIRING', target: 2 }).mission;
+    m.credit(mid, A);
 
     const roundTrip = JSON.parse(JSON.stringify({
       scores: s.export(), graph: g.export(), missions: m.export(),
@@ -288,6 +288,6 @@ describe('各模組的還原', () => {
 
     assert.equal(new ScoreBoard().hydrate(roundTrip.scores).totalOf(A), 100);
     assert.equal(new SocialGraph().hydrate(roundTrip.graph).size, 1);
-    assert.equal(new MissionBoard().hydrate(roundTrip.missions).progressOf(A), 1);
+    assert.equal(new MissionBoard().hydrate(roundTrip.missions).progressOf(mid, A), 1);
   });
 });

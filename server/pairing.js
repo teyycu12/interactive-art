@@ -157,7 +157,7 @@ export class PairingSession {
    * A 提交 B 的配對碼。
    * @returns {{ok: true, target: string} | {ok: false, reason: string}}
    */
-  claim(fromId, rawCode, now = Date.now(), missionId = null) {
+  claim(fromId, rawCode, now = Date.now(), missionIds = []) {
     const last = this.lastClaimAt.get(fromId) ?? 0;
     if (now - last < PAIRING.claimCooldownMs) {
       return { ok: false, reason: PAIR_ERRORS.COOLDOWN };
@@ -185,9 +185,9 @@ export class PairingSession {
       from: fromId,
       to: targetId,
       expiresAt: now + PAIRING.confirmTimeoutMs,
-      // 記下發出邀請當下的任務。確認有 30 秒視窗，主辦端可能在這期間結算
-      // 舊任務並發布新的 —— 沒有這個欄位，舊任務的互動會被記到新任務頭上。
-      missionId,
+      // 記下發出邀請當下、這次配對算得進去的任務（可能不只一個）。確認有 30 秒視窗，
+      // 主辦端可能在這期間結算舊任務並發布新的 —— 沒有這個欄位，舊任務的互動會被記到新任務頭上。
+      missionIds: Array.isArray(missionIds) ? missionIds : [],
     });
     return { ok: true, target: targetId };
   }
@@ -204,10 +204,10 @@ export class PairingSession {
     if (now > p.expiresAt) return { ok: false, reason: PAIR_ERRORS.EXPIRED, from: p.from };
     if (!accept) return { ok: false, reason: PAIR_ERRORS.DECLINED, from: p.from };
 
-    // 帶上 missionId：這條邊是研究資料的主體，少了任務歸屬就只知道
-    // 「這兩人碰過面」，無法回答「在哪一項任務下碰面」。
-    const isNew = this.graph.connect(p.from, p.to, p.missionId ?? null);
+    // 帶上任務 id：這條邊是研究資料的主體，少了任務歸屬就只知道
+    // 「這兩人碰過面」，無法回答「在哪一項任務下碰面」。同時算進好幾個任務時記第一個。
+    const isNew = this.graph.connect(p.from, p.to, p.missionIds[0] ?? null);
     if (!isNew) return { ok: false, reason: PAIR_ERRORS.ALREADY_PAIRED, from: p.from };
-    return { ok: true, from: p.from, to: p.to, missionId: p.missionId ?? null };
+    return { ok: true, from: p.from, to: p.to, missionIds: p.missionIds };
   }
 }

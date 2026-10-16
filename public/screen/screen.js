@@ -21,7 +21,7 @@ import {
   measureNameplate, NAMEPLATE_DROP,
 } from '/shared/character.js';
 import { layoutNameplates } from '/shared/nameplateLayout.js';
-import { stageViewport, setStageTopInset, onStageViewportChange } from './stageViewport.js';
+import { stageViewport, onStageViewportChange } from './stageViewport.js';
 import { Sfx } from './sfx.js';
 
 let activeScene = null;
@@ -343,7 +343,7 @@ function connect() {
         break;
 
       case EV.MISSION_CLOSED:
-        showMission(null);
+        closeMissionShown(msg.id);
         toast(`任務結束　共 ${msg.totalCompletions} 次配對`);
         break;
 
@@ -430,20 +430,46 @@ connect();
 // ─────────────────────────────────────────────────────────────
 // 任務橫幅與完成回饋
 // ─────────────────────────────────────────────────────────────
+/**
+ * 進行中的任務：id → {title, finished, total}。可以同時好幾個（2026-10-17），
+ * 上緣「進行中：」一列一個任務一格。
+ * @type {Map<string, {title: string, finished: number|null, total: number|null}>}
+ */
+const missionsShown = new Map();
+
 function showMission(m) {
-  missionShown = m;
-  if (m) {
-    document.getElementById('m-title').textContent = m.title;
-    document.getElementById('m-prog').replaceChildren();
-  }
-  syncBanners();
+  if (!m?.id) return;
+  missionsShown.set(m.id, { title: m.title, finished: null, total: null });
+  renderMissionsBar();
 }
 
 function showMissionProgress(m) {
-  if (!m) return;
-  const b = document.createElement('b');
-  b.textContent = `${m.finished} / ${m.totalAgents}`;
-  document.getElementById('m-prog').replaceChildren(b, document.createTextNode(' 人完成'));
+  if (!m?.id) return;
+  const entry = missionsShown.get(m.id) ?? { title: m.title };
+  missionsShown.set(m.id, { ...entry, title: m.title ?? entry.title, finished: m.finished, total: m.totalAgents });
+  renderMissionsBar();
+}
+
+function closeMissionShown(id) {
+  if (id) missionsShown.delete(id); else missionsShown.clear();
+  renderMissionsBar();
+}
+
+function renderMissionsBar() {
+  document.getElementById('nb-missions').replaceChildren(...[...missionsShown.values()].map((m) => {
+    const item = Object.assign(document.createElement('span'), { className: 'nb-item' });
+    item.append(
+      Object.assign(document.createElement('b'), { className: 'nb-kind nb-mission', textContent: '任務' }),
+      Object.assign(document.createElement('span'), { className: 'nb-text', textContent: m.title }),
+    );
+    if (m.finished != null) {
+      const meta = Object.assign(document.createElement('span'), { className: 'nb-meta' });
+      meta.append(Object.assign(document.createElement('b'), { textContent: `${m.finished} / ${m.total}` }), document.createTextNode(' 人完成'));
+      item.append(meta);
+    }
+    return item;
+  }));
+  syncBanners();
 }
 
 function toast(text) {
@@ -935,24 +961,14 @@ let quizDeadline = 0;
 let quizRaf = null;
 
 /**
- * 上緣的「進行中：」一列（任務、賓果）。房間往下讓出它的高度，不蓋住角色 ——
- * 「看著大螢幕找到自己」是作品的前提（UI-STYLING「大螢幕的橫幅不可疊在場景上」）。
+ * 上緣的「進行中：」一列（任務、賓果）。直接疊在場景上、房間不縮小（2026-10-17 主持人決定）：
+ * 場景大小固定比較重要，被這一列蓋住上緣一小塊可以接受。
  * 問答、文字雲是滿版面板，開著時會蓋在這一列上面。
  */
 function syncBanners() {
-  document.getElementById('nb-mission').hidden = missionShown === null;
   document.getElementById('nb-bingo').hidden = bingoShown === null;
-  document.getElementById('now-bar').hidden = missionShown === null && bingoShown === null;
-  measureBannerInset();
+  document.getElementById('now-bar').hidden = missionsShown.size === 0 && bingoShown === null;
 }
-
-const NOW_BAR_GAP = 12;   // 這一列與房間上緣之間留一點縫，免得看起來黏在一起
-function measureBannerInset() {
-  const bar = document.getElementById('now-bar');
-  setStageTopInset(bar.hidden ? 0 : bar.getBoundingClientRect().bottom + NOW_BAR_GAP);
-}
-// 內容是顯示之後才填的（進度、倒數），字數一變高度可能跟著變（換行、字級）
-if (typeof ResizeObserver === 'function') new ResizeObserver(() => measureBannerInset()).observe(document.getElementById('now-bar'));
 
 function showBingo(round) {
   bingoShown = round;
@@ -984,7 +1000,6 @@ function renderBingoMeta() {
 }
 setInterval(renderBingoMeta, 1000);
 
-let missionShown = null;
 
 function renderQuizOptions(revealed = null, counts = null) {
   const wrap = document.getElementById('q-opts');

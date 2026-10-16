@@ -67,23 +67,19 @@
       </p>
       <p class="sub" id="conn-status">已連線</p>
     </div>
+    <!-- 分頁放在右上角（2026-10-17，原本這裡是在場／社交連結／已出題三個數字） -->
     <div class="topbar-right">
-      <div class="stats">
-        <div class="stat"><b id="stat-people">0</b><span>在場</span></div>
-        <!-- 人滿後排隊等空位的人。有人在等時，主持人可以考慮請久未操作的人讓位 -->
-        <div class="stat" id="stat-audience-box" hidden><b id="stat-audience">0</b><span>候補</span></div>
-        <div class="stat"><b id="stat-edges">0</b><span>社交連結</span></div>
-        <div class="stat"><b id="stat-questions">0</b><span>已出題</span></div>
-      </div>
+      <!-- 人滿後排隊等空位的人。有人在等時，主持人可以考慮請久未操作的人讓位 -->
+      <div class="stat" id="stat-audience-box" hidden><b id="stat-audience">0</b><span>候補</span></div>
+      <nav class="tabs" role="tablist" aria-label="控制台分頁">
+        <button role="tab" id="tab-btn-plan" aria-controls="tab-plan" aria-selected="true">節目單<i class="live-dot" id="plan-live-dot" hidden></i></button>
+        <button role="tab" id="tab-btn-play" aria-controls="tab-play" aria-selected="false" tabindex="-1">活動選單<i class="live-dot" id="play-live-dot" hidden></i></button>
+        <button role="tab" id="tab-btn-people" aria-controls="tab-people" aria-selected="false" tabindex="-1">參與者 <span class="count" id="tab-people-count">0</span><i class="report-dot" id="report-dot" hidden title="有新的檢舉"></i></button>
+        <button role="tab" id="tab-btn-system" class="tab-quiet" aria-controls="tab-system" aria-selected="false" tabindex="-1">系統</button>
+      </nav>
     </div>
   </header>
 
-  <nav class="tabs" role="tablist" aria-label="控制台分頁">
-    <button role="tab" id="tab-btn-plan" aria-controls="tab-plan" aria-selected="true">節目單<i class="live-dot" id="plan-live-dot" hidden></i></button>
-    <button role="tab" id="tab-btn-play" aria-controls="tab-play" aria-selected="false" tabindex="-1">活動選單<i class="live-dot" id="play-live-dot" hidden></i></button>
-    <button role="tab" id="tab-btn-people" aria-controls="tab-people" aria-selected="false" tabindex="-1">參與者 <span class="count" id="tab-people-count">0</span><i class="report-dot" id="report-dot" hidden title="有新的檢舉"></i></button>
-    <button role="tab" id="tab-btn-system" class="tab-quiet" aria-controls="tab-system" aria-selected="false" tabindex="-1">系統</button>
-  </nav>
 
   <div class="layout">
    <main class="main">
@@ -101,10 +97,17 @@
     <div class="panel act-panel" data-act="mission">
       <h2>任務</h2>
 
+      <!-- 進行中的任務，一個一張卡（host.js 的 renderMissions）。可以同時好幾個（2026-10-17），
+           所以發布表單一直留著，不會因為有任務在跑就收起來 -->
+      <div id="mission-live" hidden>
+        <ul class="mission-list" id="mission-list"></ul>
+      </div>
+
       <div id="mission-idle">
         <details class="howto">
           <summary>玩法說明</summary>
-          <p>同時只能有一項任務進行，這符合實體活動「宣布 → 執行 → 收掉 → 下一項」的節奏。</p>
+          <p>可以同時進行好幾個任務（最多 4 個，同樣的任務不能重複開），例如「找一個人配對」和「找紅色的人配對」一起開。
+            參與者一次配對會同時算進符合的任務。問答、文字雲、賓果則一次只能進行一個。</p>
         </details>
         <label class="field">
           <span>任務類型</span>
@@ -128,22 +131,6 @@
           <button class="btn-primary" id="btn-publish">發布任務</button>
           <button class="btn-ghost" data-rs-add="mission">加入節目單</button>
         </div>
-      </div>
-
-      <div id="mission-live" hidden>
-        <div class="live-head">
-          <b id="live-title">—</b>
-          <span class="tags-inline">
-            <span class="tag tag-timer" id="live-timer" hidden>—</span>
-            <span class="tag" id="live-target">—</span>
-          </span>
-        </div>
-        <div class="progress-row">
-          <div class="bar"><i id="live-bar"></i></div>
-          <span class="mono" id="live-frac">0 / 0</span>
-        </div>
-        <p class="hint" id="live-detail">—</p>
-        <button class="btn-danger" id="btn-close">結算並關閉</button>
       </div>
 
       <p class="err" id="mission-err" hidden></p>

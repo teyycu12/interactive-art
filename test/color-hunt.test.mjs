@@ -110,15 +110,16 @@ describe('COLOR_HUNT 任務發布', () => {
     const b = new MissionBoard();
     const r = b.publish({ type: 'COLOR_HUNT', target: 2, colorFamily: 'RED' });
     assert.ok(r.ok);
-    assert.equal(b.announcement().colorFamily, 'RED');
-    assert.equal(b.export().active.colorFamily, 'RED');
+    assert.equal(b.announcement(r.mission.id).colorFamily, 'RED');
+    assert.equal(b.export().actives[0].colorFamily, 'RED');
+    assert.match(r.mission.title, /紅色/, '標題帶顏色：兩個顏色任務同時開著時才分得出來');
   });
 
   test('PAIRING 不受影響，且不會被塞進顏色', () => {
     const b = new MissionBoard();
     const r = b.publish({ type: 'PAIRING', target: 2 });
     assert.ok(r.ok);
-    assert.equal(b.announcement().colorFamily, null);
+    assert.equal(b.announcement(r.mission.id).colorFamily, null);
   });
 });
 
