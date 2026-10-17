@@ -2605,6 +2605,9 @@ const requestCompose = (characters, backdrop) => new Promise((resolve) => {
   const body = Buffer.from(JSON.stringify({
     characters,
     backdrop,
+    // 場地尺寸：沒有大螢幕底圖、改由 Python 自己畫時，座標要照這個換算。
+    // 原本 Python 寫死 1920×1080，場地加寬到 2596 之後人整體往右偏、間距也被壓窄
+    field: { width: STAGE.width, height: STAGE.height },
     photoUrlBase: `http://${VISION_HOST}:${VISION_PORT}/photos`,
   }), 'utf8');
   const up = http.request({
@@ -2685,6 +2688,8 @@ const takeGroupPhoto = async (ws, { arrange = 'stay' } = {}) => {
         photoB64: res.photo_b64,
         qrB64: res.qr_b64,
         count: res.character_count,
+        // 沒拿到大螢幕畫面、用的是自己畫的備用舞台：主辦端要知道，否則會以為合照就長這樣
+        fallback: backdrop === null,
       });
     } else {
       const error = res?.error || 'compose_failed';

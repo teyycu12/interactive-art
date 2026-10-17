@@ -102,13 +102,18 @@ export function orderByAffinity(ids, strength) {
 }
 
 /**
- * 隊形的站位：一個面向鏡頭、寬比高長的人群，從後排往前排、蛇行排列。
+ * 隊形的站位：一排一排、面向鏡頭，從後排往前排、蛇行排列。
+ *
+ * 先決定要幾排（每排最多 perRow 人），每一排從中間往兩側取位，再整排置中 ——
+ * 人少的時候就是並肩站成一排。原本是「離中心最近的格子」，兩個人會剛好分到
+ * 前後兩排、一個疊在另一個身後（2026-10-18 實拍）。
  *
  * 蛇行（這排由左到右、下一排由右到左）讓 orderByAffinity 排出來的相鄰兩人
  * 在畫面上也相鄰 —— 換排的地方是上下相鄰，不會從最右邊跳到最左邊。
  *
- * 站位避開道具與牆（與出生點同樣的餘裕），彼此間距大於角色的身體距離，
- * 角色到位後就不會互相推擠。
+ * 間距照大螢幕上的角色大小取：角色約 170 單位高、100 單位寬，左右要留得比身寬大，
+ * 前後排錯開半格，後排的人才不會整個被前排的頭擋住。
+ * 站位避開道具與牆（比出生點多一點餘裕）；某一排被道具佔掉位子時，不足的人補到下一排。
  *
  * @param {number} n 人數
  * @param {object} p
@@ -117,41 +122,104 @@ export function orderByAffinity(ids, strength) {
  * @param {(o: object, x: number, y: number) => number} p.obstacleDistance
  * @param {number} [p.dx] 同排左右間距
  * @param {number} [p.dy] 前後排間距
+ * @param {number} [p.perRow] 每排最多幾人
  * @returns {{x: number, y: number}[]} 依隊形順序（後排先）
  */
-export function formationSlots(n, { stage, obstacles, obstacleDistance, dx = 88, dy = 78 }) {
+export function formationSlots(n, { stage, obstacles, obstacleDistance, dx = 130, dy = 105, perRow = 12 }) {
   if (n <= 0) return [];
-  const cx = stage.width / 2;
-  const cy = stage.height * 0.55;
-  const minX = stage.width * 0.08;
-  const maxX = stage.width * 0.92;
-  const minY = stage.height * 0.22;
+  const minX = stage.width * 0.06;
+  const maxX = stage.width * 0.94;
+  const minY = stage.height * 0.2;
   const maxY = stage.height * 0.92;
+  const free = (x, y) => !obstacles.some((o) => obstacleDistance(o, x, y) < o.r + 40);
 
-  const candidates = [];
-  for (let row = 0, y = minY; y <= maxY; row++, y += dy) {
-    // 前後排錯開半格：後排的人才不會整個被前排的頭擋住
-    const offset = row % 2 ? dx / 2 : 0;
+  /**
+   * 這一排最長的一段連續空位。隊形要排成一整段，不能被桌子從中間切開 ——
+   * 切開的話，排序上相鄰的兩個熟人會被分到桌子兩邊。
+   */
+  const bestRun = (y, offset) => {
+    let best = [];
+    let run = [];
+    const close = () => {
+      const mid = (r) => (r[0] + r.at(-1)) / 2;
+      if (run.length > best.length
+        || (run.length === best.length && run.length && Math.abs(mid(run) - stage.width / 2) < Math.abs(mid(best) - stage.width / 2))) {
+        best = run;
+      }
+      run = [];
+    };
     for (let x = minX + offset; x <= maxX; x += dx) {
-      if (obstacles.some((o) => obstacleDistance(o, x, y) < o.r + 40)) continue;
-      // 橫向拉長的距離：合照是寬的，往左右排比往前後排自然
-      candidates.push({ x, y, row, d: Math.hypot((x - cx) / 1.8, y - cy) });
+      if (free(x, y)) run.push(x); else close();
+    }
+    close();
+    return best;
+  };
+  const offsetOf = (i) => (i % 2 ? dx / 2 : 0);
+
+  /**
+   * 在這一段裡取 k 個連續位置，盡量對齊 center：各排對齊同一個中心，
+   * 蛇行換排時上下才接得起來（不對齊的話，熟人會在換排處被拆到畫面兩頭）。
+   */
+  const segment = (run, k, center) => {
+    if (k >= run.length) return run.slice();
+    let best = 0;
+    for (let i = 0; i + k <= run.length; i++) {
+      const mid = (run[i] + run[i + k - 1]) / 2;
+      const bestMid = (run[best] + run[best + k - 1]) / 2;
+      if (Math.abs(mid - center) < Math.abs(bestMid - center)) best = i;
+    }
+    return run.slice(best, best + k);
+  };
+
+  // 挑隊形放在哪幾排：每排都要塞得下 each 人、各排對得齊，越靠近地板中間越好
+  const rowsWanted = Math.ceil(n / perRow);
+  const each = Math.ceil(n / rowsWanted);
+  const preferY = stage.height * 0.6;
+  let pick = null;
+  for (let y0 = minY; y0 + (rowsWanted - 1) * dy <= maxY; y0 += dy / 4) {
+    const runs = [...Array(rowsWanted).keys()].map((i) => bestRun(y0 + i * dy, offsetOf(i)));
+    const cap = Math.min(...runs.map((r) => r.length));
+    if (!cap) continue;
+    // 共同的中心：各段中點的平均；量各排實際排出來的中點離它多遠
+    const center = runs.reduce((t, r) => t + (r[0] + r.at(-1)) / 2, 0) / runs.length;
+    const mids = runs.map((r) => {
+      const seg = segment(r, Math.min(each, r.length), center);
+      return (seg[0] + seg.at(-1)) / 2;
+    });
+    const misalign = Math.max(...mids) - Math.min(...mids);
+    const mid = y0 + ((rowsWanted - 1) * dy) / 2;
+    const score = Math.min(cap, each) * 10000 - misalign * 3 - Math.abs(mid - preferY);
+    if (!pick || score > pick.score) pick = { y0, runs, score, center };
+  }
+
+  const rows = [];
+  let left = n;
+  const place = (y, run) => {
+    const k = Math.min(run.length, left, each);
+    if (!k) return;
+    rows.push({ y, xs: segment(run, k, pick?.center ?? stage.width / 2) });
+    left -= k;
+  };
+  pick?.runs.forEach((run, i) => place(pick.y0 + i * dy, run));
+  // 道具多到預定的排塞不下：往前、往後交替加排，直到每個人都有位置或場地用完
+  const base = pick?.y0 ?? stage.height * 0.5;
+  for (let k = 1; left > 0 && k < 20; k++) {
+    for (const i of [rowsWanted - 1 + k, -k]) {
+      const y = base + i * dy;
+      if (left > 0 && y >= minY && y <= maxY) place(y, bestRun(y, offsetOf(Math.abs(i))));
     }
   }
-  candidates.sort((a, b) => a.d - b.d);
-  const chosen = candidates.slice(0, n);
 
-  const rows = new Map();
-  for (const c of chosen) {
-    if (!rows.has(c.row)) rows.set(c.row, []);
-    rows.get(c.row).push(c);
-  }
+  rows.sort((a, b) => a.y - b.y);
   const ordered = [];
-  [...rows.keys()].sort((a, b) => a - b).forEach((row, i) => {
-    const line = rows.get(row).sort((a, b) => a.x - b.x);
-    if (i % 2) line.reverse();
-    for (const c of line) ordered.push({ x: Math.round(c.x), y: Math.round(c.y) });
-  });
+  for (const row of rows) {
+    // 從離上一排結尾比較近的那一頭開始（通常就是左右交替的蛇行）。
+    // 各排長短、位置不一（被道具切過）時，硬性交替會在換排處跳到另一頭
+    const prev = ordered.at(-1);
+    const line = prev && Math.abs(prev.x - row.xs.at(-1)) < Math.abs(prev.x - row.xs[0])
+      ? [...row.xs].reverse() : row.xs;
+    for (const x of line) ordered.push({ x: Math.round(x), y: Math.round(row.y) });
+  }
   return ordered;
 }
 

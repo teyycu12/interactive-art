@@ -452,24 +452,68 @@ def _layout_by_position(
         (c for c in characters if isinstance(c, dict)),
         key=lambda c: c.get("y") if isinstance(c.get("y"), (int, float)) else 0,
     )
-    for c in ordered:
-        fx = c.get("x") if isinstance(c.get("x"), (int, float)) else fw / 2
-        fy = c.get("y") if isinstance(c.get("y"), (int, float)) else fh / 2
-        depth = min(max(fy / fh, 0.0), 1.0)          # 0 最遠、1 最近
-        char_h = int(MIN_CHAR_H + depth * (MAX_CHAR_H - MIN_CHAR_H))
-        char_img = _draw_lego_character(c, target_height=char_h)
-        if char_img is None:
-            continue
-        cx = pad_x + int(min(max(fx / fw, 0.0), 1.0) * usable_w)
+    # 只取有人站的那一塊來畫，像鏡頭對準人群：整個場地縮進一張照片的話，
+    # 並肩站著的人在畫面上只隔幾十 px，不是疊在一起就是得縮到認不出來。
+    # 每個方向至少取場地的 35%，人很少時才不會被放大成一兩個巨人。
+    def num(v, d):
+        return v if isinstance(v, (int, float)) else d
+    xs = [num(c.get("x"), fw / 2) for c in ordered] or [fw / 2]
+    ys = [num(c.get("y"), fh / 2) for c in ordered] or [fh / 2]
+    margin = 0.08
+    rw = max(max(xs) - min(xs) + fw * margin * 2, fw * 0.35)
+    rh = max(max(ys) - min(ys) + fh * margin * 2, fh * 0.35)
+    rx0 = min(max((min(xs) + max(xs)) / 2 - rw / 2, 0), max(fw - rw, 0))
+    ry0 = min(max((min(ys) + max(ys)) / 2 - rh / 2, 0), max(fh - rh, 0))
+
+    def place(c):
+        fx = num(c.get("x"), fw / 2)
+        fy = num(c.get("y"), fh / 2)
+        depth = min(max((fy - ry0) / rh, 0.0), 1.0)          # 0 最遠、1 最近
+        cx = pad_x + int(min(max((fx - rx0) / rw, 0.0), 1.0) * usable_w)
         # 腳底對齊 baseline：角色是站在地上的，不是以身體中心浮在某個高度。
         # baseline 由 pad_top 起算已含最矮角色的身高，因此最遠的角色頭頂
         # 仍落在 pad_top 之下，不會頂到標題橫幅。
         baseline_y = pad_top + MIN_CHAR_H + int(depth * usable_h)
+        return depth, cx, baseline_y
+
+    placed = [(c, *place(c)) for c in ordered]
+    scale = _no_overlap_scale([(cx, by) for _, _, cx, by in placed])
+
+    for c, depth, cx, baseline_y in placed:
+        char_h = int((MIN_CHAR_H + depth * (MAX_CHAR_H - MIN_CHAR_H)) * scale)
+        char_img = _draw_lego_character(c, target_height=char_h)
+        if char_img is None:
+            continue
         canvas.paste(
             char_img,
             (cx - char_img.width // 2, baseline_y - char_img.height),
             char_img,
         )
+
+
+# 人偶寬是高的 0.65 倍（_draw_lego_character）。縮到這個高度以下就太小、認不出是誰了
+_MIN_SCALE = 0.45
+
+
+def _no_overlap_scale(points: List[Tuple[int, int]]) -> float:
+    """站得近的人要畫小一點，免得疊成一團。
+
+    場上座標換算到畫布之後，角色的畫法（170～300px 高）比大螢幕上大得多 ——
+    大螢幕上並肩站著的兩人，照原尺寸畫在這裡會一個疊在另一個身上（2026-10-18 實拍）。
+    找出「差不多站在同一排」（腳底高度差不到半個人）的兩人之間最近的左右距離，
+    把整張的人偶縮到並排時剛好不重疊。整張一起縮，遠近比例才不會亂。
+    """
+    best = 1.0
+    for i, (x1, y1) in enumerate(points):
+        for x2, y2 in points[i + 1:]:
+            if abs(y1 - y2) >= MAX_CHAR_H * 0.5:
+                continue
+            gap = abs(x1 - x2)
+            # 兩人寬度各一半加起來 = 0.65 × 高；留 5% 縫
+            need = 0.65 * MAX_CHAR_H * 1.05
+            if gap < need:
+                best = min(best, gap / need)
+    return max(best, _MIN_SCALE)
 
 
 def compose_group_photo(
@@ -480,6 +524,7 @@ def compose_group_photo(
     title: str = "PersonaFlow · 集體記憶紀念大合照",
     photo_url_base: str = "http://127.0.0.1:5001/photos",
     backdrop: Optional[str] = None,
+    field: Optional[Tuple[float, float]] = None,
 ) -> Dict[str, Any]:
     """
     合成大合照主入口。
@@ -525,7 +570,7 @@ def compose_group_photo(
         # 空合照提示
         draw.text((width // 2 - 150, height // 2), "目前尚無在場角色", fill=(200, 200, 200, 255), font=_cjk_font(28))
     elif _has_positions(characters):
-        _layout_by_position(canvas, characters, width, height, stage_y)
+        _layout_by_position(canvas, characters, width, height, stage_y, field=field or (1920, 1080))
     else:
         # 決定行數 (Rows): 1~7 角色 1 行; 8~18 角色 2 行; 19~36 角色 3 行; 37+ 角色 4 行
         if total <= 7:

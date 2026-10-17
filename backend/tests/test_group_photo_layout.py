@@ -109,6 +109,24 @@ class TestLayoutByPosition:
     def test_empty_list_does_not_raise(self):
         _layout_by_position(self._canvas(), [], 1920, 1080, 810)
 
+    def test_side_by_side_characters_do_not_overlap(self):
+        """回歸點（2026-10-18 實拍）：並肩站的兩人在備用畫面上疊成一團。
+
+        場地 2596 寬、兩人相隔 130 單位（依互動排位的間距），畫出來要是兩個分開的人。
+        """
+        canvas = self._canvas()
+        _layout_by_position(canvas, [char(1233, 636), char(1363, 636)], 1920, 1080, 810,
+                            field=(2596, 1080))
+        cols = self._drawn_columns(canvas)
+        gaps = np.diff(cols)
+        assert gaps.max() > 1, "兩個人之間應該有空隙，而不是連成一塊"
+
+    def test_uses_real_field_width(self):
+        """場地中間的人要畫在照片中間。原本寫死 1920 寬，場地加寬後人整體往右偏。"""
+        canvas = self._canvas()
+        _layout_by_position(canvas, [char(1298, 636)], 1920, 1080, 810, field=(2596, 1080))
+        assert abs(self._drawn_columns(canvas).mean() - 960) < 60
+
 
 class TestComposeWithPositions:
     def test_position_roster_composes(self):

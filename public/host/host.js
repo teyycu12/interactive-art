@@ -224,7 +224,11 @@ function renderPhotoState(msg) {
 
   if (msg.phase === 'DONE') {
     btn.disabled = false;
-    status.hidden = true;
+    // 主控台裡的預覽小窗不算大螢幕（不會被拿去截圖），只開預覽時一定會走備用畫面
+    status.textContent = msg.fallback
+      ? '這張沒有拿到大螢幕的畫面，用的是備用舞台。要拍出場景，請先在投影電腦開好大螢幕（/screen/）再拍。'
+      : '';
+    status.hidden = !msg.fallback;
     err.hidden = true;
     $('#photo-img').src = msg.photoB64 || '';
     $('#photo-qr').src = msg.qrB64 || '';

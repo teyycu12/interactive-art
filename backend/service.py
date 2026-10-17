@@ -481,8 +481,11 @@ def compose():
             if isinstance(c, dict):
                 c["body_path"] = _asset_path(c.get("fullPng"))
 
+        field = payload.get("field") if isinstance(payload.get("field"), dict) else {}
+        fw, fh = field.get("width"), field.get("height")
         res = compose_group_photo(
             chars,
+            field=(fw, fh) if all(isinstance(v, (int, float)) and v > 0 for v in (fw, fh)) else None,
             photo_url_base=payload.get("photoUrlBase") or "",
             title=payload.get("title") or "PersonaFlow 集體記憶",
             backdrop=payload.get("backdrop"),
