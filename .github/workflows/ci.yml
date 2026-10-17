@@ -1,4 +1,4 @@
-name: PersonaFlow CI
+name: PixelAir CI
 
 on:
   push:
@@ -51,7 +51,7 @@ jobs:
     - name: Install Node dependencies
       run: npm ci
 
-    # PersonaFlow2 互動層：α 仲裁共治、任務、配對、問答、計分、社交圖譜，
+    # PixelAir 互動層：α 仲裁共治、任務、配對、問答、計分、社交圖譜，
     # 以及掃描生成角色的驗證邏輯。
     - name: Run interaction-layer unit tests
       run: npm test

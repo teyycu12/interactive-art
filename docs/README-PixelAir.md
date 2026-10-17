@@ -1,6 +1,6 @@
-# PersonaFlow（眾影鏈結）
+# PixelAir（眾影鏈結）
 
-實體活動場域的雙層半自主參與式互動系統。技術規格見 [TECH-PersonaFlow2.md](TECH-PersonaFlow2.md)。
+實體活動場域的雙層半自主參與式互動系統。技術規格見 [TECH-PixelAir.md](TECH-PixelAir.md)。
 
 ## 目前進度
 
@@ -136,7 +136,7 @@ JSON，那比沒有檔案更糟 —— 下次啟動載入失敗，而現場沒�
 環境變數 → 快照裡的舊密鑰 → 重新產生。要固定成自己指定的號碼：
 
 ```bash
-PERSONAFLOW_HOST_KEY=ABC123 npm start     # 6 碼，英數
+PIXELAIR_HOST_KEY=ABC123 npm start     # 6 碼，英數
 ```
 
 不指定時，只要 `data/state.json` 還在，重開後就會沿用上一次的密鑰 ——
@@ -146,8 +146,8 @@ PERSONAFLOW_HOST_KEY=ABC123 npm start     # 6 碼，英數
 > （拿得到這個檔案的人本來就拿得到整台伺服器），但別把它放進版本控制或雲端同步。
 > 換一場新活動要清空資料時，直接刪掉 `data/state.json` 即可。
 
-其他環境變數：`PERSONAFLOW_STATE_FILE` 指定快照路徑，
-`PERSONAFLOW_PERSIST=0` 完全關閉落地（測試用，現場請勿設定）。
+其他環境變數：`PIXELAIR_STATE_FILE` 指定快照路徑，
+`PIXELAIR_PERSIST=0` 完全關閉落地（測試用，現場請勿設定）。
 
 ## 積分與問答的三個關鍵決定
 

@@ -163,7 +163,7 @@ OpenRouter 對「輸出圖片」的請求要求**餘額至少 1 美元**，不�
 這些靠 `server/eventlog.js` 逐筆寫出的 JSONL：一行一筆、只附加不修改，
 當機也只少最後一行，Excel / Python / JASP 都能直接讀。
 
-**啟動時一定要帶場次名稱**：`PERSONAFLOW_SESSION=live-1019 bash start.sh`。
+**啟動時一定要帶場次名稱**：`PIXELAIR_SESSION=live-1019 bash start.sh`。
 沒帶就是 `dev`，正式場次的資料會跟工程師測試寫進同一個 `data/events/dev.jsonl`
 —— 而事後要從一份檔案裡挑出哪些是測試，幾乎不可能。檔名就是場次名稱，
 `live` 開頭的在 `session_start` 標為 `kind: "live"`，其餘（含彩排）一律 `test`。
@@ -202,5 +202,5 @@ OpenRouter 對「輸出圖片」的請求要求**餘額至少 1 美元**，不�
 - **不記 `INPUT_MOVE`**：30 人一小時是數十萬筆，操控時間由 `mode_change` 就算得出來。
 - **只存暱稱與 agentId，不存照片與重連憑證**（e2e 有檢查）。報告引用時以編號取代暱稱。
 - 寫入失敗只警告一次並停用，**不拋錯** —— 為了紀錄讓現場的伺服器當掉是本末倒置。
-- `PERSONAFLOW_PERSIST=0` 會一併關掉事件紀錄；e2e 用 `PERSONAFLOW_EVENTS_DIR` 寫到暫存目錄。
+- `PIXELAIR_PERSIST=0` 會一併關掉事件紀錄；e2e 用 `PIXELAIR_EVENTS_DIR` 寫到暫存目錄。
 

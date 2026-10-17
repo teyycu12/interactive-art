@@ -1,4 +1,4 @@
-"""Measured base style standard for the PersonaFlow brick species.
+"""Measured base style standard for the PixelAir brick species.
 
 Every number here was measured from ``docs/style_reference/base_character.png``
 rather than chosen by eye.  The reference render is 303x563 px of subject on a

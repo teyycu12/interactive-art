@@ -33,7 +33,7 @@ index 2c4a188..de62dff 100644
 @@ -160,6 +174,7 @@ def health_check():
  @socketio.on("connect")
  def handle_connect():
-     emit("server_message", {"message": "Connected to PersonaFlow backend."})
+     emit("server_message", {"message": "Connected to PixelAir backend."})
 +    log_event("connect", pid=request.sid)
      with _swarm_lock:
          chars = list(_swarm_chars.values())

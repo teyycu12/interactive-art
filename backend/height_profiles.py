@@ -1,4 +1,4 @@
-"""Calibrated visual height classes for a fixed PersonaFlow capture station."""
+"""Calibrated visual height classes for a fixed PixelAir capture station."""
 
 from __future__ import annotations
 

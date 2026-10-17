@@ -40,7 +40,9 @@ from PIL import Image
 
 from slicer import normalize, sample_fallback_colors, slice_parts
 
-FORMAT = "personaflow-character"
+FORMAT = "pixelair-character"
+# 改名前（PersonaFlow）匯出的角色檔仍可匯入
+LEGACY_FORMATS = ("personaflow-character",)
 FORMAT_VERSION = 1
 
 # 與 shared/avatars.js 的 TEXTURE_URL_RE 同一組字元集：資產目錄名是 uuid4().hex
@@ -173,8 +175,8 @@ def restore_bundle(bundle: Any, asset_root: str, *, overwrite: bool = False) -> 
     內容一律先以 Pillow 解開確認真的是圖 —— 角色檔可能來自別台電腦，
     不能讓它決定寫到哪裡、寫進什麼。
     """
-    if not isinstance(bundle, dict) or bundle.get("format") != FORMAT:
-        raise ExportError("not_a_character_file", "這不是 PersonaFlow 的角色檔")
+    if not isinstance(bundle, dict) or bundle.get("format") not in (FORMAT, *LEGACY_FORMATS):
+        raise ExportError("not_a_character_file", "這不是 PixelAir 的角色檔")
     if bundle.get("version") != FORMAT_VERSION:
         raise ExportError("unsupported_version", f"不支援的角色檔版本：{bundle.get('version')}")
 

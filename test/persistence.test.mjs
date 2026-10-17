@@ -20,7 +20,7 @@ import { Stage } from '../server/state.js';
 const A = 'usr_aaaa';
 const B = 'usr_bbbb';
 
-const TMP = path.join(os.tmpdir(), `personaflow-test-${process.pid}`);
+const TMP = path.join(os.tmpdir(), `pixelair-test-${process.pid}`);
 const fileFor = (name) => path.join(TMP, name);
 
 beforeEach(() => {

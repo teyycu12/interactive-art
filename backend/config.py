@@ -1,5 +1,5 @@
 """
-PersonaFlow 集中式環境設定模組。
+PixelAir 集中式環境設定模組。
 負責解析、驗證與型別轉換所有環境變數，提供單一型別安全的 Config 物件。
 """
 
@@ -51,7 +51,7 @@ def _get_str(key: str, default: str) -> str:
     return default if val is None or val.strip() == "" else val.strip()
 
 
-_DEV_SECRET = "personaflow-dev-secret"
+_DEV_SECRET = "pixelair-dev-secret"
 
 
 def _get_origins(key: str, default: str) -> Any:
@@ -75,7 +75,7 @@ class AppConfig:
     # 預設 False：展場長時間運行不應開 debug（會洩漏 traceback 且效能較差）
     DEBUG: bool = _get_bool("DEBUG", False)
     # 未設定時退回開發用預設值並在啟動時警告（見 config 結尾）
-    SECRET_KEY: str = os.environ.get("SECRET_KEY", "") or "personaflow-dev-secret"
+    SECRET_KEY: str = os.environ.get("SECRET_KEY", "") or "pixelair-dev-secret"
     # "*" 或逗號分隔的來源清單；展場 LAN 事前無法列舉賓客 IP，故預設 "*"
     CORS_ALLOWED_ORIGINS: Any = _get_origins("CORS_ALLOWED_ORIGINS", "*")
 

@@ -324,7 +324,10 @@ function paintRoomCore(c, zones) {
   // ── Side and bottom walls with timber caps; side doors lead to the garden and the terrace ──
   rect(120, 24, 2000, 22, ROOM.cap); rect(120, 44, 2000, 3, ROOM.capEdge);
   for (const x of [122, FR]) {
-    const d = DOORWAYS.find((o) => o.x - ROOM_PAD === x);
+    // DOORWAYS 的 y 是舞台座標，圖面要加 FLOOR_Y（舞台 y=0 在圖面 y=FLOOR_Y）；
+    // 沒加的話畫出來的門比牆的實際缺口高 270，角色會從畫著牆的地方穿出去
+    const door = DOORWAYS.find((o) => o.x - ROOM_PAD === x);
+    const d = door && { ...door, y: door.y + FLOOR_Y };
     const top = d ? d.y : FB + 36, bot = d ? d.y + d.h : FB + 36;
     const ex = x === 122 ? FX - 4 : FR;
     rect(x, 24, 38, top - 24, ROOM.cap); rect(ex, 46, 4, top - 46, ROOM.capEdge);

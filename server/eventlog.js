@@ -8,7 +8,7 @@
  * 格式是 JSONL：一行一筆，只附加不修改。伺服器中途當掉也只會少最後一行，
  * 而 Excel、Python、JASP 都能直接讀。
  *
- * 場次由啟動時的 PERSONAFLOW_SESSION 決定，檔名就是場次名稱
+ * 場次由啟動時的 PIXELAIR_SESSION 決定，檔名就是場次名稱
  * （data/events/live-1019.jsonl）。工程師測試與正式場次因此天生分在不同檔案，
  * 分析時不必再從一份檔案裡挑出哪些是測試。
  *
@@ -24,7 +24,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-/** 場次名稱只留檔名安全的字元，避免 PERSONAFLOW_SESSION=../x 寫到別處 */
+/** 場次名稱只留檔名安全的字元，避免 PIXELAIR_SESSION=../x 寫到別處 */
 export function sessionName(raw) {
   const s = String(raw ?? '').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
   return s || 'dev';

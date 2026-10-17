@@ -26,7 +26,7 @@ import {
 import { layoutNameplates } from '/shared/nameplateLayout.js';
 import { avatarImage } from '/shared/avatarSprite.js';
 import {
-  sceneBackdrop, ORIGIN_X, ORIGIN_Y, ROOM_W, ROOM_H, BODY_UNITS, OUTSIDE,
+  sceneBackdrop, scenePainter, ORIGIN_X, ORIGIN_Y, ROOM_W, ROOM_H, BODY_UNITS, OUTSIDE,
 } from './sceneBackdrop.js';
 import {
   MAX_SPEED, CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS, EMOTE_GLYPH, WALK_THRESHOLD,
@@ -66,6 +66,7 @@ export class AvatarRenderer {
     /** 名牌目前的位移，逐幀朝避讓結果內插（同大螢幕的 drawPlate） */
     this.plateOffset = new Map();
     this.sprite = avatar ? avatarImage(avatar) : null;
+    this.reducedMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)') ?? { matches: false };
 
     // 背景網格的累積位移。角色不動，世界動。
     this.scrollX = 0;
@@ -128,6 +129,7 @@ export class AvatarRenderer {
    */
   setTheme(themeId) {
     this.backdrop = sceneBackdrop(themeId);
+    this.props = scenePainter(themeId);
   }
 
   /**
@@ -506,6 +508,21 @@ export class AvatarRenderer {
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(this.backdrop, sx0, sy0, sx1 - sx0, sy1 - sy0,
         ox + sx0 * zoom, oy + sy0 * zoom, (sx1 - sx0) * zoom, (sy1 - sy0) * zoom);
+      ctx.restore();
+    }
+
+    // 道具逐幀畫：自己或鄰居走近時會動（植物晃、書櫃冒光），與大螢幕同一套繪圖與觸發距離
+    if (this.props) {
+      const now = performance.now();
+      const walkers = [...this.neighbors.values()];
+      if (this.selfPos && this.serverSelf?.mode !== 'STAGED') walkers.push({ id: 'self', x: cam.x, y: cam.y });
+      this.props.update(walkers, now);
+      ctx.save();
+      ctx.translate(ox, oy);
+      ctx.scale(zoom, zoom);
+      ctx.imageSmoothingEnabled = false;
+      this.props.draw(ctx, { x0: -ox / zoom, y0: -oy / zoom, x1: (w - ox) / zoom, y1: (h - oy) / zoom },
+        now, this.reducedMotion.matches);
       ctx.restore();
     }
 

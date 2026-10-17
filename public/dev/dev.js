@@ -20,6 +20,7 @@
  *   （與 scripts/bots.mjs 同一個理由）。
  */
 
+import '/shared/legacyStorage.js';   // 必須排第一個：先把改名前的舊鍵搬過來
 import { EV, EMOTE_GLYPH, ACTIONS } from '/shared/protocol.js';
 import { PROPS } from '/shared/scene.js';
 import { SELECTABLE_THEMES as THEMES, THEME_MAP, DEFAULT_THEME } from '/shared/themes.js';
@@ -28,7 +29,7 @@ import { propLabel } from '../screen/scenes/registry.js';
 const $ = (sel, root = document) => root.querySelector(sel);
 
 /** 與主辦端共用同一把密鑰，也共用同一個 sessionStorage 鍵 —— 開完主辦端就不必再輸一次 */
-const SS_KEY = 'personaflow.hostKey';
+const SS_KEY = 'pixelair.hostKey';
 
 /** 傀儡的顯示名稱。開發用，取好認的短名，與 scripts/bots.mjs 同一個用意。 */
 const NAMES = [

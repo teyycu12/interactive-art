@@ -5,6 +5,7 @@
  * 素材目錄與協定常數皆由 /shared/ 載入，與伺服器共用同一份定義。
  */
 
+import '/shared/legacyStorage.js';   // 必須排第一個：先把改名前的舊鍵搬過來
 import { scorePersona, PERSONA_RESULT_MAP } from '/shared/persona.js';
 import {
   HEADS, FACES, BODIES, SKIN_TONES, ACCENT_COLORS,
@@ -19,7 +20,6 @@ import {
 } from '/shared/capture-guidance.js';
 import { COLOR_FAMILY_MAP } from '/shared/colorFamily.js';
 import { WORDCLOUD } from '/shared/wordcloud.js';
-import { ZONE_MAP } from '/shared/scene.js';
 import { avatarImage, avatarPortrait } from '/shared/avatarSprite.js';
 import { makeKeepsake, saveKeepsake } from './keepsake.js';
 import { ChatLog } from './chatlog.js';
@@ -134,9 +134,9 @@ document.addEventListener('keydown', (e) => {
  * 另設開關並預設關閉腳步震動：走路時每秒約 2–3 次的持續震動
  * 對電池與體感疲勞都有實際代價，該由使用者決定要不要開。
  */
-const HAPTICS_KEY = 'personaflow.haptics';
+const HAPTICS_KEY = 'pixelair.haptics';
 /** 只提示一次就好，每次進場都閃會變成噪音 */
-const HAPTICS_HINT_KEY = 'personaflow.hapticsHint';
+const HAPTICS_HINT_KEY = 'pixelair.hapticsHint';
 const canVibrate = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
 let hapticsOn = false;
 try { hapticsOn = localStorage.getItem(HAPTICS_KEY) === 'on'; } catch { /* 隱私模式 */ }
@@ -165,10 +165,10 @@ document.addEventListener('visibilitychange', async () => {
 // 本地狀態
 // ─────────────────────────────────────────────────────────────
 const LS = {
-  userId: 'personaflow.userId',
-  rejoinToken: 'personaflow.rejoinToken',
-  name: 'personaflow.name',
-  avatar: 'personaflow.avatar',
+  userId: 'pixelair.userId',
+  rejoinToken: 'pixelair.rejoinToken',
+  name: 'pixelair.name',
+  avatar: 'pixelair.avatar',
 };
 
 let step = 1;
@@ -1413,9 +1413,6 @@ function connect() {
       // 個人視角座標（10Hz）。畫布可能還沒建立（剛連上、尚未進場），
       // 此時直接丟棄即可 —— 下一則 100ms 後就到。
       renderer?.applySync(msg);
-      // 分區以 CLIENT_SYNC 的狀態為準，而非只靠 ZONE_SELF 事件 ——
-      // 重連的人已經錯過了進場那一則事件，只有狀態拿得到
-      if (msg.self) renderZone(msg.self.zone);
       // α 是伺服器仲裁的真實結果，比本地計時器準確（見下方 #agency）
       serverAlpha = msg.self?.alpha ?? null;
       serverMode = msg.self?.mode ?? null;
@@ -1591,29 +1588,6 @@ function renderMission() {
   $('#pair-progress').textContent = single
     ? (allDone ? `你已經完成任務了（${fracOf(list[0])}），還可以繼續認識新的人` : `你的進度　${fracOf(list[0])}`)
     : list.map((x) => `${x.mission.title}　${fracOf(x)}`).join('\n');
-}
-
-// ── 分區 ──────────────────────────────────────────────────
-/** 目前顯示中的分區，避免每幀重寫 DOM */
-let shownZone;
-
-/**
- * 顯示所在分區。
- *
- * 分區原本只是地板色塊，走進去沒有任何回饋 —— 參與者不會知道
- * 「這裡跟別處不一樣」。這一行字是最低限度的提示。
- */
-function renderZone(zoneId) {
-  if (zoneId === shownZone) return;
-  shownZone = zoneId;
-  const el = $('#zone-chip');
-  if (!el) return;
-  const z = zoneId ? ZONE_MAP[zoneId] : null;
-  el.hidden = !z;
-  if (z) {
-    el.textContent = `📍 ${z.label}`;
-    el.style.setProperty('--zone', z.fill);
-  }
 }
 
 // ── 文字雲 ────────────────────────────────────────────────

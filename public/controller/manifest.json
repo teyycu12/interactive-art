@@ -1,7 +1,7 @@
 {
-  "name": "PersonaFlow Controller",
+  "name": "PixelAir Controller",
   "short_name": "Controller",
-  "description": "PersonaFlow Interactive Controller",
+  "description": "PixelAir Interactive Controller",
   "start_url": "/controller/",
   "display": "fullscreen",
   "background_color": "#FAF8F5",

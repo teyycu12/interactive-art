@@ -4,7 +4,7 @@
 > 動到相關程式碼之前先讀，多數條目都附了「不這樣做會怎樣」。
 
 ```
-/PersonaFlow
+/PixelAir
 ├── /backend
 │   ├── service.py                # ★ 角色資產生成 HTTP 服務（只綁 127.0.0.1:5055）
 │   ├── slicer.py                 # ★ 生成圖正規化 + 切成 head/torso/legs 三張貼圖
@@ -86,8 +86,8 @@
 │   ├── STYLE_BASE.md             # 基底風格標準與量測方法
 │   ├── STYLE_PROBE_FOLLOWUPS.md  # 已知但刻意延後的量測與管線細節
 │   ├── TECHNICAL_ARCHITECTURE.md # 技術架構文件
-│   ├── TECH-PersonaFlow2.md      # ★ 整合版互動層技術說明
-│   ├── README-PersonaFlow2.md    # ★ 整合版說明
+│   ├── TECH-PixelAir.md      # ★ 整合版互動層技術說明
+│   ├── README-PixelAir.md    # ★ 整合版說明
 │   ├── PRD.md                    # 產品需求與驗收定義（驗收條件仍寫在已退役模式上，待重寫）
 │   ├── TechStack.md              # 技術選型
 │   ├── /m3                       # M3 交接說明與效能報告

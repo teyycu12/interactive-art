@@ -1,6 +1,6 @@
 # 場景銜接約束（Scene Contract）
 
-> 對象：要替 PersonaFlow 互動層做**新場景**的專案。
+> 對象：要替 PixelAir 互動層做**新場景**的專案。
 > 參考實作：本專案的 `public/screen/screen.js` ＋ `public/screen/3d/RoomScene.js`。
 > 版本：2026-09-17，對應 `shared/protocol.js` 現行協定。
 

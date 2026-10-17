@@ -239,7 +239,7 @@ const markDirty = () => store.touch();
  * 重新讀一組新號碼再登入一次，而那通常正好是最忙亂的時刻。
  */
 function resolveHostKey() {
-  const fromEnv = process.env.PERSONAFLOW_HOST_KEY?.trim().toUpperCase();
+  const fromEnv = process.env.PIXELAIR_HOST_KEY?.trim().toUpperCase();
   if (fromEnv) {
     if (fromEnv.length === HOST_KEY_LENGTH) return fromEnv;
     console.warn(`[host] 環境變數指定的密鑰長度不是 ${HOST_KEY_LENGTH} 碼，已忽略`);
@@ -254,7 +254,7 @@ function resolveHostKey() {
 }
 
 const HOST_KEY = resolveHostKey();
-const HOST_KEY_SOURCE = process.env.PERSONAFLOW_HOST_KEY ? '環境變數'
+const HOST_KEY_SOURCE = process.env.PIXELAIR_HOST_KEY ? '環境變數'
   : (snapshot?.hostKey === HOST_KEY ? '沿用上次啟動' : '本次啟動產生');
 
 function keyMatches(input) {
@@ -2434,13 +2434,13 @@ function lanAddresses() {
 
 server.listen(PORT, '0.0.0.0', () => {
   const addrs = lanAddresses();
-  console.log('\n  PersonaFlow Gateway 已啟動\n');
+  console.log('\n  PixelAir Gateway 已啟動\n');
   console.log(`  大螢幕　  ${SCHEME}://localhost:${PORT}/screen/`);
   console.log(`  手機控制  ${SCHEME}://localhost:${PORT}/controller/`);
   console.log(`  主辦端　  ${SCHEME}://localhost:${PORT}/host/`);
   console.log(`\n  主辦端通行密鑰　${HOST_KEY}　（${HOST_KEY_SOURCE}）`);
   if (!PERSISTENCE.enabled) {
-    console.log('  ⚠ 已關閉狀態存檔（PERSONAFLOW_PERSIST=0），重開後資料不保留');
+    console.log('  ⚠ 已關閉狀態存檔（PIXELAIR_PERSIST=0），重開後資料不保留');
   } else if (snapshot) {
     console.log(`  已接續上次的活動資料　${scores.standings().length} 人有積分`
       + `　社交連結 ${graph.size} 條　問答 ${quiz.asked} 題`);

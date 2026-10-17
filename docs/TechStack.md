@@ -29,7 +29,7 @@
 
 ## 4. 檔案目錄結構建議
 ```text
-/PersonaFlow
+/PixelAir
 ├── /backend            # Python Flask server
 │   ├── app.py          # 核心邏輯
 │   ├── cv_module.py    # MediaPipe 特徵提取

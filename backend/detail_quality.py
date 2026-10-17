@@ -1,4 +1,4 @@
-"""Objective image-detail measurements for PersonaFlow A/B review.
+"""Objective image-detail measurements for PixelAir A/B review.
 
 These metrics do not decide whether a character resembles its source photo.
 They measure whether the delivered render retains crisp lines, local texture

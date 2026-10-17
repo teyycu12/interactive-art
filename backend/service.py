@@ -487,7 +487,7 @@ def compose():
             chars,
             field=(fw, fh) if all(isinstance(v, (int, float)) and v > 0 for v in (fw, fh)) else None,
             photo_url_base=payload.get("photoUrlBase") or "",
-            title=payload.get("title") or "PersonaFlow 集體記憶",
+            title=payload.get("title") or "PixelAir 集體記憶",
             backdrop=payload.get("backdrop"),
         )
         if not (isinstance(res, dict) and res.get("ok")):
@@ -523,7 +523,7 @@ def session_name() -> str:
     每次呼叫時才讀環境變數，不放進 AppConfig —— 那裡的欄位在 import 時就凍結了
     （見 docs/notes/SERVER-AND-TESTS.md）。
     """
-    raw = os.environ.get("PERSONAFLOW_SESSION", "")
+    raw = os.environ.get("PIXELAIR_SESSION", "")
     return re.sub(r"[^A-Za-z0-9_-]", "", raw.strip())[:64] or "dev"
 
 

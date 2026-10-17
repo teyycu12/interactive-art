@@ -1,4 +1,4 @@
-# PersonaFlow 開發／測試相依套件
+# PixelAir 開發／測試相依套件
 # 安裝：pip install -r requirements.txt -r requirements-dev.txt
 #
 # 執行測試：

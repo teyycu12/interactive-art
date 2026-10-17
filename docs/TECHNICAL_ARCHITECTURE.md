@@ -10,7 +10,7 @@
 - 改寫目的：定義系統模組邊界、資料流與模組間介面，作為分工開發與期末發表的技術基準文件
 - 適用範圍：專題組員、指導教授
 - 文件維護：每次架構決策變更後更新版本並記錄變更紀錄（第9節）
-- **v1.1 校正說明**：v1.0 有多處與目前 repo（PersonaFlow, master 分支）現況不符，主要是「以為還沒做」跟「以為技術棧是 Node.js」這兩類落差。本版依實際程式碼（`backend/app.py`、`cv_module.py`、`vlm_module.py`、`face_module.py`、`swarm_logic.py`、`frontend/sketch.js`、`themes/lego.js`）逐項核對修正，變更處見第9節。
+- **v1.1 校正說明**：v1.0 有多處與目前 repo（PixelAir, master 分支）現況不符，主要是「以為還沒做」跟「以為技術棧是 Node.js」這兩類落差。本版依實際程式碼（`backend/app.py`、`cv_module.py`、`vlm_module.py`、`face_module.py`、`swarm_logic.py`、`frontend/sketch.js`、`themes/lego.js`）逐項核對修正，變更處見第9節。
 
 ---
 
@@ -84,7 +84,7 @@ M1（特徵擷取）跟 M2（AI/CV 生成）在程式碼裡並非獨立服務，
 
 ### M5 Dashboard管理模組
 - **職責**：活動主辦端介面，在場角色數等、觸發合照、清除角色、系統健康呈現。
-- **現況**：v1.0寫「基本畫面已demo」**言過其實**。目前`sketch.js`裡唯一相關的東西，是CUSTOMIZE畫面左上角一行文字標籤`"PERSONAFLOW: DIGITAL TWIN DASHBOARD"`，純粹是UI標題文字，**不是**功能性的管理面板——沒有角色數統計、沒有觸發合照按鈕、沒有清除角色功能、沒有系統健康度顯示（延遲/失敗率）。
+- **現況**：v1.0寫「基本畫面已demo」**言過其實**。目前`sketch.js`裡唯一相關的東西，是CUSTOMIZE畫面左上角一行文字標籤`"PIXELAIR: DIGITAL TWIN DASHBOARD"`，純粹是UI標題文字，**不是**功能性的管理面板——沒有角色數統計、沒有觸發合照按鈕、沒有清除角色功能、沒有系統健康度顯示（延遲/失敗率）。
 - **狀態**：🔴 實質上尚未開工（僅有UI標題文字），優先級維持最低——現有功能夠用即可撐到期末，健康監控可不做。
 
 ### M6 群體記憶生成模組

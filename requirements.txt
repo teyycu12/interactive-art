@@ -1,4 +1,4 @@
-# PersonaFlow 後端相依套件
+# PixelAir 後端相依套件
 # 安裝：pip install -r requirements.txt
 #
 # 版本策略：全部套件都給上界，避免下一個 major 版本在沒人動程式碼的情況下

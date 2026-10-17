@@ -38,11 +38,11 @@ function check(label, ok, extra = '') {
 // ── 啟動伺服器 ────────────────────────────────────────────
 // 快照寫到暫存檔並在開始前刪掉，測試之間互不影響；
 // 但持久化本身保持開啟 —— 重開後能否接續正是要驗的事情之一。
-const STATE_FILE = path.join(os.tmpdir(), 'personaflow-e2e-state.json');
+const STATE_FILE = path.join(os.tmpdir(), 'pixelair-e2e-state.json');
 const KEY_PATTERN = /主辦端通行密鑰\s+([A-Z0-9]+)/;
 try { fs.rmSync(STATE_FILE, { force: true }); } catch { /* 略 */ }
 // 事件紀錄同理：寫到暫存目錄，不能落進專案的 data/events/ 混進真正的場次
-const EVENTS_DIR = path.join(os.tmpdir(), `personaflow-e2e-events-${process.pid}`);
+const EVENTS_DIR = path.join(os.tmpdir(), `pixelair-e2e-events-${process.pid}`);
 const EVENTS_FILE = path.join(EVENTS_DIR, 'e2e.jsonl');
 const readEvents = () => {
   try {
@@ -66,8 +66,8 @@ async function launch() {
     // VISION_PORT 指向一個沒人聽的 port：e2e 不能打到開發者本機正在跑的生成服務
     // （合照合成會上傳到公開圖床），而且結果不該取決於那個服務有沒有開
     env: {
-      ...process.env, PORT: String(PORT), PERSONAFLOW_STATE_FILE: STATE_FILE, VISION_PORT: '9',
-      PERSONAFLOW_SESSION: 'e2e', PERSONAFLOW_EVENTS_DIR: EVENTS_DIR,
+      ...process.env, PORT: String(PORT), PIXELAIR_STATE_FILE: STATE_FILE, VISION_PORT: '9',
+      PIXELAIR_SESSION: 'e2e', PIXELAIR_EVENTS_DIR: EVENTS_DIR,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

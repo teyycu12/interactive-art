@@ -21,7 +21,7 @@ def _get_logger() -> logging.Logger:
     with _lock:
         if _logger is not None:
             return _logger
-        logger = logging.getLogger("personaflow.metrics")
+        logger = logging.getLogger("pixelair.metrics")
         logger.setLevel(logging.INFO)
         logger.propagate = False
         if not logger.handlers:

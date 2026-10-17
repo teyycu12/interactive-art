@@ -1331,25 +1331,6 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .wc-msg { margin: 6px 0 0; font-size: 13px; font-weight: 700; color: var(--ink); }
 .wc-mine[hidden], .wc-msg[hidden] { display: none; }
 
-/* 所在分區。刻意做得低調 —— 它是常駐的環境資訊，
-   不是需要立刻反應的事件 */
-.zone-chip {
-  display: inline-block;
-  /* 直式的 #controller 是 flex 直排，子元素預設被拉滿整列寬 —— inline-block
-     在這裡不起作用，膠囊會變成一條橫跨畫面的長框。橫式由 justify-self 處理。 */
-  align-self: flex-start;
-  margin: 0 0 10px;
-  padding: 5px 12px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--zone, #888) 20%, transparent);
-  border: 1.5px solid var(--zone, #888);
-  font-size: 13px;
-  font-weight: 700;
-}
-/* 上面的 display 會蓋過 [hidden] 的 UA 樣式 —— 少了這條，
-   不在任何分區時狀態列下方會留一條空的框 */
-.zone-chip[hidden] { display: none; }
-
 /* ── 橫式：16:9 的畫框，所有控制都收在虛線框內 ─────────────
    畫面固定成 16:9、置中，外面留深色邊（與大螢幕像素場景的邊框同色）。
    搖桿區撐滿整個畫框、當作外框；其餘元件疊在它上面：
@@ -1387,12 +1368,10 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 
   #controller > .bar { grid-column: 1 / -1; grid-row: 1; margin-bottom: 6px; min-height: 0; }
   #controller > #mission-banner,
-  #controller > #zone-chip,
   #controller > #wordcloud-box,
   #controller > #links-strip,
   #controller > .agency-row { grid-column: 1; margin-bottom: 6px; }
   #controller > #mission-banner { grid-row: 2; }
-  #controller > #zone-chip { grid-row: 3; justify-self: start; }
   #controller > #wordcloud-box { grid-row: 4; }
   #controller > #links-strip { grid-row: 5; }
   #controller > .agency-row { grid-row: 6; }

@@ -167,7 +167,7 @@ def _build_html(m):
     )
 
 
-_TEMPLATE = r"""<title>PersonaFlow · M3 效能量測報告</title>
+_TEMPLATE = r"""<title>PixelAir · M3 效能量測報告</title>
 <style>
   :root {{
     --paper: #f4f6f7; --panel: #ffffff; --ink: #0e1520; --ink-soft: #4a5765;
@@ -275,7 +275,7 @@ _TEMPLATE = r"""<title>PersonaFlow · M3 效能量測報告</title>
 
 <div class="wrap">
   <header>
-    <p class="eyebrow">PersonaFlow · M3 通訊與集中式狀態管理</p>
+    <p class="eyebrow">PixelAir · M3 通訊與集中式狀態管理</p>
     <h1>效能量測報告</h1>
     <p class="sub">依技術架構文件第 6 節指標，從結構化事件 log 計算。</p>
     <p class="range">量測區間　{range_txt}　·　事件總數 {n_events}</p>
@@ -392,7 +392,7 @@ _TEMPLATE = r"""<title>PersonaFlow · M3 效能量測報告</title>
 
 
 def main():
-    ap = argparse.ArgumentParser(description="PersonaFlow 事件 log → HTML 效能報告")
+    ap = argparse.ArgumentParser(description="PixelAir 事件 log → HTML 效能報告")
     ap.add_argument("paths", nargs="*", help="log 檔路徑（省略則用今日檔）")
     ap.add_argument("--glob", action="store_true", help="合併 logs/ 下所有 events-*.jsonl")
     ap.add_argument("-o", "--out", default="report.html", help="輸出 HTML 路徑")

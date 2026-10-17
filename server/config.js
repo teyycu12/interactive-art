@@ -286,9 +286,9 @@ function readGenMaxConcurrent() {
 }
 
 export const PERSISTENCE = {
-  file: process.env.PERSONAFLOW_STATE_FILE || 'data/state.json',
+  file: process.env.PIXELAIR_STATE_FILE || 'data/state.json',
   // 關閉持久化（測試用）。現場請勿設定。
-  enabled: process.env.PERSONAFLOW_PERSIST !== '0',
+  enabled: process.env.PIXELAIR_PERSIST !== '0',
   autosaveMs: 5000,
   // 身分目錄的保留上限。超過時汰換最久沒出現的，避免檔案無限成長。
   directoryLimit: 500,
@@ -298,10 +298,10 @@ export const PERSISTENCE = {
 
 // 逐筆事件紀錄（見 eventlog.js）。場次名稱決定檔名，測試與正式場次自然分檔。
 export const EVENTS = {
-  session: process.env.PERSONAFLOW_SESSION || 'dev',
-  dir: process.env.PERSONAFLOW_EVENTS_DIR || 'data/events',
+  session: process.env.PIXELAIR_SESSION || 'dev',
+  dir: process.env.PIXELAIR_EVENTS_DIR || 'data/events',
   // 與快照共用同一個開關：測試關掉持久化時，也不該在 data/ 底下留紀錄
-  enabled: process.env.PERSONAFLOW_PERSIST !== '0',
+  enabled: process.env.PIXELAIR_PERSIST !== '0',
 };
 
 // 入站速率限制（參數取捨見 ratelimit.js）
@@ -329,4 +329,4 @@ export const RATE_LIMIT = {
  * 兩種取捨都成立，因此保留成參數而非寫死：現場若覺得畫面太靜，
  * 改回 'wander' 即可，不需要動任何程式邏輯。
  */
-export const IDLE_MOTION = process.env.PERSONAFLOW_IDLE_MOTION || 'still';
+export const IDLE_MOTION = process.env.PIXELAIR_IDLE_MOTION || 'still';

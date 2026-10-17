@@ -6,6 +6,7 @@
  * 光靠「網址沒人知道」保護不了任何東西。
  */
 
+import '/shared/legacyStorage.js';   // 必須排第一個：先把改名前的舊鍵搬過來
 import {
   EV, MISSION_TYPES, MISSION_DURATIONS, QUIZ, QUIZ_CHOICES, QUIZ_PHASE, EVENT_INFO,
 } from '/shared/protocol.js';
@@ -19,7 +20,7 @@ import { SCORING_FIELDS, SCORING_MAX } from '/shared/scoring.js';
 import { recipesForTheme } from '/shared/recipes.js';
 
 const $ = (s) => document.querySelector(s);
-const SS_KEY = 'personaflow.hostKey';
+const SS_KEY = 'pixelair.hostKey';
 
 let ws = null;
 let authed = false;
@@ -234,7 +235,7 @@ function renderPhotoState(msg) {
     $('#photo-qr').src = msg.qrB64 || '';
     const dl = $('#photo-download');
     dl.href = msg.photoB64 || '#';
-    dl.download = `${msg.photoId || 'personaflow'}.png`;
+    dl.download = `${msg.photoId || 'pixelair'}.png`;
     result.hidden = false;
     return;
   }
@@ -401,7 +402,7 @@ function renderEvent(info) {
   const first = eventInfo === undefined;
   eventInfo = info;
   $('#event-title').textContent = info?.name ?? '主辦端控制台';
-  document.title = info?.name ? `${info.name}｜主辦端` : 'PersonaFlow 主辦端';
+  document.title = info?.name ? `${info.name}｜主辦端` : 'PixelAir 主辦端';
   // 斷線重連時設定頁可能已經開著、名稱打到一半 —— 不要把它清掉重來
   if (!info) { if ($('#setup').hidden) openSetup(false); return; }
   // 剛在設定頁送出 → 進控制台的「節目單」分頁（活動編排：套範本、排流程）。
@@ -580,7 +581,7 @@ function receiveScreenShot(msg) {
   }
   const stamp = new Date().toTimeString().slice(0, 8).replaceAll(':', '');
   const a = document.createElement('a');
-  a.download = `${eventInfo?.name ?? 'personaflow'}-畫面-${stamp}.png`;
+  a.download = `${eventInfo?.name ?? 'pixelair'}-畫面-${stamp}.png`;
   a.href = msg.image;
   a.click();
   screenStatus('畫面已下載');
@@ -1385,7 +1386,7 @@ $('#btn-history-refresh').addEventListener('click', loadHistory);
 // ─────────────────────────────────────────────────────────────
 // 節目單放第一個、也是預設分頁：活動進行中主持人主要看這一頁（2026-10-17）
 const TABS = ['plan', 'play', 'people', 'system'];
-const TAB_KEY = 'personaflow.hostTab';
+const TAB_KEY = 'pixelair.hostTab';
 let activeTab = 'plan';
 
 function selectTab(id, focus = false) {
@@ -1467,7 +1468,7 @@ for (const sel of Object.values(LIVE_VIEW)) {
 // ─────────────────────────────────────────────────────────────
 // 存在這台電腦的瀏覽器裡：原本只在記憶體，主控台一重新整理整串就沒了。
 // 超過 12 小時的丟掉（隔天的活動不該看到昨天的動態）。
-const FEED_KEY = 'personaflow.feed';
+const FEED_KEY = 'pixelair.feed';
 const FEED_MAX = 60;
 const FEED_TTL_MS = 12 * 60 * 60 * 1000;
 /** 重連時伺服器會補送進行中的題目等狀態，同一句話在這段時間內只記一次 */
@@ -1513,7 +1514,7 @@ else pushFeed('等待現場活動…', 'ev-empty');
 // ─────────────────────────────────────────────────────────────
 // 即時問答
 // ─────────────────────────────────────────────────────────────
-const BANK_KEY = 'personaflow.quizBank';
+const BANK_KEY = 'pixelair.quizBank';
 
 /** @type {object|null} 目前的題目（伺服器視圖，不含正解） */
 let quiz = null;
@@ -1658,7 +1659,7 @@ function startQuiz(draft) {
 // ── 連續問答：題庫一次跑完 ────────────────────────────────
 // 進度存在這台電腦（localStorage）：主控台中途重整，回來仍按得到「下一題」。
 // 伺服器只知道「現在這一題」，題目順序是主辦端的事 —— 跟節目單同一個做法。
-const RUN_KEY = 'personaflow.quizRun';
+const RUN_KEY = 'pixelair.quizRun';
 /** @type {{items: object[], index: number}|null} */
 let quizRun = null;
 try { quizRun = JSON.parse(localStorage.getItem(RUN_KEY) ?? 'null'); } catch { quizRun = null; }
@@ -2010,7 +2011,7 @@ renderBank();
 // 現場按「下一項」就是把那則訊息送出去，與直接按該玩法的按鈕完全相同。
 // 存在這台電腦的瀏覽器裡（同題庫），伺服器重開也不會掉。
 // ─────────────────────────────────────────────────────────────
-const RS_KEY = 'personaflow.runSheet';
+const RS_KEY = 'pixelair.runSheet';
 const RS_KIND = {
   mission: '任務', wordcloud: '文字雲',
   quiz: '問答', photo: '合照', theme: '場景', bingo: '賓果',
@@ -2236,12 +2237,12 @@ function renderReport(format, report) {
   const two = (n) => String(n).padStart(2, '0');
   const stamp = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
   if (format === 'activities') {
-    downloadCsv(`personaflow-活動紀錄-${stamp}.csv`, [
+    downloadCsv(`pixelair-活動紀錄-${stamp}.csv`, [
       ['類型', '內容', '開始', '結束', '參與人數', '結果'],
       ...report.activities.map((a) => [a.kind, a.title, fmtTime(a.startedAt), fmtTime(a.endedAt), a.participants, a.result]),
     ]);
   } else {
-    downloadCsv(`personaflow-參與者-${stamp}.csv`, [
+    downloadCsv(`pixelair-參與者-${stamp}.csv`, [
       ['名稱', '目前在場', '積分', '社交連結', '任務完成次數', '問答作答', '問答答對', '問卷標籤'],
       ...report.people.map((p) => [
         p.name || '（已離場）', p.present ? '是' : '否', p.score, p.connections,
@@ -2280,7 +2281,7 @@ function initPreview() {
 }
 
 // 投影模式已移除（2026-10-17）：清掉舊版留下的開關，免得哪天又被讀到
-try { localStorage.removeItem('personaflow.projector'); } catch { /* 略 */ }
+try { localStorage.removeItem('pixelair.projector'); } catch { /* 略 */ }
 
 // ─────────────────────────────────────────────────────────────
 // 現在進行中（節目單頁）

@@ -1,4 +1,4 @@
-# PersonaFlow 基底風格標準
+# PixelAir 基底風格標準
 
 參考檔案：[`docs/style_reference/base_character.png`](./style_reference/base_character.png)
 機器可讀版本：[`backend/style_base.py`](../backend/style_base.py)

@@ -56,7 +56,7 @@ else
   # openssl 因此失敗；錯誤又被 2>/dev/null 吞掉，看起來像腳本無故中止。
   MSYS2_ARG_CONV_EXCL='/CN=' openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
     -keyout "$CERT_DIR/key.pem" -out "$CERT_DIR/cert.pem" \
-    -subj "/CN=PersonaFlow" \
+    -subj "/CN=PixelAir" \
     -addext "subjectAltName=$SAN" 2>/dev/null
 
   echo "✅ 憑證已產生於 ${CERT_DIR}（自簽，手機首次連線需手動略過警告）"

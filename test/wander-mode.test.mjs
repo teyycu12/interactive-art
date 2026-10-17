@@ -1,7 +1,7 @@
 /**
  * 湧現漫遊態（IDLE_MOTION === 'wander'）的群體動力學測試
  *
- * ⚠ 本檔必須在 PERSONAFLOW_IDLE_MOTION=wander 之下執行，見 package.json 的
+ * ⚠ 本檔必須在 PIXELAIR_IDLE_MOTION=wander 之下執行，見 package.json 的
  *   test:wander。IDLE_MOTION 於模組載入時讀取，同一個行程內無法中途切換，
  *   因此這些測試不能與預設（'still'）的測試混在同一次 node --test 執行。
  *
@@ -47,7 +47,7 @@ function run(agents, { steps, dt = 0.033, graph = null }) {
 // IDLE_MOTION 於模組載入時定案，同一行程無法中途切換，因此預設（'still'）
 // 那一輪跑到本檔時整組跳過，改由 npm run test:wander 以正確的環境變數再跑一次。
 // 用 skip 而非讓它失敗，npm test 才能一次跑完兩種模式。
-describe("湧現漫遊態（IDLE_MOTION='wander'）", { skip: IDLE_MOTION !== 'wander' && '需 PERSONAFLOW_IDLE_MOTION=wander（見 npm run test:wander）' }, () => {
+describe("湧現漫遊態（IDLE_MOTION='wander'）", { skip: IDLE_MOTION !== 'wander' && '需 PIXELAIR_IDLE_MOTION=wander（見 npm run test:wander）' }, () => {
 
   test('角色會被推離道具，不會停在道具內部', () => {
     const stage = new Stage();

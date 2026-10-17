@@ -1,4 +1,4 @@
-# PersonaFlow · 數位轉譯角色空間互動系統
+# PixelAir · 數位轉譯角色空間互動系統
 
 將實體穿著透過視覺識別技術數位化，轉譯為樂高風格插畫角色，並透過群體演算法在公共空間中生成集體共創視覺圖。
 
@@ -6,8 +6,8 @@
 
 ## 📌 整合現況
 
-本專案已與 **PersonaFlow2**（Node.js 互動層）整合為單一展場作品。
-依 v4.0 計畫書決議：PF2 為主幹，本專案的 CV/VLM/生圖管線退為**角色資產生成服務**。
+本專案已與 **PixelAir**（Node.js 互動層）整合為單一展場作品。
+依 v4.0 計畫書決議：PixelAir 為主幹，本專案的 CV/VLM/生圖管線退為**角色資產生成服務**。
 
 | | 位置 |
 |---|---|
@@ -360,7 +360,7 @@ SQLite 每次 attempt 可記錄：
 ## 目錄結構
 
 ```text
-PersonaFlow/
+PixelAir/
 ├── backend/
 │   ├── service.py              # 角色資產生成 HTTP 服務（只綁 127.0.0.1:5055）
 │   ├── slicer.py               # 生成圖正規化 + 切成 head/torso/legs 三張貼圖
@@ -406,8 +406,8 @@ PersonaFlow/
 │   ├── TECHNICAL_ARCHITECTURE.md
 │   ├── PRD.md                  # 產品需求與驗收定義
 │   ├── TechStack.md            # 技術選型
-│   ├── README-PersonaFlow2.md  # 互動層說明
-│   ├── TECH-PersonaFlow2.md    # 互動層技術說明
+│   ├── README-PixelAir.md  # 互動層說明
+│   ├── TECH-PixelAir.md    # 互動層技術說明
 │   ├── m3/                     # M3 交接文件與效能報告
 │   ├── notes/                  # 各主題的踩坑筆記（由 CLAUDE.md 拆出）
 │   └── style_reference/        # 風格參考圖集（含圖檔，來源與授權見 PROVENANCE.md）

@@ -142,7 +142,7 @@ WebSocket 生命週期與 30Hz 主迴圈。靜態服務與代理那 540 行與�
 `IDLE_MOTION` 控制，可用環境變數覆寫：
 
 ```bash
-PERSONAFLOW_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
+PIXELAIR_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 ```
 
 | 值 | 行為 |

@@ -1,7 +1,7 @@
 {
-  "name": "personaflow",
+  "name": "pixelair",
   "version": "2.0.0",
-  "description": "PersonaFlow（眾影鏈結）— 實體活動場域的雙層半自主參與式互動系統",
+  "description": "PixelAir（眾影鏈結）— 實體活動場域的雙層半自主參與式互動系統",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "dev": "node --watch server/index.js",
     "test": "npm run test:default && npm run test:wander",
     "test:default": "node --import ./test/helpers/shared-path-hook-register.mjs --test test/",
-    "test:wander": "PERSONAFLOW_IDLE_MOTION=wander node --import ./test/helpers/shared-path-hook-register.mjs --test test/wander-mode.test.mjs",
+    "test:wander": "PIXELAIR_IDLE_MOTION=wander node --import ./test/helpers/shared-path-hook-register.mjs --test test/wander-mode.test.mjs",
     "test:e2e": "node scripts/e2e.mjs",
     "preview:scene": "node scripts/scene-preview.mjs",
     "bots": "node scripts/bots.mjs"

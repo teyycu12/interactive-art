@@ -308,7 +308,7 @@ def _create_qr_image(url: str, size: int = 160) -> Image.Image:
     return badge
 
 
-def _upload_imgbb(image_bytes: bytes, name: str = "personaflow") -> Optional[str]:
+def _upload_imgbb(image_bytes: bytes, name: str = "pixelair") -> Optional[str]:
     """上傳至 ImgBB（免費圖床）。需要 IMGBB_API_KEY 環境變數。"""
     api_key = os.environ.get("IMGBB_API_KEY", "").strip()
     if not api_key or _requests is None:
@@ -334,7 +334,7 @@ def _upload_imgbb(image_bytes: bytes, name: str = "personaflow") -> Optional[str
     return None
 
 
-def _upload_imgur(image_bytes: bytes, title: str = "PersonaFlow") -> Optional[str]:
+def _upload_imgur(image_bytes: bytes, title: str = "PixelAir") -> Optional[str]:
     """上傳至 Imgur（匿名）。需要 IMGUR_CLIENT_ID 環境變數。"""
     client_id = os.environ.get("IMGUR_CLIENT_ID", "").strip()
     if not client_id or _requests is None:
@@ -361,14 +361,14 @@ def _upload_imgur(image_bytes: bytes, title: str = "PersonaFlow") -> Optional[st
     return None
 
 
-def upload_photo(image_bytes: bytes, photo_id: str = "personaflow") -> Optional[str]:
+def upload_photo(image_bytes: bytes, photo_id: str = "pixelair") -> Optional[str]:
     """
     嘗試上傳合照到雲端圖床，回傳公開 URL。
     優先順序：ImgBB → Imgur。全部失敗則回傳 None（fallback 到 local URL）。
     """
     return (
         _upload_imgbb(image_bytes, name=photo_id)
-        or _upload_imgur(image_bytes, title=f"PersonaFlow {photo_id}")
+        or _upload_imgur(image_bytes, title=f"PixelAir {photo_id}")
     )
 
 
@@ -521,7 +521,7 @@ def compose_group_photo(
     *,
     width: int = 1920,
     height: int = 1080,
-    title: str = "PersonaFlow · 集體記憶紀念大合照",
+    title: str = "PixelAir · 集體記憶紀念大合照",
     photo_url_base: str = "http://127.0.0.1:5001/photos",
     backdrop: Optional[str] = None,
     field: Optional[Tuple[float, float]] = None,

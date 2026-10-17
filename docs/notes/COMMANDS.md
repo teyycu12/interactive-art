@@ -17,8 +17,8 @@ bash start.sh                      # 生成服務 :5055 + 互動層 :3000
                                    # 沒有憑證則以 HTTP 啟動並說明代價
 
 # 正式場次：一定要帶場次名稱，事件紀錄才不會混進工程師測試（見 FIELD-OPS「事件紀錄」）
-PERSONAFLOW_SESSION=live-1019 bash start.sh    # → data/events/live-1019.jsonl
-PERSONAFLOW_SESSION=rehearsal-1017 bash start.sh   # 彩排：非 live 開頭一律標為 test
+PIXELAIR_SESSION=live-1019 bash start.sh    # → data/events/live-1019.jsonl
+PIXELAIR_SESSION=rehearsal-1017 bash start.sh   # 彩排：非 live 開頭一律標為 test
 
 # 或分別啟動（除錯時比較好看 log）
 npm start                          # 互動層，印出大螢幕/手機/主辦端三個網址
@@ -51,7 +51,7 @@ python scripts/import_character.py character-xxxxxxxx.persona.json   # 已存在
 
 # 測試
 npm test                           # Node 單元測試（370 + wander 模式 5）
-npm run test:wander                # 只跑漫遊模式那一組（PERSONAFLOW_IDLE_MOTION=wander）
+npm run test:wander                # 只跑漫遊模式那一組（PIXELAIR_IDLE_MOTION=wander）
 npm run test:e2e                   # 端對端，會自行啟動伺服器（147）
 pytest backend/                    # Python（423）
 

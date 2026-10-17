@@ -60,7 +60,7 @@ backend/test-results.xml
 htmlcov/
 
 
-# ── PersonaFlow2（Node 互動層）─────────────────────────────
+# ── PixelAir（Node 互動層）─────────────────────────────
 node_modules/
 
 # 活動資料快照。內含重連憑證與主辦端密鑰的明文，不進版本控制。

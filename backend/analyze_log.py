@@ -80,7 +80,7 @@ def analyze(events):
     peak_join = max((e.get("swarm_size", 0) for e in joins), default=0)
     encounters = [e for e in events if e.get("event") == "character_encounter"]
 
-    print("\n================ PersonaFlow M3 效能量測報告 ================")
+    print("\n================ PixelAir M3 效能量測報告 ================")
     print(f"  事件總數                    : {len(events)}")
     if events:
         print(f"  時間範圍                    : {events[0].get('ts','?')}  →  {events[-1].get('ts','?')}")
@@ -113,7 +113,7 @@ def analyze(events):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="PersonaFlow 事件 log 分析")
+    ap = argparse.ArgumentParser(description="PixelAir 事件 log 分析")
     ap.add_argument("paths", nargs="*", help="log 檔路徑（省略則用今日檔）")
     ap.add_argument("--glob", action="store_true", help="合併分析 logs/ 下所有 events-*.jsonl")
     args = ap.parse_args()

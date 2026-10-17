@@ -84,7 +84,7 @@ function renderEventCard() {
   sub.textContent = subtitle;
   sub.hidden = !subtitle;
   eventCard.hidden = !title;
-  document.title = eventInfo?.name ? `${eventInfo.name}｜PersonaFlow 大螢幕` : 'PersonaFlow 大螢幕';
+  document.title = eventInfo?.name ? `${eventInfo.name}｜PixelAir 大螢幕` : 'PixelAir 大螢幕';
 }
 
 // ─────────────────────────────────────────────────────────────

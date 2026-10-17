@@ -1,8 +1,8 @@
 # 數位轉譯角色空間互動系統 - Claude Code 專案說明
 
 將實體穿著透過視覺識別數位化、轉譯為插畫角色，在公共空間中以群體演算法生成
-集體共創視覺圖。已與 PersonaFlow2（Node.js 互動層）整合為單一展場作品。
-依 v4.0 計畫書：**PF2 為主幹**，CV/VLM/生圖管線退為角色資產生成服務。
+集體共創視覺圖。已與 PixelAir（Node.js 互動層）整合為單一展場作品。
+依 v4.0 計畫書：**PixelAir 為主幹**，CV/VLM/生圖管線退為角色資產生成服務。
 
 **校內實測期限：2026/9/30**
 
@@ -34,7 +34,7 @@
 ```bash
 npm install && pip install -r requirements.txt requirements-dev.txt
 bash start.sh          # 生成服務 :5055 + 互動層 :3000（偵測到 certs/ 自動走 HTTPS）
-npm test               # Node 628      npm run test:e2e   # 端對端 259
+npm test               # Node 637      npm run test:e2e   # 端對端 259
 pytest backend/        # Python 524
 ```
 

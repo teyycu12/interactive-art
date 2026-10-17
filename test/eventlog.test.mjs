@@ -15,7 +15,7 @@ import path from 'node:path';
 
 import { EventLog, sessionName, sessionKind, generationIdOf } from '../server/eventlog.js';
 
-const TMP = path.join(os.tmpdir(), `personaflow-eventlog-${process.pid}`);
+const TMP = path.join(os.tmpdir(), `pixelair-eventlog-${process.pid}`);
 const read = (file) => fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
 
 beforeEach(() => {
