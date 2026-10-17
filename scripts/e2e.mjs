@@ -1301,6 +1301,19 @@ check('新任務已生效', hostStates.at(-1)?.missions?.[0]?.target === 2, `tar
   check('拍大合照時生成服務沒開，主辦端收到失敗而不是伺服器當掉',
     final?.phase === 'ERROR', JSON.stringify(photoStates.map((x) => x.phase)));
   check('拍完大合照伺服器仍存活', (await httpStatus('/screen/')) === 200);
+  check('預設的合照是原地拍', photoStates.find((x) => x.phase === 'STAGING')?.arrange === 'stay');
+
+  // 依互動排位：主辦端選了才換站位，流程其餘不變
+  photoStates.length = 0;
+  host.send(JSON.stringify({ type: 'HOST_TAKE_PHOTO', arrange: 'affinity' }));
+  const deadline2 = Date.now() + 25000;
+  while (Date.now() < deadline2 && !photoStates.some((x) => x.phase === 'DONE' || x.phase === 'ERROR')) {
+    await sleep(200);
+  }
+  check('選「依互動排位」時伺服器照著排', photoStates.find((x) => x.phase === 'STAGING')?.arrange === 'affinity',
+    JSON.stringify(photoStates.map((x) => [x.phase, x.arrange])));
+  check('依互動排位的合照同樣會結束（不卡在定位）',
+    photoStates.some((x) => x.phase === 'ERROR' || x.phase === 'DONE'));
 }
 
 amy.ws.close();

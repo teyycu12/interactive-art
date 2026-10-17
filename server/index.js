@@ -47,7 +47,7 @@ import { Greetings } from './greetings.js';
 import { BingoRound, BINGO_ERRORS, STRANGER } from './bingo.js';
 import { TopicTables } from './topics.js';
 import { TOPIC_QUESTIONS, TOPIC_TABLES } from '../shared/topics.js';
-import { PROPS } from '../shared/scene.js';
+import { PROPS, OBSTACLES, obstacleDistance } from '../shared/scene.js';
 import { QuizSession } from './quiz.js';
 import { TraitStore } from './traits.js';
 import { WordCloudSession } from './wordcloud.js';
@@ -60,6 +60,7 @@ import { ScoreBoard } from './scores.js';
 import { SnapshotStore, Directory } from './persistence.js';
 import { createHttpLayer } from './httplayer.js';
 import { buildReport } from './report.js';
+import { affinityFrom, arrangeByAffinity } from './photoLayout.js';
 import { isBlockedName } from './nameFilter.js';
 import {
   defaultBingoFacts, validateBingoFacts, BINGO_FACTS_ASK, BINGO_ASK_MS,
@@ -1844,7 +1845,7 @@ function handleHostMessage(ws, msg) {
     case EV.HOST_TAKE_PHOTO:
       // 刻意不 await：合照要等角色就定位，await 會讓這條 WebSocket 的
       // 訊息處理停擺數秒，期間主辦端的其他操作全部沒有回應。
-      takeGroupPhoto(ws);
+      takeGroupPhoto(ws, { arrange: msg.arrange });
       break;
 
     case EV.HOST_REVEAL_QUIZ:
@@ -2461,9 +2462,12 @@ server.listen(PORT, '0.0.0.0', () => {
 // 流程：鎖定場域把角色定住並全部面向鏡頭 → 輪詢到位 → 帶著場上座標
 // 呼叫生成服務合成 → 解除鎖定。
 //
-// 排版採角色的實際座標而非重排隊形：這件作品要記錄的是集體共創的
+// 預設採角色的實際座標而非重排隊形：這件作品要記錄的是集體共創的
 // 當下樣貌，誰跟誰聚在一起正是重點，排整齊會把那個訊息抹掉。
-// 因此 lockStage() 這裡的用途是「原地定住並轉向鏡頭」，不是排隊形。
+// 因此預設的 lockStage() 用途是「原地定住並轉向鏡頭」，不是排隊形。
+//
+// 主辦端可以改選「依互動排位」（arrange: 'affinity'，server/photoLayout.js）：
+// 排成一個面向鏡頭的隊形，今天互動越多的人站得越近。兩種各有用處，所以是選項。
 const PHOTO_TIMEOUT_MS = 60000;   // 合成含外部圖床上傳，比生成寬鬆
 const PHOTO_SETTLE_MS = 12000;    // 等到位的上限；逾時就照現況拍，不卡住現場
 const PHOTO_POLL_MS = 200;
@@ -2588,7 +2592,20 @@ const requestCompose = (characters, backdrop) => new Promise((resolve) => {
   up.end(body);
 });
 
-const takeGroupPhoto = async (ws) => {
+/** 合照的站位方式。不認得的值一律當原地拍：預設行為不該因為一個打錯的參數而改變 */
+const PHOTO_ARRANGE = new Set(['stay', 'affinity']);
+
+/** 依互動排位：誰該站到哪裡（面向鏡頭） */
+function affinityAssignments(agents) {
+  // 封鎖雙向濾掉（同紀念卡）：封鎖過的兩人不能因為之前互動過就被排在隔壁
+  const hidden = (a) => (b) => messages.isBlocked(a, b) || messages.isBlocked(b, a);
+  const strength = affinityFrom((id) => encounters.peersOf(id, { hidden: hidden(id) }));
+  const spots = arrangeByAffinity(agents, strength, { stage: STAGE, obstacles: OBSTACLES, obstacleDistance });
+  return new Map([...spots].map(([id, p]) => [id, { ...p, heading: FACING_CAMERA }]));
+}
+
+const takeGroupPhoto = async (ws, { arrange = 'stay' } = {}) => {
+  if (!PHOTO_ARRANGE.has(arrange)) arrange = 'stay';
   // 合成期間場域是鎖住的，重入會讓第二次的 unlockStage 提前解鎖第一次
   if (photoInFlight) {
     send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error: '合照進行中' });
@@ -2601,14 +2618,14 @@ const takeGroupPhoto = async (ws) => {
   }
   photoInFlight = true;
   try {
-    // 原地定住並全部轉向鏡頭
-    const assignments = new Map(
-      agents.map((a) => [a.id, { x: a.x, y: a.y, heading: FACING_CAMERA }]),
-    );
+    // 原地定住並全部轉向鏡頭；依互動排位時改走到隊形裡的位置
+    const assignments = arrange === 'affinity'
+      ? affinityAssignments(agents)
+      : new Map(agents.map((a) => [a.id, { x: a.x, y: a.y, heading: FACING_CAMERA }]));
     const n = stage.lockStage(assignments);
-    events.log('photo_start', { count: n });
-    send(ws, EV.HOST_PHOTO_STATE, { phase: 'STAGING', count: n });
-    console.log(`[photo] 定位 ${n} 位角色…`);
+    events.log('photo_start', { count: n, arrange });
+    send(ws, EV.HOST_PHOTO_STATE, { phase: 'STAGING', count: n, arrange });
+    console.log(`[photo] ${arrange === 'affinity' ? '依互動排位' : '原地定位'} ${n} 位角色…`);
 
     // 輪詢到位而非固定秒數等待：移動時間取決於角色原本散得多開。
     // 但仍設上限 —— 現場不能因為某個角色卡住就永遠拍不成。

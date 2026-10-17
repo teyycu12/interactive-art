@@ -210,7 +210,9 @@ function handle(msg, key) {
 
 // ── 大合照 ───────────────────────────────────────────────────
 const PHOTO_PHASES = {
-  STAGING: (m) => `正在把 ${m.count ?? 0} 位角色帶到定位…`,
+  STAGING: (m) => (m.arrange === 'affinity'
+    ? `正在依互動把 ${m.count ?? 0} 位角色排進隊形…`
+    : `正在把 ${m.count ?? 0} 位角色帶到定位…`),
   COMPOSING: () => '角色已就位，合成中…',
 };
 
@@ -247,9 +249,19 @@ function renderPhotoState(msg) {
   status.hidden = false;
 }
 
+// 站位選擇記在這台電腦上：主持人通常整場都用同一種，重新整理不該被改回預設
+const PHOTO_ARRANGE_KEY = 'pf-photo-arrange';
+try {
+  const saved = localStorage.getItem(PHOTO_ARRANGE_KEY);
+  if (saved && [...$('#photo-arrange').options].some((o) => o.value === saved)) $('#photo-arrange').value = saved;
+} catch { /* 私密視窗等情況讀不到，用預設的原地拍 */ }
+$('#photo-arrange').addEventListener('change', () => {
+  try { localStorage.setItem(PHOTO_ARRANGE_KEY, $('#photo-arrange').value); } catch { /* 同上 */ }
+});
+
 $('#btn-photo').addEventListener('click', () => {
   $('#btn-photo').disabled = true;
-  ws?.send(JSON.stringify({ type: EV.HOST_TAKE_PHOTO }));
+  ws?.send(JSON.stringify({ type: EV.HOST_TAKE_PHOTO, arrange: $('#photo-arrange').value }));
 });
 
 const setConn = (text, warn) => {

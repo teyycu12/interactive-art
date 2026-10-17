@@ -224,6 +224,22 @@ export function stepAgent(agent, agents, dt, now, affinity = null) {
     const k = agent.lockAlpha;
     vx = (1 - k) * vx + k * arrive.vx;
     vy = (1 - k) * vy + k * arrive.vy;
+    // 合照「依互動排位」要走一段路到隊形裡，直線路徑可能穿過沙發。
+    // 剛體修正會擋住、但不會繞，角色會卡在道具前面直到合照逾時。
+    // 沿用上面的切向繞行，同樣只改方向、不改速率。
+    //
+    // ⚠ 只在離目標還遠時繞：目標本身貼著道具時，最後一段若還在繞，
+    //   角色會在目標旁邊打轉、永遠到不了。原地拍（目標就是現在的位置）因此完全不受影響。
+    const toTarget = Math.hypot(agent.targetX - agent.x, agent.targetY - agent.y);
+    if (!arrive.arrived && toTarget > ARRIVE.slowRadius && (vx !== 0 || vy !== 0)) {
+      const [avoidX, avoidY] = obstacleAvoidance(agent, vx, vy);
+      const before = Math.hypot(vx, vy);
+      const after = Math.hypot(vx + avoidX, vy + avoidY);
+      if ((avoidX !== 0 || avoidY !== 0) && after > 0) {
+        vx = ((vx + avoidX) / after) * before;
+        vy = ((vy + avoidY) / after) * before;
+      }
+    }
   } else if (agent.lockAlpha > 0) {
     // 解除鎖定同樣是漸進的，角色會自然地重新加入人群
     agent.lockAlpha = Math.max(0, agent.lockAlpha - (dt * 1000) / ARRIVE.takeoverMs);

@@ -704,6 +704,8 @@ td.export { white-space: nowrap; }
 .quiz-stop { display: block; margin: 10px auto 0; }
 .quiz-stop[hidden] { display: none; }
 
+.sp-arrange { display: grid; gap: 4px; margin-top: 10px; font-size: 13px; color: var(--ink-soft); }
+.sp-arrange select { width: 100%; min-height: 40px; padding: 6px 8px; font: inherit; font-size: 14px; color: var(--ink); background: var(--paper); border: 2px solid var(--line); border-radius: 9px; }
 .sp-photo { width: 100%; margin-top: 8px; min-height: 44px; }
 #photo-result { margin-top: 10px; }
 

@@ -181,7 +181,7 @@ OpenRouter 對「輸出圖片」的請求要求**餘額至少 1 美元**，不�
 | `treasure_start` / `_found` / `_stop` | prophet、x／y、ms | 尋寶花費時間 |
 | `harvest_start` / `_take` / `_drop` / `_done` / `_stop` | helpers | 接力參與人數 |
 | `survey_start` / `_answer` / `_close` | key、choice、label | 轉場問卷作答率 |
-| `photo_start`、`photo` | count、ok、uploaded | 合照參與人數 |
+| `photo_start`、`photo` | count、arrange（stay／affinity）、ok、uploaded | 合照參與人數、用了哪種站位 |
 | `theme_change` | theme | 不同主題下的互動量 |
 | `persona` | agent、type | 進場人格問卷的分佈 |
 | `greet_invite`、`greet` | kind（WAVE／CHEERS）、agent、peer | 「要對方回應才算數」的互動次數 |

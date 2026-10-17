@@ -507,8 +507,16 @@
         <button class="btn-ghost sp-sound" id="btn-screen-sound" aria-pressed="true" aria-label="大螢幕音效：開"
                 title="配對成功、出題與公布答案時，大螢幕發出短音效。投影那台電腦要先點一下大螢幕畫面才會出聲（瀏覽器的規定）">🔊</button>
       </div>
-      <!-- 大合照：原本在「場景與合照」分頁。所有角色原地定住、轉向鏡頭，就定位後自動拍 -->
-      <button class="btn-primary sp-photo" id="btn-photo" title="所有角色會原地定住並轉向鏡頭，就定位後自動拍攝">拍大合照</button>
+      <!-- 大合照：原本在「場景與合照」分頁。所有角色轉向鏡頭，就定位後自動拍。
+           站位兩種：原地（記錄大家自己走出來的樣子）或依互動排位（server/photoLayout.js） -->
+      <label class="sp-arrange">
+        <span>合照站位</span>
+        <select id="photo-arrange">
+          <option value="stay">原地拍：大家站在哪就拍在哪</option>
+          <option value="affinity">依互動排位：今天越熟的人站越近</option>
+        </select>
+      </label>
+      <button class="btn-primary sp-photo" id="btn-photo" title="所有角色轉向鏡頭，就定位後自動拍攝">拍大合照</button>
       <p class="hint tiny" id="photo-status" hidden></p>
       <div id="photo-result" hidden>
         <img id="photo-img" alt="大合照">
