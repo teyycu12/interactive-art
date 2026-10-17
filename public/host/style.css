@@ -763,3 +763,12 @@ td.export { white-space: nowrap; }
 .mission-check.warn b { color: var(--accent-ink); }
 .mission-check.block { border-color: var(--danger); background: #FBEDEB; }
 .mission-check.block b { color: var(--danger); }
+
+/* ── 賓果：每個人勾的自我介紹 ─────────────────────────── */
+.bingo-picks { margin: 10px 0 12px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.bingo-picks[hidden] { display: none; }
+.bingo-picks > summary { cursor: pointer; font-size: 14px; font-weight: 700; color: var(--ink); padding: 6px 0; }
+.bingo-picks ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
+.bingo-picks li { display: grid; grid-template-columns: minmax(4em, max-content) 1fr; gap: 10px; font-size: 13px; line-height: 1.5; }
+.bingo-picks li b { overflow-wrap: anywhere; }
+.bingo-picks li .none { color: var(--ink-soft); }

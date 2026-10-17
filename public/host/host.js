@@ -978,6 +978,7 @@ let roster = [];
 /**
  * 賓果面板。事件驅動（HOST_STATE 不含它），重整時由 HOST_AUTH 的 BINGO_STATE 補送接回。
  * 只顯示進度前幾名 —— 卡片內容是參與者私人的，主辦端也不需要看。
+ * 例外是開局勾的自我介紹（picks）：主持人要能幫忘記自己勾什麼的人查（2026-10-17 試玩回饋）。
  */
 let bingoDeadlineAt = null;
 let bingoCountdown = null;
@@ -1002,6 +1003,16 @@ function renderBingo(round) {
   ol.replaceChildren(...round.top.map((t) => Object.assign(document.createElement('li'), {
     textContent: `${t.name}　連線 ${t.lines}　已填 ${t.filled}/9`,
   })));
+  // <details> 本身不重建，主持人展開之後每次更新都還是展開的
+  const picks = round.picks;
+  $('#bingo-picks-box').hidden = !picks?.length;
+  $('#bingo-picks').replaceChildren(...(picks ?? []).map((p) => {
+    const li = document.createElement('li');
+    li.append(Object.assign(document.createElement('b'), { textContent: p.name || '（未命名）' }));
+    const text = p.facts === null ? '還沒勾' : p.facts.length ? p.facts.join('、') : '一題都沒勾';
+    li.append(Object.assign(document.createElement('span'), { textContent: text, className: p.facts?.length ? '' : 'none' }));
+    return li;
+  }));
 }
 
 // ── 賓果自我介紹題 ──

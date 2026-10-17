@@ -1781,7 +1781,7 @@ check('引導端點擋下過大的影格',
     box.ws.on('message', (d) => {
       const m = JSON.parse(d);
       if (m.type === 'BINGO_ASK') box.bingo.ask = m;
-      if (m.type === 'BINGO_CARD') box.bingo.card = m.card;
+      if (m.type === 'BINGO_CARD') { box.bingo.card = m.card; box.bingo.myFacts = m.myFacts; }
       if (m.type === 'BINGO_RESULT') box.bingo.results.push(m);
       if (m.type === 'BINGO_TAGGED') box.bingo.tagged.push(m);
       if (m.type === 'BINGO_ENDED') box.bingo.ended = m;
@@ -1802,6 +1802,11 @@ check('引導端點擋下過大的影格',
     if (m.type === 'HOST_BINGO_FACTS') factBank = m;
   });
   bHost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  // 大螢幕也開一條：每個人勾了什麼只給主辦端，不能出現在全場看得到的畫面上
+  const bScreen = new WebSocket(URL);
+  const screenBingo = [];
+  bScreen.on('open', () => bScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
+  bScreen.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'BINGO_STATE') screenBingo.push(m.round); });
   await sleep(300);
   check('主辦端認證時收到自我介紹題（依場景預設）', factBank?.isDefault === true && factBank.facts.length >= 3, JSON.stringify(factBank));
   bHost.send(JSON.stringify({ type: 'HOST_START_BINGO' }));
@@ -1820,6 +1825,15 @@ check('引導端點擋下過大的影格',
   check('甲的卡上有乙勾的那一題', pA.bingo.card?.cells?.some((c) => c.label === factLabel),
     JSON.stringify(pA.bingo.card?.cells?.map((c) => c.label)));
   check('乙自己勾的題目不會出現在乙的卡上（場上沒有別人符合）', !pB.bingo.card?.cells?.some((c) => c.label === factLabel));
+  check('手機上看得到自己開局勾了什麼（不認得的題號略過）',
+    JSON.stringify(pB.bingo.myFacts) === JSON.stringify([facts[0]?.text]) && Array.isArray(pA.bingo.myFacts) && pA.bingo.myFacts.length === 0,
+    JSON.stringify([pA.bingo.myFacts, pB.bingo.myFacts]));
+  const pickOf = (name) => bingoRound?.picks?.find((p) => p.name === name);
+  check('主辦端看得到每個人勾了哪幾題', JSON.stringify(pickOf('賓果乙')?.facts) === JSON.stringify([facts[0]?.text])
+    && pickOf('賓果甲')?.facts?.length === 0, JSON.stringify(bingoRound?.picks));
+  check('大螢幕收不到每個人勾了什麼', screenBingo.length > 0 && screenBingo.every((r) => r?.picks === undefined),
+    JSON.stringify(screenBingo.at(-1)));
+  bScreen.close();
 
   const first = pA.bingo.card.cells.findIndex((c) => c.label === factLabel);
   pA.ws.send(JSON.stringify({ type: 'BINGO_CLAIM', cell: first, code: pB.code }));

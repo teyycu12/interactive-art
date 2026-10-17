@@ -388,14 +388,27 @@ export class AvatarRenderer {
    * @returns {string|null} 鄰居的 id；沒點到人（或點到自己）回 null
    */
   pickAt(clientX, clientY) {
+    return this.pickAllAt(clientX, clientY)[0] ?? null;
+  }
+
+  /**
+   * 這一點落在哪些鄰居身上，站得越前面（蓋在上面）的排越前。
+   *
+   * 幾個人擠在一起時點擊框會重疊（遠處的人框被撐到 44px，比本人寬），
+   * 只回最上面那個的話，常常點到旁邊的人（2026-10-17 試玩回饋）。
+   * 呼叫端拿到兩個以上時讓使用者自己選。
+   * @returns {string[]}
+   */
+  pickAllAt(clientX, clientY) {
     const rect = this.canvas.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
+    const out = [];
     for (let i = this.hitboxes.length - 1; i >= 0; i--) {
       const b = this.hitboxes[i];
-      if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) return b.id;
+      if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1 && !out.includes(b.id)) out.push(b.id);
     }
-    return null;
+    return out;
   }
 
   /**

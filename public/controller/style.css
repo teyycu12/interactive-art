@@ -461,7 +461,7 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 }
 #controller > #emotes button em { display: block; font-size: 22px; font-style: normal; line-height: 1; }
 /* 話題卡會出現在畫面最下方，右邊讓出表情鍵的寬度，按鈕才不會被蓋住 */
-#controller > .topic-card { margin-right: 76px; }
+#controller > .topic-card, #controller > .topic-chip { margin-right: 76px; }
 
 /* 「某某在跟你揮手」。用大螢幕「1號桌」那種黃牌（ink 字 8.7:1）——
    要一眼看到，又不能做成蓋住搖桿的覆蓋層。
@@ -627,6 +627,12 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .sheet-inner h2 { margin: 0 0 4px; font-size: 19px; }
 .sheet-brief { margin: 0 0 16px; font-size: 13px; color: var(--ink-soft); }
 
+.bingo-mine {
+  margin: 0 0 10px; padding: 8px 12px;
+  font-size: 13px; font-weight: 700; line-height: 1.5; color: var(--ink);
+  background: var(--wall-tint); border-radius: 10px;
+}
+.bingo-mine[hidden] { display: none; }
 .mycode {
   background: var(--wall);
   color: var(--paper);
@@ -1691,6 +1697,20 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
   text-align: left;
 }
 .topic-card[hidden] { display: none; }
+.topic-card .tc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
+.topic-card .tc-close {
+  flex: none; min-height: 32px; padding: 4px 12px;
+  font: inherit; font-size: 13px; font-weight: 700; color: var(--ink);
+  background: transparent; border: 2px solid var(--line); border-radius: 999px;
+}
+/* 收起後的「再看一次」：小、靠左，不擋搖桿 */
+.topic-chip {
+  align-self: flex-start; flex-shrink: 0; min-height: 36px; padding: 6px 14px;
+  font: inherit; font-size: 13px; font-weight: 700; color: var(--ink);
+  background: #FFFCF5; border: 2px solid var(--ink); border-radius: 999px;
+  box-shadow: inset 4px 0 0 var(--ok), var(--drop-sm);
+}
+.topic-chip[hidden] { display: none; }
 .topic-card .tc-head { font-size: 11px; font-weight: 700; color: var(--ok-ink); letter-spacing: .06em; }
 .topic-card .tc-q { font-size: 15px; font-weight: 800; line-height: 1.35; }
 .topic-card .tc-with { font-size: 12px; color: var(--ink-soft); }
@@ -1747,3 +1767,14 @@ body:has(#greet-invite:not([hidden])):has(#bingo-offer:not([hidden])) .toast { t
 
 /* 同時好幾個任務時，配對面板底下一個任務一行 */
 #pair-progress { white-space: pre-line; }
+
+/* 點到好幾個人時的選人清單 */
+.pick-list { display: grid; gap: 8px; margin-top: 6px; }
+.pick-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 6px 12px;
+  font: inherit; font-size: 16px; color: var(--ink); text-align: left;
+  background: #FFFCF5; border: 2px solid var(--ink); border-radius: var(--r);
+}
+.pick-row b { overflow-wrap: anywhere; }
+.pick-face { flex: none; width: 40px; height: 44px; display: grid; place-items: center; }
+.pick-face canvas, .pick-face img { max-width: 100%; max-height: 100%; image-rendering: pixelated; }

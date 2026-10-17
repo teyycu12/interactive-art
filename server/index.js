@@ -633,6 +633,13 @@ function bingoTest(who, condId, from) {
 }
 
 /** 手機看到的卡：填了的格子顯示那個人的名字（不給 id —— 手機不需要） */
+/** 某人開局勾的自我介紹題（題目文字）。沒答過回 null，勾了零題回 [] */
+function bingoFactsOf(agentId) {
+  const r = bingo.round;
+  if (!r?.facts.length || !bingo.hasAnswered(agentId)) return null;
+  return r.facts.filter((f) => bingo.hasFact(agentId, f.id)).map((f) => f.text);
+}
+
 function sendBingoCard(agentId) {
   const card = bingo.cardOf(agentId);
   if (!card) return;
@@ -642,6 +649,8 @@ function sendBingoCard(agentId) {
       cells: card.cells.map((c) => ({ label: c.cond.label, filled: !!c.by, name: c.by ? nameOf(c.by) : null })),
       lines: card.lines,
     },
+    // 自己開局勾了什麼（2026-10-17 試玩回饋）：別人是照這個來找你的，勾完就忘的話會被問倒
+    myFacts: bingoFactsOf(agentId),
     remainingMs: r.endsAt ? Math.max(0, r.endsAt - Date.now()) : null,
   });
 }
@@ -664,7 +673,28 @@ function bingoPublicView() {
   };
 }
 
-const pushBingoState = () => blast([...screens, ...hosts], EV.BINGO_STATE, { round: bingoPublicView() });
+/**
+ * 主辦端多看一份：每個人勾了哪幾題自我介紹。大螢幕不送 —— 那是全場看得到的畫面。
+ * 主持人要能在有人說「我不記得我勾了什麼」「他說他是、可是填不進去」時當場查。
+ */
+function bingoHostView() {
+  const view = bingoPublicView();
+  if (!view) return null;
+  const r = bingo.round;
+  const ids = r.phase === 'ask' ? bingoAskers() : [...r.cards.keys()];
+  return {
+    ...view,
+    picks: r.facts.length
+      ? ids.filter((id) => stage.get(id)).map((id) => ({ name: nameOf(id), facts: bingoFactsOf(id) }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'))
+      : null,
+  };
+}
+
+const pushBingoState = () => {
+  blast(screens, EV.BINGO_STATE, { round: bingoPublicView() });
+  blast(hosts, EV.BINGO_STATE, { round: bingoHostView() });
+};
 
 function startBingo(ws, msg) {
   const busy = busyActivity('bingo');
@@ -830,6 +860,8 @@ function stepTopics(now) {
   if (now - lastTopicCheck < 500) return;   // 半秒看一次就夠：停留門檻是 2 秒
   lastTopicCheck = now;
   if (topicsPaused()) return;
+  // 只有標了 topicTables 的場景有話題桌（shared/themes.js）
+  if (!THEME_MAP[stageTheme]?.topicTables) return;
   for (const deal of topics.update(topicSpots(), stage.agents.values(), now)) {
     for (const id of deal.ids) {
       sendToAgent(id, EV.TOPIC_CARD, {
@@ -2128,7 +2160,7 @@ wss.on('connection', (ws) => {
           send(ws, EV.WORDCLOUD_QUESTION, { cloud: wordcloud.publicView() });
           send(ws, EV.WORDCLOUD_STATE, { cloud: wordcloud.cloud() });
         }
-        if (bingo.isActive) send(ws, EV.BINGO_STATE, { round: bingoPublicView() });
+        if (bingo.isActive) send(ws, EV.BINGO_STATE, { round: bingoHostView() });
         console.log(`[host] 主辦端已連線　共 ${hosts.size} 台`);
         break;
       }

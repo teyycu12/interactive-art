@@ -1686,6 +1686,8 @@ function onWordCloudAck(msg) {
 
 /** @type {{cells: {label: string, filled: boolean, name: string|null}[], lines: number}|null} */
 let bingoCard = null;
+/** 自己開局勾的自我介紹題（題目文字）；這一輪沒有自我介紹題時為 null */
+let bingoMyFacts = null;
 let bingoDeadline = null;
 let bingoPick = null;
 let bingoTimer = null;
@@ -1805,6 +1807,13 @@ function renderBingo() {
   banner.hidden = false;
   $('#bingo-prog').textContent = `${filled} / 9${bingoCard.lines ? `　連線 ${bingoCard.lines}` : ''}`;
   $('#bingo-mycode').textContent = myCode;
+  const mine = $('#bingo-mine');
+  mine.hidden = bingoMyFacts === null;
+  if (bingoMyFacts) {
+    mine.textContent = bingoMyFacts.length
+      ? `你開局勾的：${bingoMyFacts.join('、')}`
+      : '你開局沒有勾任何一題自我介紹';
+  }
 
   const grid = $('#bingo-grid');
   grid.replaceChildren();
@@ -1901,6 +1910,7 @@ function handleBingoMessage(msg) {
         if (wasOpen || !bingoCard) showToast('賓果卡發下來了！點上方的橫幅打開');
       }
       bingoCard = msg.card;
+      bingoMyFacts = Array.isArray(msg.myFacts) ? msg.myFacts : null;
       bingoDeadline = msg.remainingMs == null ? null : Date.now() + msg.remainingMs;
       clearInterval(bingoTimer);
       if (bingoDeadline) bingoTimer = setInterval(tickBingoTimer, 1000);
@@ -1964,12 +1974,18 @@ function handleMissionMessage(msg) {
       showGreetResult(msg);
       return;
 
-    case EV.PAIR_CODE:
+    case EV.PAIR_CODE: {
+      const changed = myCode && myCode !== '----' && myCode !== msg.code;
       myCode = msg.code;
+      // 面板開著的時候碼換了：可能正唸到一半，講一聲，免得對方照舊碼輸入卻以為輸錯
+      if (changed && (!sheet.hidden || !bingoSheet.hidden)) {
+        showToast(`你的配對碼換成 ${msg.code}（剛才那組 1 分鐘內還能用）`);
+      }
       renderMission();
       // 賓果卡上也印著自己的碼（別人要填你時用），每分鐘輪換時要跟著換
       renderBingo();
       break;
+    }
 
     case EV.MISSION_ANNOUNCE:
       if (msg.mission?.id) {
@@ -2360,23 +2376,38 @@ setInterval(() => {
 // 跟同一桌的人拿到同一題。題目是要念出來跟旁邊的人聊的，不是作答 ——
 // 所以不給輸入框，只給一句「和誰同桌」，提醒他抬頭找人。
 let topicTimer = null;
+let topicChipTimer = null;
+/** 收起後那顆「再看一次」留多久：聊完換桌就用不到了 */
+const TOPIC_CHIP_MS = 3 * 60_000;
 
 function showTopic(msg) {
   $('#topic-head').textContent = `💬 ${msg.spot ?? '話題桌'}的話題`;
   $('#topic-q').textContent = msg.question;
   $('#topic-with').textContent = msg.withNames?.length ? `和 ${msg.withNames.join('、')} 同桌，聊聊看` : '';
-  $('#topic-card').hidden = false;
+  openTopic();
   vibrate([20, 40, 20]);
-  clearTimeout(topicTimer);
-  topicTimer = setTimeout(hideTopic, 25_000);
 }
 
-function hideTopic() {
+function openTopic() {
+  clearTimeout(topicChipTimer);
+  $('#topic-chip').hidden = true;
+  $('#topic-card').hidden = false;
   clearTimeout(topicTimer);
+  topicTimer = setTimeout(collapseTopic, 25_000);
+}
+
+/** 收成一顆小鈕而不是直接消失：題目要念給同桌的人聽，收起來之後常常還要再看一次 */
+function collapseTopic() {
+  clearTimeout(topicTimer);
+  if ($('#topic-card').hidden) return;
   $('#topic-card').hidden = true;
+  $('#topic-chip').hidden = false;
+  clearTimeout(topicChipTimer);
+  topicChipTimer = setTimeout(() => { $('#topic-chip').hidden = true; }, TOPIC_CHIP_MS);
 }
 
-$('#topic-card').addEventListener('click', hideTopic);
+$('#btn-topic-close').addEventListener('click', collapseTopic);
+$('#topic-chip').addEventListener('click', openTopic);
 
 // ── 揮手的回應（server/greetings.js）──────────────────────
 //
@@ -2786,21 +2817,53 @@ function pickTarget(e) {
   if (base && Math.hypot(pt.clientX - (base.left + base.width / 2), pt.clientY - (base.top + base.height / 2)) < JOYSTICK_GUARD_PX) {
     return null;
   }
-  return renderer.pickAt(pt.clientX, pt.clientY);
+  const ids = renderer.pickAllAt(pt.clientX, pt.clientY);
+  return ids.length ? ids : null;
 }
 
 for (const type of ['pointerdown', 'touchstart', 'mousedown']) {
   $('#controller').addEventListener(type, (e) => {
-    const id = pickTarget(e);
-    if (!id) return;
+    const ids = pickTarget(e);
+    if (!ids) return;
     e.stopPropagation();
     if (e.cancelable && type !== 'pointerdown') e.preventDefault();
     // 同一下觸控會依序來 pointerdown → touchstart（→ mousedown），只開一次
     if (Date.now() - lastPickAt < 600) return;
     lastPickAt = Date.now();
-    openComposer(id);
+    // 好幾個人擠在一起：讓他自己選，不替他猜是哪一個
+    if (ids.length > 1) openPicker(ids);
+    else openComposer(ids[0]);
   }, { capture: true, passive: false });
 }
+
+// ── 點到好幾個人時：選一個 ──
+const pickSheet = $('#pick-sheet');
+
+function openPicker(ids) {
+  const list = $('#pick-list');
+  list.replaceChildren(...ids.map((id) => {
+    const who = lookOf(id);
+    const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'pick-row' });
+    const face = Object.assign(document.createElement('span'), { className: 'pick-face' });
+    face.setAttribute('aria-hidden', 'true');
+    showPortrait(face, who?.look ?? null);
+    btn.append(face, Object.assign(document.createElement('b'), { textContent: who?.name || '（沒有名字）' }));
+    btn.addEventListener('click', () => { closePicker(); openComposer(id); });
+    return btn;
+  }));
+  pickSheet.hidden = false;
+  pushOverlay(pickSheet, { onEscape: closePicker });
+  list.querySelector('button')?.focus();
+}
+
+function closePicker() {
+  if (pickSheet.hidden) return;
+  pickSheet.hidden = true;
+  popOverlay(pickSheet);
+}
+
+$('#btn-pick-close').addEventListener('click', closePicker);
+pickSheet.addEventListener('click', (e) => { if (e.target === pickSheet) closePicker(); });
 
 const msgSheet = $('#msg-sheet');
 const msgInput = $('#msg-input');
