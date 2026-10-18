@@ -20,6 +20,7 @@ import { RateLimiter } from './ratelimit.js';
 import { listHistoricalAvatars } from './devAvatars.js';
 import { VISION_HOST, VISION_PORT, GEN_MAX_CONCURRENT } from './config.js';
 import { GenerateQueue, isValidTicket } from './generateQueue.js';
+import { GenerateResults } from './generateResults.js';
 import { clientIp } from './clientIp.js';
 
 /**
@@ -184,6 +185,21 @@ const MAX_QUEUED_GENERATES = 60;
 const generateQueue = new GenerateQueue({
   maxActive: GEN_MAX_CONCURRENT, maxQueued: MAX_QUEUED_GENERATES,
 });
+
+/** 生成結果依號碼牌留著，斷線的手機回來後用 /api/generate/result 領（見 generateResults.js） */
+const generateResults = new GenerateResults();
+
+/**
+ * 每張號碼牌最後一次有消息的時間（送出照片、或輪詢排第幾）。
+ *
+ * 排隊中連線斷掉，不一定是人走了 —— iOS 切出去幾秒就會斷，切回來手機還在
+ * 輪詢。所以斷線先不讓位，等 SEEN_GRACE_MS 都沒消息才算真的走了；輪到時
+ * 連線已斷、又超過 SEEN_ALIVE_MS 沒消息的，就不送去生成（還沒花錢）。
+ */
+const generateSeen = new Map();
+const SEEN_GRACE_MS = 45_000;
+const SEEN_ALIVE_MS = 30_000;
+const seenRecently = (ticket, ms) => Date.now() - (generateSeen.get(ticket) ?? 0) <= ms;
 
 /** @type {Map<string, {limiter: RateLimiter, seenAt: number}>} 依來源位址計費 */
 const generateLimiters = new Map();
@@ -517,14 +533,23 @@ function proxyGenerate(req, res) {
     if (aborted) return;
     const body = Buffer.concat(chunks);
 
-    const outcome = generateQueue.enqueue(ticket, (done) => forwardGenerate(body, res, done));
+    generateSeen.set(ticket, Date.now());
+    const outcome = generateQueue.enqueue(ticket, (done) => forwardGenerate(ticket, body, res, done));
     if (outcome === 'full' || outcome === 'duplicate') {
+      if (outcome === 'full') generateSeen.delete(ticket);
       sendJSON(res, 200, { ok: false, error: 'too_busy', fallbackColors: DEFAULT_FALLBACK_COLORS });
       return;
     }
     // 排隊中斷線（關分頁、App 被系統收掉）要讓出位子，否則後面的人
-    // 會白等一個永遠不會送出的請求。已經在生成的由 forwardGenerate 自己處理。
-    res.on('close', () => generateQueue.cancel(ticket));
+    // 會白等一個永遠不會送出的請求。但切出去幾秒也會斷，所以寬限一段時間，
+    // 期間手機還在輪詢就不讓。已經在生成的由 forwardGenerate 自己處理。
+    res.on('close', () => {
+      setTimeout(() => {
+        if (!seenRecently(ticket, SEEN_GRACE_MS) && generateQueue.cancel(ticket)) {
+          generateSeen.delete(ticket);
+        }
+      }, SEEN_GRACE_MS).unref();
+    });
   });
 }
 
@@ -532,10 +557,14 @@ function proxyGenerate(req, res) {
  * 輪到了：把照片送去生成服務。done() 歸還排隊名額，必須在每一條結束路徑上呼叫。
  *
  * GENERATE_TIMEOUT_MS 從這裡才開始算 —— 排隊的時間不算在內。
+ *
+ * 結果一律存進 generateResults，連線還在的話也直接回給手機。
  */
-function forwardGenerate(body, res, done) {
+function forwardGenerate(ticket, body, res, done) {
   // 排隊期間手機已經走了：不送。這是唯一還沒花錢就能省下來的時機。
-  if (res.destroyed || res.writableEnded) {
+  // 連線斷了但手機還在輪詢（切出去又切回來），照樣送，結果讓它用號碼牌領。
+  if ((res.destroyed || res.writableEnded) && !seenRecently(ticket, SEEN_ALIVE_MS)) {
+    generateSeen.delete(ticket);
     done();
     return;
   }
@@ -561,8 +590,15 @@ function forwardGenerate(body, res, done) {
   // 會永遠停在 92%，也不會退回捏臉。
   const degrade = (error) => {
     if (!finish()) return;
+    const payload = { ok: false, error, fallbackColors: DEFAULT_FALLBACK_COLORS };
+    keepResult(200, Buffer.from(JSON.stringify(payload)));
     if (res.destroyed || res.headersSent) return;
-    sendJSON(res, 200, { ok: false, error, fallbackColors: DEFAULT_FALLBACK_COLORS });
+    sendJSON(res, 200, payload);
+  };
+
+  const keepResult = (statusCode, buf) => {
+    generateSeen.delete(ticket);
+    generateResults.put(ticket, statusCode, buf);
   };
 
   const upstream = http.request({
@@ -577,11 +613,13 @@ function forwardGenerate(body, res, done) {
     up.on('data', (c) => out.push(c));
     up.on('end', () => {
       if (!finish()) return;
-      if (res.destroyed || res.headersSent) return;   // 手機已經走了
+      const buf = Buffer.concat(out);
+      keepResult(up.statusCode ?? 200, buf);
+      if (res.destroyed || res.headersSent) return;   // 手機斷線了，等它回來領
       res.writeHead(up.statusCode ?? 200, {
         'Content-Type': 'application/json; charset=utf-8',
       });
-      res.end(Buffer.concat(out));
+      res.end(buf);
     });
     up.on('error', () => degrade('vision_service_unavailable'));
     // 沒有 error、也沒有 end 就關掉（連線被重設）也要收尾
@@ -597,10 +635,18 @@ function forwardGenerate(body, res, done) {
 /**
  * 手機輪詢自己排第幾。回應刻意很小、不限流 —— 它每 2 秒才問一次，
  * 而且不碰生成服務。
+ *
+ * state 為 done 代表結果已經好了、在 generateResults 裡等著領。
+ * 輪詢同時也是「手機還在」的訊號（見 generateSeen）。
  */
 function generateStatus(req, res) {
   const ticket = new URL(req.url, 'http://localhost').searchParams.get('ticket');
+  if (isValidTicket(ticket) && generateResults.has(ticket)) {
+    sendJSON(res, 200, { ok: true, state: 'done' });
+    return;
+  }
   const status = isValidTicket(ticket) ? generateQueue.status(ticket) : null;
+  if (status) generateSeen.set(ticket, Date.now());
   if (!status) {
     sendJSON(res, 200, { ok: false });
     return;
@@ -613,6 +659,24 @@ function generateStatus(req, res) {
       etaSec: Math.round(status.etaMs / 1000),
     }),
   });
+}
+
+/**
+ * 斷線的手機用號碼牌領回生成結果，內容與 /api/generate 原本會回的一模一樣。
+ * 領過就沒了；沒有這筆（過期、沒生成過、已領走）回 ok:false。
+ */
+function generateResult(req, res) {
+  const ticket = new URL(req.url, 'http://localhost').searchParams.get('ticket');
+  const entry = isValidTicket(ticket) ? generateResults.take(ticket) : null;
+  if (!entry) {
+    sendJSON(res, 200, { ok: false, error: 'result_not_found' });
+    return;
+  }
+  res.writeHead(entry.statusCode, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': entry.body.length,
+  });
+  res.end(entry.body);
 }
 
 
@@ -679,6 +743,11 @@ function handleRequest(req, res) {
 
   if (urlPath === '/api/generate/status') {
     generateStatus(req, res);
+    return;
+  }
+
+  if (urlPath === '/api/generate/result') {
+    generateResult(req, res);
     return;
   }
 

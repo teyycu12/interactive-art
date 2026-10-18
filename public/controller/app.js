@@ -902,20 +902,58 @@ function cropToPortraitJpeg(source, sw0, sh0, maxEdge = 1280, quality = 0.85, zo
  *
  * 查不到（照片還在上傳、舊版伺服器沒有這個端點、網路抖一下）就維持原狀，
  * 不當成錯誤 —— 這只是顯示用的，生成結果仍以 /api/generate 的回應為準。
+ *
+ * 伺服器說已經好了（done）就呼叫 onDone：/api/generate 那條連線可能已經
+ * 默默斷了（切出去又切回來、換了基地台），fetch 卻還掛著不回。
  */
-function pollQueue(ticket, onQueue) {
+function pollQueue(ticket, onQueue, onDone = () => {}) {
   let stopped = false;
   const poll = async () => {
     try {
       const res = await fetch(`/api/generate/status?ticket=${ticket}`);
       const s = await res.json();
       if (stopped || !s?.ok) return;
+      if (s.state === 'done') { onDone(); return; }
       onQueue(s.state === 'queued' ? { ahead: s.ahead, etaSec: s.etaSec } : null);
     } catch { /* 略 */ }
   };
   const timer = setInterval(poll, 2000);
   setTimeout(poll, 600);   // 第一次稍等一下，讓照片先上傳完、排進隊伍
   return () => { stopped = true; clearInterval(timer); };
+}
+
+/** 用號碼牌領生成結果。沒有這筆（或連不上）回 null。 */
+async function takeScanResult(ticket) {
+  try {
+    const res = await fetch(`/api/generate/result?ticket=${ticket}`);
+    const body = await res.json();
+    return body?.error === 'result_not_found' ? null : body;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * /api/generate 的連線斷了之後，改用號碼牌等結果。
+ *
+ * 剛切回來時網路可能還沒恢復，所以連不上就繼續等，直到 deadline。
+ * 伺服器完全不認得這張號碼牌（排隊時離開太久被讓位、或伺服器重啟過）
+ * 才放棄，回 ticket_lost 讓人重拍；一直連不上則回 null。
+ */
+async function recoverScanResult(ticket, onQueue) {
+  // 涵蓋最壞情況：排在隊尾（數分鐘）再加生成逾時（GENERATE_TIMEOUT_MS 150 秒）
+  const deadline = Date.now() + 8 * 60_000;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`/api/generate/status?ticket=${ticket}`);
+      const s = await res.json();
+      if (s?.ok && s.state === 'done') return takeScanResult(ticket);
+      if (!s?.ok) return { ok: false, error: 'ticket_lost' };
+      onQueue(s.state === 'queued' ? { ahead: s.ahead, etaSec: s.etaSec } : null);
+    } catch { /* 網路還沒回來，繼續等 */ }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return null;
 }
 
 /** 送出照片並走完生成流程。相機與上傳共用。 */
@@ -933,27 +971,45 @@ async function submitScanImage(image) {
   // 號碼牌：生成請求會一直掛著等結果，排第幾要另外問。
   const ticket = Array.from(crypto.getRandomValues(new Uint8Array(16)),
     (b) => b.toString(16).padStart(2, '0')).join('');
-  const stopPolling = pollQueue(ticket, progress.setQueue);
+  // 伺服器說好了，但 /api/generate 過了幾秒還沒回：那條連線多半已經斷了，
+  // 改用號碼牌去領。領不到就不搶，繼續等原本那條。
+  let markDone;
+  const doneSeen = new Promise((resolve) => { markDone = resolve; });
+  const stopPolling = pollQueue(ticket, progress.setQueue, () => markDone());
   const stopProgress = () => { stopPolling(); progress.stop(); };
+  const aborter = new AbortController();
+  const takeOver = doneSeen
+    .then(() => new Promise((r) => setTimeout(r, 4000)))
+    .then(() => takeScanResult(ticket))
+    .then((b) => b ?? new Promise(() => {}));
 
   let body;
   try {
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Gen-Ticket': ticket },
-      // sessionId：取景期間跨影格量到的身高比快門那一瞬間的單張估計可信，
-      // 後端會優先採用它。相簿上傳沒有取景階段，因此是 null。
-      // styleId：選單沒載入時是 null，後端會退回活動層級的預設風格。
-      body: JSON.stringify({ image, sessionId: previewSessionId, styleId: selectedStyleId }),
-    });
-    body = await res.json();
+    body = await Promise.race([
+      fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Gen-Ticket': ticket },
+        // sessionId：取景期間跨影格量到的身高比快門那一瞬間的單張估計可信，
+        // 後端會優先採用它。相簿上傳沒有取景階段，因此是 null。
+        // styleId：選單沒載入時是 null，後端會退回活動層級的預設風格。
+        body: JSON.stringify({ image, sessionId: previewSessionId, styleId: selectedStyleId }),
+        signal: aborter.signal,
+      }).then((res) => res.json()),
+      takeOver,
+    ]);
   } catch {
-    stopProgress();
+    // 連線斷了不代表沒生成：切出去、螢幕鎖定時 iOS 會把連線砍掉，伺服器那邊
+    // 照樣排隊、照樣生成（錢也照樣付）。用號碼牌把結果領回來。
+    stopPolling();
+    body = await recoverScanResult(ticket, progress.setQueue);
+  }
+  aborter.abort();
+
+  stopProgress();
+  if (!body) {
     showScanFailure('生成服務連不上。');
     return;
   }
-
-  stopProgress();
 
   if (!body?.ok) {
     const known = SCAN_ERRORS[body?.error];
@@ -1032,6 +1088,8 @@ const SCAN_ERRORS = {
   upstream_unreachable: '生成服務連不上外部網路，請通知工作人員。',
   upstream_timeout: '生成等太久逾時了。',
   queue_timeout: '排隊的人太多，等太久了。',
+  // 手機自己判斷的：排隊時切出去太久，位子已經讓給後面的人
+  ticket_lost: '離開畫面太久，排隊的位子讓出去了，再拍一次。',
   no_person: '照片裡沒有偵測到人。',
 };
 
