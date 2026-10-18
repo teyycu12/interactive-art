@@ -33,6 +33,8 @@ def test_every_part_in_the_manifest_has_its_raw_and_layers():
     """manifest 加了一筆卻沒生成或沒切：catalog 會把它濾掉，手機上就是少一個選項。"""
     missing = []
     for part in dressup.load_manifest()["parts"]:
+        if part["category"] in dressup.FACE_CATEGORIES:
+            continue   # 臉是格子圖，沒有原圖與圖層
         for path in (dressup.RAW_DIR / f"{part['id']}.png",
                      dressup.LAYER_DIR / f"{part['id']}.png",
                      dressup.LAYER_DIR / f"{part['id']}_mask.png"):
@@ -44,7 +46,8 @@ def test_every_part_in_the_manifest_has_its_raw_and_layers():
 def test_every_part_uses_a_known_category():
     known = {c["id"] for c in dressup.load_manifest()["categories"]}
     assert {p["category"] for p in dressup.load_manifest()["parts"]} <= known
-    assert set(dressup.CATEGORY_CODE) | {"acc"} == known, "新分類要在 dressup.py 補上代碼與繪製順序"
+    assert set(dressup.CATEGORY_CODE) | {"acc"} | set(dressup.FACE_CATEGORIES) == known, \
+        "新分類要在 dressup.py 補上代碼與繪製順序"
 
 
 def test_catalog_has_no_prompts():
@@ -104,6 +107,107 @@ def test_bare_legs_under_a_skirt_follow_the_skin_tone():
     deep = np.asarray(dressup.compose({"bottom": "bottom_skirt"}, {"skin": "#5C3A21"})).astype(float)
     changed = np.abs(pale[legs] - deep[legs]).sum(axis=1) > 60
     assert changed.mean() > 0.2, "裙子底下的腿沒有跟著膚色換"
+
+
+# ── 臉：表情、眉毛、眼珠顏色（格子圖，不是生圖）──────────────────
+
+
+def _face():
+    return dressup.load_manifest()["face"]
+
+
+def _slot_mask(feature=None):
+    """所有五官 slot 的範圍（feature 給了就只算那一種）。"""
+    mask = np.zeros((dressup.CANVAS[1], dressup.CANVAS[0]), dtype=bool)
+    for slots in _face()["slots"].values():
+        for slot in slots.values():
+            if feature is None or slot.get("feature") == feature:
+                x0, y0, x1, y1 = slot["clear"]
+                mask[y0:y1, x0:x1] = True
+    return mask
+
+
+def test_face_stamps_only_use_known_ink_and_slots():
+    """格子圖寫錯一個字或 slot 名稱：那一格默默不畫，手機上看起來就是「選了沒反應」。"""
+    face = _face()
+    names = {n for slots in face["slots"].values() for n in slots}
+    names |= {s["pair"] for slots in face["slots"].values() for s in slots.values() if s.get("pair")}
+    for part in dressup.load_manifest()["parts"]:
+        if part["category"] not in ("expression", "brows"):
+            continue
+        for view_id, drawn in part["stamp"].items():
+            assert view_id in face["slots"], part["id"]
+            for slot_id, rows in drawn.items():
+                assert slot_id in names, f"{part['id']}：沒有 {slot_id} 這個位置"
+                assert set("".join(rows)) <= set(face["ink"]) | {"."}, part["id"]
+                # 左右翻的那一邊靠字串反轉：每一列不等長，翻過去就錯位
+                assert len({len(r) for r in rows if r}) <= 1, f"{part['id']} {slot_id} 每列要一樣長"
+
+
+def test_eye_color_changes_only_the_irises():
+    base = np.asarray(dressup.compose({})).astype(int)
+    blue = np.asarray(dressup.compose({}, {"eyes": "#2E6FB5"})).astype(int)
+    changed = np.abs(base - blue).sum(axis=2) > 0
+    assert changed.sum() > 200, "換眼珠顏色沒有作用"
+    assert not (changed & ~_slot_mask("eyes")).any(), "換眼珠顏色動到眼睛以外的地方"
+
+
+def test_each_eye_has_one_iris():
+    """眼角那一格陰影跟眼珠亮部同色：也算進眼珠的話，藍眼的人眼角會發藍。"""
+    import cv2
+
+    labels = _labels()
+    for slots in _face()["slots"].values():
+        for slot in slots.values():
+            if slot.get("feature") != "eyes":
+                continue
+            x0, y0, x1, y1 = slot["clear"]
+            count, _ = cv2.connectedComponents((labels[y0:y1, x0:x1] == dressup.C_EYES).astype(np.uint8),
+                                               connectivity=4)
+            assert count - 1 == 1, f"眼睛 {slot['clear']} 的眼珠分成 {count - 1} 塊"
+
+
+def test_expressions_and_brows_stay_on_the_face():
+    base = np.asarray(dressup.compose({})).astype(int)
+    for part in dressup.load_manifest()["parts"]:
+        if part["category"] not in ("expression", "brows"):
+            continue
+        out = np.asarray(dressup.compose({part["category"]: part["id"]})).astype(int)
+        changed = np.abs(base - out).sum(axis=2) > 0
+        assert changed.any(), f"{part['id']} 畫上去跟素體一樣"
+        assert not (changed & ~_slot_mask()).any(), f"{part['id']} 畫到五官以外的地方"
+
+
+def test_closed_eyes_ignore_the_eye_color():
+    """瞇眼笑的正面眼珠被抹掉：選什麼眼珠顏色，正面都一樣。"""
+    front = (slice(0, dressup.CANVAS[1]), slice(0, 520))
+    a = np.asarray(dressup.compose({"expression": "expr_joy"}, {"eyes": "#2E6FB5"}))[front]
+    b = np.asarray(dressup.compose({"expression": "expr_joy"}, {"eyes": "#3E8E4F"}))[front]
+    assert np.array_equal(a, b)
+
+
+def test_brow_color_follows_the_choice_even_with_a_new_shape():
+    labels_brow = _slot_mask("brows")
+    light = np.asarray(dressup.compose({"brows": "brows_thick"}, {"brows": "#E6D3A3"})).astype(float)
+    dark = np.asarray(dressup.compose({"brows": "brows_thick"}, {"brows": "#1E1A1C"})).astype(float)
+    assert np.abs(light[labels_brow] - dark[labels_brow]).sum(axis=1).max() > 200
+
+
+def test_face_request_is_cleaned_like_the_rest():
+    sel, col = dressup.clean_request(
+        {"expression": "expr_wink", "brows": "expr_joy", "eyes": "anything"},
+        {"eyes": "#2E6FB5", "brows": "brown"},
+    )
+    assert sel == {"expression": "expr_wink", "acc": []}, "眉毛那格放了表情：分類對不上要丟掉"
+    assert col == {"eyes": "#2E6FB5"}
+
+
+def test_catalog_lists_the_face_tabs():
+    cat = dressup.catalog()
+    palettes = {c["id"]: c["palette"] for c in cat["categories"]}
+    assert palettes["expression"] == "none" and palettes["eyes"] == "eye" and palettes["brows"] == "hair"
+    assert not [p for p in cat["parts"] if p["category"] == "eyes"], "眼睛只換顏色，沒有款式"
+    assert {"expression", "brows"} <= {p["category"] for p in cat["parts"]}
 
 
 @pytest.fixture

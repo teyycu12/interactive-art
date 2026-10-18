@@ -29,6 +29,24 @@
 4. 切圖層：`python scripts/dressup_build.py hair_afro`，看 `_overview.png`
 5. 重開生成服務。手機的換裝頁會自動多出這個選項，前端不必改。
 
+## 加一個表情或眉毛（不花錢、不必生成）
+
+臉的部件是 `manifest.json` 裡手寫的格子圖，不走生圖。在 `parts` 加一筆：
+
+```json
+{ "id": "expr_smirk", "category": "expression", "label": "壞笑",
+  "stamp": { "front": { "mouth": ["", "..mmm.d.", ".....m.."] },
+             "side":  { "mouth": ["", ".mmd"] } } }
+```
+
+- 一個字一格（8px），`.` 是不動。字的意思見 `face.ink`：`k` 睫毛黑、`m` 嘴線、`r` 嘴裡、
+  `t` 舌頭、`w` 牙齒、`d` 皮膚陰影、`b` 眉毛（跟著選的眉色換）、`i` 眼珠（跟著選的眼珠顏色換）
+- 位置見 `face.slots`：正面 `brow` `eye` 寫一次左右都畫（右邊自動翻），`brow_l` `eye_r` 只畫一邊；
+  側面 `brow` `eye` `mouth`。寫了哪個位置，那個五官原本的樣子就先抹成皮膚
+- 每一列要一樣長（左右翻靠字串反轉）；`""` 是空一列，用來往下挪
+- 不必切圖、不必重跑什麼，**重開生成服務**就好。`pytest backend/tests/test_dressup.py`
+  會檢查字有沒有寫錯、有沒有畫出臉外
+
 ## 加一個新分類
 
 （例如「耳環」想跟其他配件分開）要改程式：`backend/dressup.py` 的 `CATEGORY_CODE`、

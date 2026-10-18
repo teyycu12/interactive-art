@@ -553,6 +553,9 @@ const DU_CLOTH_COLORS = [
   '#F4F1EA', '#2B2B30', '#8A8C92', '#2F4C7A', '#4A6FA5', '#7FA7C9', '#2F6B4F',
   '#84A98C', '#C94F5C', '#E9A9B8', '#E9C46A', '#D98B3A', '#8B5A2B', '#6D6875',
 ];
+const DU_EYE_COLORS = ['#301810', '#141414', '#7A4A24', '#B07A2E', '#2E6FB5', '#6FA8D8', '#3E8E4F', '#7E8C96', '#7B4FA0', '#B23A48'];
+/** 分類的 palette（manifest）→ 色票；'none' 的分類（表情）不換色 */
+const DU_PALETTES = { hair: DU_HAIR_COLORS, cloth: DU_CLOTH_COLORS, eye: DU_EYE_COLORS };
 const DU_SKIN_TAB = { id: 'skin', label: '膚色' };
 
 /** @type {{categories: object[], parts: object[], defaults: object}|null} */
@@ -594,7 +597,7 @@ function openDressup() {
   const fb = lastFallbackColors ?? {};
   const isHex = (c) => typeof c === 'string' && /^#[0-9A-Fa-f]{6}$/.test(c);
   duState = {
-    selection: { hair: null, top: null, outer: null, bottom: null, shoes: null, acc: [] },
+    selection: Object.fromEntries(duCatalog.categories.map((c) => [c.id, c.multi ? [] : null])),
     colors: {
       ...duCatalog.defaults,
       ...(isHex(fb.skin) && { skin: fb.skin }),
@@ -694,11 +697,14 @@ function renderDressup() {
     return;
   }
   const pick = (id) => () => { selection[tab] = id; renderDressup(); requestDuPreview(); };
-  // 外套的「不穿」也是一個選項：素體沒有外套
-  opts.append(duButton(cat.base_label, !selection[tab], pick(null)));
-  for (const p of duPartsOf(tab)) opts.append(duButton(p.label, selection[tab] === p.id, pick(p.id)));
-  if (tab === 'outer' && !selection.outer) { $('#du-colors').hidden = true; return; }
-  duSwatches(tab === 'hair' ? DU_HAIR_COLORS : DU_CLOTH_COLORS, colors[tab], (c) => { colors[tab] = c; });
+  // 眼睛沒有款式可選，只換顏色；外套的「不穿」也是一個選項：素體沒有外套
+  if (duPartsOf(tab).length) {
+    opts.append(duButton(cat.base_label, !selection[tab], pick(null)));
+    for (const p of duPartsOf(tab)) opts.append(duButton(p.label, selection[tab] === p.id, pick(p.id)));
+  }
+  const palette = DU_PALETTES[cat.palette];
+  if (!palette || (tab === 'outer' && !selection.outer)) { $('#du-colors').hidden = true; return; }
+  duSwatches(palette, colors[tab], (c) => { colors[tab] = c; });
 }
 
 let duPreviewTimer = null;
@@ -732,7 +738,7 @@ $('#btn-du-random').addEventListener('click', () => {
     }
     // 一半機率維持素體原本那件，不然每次都穿得很滿
     sel[cat.id] = Math.random() < 0.5 ? null : (any(duPartsOf(cat.id))?.id ?? null);
-    duState.colors[cat.id] = any(cat.id === 'hair' ? DU_HAIR_COLORS : DU_CLOTH_COLORS);
+    if (DU_PALETTES[cat.palette]) duState.colors[cat.id] = any(DU_PALETTES[cat.palette]);
   }
   renderDressup();
   requestDuPreview();

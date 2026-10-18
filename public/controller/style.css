@@ -305,9 +305,9 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   height: min(30dvh, 240px); width: auto;
   image-rendering: pixelated;
 }
-/* 七個分類平均分一列：原本可左右捲，「配件」被擠出畫面外，實測沒人發現它（2026-10-18） */
+/* 分類全部攤開（十個：兩列各五）：原本可左右捲，「配件」被擠出畫面外，實測沒人發現它（2026-10-18） */
 .du-tabs {
-  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px;
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px;
   flex-shrink: 0;
   padding-bottom: 4px;
 }
