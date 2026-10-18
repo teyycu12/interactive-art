@@ -35,7 +35,7 @@ EXPECTED_PYTHON = (3, 11)
 # 留空就是用程式預設值；設了任何值都可能換掉參考圖或風格
 MUST_BE_UNSET = (
     "CHARACTER_STYLE", "ENABLED_STYLES", "STYLE_REFERENCE_SET", "STYLE_REFERENCE_MODE",
-    "OPENAI_BASE_URL", "FULL_MODE_VLM_ENABLED",
+    "OPENAI_BASE_URL", "FULL_MODE_VLM_ENABLED", "BACKUP_IMAGE_MODEL",
 )
 PACKAGES = ("mediapipe", "openai", "pillow", "numpy", "opencv-python", "flask")
 
