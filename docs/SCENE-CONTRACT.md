@@ -190,7 +190,8 @@ scaleAt(logicX, logicY, worldHeight)
     正面由生成圖縮成 40×54 的像素格子並 Q 版化成兩頭身；側面與背面用
     `pixelGrid` 依 `fallbackColors` 與選填的 `pixelParts`（`{head, body}`，
     捏臉的 token）畫出。生成服務只畫正面，`pixelParts` 讓側面與背面接近本人。
-  - 其他來源：捏臉像素角色（備援路徑，**不可移除**）。
+  - 其他來源：token 外觀的像素角色。手機已不再提供捏臉（2026-10-18），但壓測機器人與
+    之前進過場的人回來時仍是這種外觀，伺服器照收，畫法**不可移除**。
 - 畫布尺寸固定 `AVATAR_W × AVATAR_H = 788 × 1024`，寬高比 200:260。
 - 若 3D 場景要把角色做成 billboard／貼圖平面，**必須**以 `avatarImage()`
   回傳的 canvas 作為材質來源，並維持 200:260 比例與底部錨點。
