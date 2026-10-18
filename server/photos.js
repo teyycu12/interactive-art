@@ -17,16 +17,69 @@ import path from 'node:path';
 const PHOTO_FILE = /^photo_[0-9]+_[0-9]+p_[0-9a-f]+\.png$/;
 
 /**
- * QR 裡的網址前綴。
+ * QR 裡的網址前綴。優先順序：
  *
- * 位址優先用環境變數 PUBLIC_HOST（電腦有好幾張網卡、預設挑到的不是場館 Wi-Fi
- * 那張時指定；Node 不讀 .env，要設在啟動互動層的那個 shell）；否則用第一個
- * 區網位址，與啟動時印給手機的那組相同。
- * 一個區網位址都沒有時退回 localhost：至少在這台電腦上點得開。
+ * 1. 環境變數 PUBLIC_HOST：可以是完整網址（`https://xxx.ngrok-free.dev`，對外通道用；
+ *    start-public.sh 會自動設）或單純主機名（電腦有好幾張網卡時指定場館 Wi-Fi 那張）。
+ * 2. 主辦端自己連進來用的網址（viewerOrigin）：主持人經 ngrok 開主辦端，QR 就給 ngrok 網址；
+ *    經區網位址開，就給那個位址 —— 主持人連得到，同一個網路的手機也連得到。
+ *    主辦端開在 localhost 時這一條不算（手機上的 localhost 是手機自己）。
+ * 3. 排序後的第一個區網位址（rankLanAddresses），與啟動時印給手機的那組相同。
+ *
+ * 原本只用第 3 條、而且不排序：這台電腦的第一張網卡是 VirtualBox 的
+ * 192.168.56.1，QR 指向一個手機永遠連不到的位址（2026-10-19「QR code 不能用」）。
  */
-export function photoUrlBase({ scheme, port, lanAddrs, publicHost }) {
-  const host = publicHost || lanAddrs[0] || 'localhost';
+export function photoUrlBase({ scheme, port, lanAddrs, publicHost, viewerOrigin }) {
+  if (publicHost && /^https?:\/\//i.test(publicHost)) return `${publicHost.replace(/\/+$/, '')}/photos`;
+  if (publicHost) return `${scheme}://${publicHost}:${port}/photos`;
+  if (viewerOrigin && !isLoopbackOrigin(viewerOrigin)) return `${viewerOrigin}/photos`;
+  const host = lanAddrs[0] || 'localhost';
   return `${scheme}://${host}:${port}/photos`;
+}
+
+function isLoopbackOrigin(origin) {
+  try {
+    const { hostname } = new URL(origin);
+    return hostname === 'localhost' || hostname === '::1' || hostname === '[::1]' || hostname.startsWith('127.');
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * 連線請求的對外網址（`https://host[:port]`）。經 ngrok 等代理時用代理轉來的
+ * X-Forwarded-Proto／Host —— 代理到本機那一段是 https://localhost:3000，不是使用者看到的網址。
+ * 只用來產生主辦端合照的 QR 網址，主辦端已通過密鑰驗證，不拿它做任何授權判斷。
+ */
+export function requestOrigin(req, scheme) {
+  const first = (v) => (typeof v === 'string' ? v.split(',')[0].trim() : '');
+  const host = first(req?.headers?.['x-forwarded-host']) || first(req?.headers?.host);
+  if (!host || !/^[\w.\-:[\]]+$/.test(host)) return null;
+  const proto = first(req?.headers?.['x-forwarded-proto']).toLowerCase();
+  return `${proto === 'http' || proto === 'https' ? proto : scheme}://${host}`;
+}
+
+// 手機連不到的虛擬網卡：VirtualBox（預設 192.168.56.x）、Hyper-V／WSL／Docker（多在 172.16–31）、
+// VPN。Windows 的網卡名稱會被翻譯（VirtualBox 那張在中文版叫「乙太網路」），只看名稱抓不到，
+// 所以位址範圍也一起看。只是排到後面，不刪掉 —— 少數場館的 Wi-Fi 確實發 172.x。
+const VIRTUAL_NAME = /virtual|vbox|vmware|vethernet|hyper-v|wsl|docker|tailscale|zerotier|loopback|vpn/i;
+const VIRTUAL_ADDR = /^(192\.168\.56\.|172\.(1[6-9]|2\d|3[01])\.)/;
+const WIFI_NAME = /wi-?fi|wlan|wireless|無線/i;
+
+/**
+ * 區網位址，手機最可能連得到的排前面：Wi-Fi > 其他實體網卡 > 虛擬網卡。
+ * @param {Record<string, Array<{family: string|number, internal: boolean, address: string}>>} interfaces os.networkInterfaces()
+ */
+export function rankLanAddresses(interfaces) {
+  const rows = [];
+  for (const [name, list] of Object.entries(interfaces ?? {})) {
+    for (const i of list ?? []) {
+      if (!i || i.internal || !(i.family === 'IPv4' || i.family === 4)) continue;
+      const rank = VIRTUAL_NAME.test(name) || VIRTUAL_ADDR.test(i.address) ? 2 : WIFI_NAME.test(name) ? 0 : 1;
+      rows.push({ address: i.address, rank, order: rows.length });
+    }
+  }
+  return rows.sort((a, b) => a.rank - b.rank || a.order - b.order).map((r) => r.address);
 }
 
 /** 存一張合照（photo_b64 是 data URL）。id 不合格式或寫入失敗回傳 null，不拋例外 */

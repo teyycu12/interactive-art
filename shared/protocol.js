@@ -44,7 +44,9 @@ export const EV = {
   HOST_KICK: 'HOST_KICK',                     // Host → Server：踢除參與者
   HOST_TAKE_PHOTO: 'HOST_TAKE_PHOTO',         // Host → Server：拍大合照（定位→合成）
   HOST_PHOTO_STATE: 'HOST_PHOTO_STATE',       // Server → Host：合照進度與結果
-  SCREEN_CAPTURE_REQ: 'SCREEN_CAPTURE_REQ',   // Server → Screen：請大螢幕交出當下畫面
+  SCREEN_CAPTURE_REQ: 'SCREEN_CAPTURE_REQ',   // Server → Screen：請大螢幕交出當下畫面（帶 people 時是另外合成合照）
+  SCREEN_PHOTO_QR: 'SCREEN_PHOTO_QR',         // Server → Screen：大合照的下載 QR {qr, visible}，右下角顯示
+  HOST_PHOTO_QR: 'HOST_PHOTO_QR',             // Host → Server：大螢幕的下載 QR 顯示／隱藏 {visible}
   SCREEN_CAPTURE: 'SCREEN_CAPTURE',           // Screen → Server：回傳截圖（合照底圖）
 
   // ── 任務生命週期（規格 v3.0 §03）──────────────────────
@@ -94,11 +96,14 @@ export const EV = {
   WORDCLOUD_ACK: 'WORDCLOUD_ACK',               // Server → Phone：結果與自己送過的答案 {ok, reason?, mine}
   WORDCLOUD_STATE: 'WORDCLOUD_STATE',           // Server → Screen/Host：目前的詞與票數（節流廣播）
   WORDCLOUD_CLOSED: 'WORDCLOUD_CLOSED',         // Server → All：本題收掉，附最終的詞與票數
+  HOST_DISMISS_WORDCLOUD: 'HOST_DISMISS_WORDCLOUD', // Host → Server：收起大螢幕上的文字雲結果
+  WORDCLOUD_DISMISS: 'WORDCLOUD_DISMISS',       // Server → Screen：收起文字雲結果
 
   // 人物賓果（server/bingo.js）。卡片是私人的，只送給本人；大螢幕只看排行
   HOST_SET_TOPICS: 'HOST_SET_TOPICS',         // Host → Server：話題桌開關 {enabled}
   HOST_START_BINGO: 'HOST_START_BINGO',       // Host → Server：開一輪 {durationMs?}
   HOST_END_BINGO: 'HOST_END_BINGO',           // Host → Server：結束本輪
+  HOST_BINGO_DEAL: 'HOST_BINGO_DEAL',         // Host → Server：自我介紹不等了，直接發卡
   BINGO_CARD: 'BINGO_CARD',                   // Server → Phone：自己的卡 {card, remainingMs}
   BINGO_CLAIM: 'BINGO_CLAIM',                 // Phone → Server：填格 {cell, code}（code 是對方的配對碼）
   BINGO_RESULT: 'BINGO_RESULT',               // Server → Phone：填格結果 {ok, reason?, name?, newLines?, full?}
@@ -322,6 +327,7 @@ export const SCORE_SOURCES = {
   HARVEST: 'HARVEST',         // 採水果接力完成（已移除的玩法）
   BINGO: 'BINGO',             // 人物賓果填格、連線、全滿
   GATHER: 'GATHER',           // GATHER 任務：湊滿人數到集合點
+  WORDCLOUD: 'WORDCLOUD',     // 回答文字雲（每送出一個答案）
 };
 
 /** 積分來源的顯示文案，集中定義避免三端各寫一套 */
@@ -333,6 +339,7 @@ export const SCORE_LABELS = {
   TREASURE: '找到寶藏',
   HARVEST: '採收接力',
   BINGO: '人物賓果',
+  WORDCLOUD: '回答文字雲',
 };
 
 /** 配對失敗原因，集中定義以便手機端顯示對應文案 */

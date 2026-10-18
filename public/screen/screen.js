@@ -23,6 +23,7 @@ import {
 import { layoutNameplates } from '/shared/nameplateLayout.js';
 import { stageViewport, onStageViewportChange } from './stageViewport.js';
 import { Sfx } from './sfx.js';
+import { renderGroupPhoto } from './photoRender.js';
 
 let activeScene = null;
 
@@ -381,6 +382,11 @@ function connect() {
         closeWordCloud(msg.result);
         break;
 
+      // 主持人收起結果（或伺服器時間到）。只收「已收題」的那一面，正在作答的題目不受影響
+      case EV.WORDCLOUD_DISMISS:
+        if (wcEl.classList.contains('closed')) { clearTimeout(wcHideTimer); wcEl.hidden = true; }
+        break;
+
       case EV.BINGO_STATE: {
         // 有人新連成一線：響一聲（BINGO_STATE 每填一格都會來，只有線數變多才響）
         const prevTop = bingoShown?.top?.[0]?.lines ?? 0;
@@ -415,18 +421,31 @@ function connect() {
         renderRanks(msg.leaderboard ?? []);
         break;
 
-      case EV.SCREEN_CAPTURE_REQ:
-        // 大合照的底圖只能由大螢幕自己提供 —— 3D 場景在 WebGL 畫布上，
-        // 伺服器端沒有等價的渲染路徑（見 server/index.js 的 takeGroupPhoto）。
-        //
+      case EV.SCREEN_PHOTO_QR:
+        showPhotoQr(msg);
+        break;
+
+      case EV.SCREEN_CAPTURE_REQ: {
+        // 兩種用途共用這條管線：
+        //   帶 people → 大合照。在看不見的畫布上另外合成一張全員到齊的房間（photoRender.js），
+        //               大螢幕畫面完全不變、場上的人照常走動。
+        //   不帶      → 主辦端「儲存畫面」，截大螢幕當下的樣子。
         // 走 HTTP 而非這條 WebSocket：截圖遠大於單則訊息上限（4KB），
         // 那個上限是擋惡意客戶端用的，不該為了合照對所有連線放寬。
-        fetch('/api/screen-capture', {
+        const post = (image) => fetch('/api/screen-capture', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ requestId: msg.requestId, image: captureStageFrame() }),
+          body: JSON.stringify({ requestId: msg.requestId, image }),
         }).catch(() => { /* 失敗就讓伺服器那邊逾時，退回無底圖版本 */ });
+        if (Array.isArray(msg.people)) {
+          renderGroupPhoto(activeScene, msg.people, { heightScale: CHARACTER_SCALE, worldHeight: CHARACTER_WORLD_HEIGHT })
+            .catch((err) => { console.warn('[photo] 合成失敗', err); return null; })
+            .then(post);   // null（3D 主題、合成失敗）→ 伺服器退回 Python 自畫的舞台
+        } else {
+          post(captureStageFrame());
+        }
         break;
+      }
     }
   });
 
@@ -654,6 +673,15 @@ function drawDebugOverlay(a, pos) {
  * 先強制 render 一次再讀：WebGL 的緩衝內容只在該幀有效，
  * 不重畫就可能讀到上一幀甚至空白（配合 preserveDrawingBuffer）。
  */
+// ── 大合照下載 QR ─────────────────────────────────────────
+// 拍完自動顯示，之後由主持人在主控端切換顯示／隱藏（SCREEN_PHOTO_QR 的 visible）。
+function showPhotoQr({ qr, visible } = {}) {
+  const box = document.getElementById('photo-qr');
+  if (!visible || typeof qr !== 'string' || !qr.startsWith('data:image/')) { box.hidden = true; return; }
+  document.getElementById('photo-qr-img').src = qr;
+  box.hidden = false;
+}
+
 function captureStageFrame() {
   // 整幀重畫（場景＋角色），不只重畫場景：大螢幕分頁在背景或縮小時瀏覽器會暫停
   // 動畫，角色那層停在很久以前的樣子 —— 合照只有房間沒有人（2026-10-17 實測：
@@ -662,17 +690,27 @@ function captureStageFrame() {
   for (const a of latest) view.set(a.id, { x: a.x, y: a.y });
   drawFrame(performance.now());
 
+  // 只截房間那一塊（像素場景剛好 16:9）。原本截整個視窗：大螢幕視窗不是 16:9 時
+  // （瀏覽器還有工具列、或投影機解析度不同）兩側多了深色邊，Python 再硬拉成
+  // 1920×1080，整個房間被壓扁或拉長（2026-10-19「合照長寬比跑掉了」）。
+  // 3D 主題沒有房間框，照舊截整個視窗，Python 那邊會等比縮放、不再硬拉。
+  const r = activeScene?.roomRect?.() ?? { x: 0, y: 0, w: innerWidth, h: innerHeight };
+  const k = canvas.width / innerWidth;   // 2D 畫布每 CSS px 幾個像素
   const out = document.createElement('canvas');
-  out.width = canvas.width;
-  out.height = canvas.height;
+  out.width = Math.max(1, Math.round(r.w * k));
+  out.height = Math.max(1, Math.round(r.h * k));
   const octx = out.getContext('2d');
+  // 各畫布的像素密度未必相同（WebGL 的 setPixelRatio 上限 1.5，2D 用完整 dpr），
+  // 每一張都依自己的密度換算要截的那一塊
+  const blit = (src) => {
+    const s = src.width / innerWidth;
+    octx.drawImage(src, r.x * s, r.y * s, r.w * s, r.h * s, 0, 0, out.width, out.height);
+  };
 
-  // 3D 房間在底層。WebGL 畫布的像素尺寸與 2D 畫布未必相同
-  // （setPixelRatio 上限 1.5，2D 用完整 dpr），因此明確拉伸到同一尺寸。
+  // 場景在底層，角色與名牌在上層
   const gl = activeScene?.canvas ?? activeScene?.renderer?.domElement;
-  if (gl) octx.drawImage(gl, 0, 0, out.width, out.height);
-  // 角色與名牌在上層
-  octx.drawImage(canvas, 0, 0);
+  if (gl) blit(gl);
+  blit(canvas);
 
   return out.toDataURL('image/png');
 }
@@ -1278,8 +1316,10 @@ function closeWordCloud(result) {
   document.getElementById('wc-meta').textContent = `${result?.participants ?? 0} 人作答・已收題`;
   document.getElementById('wc-hint').textContent = result?.words?.length ? '誰寫了這個？' : '這題沒有人作答';
   layoutWordCloud();
+  // 什麼時候收起由伺服器決定（主持人按「收起」或時間到，WORDCLOUD_DISMISS）。
+  // 這裡只留一個很長的保險：伺服器斷線收不到通知時，結果也不會永遠蓋著房間
   clearTimeout(wcHideTimer);
-  wcHideTimer = setTimeout(() => { wcEl.hidden = true; }, 30_000);
+  wcHideTimer = setTimeout(() => { wcEl.hidden = true; }, 5 * 60_000);
 }
 
 function layoutWordCloud() {

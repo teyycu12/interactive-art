@@ -126,7 +126,9 @@ screen.on('message', (d) => {
   if (m.type === 'WORDCLOUD_QUESTION') screenCloudQ = m.cloud;
   if (m.type === 'WORDCLOUD_STATE') screenCloud = m.cloud;
   if (m.type === 'WORDCLOUD_CLOSED') screenCloudClosed = m.result;
+  if (m.type === 'WORDCLOUD_DISMISS') screenCloudDismissed = true;
 });
+let screenCloudDismissed = false;
 let screenThemes = [];
 let screenCloudQ = null;
 let screenCloud = null;
@@ -616,13 +618,13 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
     await sleep(150);
     check('配分填錯被拒絕並說明原因', hostRejects.length === rejectsBefore + 1 && /問答答對/.test(hostRejects.at(-1)?.reason ?? ''),
       hostRejects.at(-1)?.reason);
-    host.send(JSON.stringify({ type: 'HOST_SET_SCORING', scoring: { pairCompletion: 7 } }));
+    host.send(JSON.stringify({ type: 'HOST_SET_SCORING', scoring: { missionFinish: 7 } }));
     await sleep(150);
-    check('主持人改的配分廣播回主辦端', views.at(-1)?.scoring?.pairCompletion === 7 && views.at(-1)?.isDefault === false,
+    check('主持人改的配分廣播回主辦端', views.at(-1)?.scoring?.missionFinish === 7 && views.at(-1)?.isDefault === false,
       JSON.stringify(views.at(-1)));
     host.send(JSON.stringify({ type: 'HOST_SET_SCORING', scoring: null }));
     await sleep(150);
-    check('配分可以恢復預設', views.at(-1)?.isDefault === true && views.at(-1)?.scoring?.pairCompletion === 20,
+    check('配分可以恢復預設', views.at(-1)?.isDefault === true && views.at(-1)?.scoring?.missionFinish === 10,
       JSON.stringify(views.at(-1)));
     host.off('message', onScoring);
   }
@@ -949,9 +951,13 @@ await sleep(300);
   host.send(JSON.stringify({ type: 'HOST_HIDE_WORD', word: '期待' }));
   await sleep(200);
   check('主持人隱藏的詞立刻從大螢幕消失', !words().includes('期待'), words());
+  const benBefore = ben.scores.at(-1)?.score ?? 0;
   say(ben, '期待');
   await sleep(450);
   check('被隱藏的詞之後有人再送也不會出現', !words().includes('期待') && ben.cloudAcks.at(-1)?.ok === true, words());
+  // 2026-10-19：回答文字雲每個答案得分（預設 5）
+  check('回答文字雲得分', (ben.scores.at(-1)?.score ?? 0) - benBefore === 5,
+    `${benBefore} → ${ben.scores.at(-1)?.score}`);
 
   // 主辦端重整：文字雲面板只由 WORDCLOUD_* 事件驅動，認證時要補送題目與雲
   const rehost = new WebSocket(URL);
@@ -988,6 +994,12 @@ await sleep(300);
   say(amy, '太晚了');
   await sleep(200);
   check('收題後送答案被拒', amy.cloudAcks.at(-1)?.reason === 'NO_ROUND');
+
+  // 收題後結果留在大螢幕上，主持人可以收起（2026-10-19：原本收題後不知道怎麼關掉）
+  check('收題後主辦端知道結果還留在大螢幕上', hostStates.at(-1)?.wordcloudResultShown === true);
+  host.send(JSON.stringify({ type: 'HOST_DISMISS_WORDCLOUD' }));
+  await sleep(300);
+  check('主持人按「收起」，大螢幕收到收起結果', screenCloudDismissed && hostStates.at(-1)?.wordcloudResultShown === false);
 }
 
 // ── 清場：只留小美與阿賓 ────────────────────────────────────
@@ -1224,7 +1236,7 @@ check('新任務已生效', hostStates.at(-1)?.missions?.[0]?.target === 2, `tar
   check('同樣的任務不能重複開', hostRejects.length === rejectsBefore + 1 && missionsNow().length === 2
     && /已經在進行中/.test(hostRejects.at(-1)?.reason ?? ''), hostRejects.at(-1)?.reason);
 
-  // 一次配對同時算進符合的兩個任務；配對分只給一次，達標獎勵每個任務各給一次
+  // 一次配對同時算進符合的兩個任務；配對本身不給分（2026-10-19），達標獎勵每個任務各給一次
   const tA = joinPhone('任務甲');
   const tB = joinPhone('任務乙');
   await sleep(700);
@@ -1234,7 +1246,7 @@ check('新任務已生效', hostStates.at(-1)?.missions?.[0]?.target === 2, `tar
   await sleep(400);
   const r1 = tA.results.at(-1);
   check('一次配對同時算進符合的兩個任務', r1?.ok && r1.missions?.length === 2, JSON.stringify(r1?.missions));
-  check('配對分只給一次，達標獎勵照任務各算（20 ＋ 顏色任務達標 50）', r1?.points === 70, `points=${r1?.points}`);
+  check('配對本身不給分，達標獎勵照任務各算（只有顏色任務達標 10）', r1?.points === 10, `points=${r1?.points}`);
 
   // 顏色不符的任務不算進去，但同時開著的一般配對任務照算
   host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'COLOR_HUNT', target: 1, colorFamily: other.id, force: true }));
@@ -1286,11 +1298,15 @@ check('新任務已生效', hostStates.at(-1)?.missions?.[0]?.target === 2, `tar
   const photoStates = [];
   host.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'HOST_PHOTO_STATE') photoStates.push(m); });
   // 大螢幕立刻交出（空的）底圖，省掉 8 秒的截圖逾時
+  const captureReqs = [];
+  let stagedSeen = false;
   screen.on('message', (d) => {
     const m = JSON.parse(d);
     if (m.type === 'SCREEN_CAPTURE_REQ') {
+      captureReqs.push(m);
       sendPost('/api/screen-capture', Buffer.from(JSON.stringify({ requestId: m.requestId, image: null })));
     }
+    if (m.type === 'STAGE_SYNC' && photoStates.length && m.agents.some((a) => a.mode === 'STAGED')) stagedSeen = true;
   });
   host.send(JSON.stringify({ type: 'HOST_TAKE_PHOTO' }));
   const deadline = Date.now() + 25000;
@@ -1301,7 +1317,13 @@ check('新任務已生效', hostStates.at(-1)?.missions?.[0]?.target === 2, `tar
   check('拍大合照時生成服務沒開，主辦端收到失敗而不是伺服器當掉',
     final?.phase === 'ERROR', JSON.stringify(photoStates.map((x) => x.phase)));
   check('拍完大合照伺服器仍存活', (await httpStatus('/screen/')) === 200);
-  check('預設的合照是原地拍', photoStates.find((x) => x.phase === 'STAGING')?.arrange === 'stay');
+  check('預設的合照是原地拍', photoStates.find((x) => x.phase === 'COMPOSING')?.arrange === 'stay');
+  // 合照是另一條合成管線（2026-10-19）：大螢幕收到名單在看不見的畫布上合成，場上的人不被定住
+  check('合照請大螢幕另外合成，帶著每個人的站位',
+    Array.isArray(captureReqs[0]?.people) && captureReqs[0].people.length > 0
+    && captureReqs[0].people.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && typeof p.name === 'string'),
+    JSON.stringify(captureReqs[0]?.people?.slice(0, 2)));
+  check('拍合照時場上的人照常走動（沒有被定住）', !stagedSeen);
 
   // 依互動排位：主辦端選了才換站位，流程其餘不變
   photoStates.length = 0;
@@ -1310,7 +1332,7 @@ check('新任務已生效', hostStates.at(-1)?.missions?.[0]?.target === 2, `tar
   while (Date.now() < deadline2 && !photoStates.some((x) => x.phase === 'DONE' || x.phase === 'ERROR')) {
     await sleep(200);
   }
-  check('選「依互動排位」時伺服器照著排', photoStates.find((x) => x.phase === 'STAGING')?.arrange === 'affinity',
+  check('選「依互動排位」時伺服器照著排', photoStates.find((x) => x.phase === 'COMPOSING')?.arrange === 'affinity',
     JSON.stringify(photoStates.map((x) => [x.phase, x.arrange])));
   check('依互動排位的合照同樣會結束（不卡在定位）',
     photoStates.some((x) => x.phase === 'ERROR' || x.phase === 'DONE'));

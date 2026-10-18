@@ -91,6 +91,11 @@ export class PairingSession {
     return true;
   }
 
+  /** 距離下一次輪換還有多久（手機在配對碼旁邊倒數，參與者才知道碼什麼時候會換） */
+  msUntilRotate(now = Date.now()) {
+    return Math.max(0, PAIRING.rotateMs - (now - this.lastRotateAt));
+  }
+
   /** 依碼找人，涵蓋仍在寬限期內的舊碼 */
   #findByCode(code, now) {
     for (const [id, entry] of this.codes) {

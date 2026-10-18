@@ -511,6 +511,7 @@ td.export { white-space: nowrap; }
   margin-top: 10px;
   display: block;
 }
+.photo-actions[hidden] { display: none; }
 .photo-actions {
   display: flex;
   align-items: center;
@@ -518,7 +519,7 @@ td.export { white-space: nowrap; }
   margin-top: 8px;
 }
 .photo-actions #photo-qr { width: 64px; height: 64px; border-radius: 6px; }
-.photo-actions .btn-ghost { flex: 1; text-align: center; text-decoration: none; }
+.photo-actions .btn-ghost { flex: 1; text-align: center; text-decoration: none; white-space: nowrap; }
 
 /* ── 場景主題選單 ───────────────────────────────────────────
    .theme-card 而非 .card：通用類名在這份樣式檔裡容易撞名（見 .swatch 的前例）。

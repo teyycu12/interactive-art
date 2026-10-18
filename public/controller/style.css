@@ -1660,9 +1660,61 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .bingo-fact[aria-pressed="true"]::before { content: '✓ '; }
 .bingo-cell.filled .who { font-size: 13px; font-weight: 800; color: var(--ok-ink); }
 .bingo-cell.filled .cond { font-weight: 500; color: var(--ink-soft); font-size: 11px; }
-.bingo-entry { display: flex; gap: 8px; align-items: flex-end; }
+/* 標題旁的本輪倒數。關閉鈕在右上角，留出它的位置 */
+.bingo-title { display: flex; align-items: baseline; gap: 10px; padding-right: 48px; }
+.bingo-timer {
+  font-size: 14px; font-weight: 800; color: var(--accent-ink);
+  font-variant-numeric: tabular-nums;
+}
+.bingo-timer:empty { display: none; }
+
+/* 自己的碼：一行就好（原本是大色塊，把九宮格與輸入列擠到畫面外） */
+.bingo-mycode {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 10px; padding: 8px 12px;
+  background: var(--wall); color: var(--paper);
+  border: 2px solid var(--ink); border-radius: var(--r-sm);
+  font-size: 13px; font-weight: 700;
+}
+.bingo-mycode b {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 24px; letter-spacing: .16em;
+}
+.bingo-mycode .code-timer { margin-left: auto; color: var(--paper); opacity: .85; }
+
+/* 輸入列黏在面板底部（面板本身會捲）：點了格子馬上看得到，不必往下捲 */
+.bingo-dock {
+  position: sticky;
+  bottom: calc(-22px - env(safe-area-inset-bottom));
+  margin: 0 -20px calc(-22px - env(safe-area-inset-bottom));
+  padding: 12px 20px calc(14px + env(safe-area-inset-bottom));
+  background: var(--paper);
+  border-top: 2px solid var(--ink);
+}
+.bingo-dock .sheet-msg { margin-bottom: 10px; }
+.bingo-hint { margin: 0; font-size: 15px; font-weight: 700; color: var(--ink-soft); text-align: center; }
+.bingo-hint[hidden] { display: none; }
+.bingo-entry { display: flex; gap: 10px; align-items: flex-end; }
 .bingo-entry[hidden] { display: none; }
 .bingo-entry .sheet-field { flex: 1; margin-bottom: 0; }
+.bingo-entry .sheet-field > span { font-size: 13px; color: var(--ink); }
+/* 跟配對的輸入框一樣大：4 位數字要看得清楚、好按 */
+#bingo-input {
+  font: inherit;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 30px; font-weight: 700;
+  letter-spacing: .22em; text-indent: .22em; text-align: center;
+  width: 100%; box-sizing: border-box; padding: 10px;
+  border: 2.5px solid var(--ink); border-radius: var(--r);
+  background: #FFFCF5; color: var(--ink);
+  box-shadow: inset 0 3px 0 rgba(58, 46, 39, .08);
+}
+#bingo-input::placeholder { color: var(--line); }
+#btn-bingo-submit { min-height: 60px; min-width: 88px; font-size: 18px; }
+
+/* 配對碼旁的倒數：低調，但看得到 */
+.code-timer { font-size: 12px; font-weight: 700; opacity: .8; white-space: nowrap; }
+.mycode-timer { display: block; margin-top: 4px; font-size: 13px; font-weight: 700; opacity: .85; }
 
 /* 話題桌的題目卡：跟揮手提示同一個位置，但用紙色底 —— 這是要念出來聊的題目，不是待辦 */
 .topic-card {

@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 
-import { photoUrlBase, savePhoto, photoPath } from '../server/photos.js';
+import { photoUrlBase, savePhoto, photoPath, requestOrigin, rankLanAddresses } from '../server/photos.js';
 import { createHttpLayer } from '../server/httplayer.js';
 
 const ID = 'photo_1792169613_3p_18f34d68';
@@ -32,6 +32,48 @@ describe('合照網址', () => {
 
   test('沒有區網位址時退回 localhost', () => {
     assert.equal(photoUrlBase({ scheme: 'http', port: 3000, lanAddrs: [] }), 'http://localhost:3000/photos');
+  });
+});
+
+describe('合照網址：主辦端的網址與網卡排序（2026-10-19「QR code 不能用」）', () => {
+  test('主辦端經 ngrok 開，QR 就給 ngrok 網址', () => {
+    const base = photoUrlBase({
+      scheme: 'https', port: 3000, lanAddrs: ['192.168.50.208'], viewerOrigin: 'https://abc.ngrok-free.dev',
+    });
+    assert.equal(base, 'https://abc.ngrok-free.dev/photos');
+  });
+
+  test('主辦端開在 localhost 時不用它（手機上的 localhost 是手機自己）', () => {
+    for (const viewerOrigin of ['https://localhost:3000', 'http://127.0.0.1:3000', 'https://[::1]:3000']) {
+      const base = photoUrlBase({ scheme: 'https', port: 3000, lanAddrs: ['192.168.50.208'], viewerOrigin });
+      assert.equal(base, 'https://192.168.50.208:3000/photos', viewerOrigin);
+    }
+  });
+
+  test('PUBLIC_HOST 可以是完整網址（start-public.sh 設的外網網址），優先於主辦端網址', () => {
+    const base = photoUrlBase({
+      scheme: 'https', port: 3000, lanAddrs: [], publicHost: 'https://abc.ngrok-free.dev/',
+      viewerOrigin: 'https://192.168.50.208:3000',
+    });
+    assert.equal(base, 'https://abc.ngrok-free.dev/photos');
+  });
+
+  test('連線網址：經代理時用 X-Forwarded-Host／Proto', () => {
+    const req = { headers: { host: 'localhost:3000', 'x-forwarded-host': 'abc.ngrok-free.dev', 'x-forwarded-proto': 'https' } };
+    assert.equal(requestOrigin(req, 'https'), 'https://abc.ngrok-free.dev');
+    assert.equal(requestOrigin({ headers: { host: '192.168.50.208:3000' } }, 'https'), 'https://192.168.50.208:3000');
+    assert.equal(requestOrigin({ headers: { host: 'evil.com/<x>' } }, 'https'), null);
+    assert.equal(requestOrigin({ headers: {} }, 'https'), null);
+  });
+
+  test('VirtualBox 的 192.168.56.x 排到 Wi-Fi 後面（中文 Windows 上它叫「乙太網路」）', () => {
+    const ifaces = {
+      乙太網路: [{ family: 'IPv4', internal: false, address: '192.168.56.1' }],
+      'Wi-Fi': [{ family: 'IPv4', internal: false, address: '192.168.50.208' }],
+      'vEthernet (WSL)': [{ family: 'IPv4', internal: false, address: '172.20.0.1' }],
+      lo: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }],
+    };
+    assert.deepEqual(rankLanAddresses(ifaces), ['192.168.50.208', '192.168.56.1', '172.20.0.1']);
   });
 });
 

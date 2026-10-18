@@ -372,8 +372,16 @@ def upload_photo(image_bytes: bytes, photo_id: str = "pixelair") -> Optional[str
     )
 
 
+# 截圖不是 16:9 時補邊的顏色，與大螢幕像素場景外圍的深色邊相同
+_LETTERBOX = (56, 60, 67, 255)
+
+
 def _decode_backdrop(backdrop: Optional[str], width: int, height: int):
     """把大螢幕交回的截圖解成畫布尺寸的底圖。
+
+    等比縮放、置中，比例不合的部分補深色邊 —— 原本直接 resize 成畫布尺寸，
+    大螢幕視窗不是 16:9 時整個房間被壓扁或拉長（2026-10-19「合照長寬比跑掉了」）。
+    現在大螢幕只截房間那一塊（本身就是 16:9），這裡是給 3D 主題與舊版大螢幕的保險。
 
     任何解不開的情況（None、格式壞掉、被截斷）都回 None，讓呼叫端安靜地
     退回自畫舞台 —— 合照失敗對現場的代價，遠高於背景不是 3D 房間。
@@ -384,7 +392,11 @@ def _decode_backdrop(backdrop: Optional[str], width: int, height: int):
         raw = backdrop.split(",", 1)[1] if backdrop.startswith("data:image") else backdrop
         img = Image.open(io.BytesIO(base64.b64decode(raw))).convert("RGBA")
         if img.size != (width, height):
-            img = img.resize((width, height), Image.Resampling.LANCZOS)
+            scale = min(width / img.width, height / img.height)
+            fit = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))),
+                             Image.Resampling.LANCZOS)
+            img = Image.new("RGBA", (width, height), _LETTERBOX)
+            img.paste(fit, ((width - fit.width) // 2, (height - fit.height) // 2))
         return img
     except Exception as e:
         print(f"[photo_composer] 底圖解碼失敗，改用自畫舞台：{e}")
@@ -528,6 +540,11 @@ def compose_group_photo(
 ) -> Dict[str, Any]:
     """
     合成大合照主入口。
+
+    照片固定 width x height（16:9，與大螢幕同比例）。標題列疊在最上面一條、QR 疊在右下角。
+    characters 是合照裡的每一個人（含有參與但已不在場的人，由互動層決定站位）；
+    backdrop 是大螢幕另外合成好的全員房間（public/screen/photoRender.js），有它時這裡不再畫人。
+
     回傳字典包含 ok, photo_id, photo_bytes, photo_b64, qr_b64, character_count。
     若 IMGUR_CLIENT_ID 有設定，會自動上傳至 Imgur 並把 QR Code 指向公開 URL。
     """
@@ -609,47 +626,34 @@ def compose_group_photo(
                 paste_y = row_baseline_y - char_img.height
                 canvas.paste(char_img, (paste_x, paste_y), char_img)
 
-    # 3. 標題橫幅與紀念邊框
-    # 頂部裝飾條
-    draw.rectangle([0, 0, width, 90], fill=(10, 12, 22, 220))
-    draw.line([(0, 90), (width, 90)], fill=(255, 215, 0, 160), width=2)
-    # 標題文字
-    draw.text((60, 26), title, fill=(255, 255, 255, 255), font=_cjk_font(26))
+    # 3. 疊在場景上的標題列。照片固定 16:9（width x height），標題蓋住最上面一條（牆頂）。
+    #    照片上不放 QR（2026-10-19）：下載 QR 改由大螢幕右下角顯示，照片本身是紀念品，
+    #    不該帶著一塊下載用的條碼。qr_b64 仍回傳給互動層轉給大螢幕。
+    overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    odraw = ImageDraw.Draw(overlay)
+    odraw.rectangle([0, 0, width, _HEAD_H], fill=(10, 12, 22, 225))
+    odraw.line([(0, _HEAD_H), (width, _HEAD_H)], fill=(255, 215, 0, 160), width=2)
+    canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    draw.text((60, 18), title, fill=(255, 255, 255, 255), font=_cjk_font(26))
     date_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
-    meta_text = f"時間：{date_str}   在場人數：{total} 人   ID：{photo_id}"
-    draw.text((60, 58), meta_text, fill=(160, 180, 210, 255), font=_cjk_font(16))
+    meta_text = f"時間：{date_str}   參與人數：{total} 人   ID：{photo_id}"
+    draw.text((60, 52), meta_text, fill=(160, 180, 210, 255), font=_cjk_font(16))
 
-    # 4. 右下角 QR Code 紀念印章
-    qr_size = 140
-    qr_img = _create_qr_image(photo_url, size=qr_size)
-    qr_bg = Image.new("RGBA", (qr_size + 24, qr_size + 50), (255, 255, 255, 240))
-    qr_draw = ImageDraw.Draw(qr_bg)
-    qr_bg.paste(qr_img, (12, 10))
-    qr_draw.text((16, qr_size + 16), "掃描下載合照", fill=(20, 20, 20, 255), font=_cjk_font(18))
-
-    badge_x = width - qr_size - 60
-    badge_y = height - qr_size - 80
-    canvas.paste(qr_bg, (badge_x, badge_y), qr_bg)
-
-    # 5. 輸出二進位與 Base64
+    # 4. 輸出二進位與 Base64
     buf = io.BytesIO()
     canvas.convert("RGB").save(buf, format="PNG", optimize=True)
     photo_bytes = buf.getvalue()
     photo_b64 = "data:image/png;base64," + base64.b64encode(photo_bytes).decode("utf-8")
 
-    # 5.5 嘗試上傳雲端圖床：成功則 QR 指向公網 URL，任何手機都能掃
+    # 5. 嘗試上傳雲端圖床：成功則 QR 指向公網 URL，任何手機都能掃
     cloud_url = upload_photo(photo_bytes, photo_id=photo_id)
     if cloud_url:
         photo_url = cloud_url
-        # 重新生成 QR Code 指向公開 URL，並重繪回畫布
-        qr_img = _create_qr_image(cloud_url, size=qr_size)
-        qr_bg.paste(qr_img, (12, 10))
-        canvas.paste(qr_bg, (badge_x, badge_y), qr_bg)
-        buf = io.BytesIO()
-        canvas.convert("RGB").save(buf, format="PNG", optimize=True)
-        photo_bytes = buf.getvalue()
-        photo_b64 = "data:image/png;base64," + base64.b64encode(photo_bytes).decode("utf-8")
 
+    # 6. 下載 QR（給大螢幕右下角顯示）。放大一點：投影在場地另一頭也要掃得到
+    qr_img = _create_qr_image(photo_url, size=_QR_SIZE)
     qr_buf = io.BytesIO()
     qr_img.save(qr_buf, format="PNG")
     qr_b64 = "data:image/png;base64," + base64.b64encode(qr_buf.getvalue()).decode("utf-8")
@@ -664,3 +668,8 @@ def compose_group_photo(
         "character_count": total,
         "timestamp": timestamp,
     }
+
+
+# 版面尺寸（px）。標題列疊在場景上，照片維持 16:9
+_HEAD_H = 90
+_QR_SIZE = 360

@@ -19,8 +19,10 @@
  * 「顏色預檢不可成為枚舉管道」。本模組只管規則。
  *
  * ── 開局先問幾句自我介紹（shared/bingoFacts.js）──
- * 有自我介紹題時，一輪分兩段：先 `ask`（每人勾自己符合的，最多 askMs），
- * 全部答完或時間到才發卡（`play`）。卡要等答案回來才發得出來 ——
+ * 有自我介紹題時，一輪分兩段：先 `ask`（每人勾自己符合的），
+ * 在線的人全部答完才發卡（`play`）。預設不限時（2026-10-19：原本 30 秒，試玩回饋太短）；
+ * 有人一直不答時由主持人按「直接發卡」（index.js 的 HOST_BINGO_DEAL）。
+ * askMs 仍可傳，給要限時的場合與測試用。卡要等答案回來才發得出來 ——
  * 「場上至少有一人符合」才放進卡裡，而那要先知道誰勾了什麼。
  * 發卡之後才進場的人直接拿卡、不再問，免得他的卡一直發不出來。
  *
@@ -32,6 +34,12 @@
  * 「同一個人只能填一格」逼人去認識不同的人，但 9 格要 9 個不同的人 ——
  * 場上不到 10 人時全卡永遠填不滿，而主辦端看不出來。所以上限是
  * ceil(9 ÷ 其他人數)：10 人以上照舊一人一格，8 人時一人最多兩格。
+ *
+ * ── 稀有的格子可以重複找同一個人（2026-10-19）──
+ * 「場上只有一兩個人會樂器」的格子，本來就只能找那幾個人；他已經填在你卡上別格的話，
+ * 這格就永遠填不了。所以：場上（不算自己、只算在線的人）符合這格的人 ≤ SCARCE_MATCHES 時，
+ * 可以填已經用過的人；符合的人多的格子照舊擋下，逼你去找別人。上面的人數上限仍然有效
+ * （兩條任一條成立就放行）—— 人少時常見的格子也湊不到那麼多不同的人。
  *
  * ── 被找的人也能順便填 ──
  * A 輸入 B 的碼填格之後，若 A 也符合 B 卡上還空著的某一格，B 的手機會問
@@ -66,6 +74,9 @@ export const STRANGER = 'STRANGER';
 
 /** 一張卡上同一類格子（顏色、類型、問卷、自我介紹）最多幾格 */
 export const KIND_CAP = 3;
+
+/** 場上符合某格的人不超過這個數，就允許填已經在你卡上別格的人（見檔頭「稀有的格子」） */
+export const SCARCE_MATCHES = 2;
 
 /** 被找的人「順便填」的邀請多久內有效 */
 export const OFFER_TTL_MS = 90_000;
@@ -106,21 +117,24 @@ export class BingoRound {
    * @param {string[]} agentIds 場上的人
    * @param {Condition[]} pool 候選條件（呼叫端已濾掉「場上沒有任何人符合」的）
    * @param {Tester} test 判定某人是否符合某條件
-   * @param {{durationMs?: number|null, facts?: string[], askMs?: number, rng?: () => number}} [opts]
+   * @param {{durationMs?: number|null, facts?: string[], askMs?: number|null, rng?: () => number,
+   *   present?: () => string[]}} [opts]
    *   facts：這一輪要問的自我介紹題（空的話跳過 ask，直接發卡）
+   *   present：現在在場（在線）的人，判斷某格稀不稀有時用；沒給就只看人數上限
    */
   start(agentIds, pool, test, {
-    durationMs = null, facts = [], askMs = 30_000, rng = Math.random, now = Date.now(),
+    durationMs = null, facts = [], askMs = null, rng = Math.random, now = Date.now(), present = null,
   } = {}) {
     if (this.round) return { ok: false, reason: '已有進行中的賓果，請先結束' };
     if (agentIds.length < 2) return { ok: false, reason: '至少需要 2 位參與者才能開始賓果' };
     this.test = test;
     this.rng = rng;
+    this.present = present;
     this.round = {
       id: `bgo_${randomUUID().slice(0, 8)}`,
       startedAt: now,
       phase: facts.length ? 'ask' : 'play',
-      askEndsAt: facts.length ? now + askMs : null,
+      askEndsAt: facts.length && askMs ? now + askMs : null,
       durationMs,
       endsAt: null,
       cards: new Map(),
@@ -158,11 +172,11 @@ export class BingoRound {
     return this.round?.answers.get(agentId)?.has(factId) ?? false;
   }
 
-  /** ask 階段是否該結束：時間到，或在場的人都答完了 */
+  /** ask 階段是否該結束：在場的人都答完了，或（有限時的話）時間到 */
   readyToPlay(presentIds, now = Date.now()) {
     const r = this.round;
     if (!r || r.phase !== 'ask') return false;
-    return now >= r.askEndsAt || presentIds.every((id) => r.answers.has(id));
+    return (r.askEndsAt !== null && now >= r.askEndsAt) || presentIds.every((id) => r.answers.has(id));
   }
 
   /**
@@ -231,7 +245,7 @@ export class BingoRound {
     const cell = card.cells[cellIndex];
     if (cell.by) return { ok: false, reason: BINGO_ERRORS.FILLED };
     if (targetId === fromId) return { ok: false, reason: BINGO_ERRORS.SELF };
-    if (this.#uses(card, targetId) >= this.maxUses()) return { ok: false, reason: BINGO_ERRORS.USED };
+    if (!this.#mayReuse(card, cell, targetId, fromId)) return { ok: false, reason: BINGO_ERRORS.USED };
     if (!this.test(targetId, cell.cond.id, fromId)) return { ok: false, reason: BINGO_ERRORS.MISMATCH };
 
     cell.by = targetId;
@@ -255,6 +269,21 @@ export class BingoRound {
   }
 
   /**
+   * 這格可不可以填 targetId：他在這張卡上用的格數還沒到上限，或這格稀有
+   * （場上符合的人 ≤ SCARCE_MATCHES，見檔頭）。
+   */
+  #mayReuse(card, cell, targetId, ownerId) {
+    if (this.#uses(card, targetId) < this.maxUses()) return true;
+    return this.matchCount(cell.cond.id, ownerId) <= SCARCE_MATCHES;
+  }
+
+  /** 場上（不算 ownerId 自己、只算在線的人）符合某條件的人數。不知道誰在場時回傳 Infinity（不放寬） */
+  matchCount(condId, ownerId) {
+    if (typeof this.present !== 'function') return Infinity;
+    return this.present().filter((id) => id !== ownerId && this.test(id, condId, ownerId)).length;
+  }
+
+  /**
    * from 剛把 target 填進自己的卡。看 from 符不符合 target 卡上還空著的某一格，
    * 符合就記一筆邀請（同一人只留最新的一筆）。
    * 優先挑填了會連成線的那一格，其次照格子順序。
@@ -263,10 +292,10 @@ export class BingoRound {
   offerFor(targetId, fromId, now = Date.now()) {
     const r = this.round;
     const card = r?.cards.get(targetId);
-    if (!card || this.#uses(card, fromId) >= this.maxUses()) return null;
+    if (!card) return null;
     const open = card.cells
       .map((c, i) => ({ c, i }))
-      .filter(({ c }) => !c.by && this.test(fromId, c.cond.id, targetId));
+      .filter(({ c }) => !c.by && this.test(fromId, c.cond.id, targetId) && this.#mayReuse(card, c, fromId, targetId));
     if (!open.length) return null;
     const completes = (i) => BINGO_LINES.some((l) => l.includes(i) && l.every((j) => j === i || card.cells[j].by));
     const best = open.find(({ i }) => completes(i)) ?? open[0];

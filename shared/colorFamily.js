@@ -49,6 +49,24 @@ export const COLOR_FAMILY_MAP = Object.fromEntries(
  */
 const MONO_SATURATION = 0.12;
 
+/**
+ * 暗而且不鮮豔的顏色，人看起來就是「黑／深色」，不會說它是紅或橘。
+ *
+ * 2026-10-19 試玩：黑上衣在暖色燈光下取樣成 #4D2A24（暗咖啡，亮度 0.22、飽和度 0.36），
+ * 色相 8° 落在紅色區間 —— 全場沒人穿紅，賓果卻出了「衣服有紅色的人」那格、
+ * 顏色任務也會判他符合。暗色只有夠鮮豔（真正的酒紅、深藍）才保留色族：
+ * #800000（酒紅，飽和度 1.0）仍是紅，#1F3A93（深藍）仍是藍。
+ */
+const DARK_LIGHTNESS = 0.3;
+const DARK_VIVID_SATURATION = 0.55;
+
+/**
+ * 同理，很亮而且很淡的顏色看起來就是白：白褲子在生成圖裡常帶一點冷色陰影（#DCE1EA），
+ * 不該被判成藍。粉藍 #BFD9F2（飽和度 0.68）、淺牛仔 #A8C0DD（亮度 0.76）仍保留色族。
+ */
+const LIGHT_LIGHTNESS = 0.82;
+const LIGHT_PALE_SATURATION = 0.4;
+
 /** #RRGGBB → {h: 0–360, s: 0–1, l: 0–1} */
 export function hexToHSL(hex) {
   const m = /^#([0-9a-fA-F]{6})$/.exec(String(hex ?? '').trim());
@@ -87,6 +105,8 @@ export function familyOf(hex) {
   // 極暗、極亮或低飽和一律歸為無彩色。順序不能調到色相判定之後，
   // 理由見 COLOR_FAMILIES 的 MONO 註解。
   if (hsl.s < MONO_SATURATION || hsl.l < 0.12 || hsl.l > 0.92) return 'MONO';
+  if (hsl.l < DARK_LIGHTNESS && hsl.s < DARK_VIVID_SATURATION) return 'MONO';
+  if (hsl.l > LIGHT_LIGHTNESS && hsl.s < LIGHT_PALE_SATURATION) return 'MONO';
   for (const f of COLOR_FAMILIES) {
     if (f.hueRange && hueIn(hsl.h, f.hueRange)) return f.id;
   }

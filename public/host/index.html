@@ -190,6 +190,8 @@
         <p class="hint tiny">看到不適合的詞，按「隱藏」會立刻從大螢幕拿掉（本題內同一個詞不會再出現）。</p>
         <button class="btn-danger" id="btn-wordcloud-close">收題</button>
       </div>
+      <!-- 收題後結果還留在大螢幕上：按這顆收起（沒按的話 60 秒後自動收起，開始問答或賓果時也會收起） -->
+      <button class="btn-ghost" id="btn-wordcloud-dismiss" hidden>收起大螢幕上的文字雲結果</button>
 
       <p class="err" id="wordcloud-err" hidden></p>
     </div>
@@ -244,6 +246,8 @@
           <summary>每個人勾的自我介紹</summary>
           <ul id="bingo-picks"></ul>
         </details>
+        <!-- 自我介紹不限時（2026-10-19），大家答完才發卡；有人一直沒答時主持人按這顆 -->
+        <button class="btn-primary" id="btn-bingo-deal" hidden>不等了，直接發卡</button>
         <button class="btn-danger" id="btn-bingo-end">結束本輪</button>
       </div>
 
@@ -522,14 +526,19 @@
           <option value="affinity">依互動排位：今天越熟的人站越近</option>
         </select>
       </label>
-      <button class="btn-primary sp-photo" id="btn-photo" title="所有角色轉向鏡頭，就定位後自動拍攝">拍大合照</button>
+      <button class="btn-primary sp-photo" id="btn-photo" title="另外合成一張全員到齊的合照（含今天參與過、已經離開的人），大螢幕畫面不受影響。拍完自動下載">拍大合照</button>
       <p class="hint tiny" id="photo-status" hidden></p>
       <div id="photo-result" hidden>
         <img id="photo-img" alt="大合照">
-        <div class="photo-actions">
-          <a class="btn-ghost" id="photo-download" download>下載合照</a>
-          <img id="photo-qr" alt="下載用 QR Code">
-        </div>
+      </div>
+      <!-- 拍過大合照才出現（重新整理後也在：照片與 QR 由伺服器提供）。同一行：
+           大螢幕右下角 QR 的顯示／隱藏、下載、QR 本身（2026-10-19） -->
+      <div class="photo-actions" id="photo-actions" hidden>
+        <button class="btn-ghost" id="btn-photo-qr" aria-pressed="false"
+                title="大螢幕右下角的合照下載 QR Code，點一下切換顯示／隱藏">QR 顯示中</button>
+        <!-- 不顯示：拍完自動存到主控電腦（host.js 用它觸發下載） -->
+        <a id="photo-download" download hidden></a>
+        <img id="photo-qr" alt="下載用 QR Code">
       </div>
       <p class="err" id="photo-err" hidden></p>
       <p class="hint tiny" id="screen-status" hidden role="status"></p>

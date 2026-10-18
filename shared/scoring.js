@@ -11,11 +11,13 @@
 export const SCORING_FIELDS = [
   { key: 'quizCorrect', label: '問答答對' },
   { key: 'quizSpeedBonus', label: '問答速度加成上限' },
-  { key: 'pairCompletion', label: '每完成一次配對' },
+  // 任務只有一項：做到目標才給分（2026-10-19 拿掉「每完成一次配對」—— 每配對一次就給分的話，
+  // 任務的目標次數失去意義，而且跟達標獎勵兩項加起來，主持人算不清楚一個任務值多少分）
   { key: 'missionFinish', label: '任務達標' },
   { key: 'bingoCell', label: '賓果每填一格' },
   { key: 'bingoLine', label: '賓果每連一線' },
   { key: 'bingoFull', label: '賓果全卡填滿' },
+  { key: 'wordcloudAnswer', label: '回答文字雲（每個答案）' },
 ];
 
 /** 單項上限：再大就是打錯字（多按了一個 0），而且排行榜會被一題洗掉 */

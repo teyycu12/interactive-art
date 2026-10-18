@@ -7,7 +7,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { affinityFrom, orderByAffinity, formationSlots, arrangeByAffinity } from '../server/photoLayout.js';
+import { affinityFrom, orderByAffinity, formationSlots, arrangeByAffinity, guestSpots } from '../server/photoLayout.js';
 import { Stage } from '../server/state.js';
 import { STAGE } from '../shared/protocol.js';
 import { OBSTACLES, obstacleDistance } from '../shared/scene.js';
@@ -137,4 +137,46 @@ test('排位之後角色真的走得到（會繞過道具，不會卡在沙發�
     const d = Math.hypot(a.x - a.targetX, a.y - a.targetY);
     assert.ok(d < 20, `${a.name} 12 秒後離位置還有 ${d.toFixed(0)}，卡住了`);
   }
+});
+
+describe('合照的臨時人物站位（guestSpots，2026-10-19）', () => {
+  const field = { stage: STAGE, obstacles: OBSTACLES, obstacleDistance };
+  const crowd = [{ x: 1300, y: 640 }, { x: 1430, y: 640 }];
+
+  test('補進人群旁邊，不疊在在場的人或彼此身上、不進家具', () => {
+    const spots = guestSpots(6, crowd, field);
+    assert.equal(spots.length, 6);
+    const all = [...crowd, ...spots];
+    for (let i = 0; i < all.length; i++) {
+      for (let j = i + 1; j < all.length; j++) {
+        // 並排（左右至少一個身位）或前後差一整個身位＋名牌，不能斜斜地疊在後面
+        const ok = Math.abs(all[i].x - all[j].x) >= 115 || Math.abs(all[i].y - all[j].y) >= 175;
+        assert.ok(ok, `${JSON.stringify(all[i])} 與 ${JSON.stringify(all[j])} 太近`);
+      }
+    }
+    for (const s of spots) {
+      assert.ok(OBSTACLES.every((o) => obstacleDistance(o, s.x, s.y) >= o.r + 40), `${s.x},${s.y} 在家具裡`);
+    }
+    // 離人群不遠：都在人群中心 700 單位內
+    for (const s of spots) assert.ok(Math.hypot(s.x - 1365, s.y - 640) < 700);
+  });
+
+  test('場上沒人時從地板中間開始排', () => {
+    const spots = guestSpots(3, [], field);
+    assert.equal(spots.length, 3);
+    for (const s of spots) assert.ok(Math.abs(s.x - STAGE.width / 2) < 500);
+  });
+
+  test('人數為 0 回傳空陣列；場地塞不下時少給，不硬塞', () => {
+    assert.deepEqual(guestSpots(0, crowd, field), []);
+    const many = guestSpots(500, crowd, field);
+    assert.ok(many.length > 40 && many.length < 500);
+  });
+
+  test('依互動排位：沒有座標的臨時人物排不進隊形就不出現', () => {
+    const tiny = { ...field, stage: { width: 300, height: 300 }, obstacles: [] };
+    const out = arrangeByAffinity([{ id: 'a', x: 100, y: 100 }, { id: 'ghost' }], () => 0, { ...tiny, perRow: 1, dx: 1000 });
+    assert.ok(out.has('a'));
+    for (const [, p] of out) assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y));
+  });
 });

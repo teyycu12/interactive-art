@@ -38,6 +38,8 @@ export class PixelScene {
   projectToScreen(x, y) { return { x: this.ox + (GX + x) * this.zoom, y: this.oy + (GY + y) * this.zoom }; }
   scaleAt(x, y, height) { return Number.isFinite(x + y + height) ? height * CHARACTER_SCALE * this.zoom : 0; }
   resetCamera() { this.resize(); }
+  /** 房間在視窗裡的位置（CSS px）。合照只截這一塊：剛好 16:9，不含兩側的深色邊（screen.js captureStageFrame） */
+  roomRect() { return { x: this.ox, y: this.oy, w: W * this.zoom, h: H * this.zoom }; }
   applyLight(name) { if (['day', 'evening', 'night'].includes(name)) this.light = name; }
   resize() {
     // 畫布仍是整個視窗（背景色要鋪滿），但房間只縮放並置中到可用區裡 ——
@@ -93,6 +95,22 @@ export class PixelScene {
     if (this.light !== 'day') {
       c.fillStyle = this.light === 'night' ? 'rgba(31,49,65,.34)' : 'rgba(221,131,68,.18)';
       c.fillRect(-this.ox / this.zoom, -this.oy / this.zoom, innerWidth / this.zoom, innerHeight / this.zoom);
+    }
+  }
+  /**
+   * 畫一張靜止的房間（底圖、道具、桌號、燈光）到另一張畫布，給大合照用（screen/photoRender.js）。
+   * 不碰這個場景自己的畫布與動畫狀態：拍合照不能改變大螢幕的畫面。
+   */
+  paintStill(c) {
+    c.drawImage(this.staticCanvas, 0, 0);
+    for (const p of [...this.props].sort((a, b) => a.y - b.y)) {
+      this.constructor.paintProp(c, p, this.item(p)[0], -1, true);
+    }
+    const spots = this.spots();
+    for (const p of this.props) if (spots[p.id]) spotBadge(c, GX + p.x, GY + p.y + 46, spots[p.id]);
+    if (this.light !== 'day') {
+      c.fillStyle = this.light === 'night' ? 'rgba(31,49,65,.34)' : 'rgba(221,131,68,.18)';
+      c.fillRect(0, 0, W, H);
     }
   }
   dispose() { removeEventListener('resize', this.onResize); this.offViewport?.(); this.canvas.remove(); this.ui.remove(); }

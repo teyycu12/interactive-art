@@ -393,3 +393,51 @@ class TestAnalyzeCuts:
     def test_ignores_fully_transparent_sample(self):
         blank = PILImage.new("RGBA", (50, 50), (0, 0, 0, 0))
         assert analyze_cuts([make_minifig(), blank])["samples"] >= 1
+
+
+class TestClothingColorOnBigHeadFigures:
+    """2026-10-19：大頭 Q 版（約 2.2 頭身）的「上身」那一塊有一半是臉，
+    取中位數會落在膚色上 —— 白襯衫被判成「橘黃」，賓果與顏色任務出錯。"""
+
+    SKIN = (216, 148, 108, 255)        # #D8946C
+    HAIR = (28, 28, 28, 255)
+
+    def _parts(self, torso_color, legs_top, legs_bottom, size=(200, 200)):
+        w, h = size
+        head = np.zeros((h, w, 4), np.uint8)
+        head[: h // 2] = self.HAIR
+        head[h // 2:] = self.SKIN
+        head[h // 2:, : w // 4] = self.HAIR            # 兩側長髮
+        torso = np.zeros((h, w, 4), np.uint8)
+        torso[: int(h * 0.45)] = self.SKIN             # 下巴與脖子佔了將近一半
+        torso[int(h * 0.45):] = torso_color
+        legs = np.zeros((h, w, 4), np.uint8)
+        legs[: h // 2] = legs_top
+        legs[h // 2:] = legs_bottom
+        return {k: PILImage.fromarray(v, "RGBA") for k, v in (("head", head), ("torso", torso), ("legs", legs))}
+
+    @staticmethod
+    def _close(hex_str, rgb, tol=12):
+        n = int(hex_str[1:], 16)
+        got = ((n >> 16) & 255, (n >> 8) & 255, n & 255)
+        return all(abs(a - b) <= tol for a, b in zip(got, rgb[:3]))
+
+    def test_white_shirt_is_not_skin(self):
+        c = sample_fallback_colors(self._parts((236, 237, 238, 255), (34, 34, 34, 255), (34, 34, 34, 255)))
+        assert self._close(c["skin"], self.SKIN)
+        assert self._close(c["torso"], (236, 237, 238)), c
+
+    def test_red_shirt_stays_red(self):
+        c = sample_fallback_colors(self._parts((192, 57, 43, 255), (40, 50, 90, 255), (40, 50, 90, 255)))
+        assert self._close(c["torso"], (192, 57, 43)), c
+        assert self._close(c["legs"], (40, 50, 90)), c
+
+    def test_bare_legs_lighter_than_face_are_still_skin(self):
+        """裙子＋露出的小腿（打光比臉亮一階）：腿的顏色要是裙子，不是皮膚"""
+        c = sample_fallback_colors(self._parts((240, 240, 240, 255), (140, 139, 145, 255), (236, 190, 164, 255)))
+        assert self._close(c["legs"], (140, 139, 145)), c
+
+    def test_all_skin_falls_back_to_skin(self):
+        """整塊都是皮膚（無袖＋短褲）時照實回報膚色，不硬找一個衣服色"""
+        c = sample_fallback_colors(self._parts(self.SKIN, self.SKIN, self.SKIN))
+        assert self._close(c["legs"], self.SKIN), c

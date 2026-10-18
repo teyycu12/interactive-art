@@ -240,3 +240,44 @@ class TestBackdropFromScreen:
         b = np.asarray(I.open(io.BytesIO(base64.b64decode(
             two["photo_b64"].split(",")[1]))).convert("RGB")).astype(int)
         assert np.abs(a - b).mean() > 0.5, "自畫舞台必須畫出角色"
+
+
+class TestPhotoFrame:
+    """2026-10-19：合照長寬比跑掉；標題與 QR 疊在場景上，照片維持 16:9。"""
+
+    def _backdrop(self, w, h, colour=(30, 90, 160)):
+        img = I.new("RGB", (w, h), colour)
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    @staticmethod
+    def _img(res):
+        return I.open(io.BytesIO(base64.b64decode(res["photo_b64"].split(",")[1]))).convert("RGB")
+
+    def test_off_ratio_backdrop_is_letterboxed_not_stretched(self):
+        """大螢幕截圖不是 16:9 時等比縮放、補邊，不可硬拉成 16:9。"""
+        res = compose_group_photo([], photo_url_base="http://x/p", backdrop=self._backdrop(1000, 1000))
+        arr = np.asarray(self._img(res)).astype(int)
+        # 方形底圖等比放進 1920x1080 後左右各留 420 的邊
+        mid = arr[540]
+        assert np.abs(mid[200] - (56, 60, 67)).mean() < 6, "左邊應是補邊色"
+        assert np.abs(mid[960] - (30, 90, 160)).mean() < 6, "中間應是底圖"
+
+    def test_photo_stays_16_9_with_title_only(self):
+        """照片維持 16:9：標題疊在最上面一條；照片上不放 QR（改由大螢幕顯示），右下角是底圖原樣。"""
+        res = compose_group_photo([], photo_url_base="http://x/p", backdrop=self._backdrop(1920, 1080))
+        img = self._img(res)
+        assert img.size == (1920, 1080)
+        arr = np.asarray(img).astype(int)
+        assert np.abs(arr[300:700, 200:1500] - (30, 90, 160)).mean() < 1.0, "中段不該被蓋到"
+        assert np.abs(arr[10:80, 600:900] - (30, 90, 160)).mean() > 30, "最上面一條是標題列"
+        assert np.abs(arr[880:1070, 1700:1910] - (30, 90, 160)).mean() < 1.0, "右下角不該有 QR"
+
+    def test_download_qr_is_still_returned(self):
+        """照片上沒有 QR，但下載 QR 仍要回傳（互動層轉給大螢幕右下角顯示），且指向照片網址"""
+        res = compose_group_photo([], photo_url_base="http://x/p", backdrop=self._backdrop(1920, 1080))
+        assert res["qr_b64"].startswith("data:image/png;base64,")
+        assert res["photo_url"] == f"http://x/p/{res['photo_id']}.png"
+        qr = I.open(io.BytesIO(base64.b64decode(res["qr_b64"].split(",")[1])))
+        assert qr.width >= 300, "投影在場地另一頭也要掃得到"

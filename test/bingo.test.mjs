@@ -90,6 +90,55 @@ describe('填格', () => {
     assert.equal(g.claim('p0', 1, 'p1').reason, BINGO_ERRORS.USED);
   });
 
+  describe('稀有的格子可以重複找同一個人（2026-10-19）', () => {
+    // 12 人：上限一人一格。只有 r0、r1 會樂器（稀有，≤ 2 人）；人人都符合 STRANGER（常見）
+    const ids = Array.from({ length: 12 }, (_, i) => `p${i}`);
+    const RARE = { id: 'fact:0', label: '會樂器的人' };
+    const tester = (who, cond, from) => (cond === RARE.id ? ['p1', 'p2'].includes(who) : who !== from);
+    function round12(present = () => ids) {
+      const g = new BingoRound();
+      g.start(ids, [RARE], tester, { now: 0, rng: fixedRng, present });
+      return g;
+    }
+    const rareCell = (g, owner) => g.cardOf(owner).cells.findIndex((c) => c.cond.id === RARE.id);
+    const commonCell = (g, owner, skip = -1) => g.cardOf(owner).cells.findIndex((c, i) => i !== skip && c.cond.id === STRANGER && !c.by);
+
+    test('符合的人 ≤ 2：已經填過別格的人也可以填這格', () => {
+      const g = round12();
+      const rare = rareCell(g, 'p0');
+      assert.ok(rare >= 0);
+      assert.equal(g.claim('p0', commonCell(g, 'p0', rare), 'p1').ok, true);
+      assert.equal(g.claim('p0', rare, 'p1').ok, true, '全場只有兩個人會樂器，不能因為他填過別格就擋');
+    });
+
+    test('符合的人多的格子照舊擋下，逼你去找別人', () => {
+      const g = round12();
+      const rare = rareCell(g, 'p0');
+      const first = commonCell(g, 'p0', rare);
+      assert.equal(g.claim('p0', first, 'p1').ok, true);
+      assert.equal(g.claim('p0', commonCell(g, 'p0', rare), 'p1').reason, BINGO_ERRORS.USED);
+    });
+
+    test('稀不稀有只算在線的人：會樂器的第三人斷線了，這格就算稀有', () => {
+      const tester3 = (who, cond, from) => (cond === RARE.id ? ['p1', 'p2', 'p3'].includes(who) : who !== from);
+      const online = ids.filter((id) => id !== 'p3');
+      const g = new BingoRound();
+      g.start(ids, [RARE], tester3, { now: 0, rng: fixedRng, present: () => online });
+      const rare = rareCell(g, 'p0');
+      assert.equal(g.matchCount(RARE.id, 'p0'), 2);
+      assert.equal(g.claim('p0', commonCell(g, 'p0', rare), 'p1').ok, true);
+      assert.equal(g.claim('p0', rare, 'p1').ok, true);
+    });
+
+    test('沒給 present 時不放寬（照舊只看人數上限）', () => {
+      const g = new BingoRound();
+      g.start(ids, [RARE], tester, { now: 0, rng: fixedRng });
+      const rare = rareCell(g, 'p0');
+      assert.equal(g.claim('p0', commonCell(g, 'p0', rare), 'p1').ok, true);
+      assert.equal(g.claim('p0', rare, 'p1').reason, BINGO_ERRORS.USED);
+    });
+  });
+
   test('人少時同一個人可以填不只一格，否則 9 格永遠填不滿', () => {
     const g = new BingoRound();
     const ids = Array.from({ length: 8 }, (_, i) => `p${i}`);   // 其他人 7 位 → 一人最多 2 格
@@ -195,6 +244,16 @@ describe('開局先問自我介紹題', () => {
     assert.equal(g.phase, 'play');
     assert.equal(g.round.endsAt, 61_000);
     assert.equal(g.shouldAutoEnd(60_999), false);
+  });
+
+  test('預設不限時（2026-10-19）：沒給 askMs 時，等多久都要大家答完才發卡', () => {
+    const g = new BingoRound();
+    g.start(['a', 'b'], [], withFacts(g), { now: 0, facts: FACTS });
+    assert.equal(g.round.askEndsAt, null);
+    g.answerFacts('a', ['0']);
+    assert.equal(g.readyToPlay(['a', 'b'], 10 * 60 * 1000), false, '十分鐘後也不自己發卡');
+    g.answerFacts('b', []);
+    assert.equal(g.readyToPlay(['a', 'b'], 10 * 60 * 1000), true);
   });
 
   test('有人沒答，時間到也照樣發卡', () => {

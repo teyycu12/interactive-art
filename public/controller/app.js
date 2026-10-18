@@ -1717,6 +1717,18 @@ $('#btn-audience-leave').addEventListener('click', leaveAudience);
  */
 const missions = new Map();
 let myCode = '----';
+/** 下一次換碼的時刻（本機時鐘）。伺服器送的是「還剩幾毫秒」，不靠兩邊時鐘對得準 */
+let myCodeNextAt = null;
+
+/** 配對碼旁的倒數：橫幅、配對面板、賓果卡都有一個（data-code-timer） */
+function tickCodeTimers() {
+  const left = myCodeNextAt === null ? null : Math.ceil((myCodeNextAt - Date.now()) / 1000);
+  const text = left === null ? '' : left > 0 ? `${left} 秒後換新碼` : '即將換新碼';
+  for (const el of document.querySelectorAll('[data-code-timer]')) {
+    if (el.textContent !== text) el.textContent = text;
+  }
+}
+setInterval(tickCodeTimers, 1000);
 
 const banner = $('#mission-banner');
 const sheet = $('#pair-sheet');
@@ -1887,7 +1899,7 @@ const bingoSheet = $('#bingo-sheet');
 const bingoInput = $('#bingo-input');
 
 // ── 開局的自我介紹（shared/bingoFacts.js）──
-/** @type {{facts: {id: string, text: string}[], deadline: number, sent: boolean}|null} */
+/** @type {{facts: {id: string, text: string}[], deadline: number|null, sent: boolean}|null} */
 let bingoAsk = null;
 let bingoAskTimer = null;
 const bingoAskSheet = $('#bingo-ask-sheet');
@@ -1926,6 +1938,11 @@ function renderBingoAsk() {
 
 function tickBingoAsk() {
   if (!bingoAsk) return;
+  // 預設不限時（2026-10-19）：不寫任何備註（主持人覺得多餘）。送出後面板會關掉，
+  // 「等大家答完就發卡」寫在賓果橫幅上
+  const timer = $('#bingo-ask-timer');
+  timer.hidden = bingoAsk.deadline === null;
+  if (bingoAsk.deadline === null) return;
   const left = Math.max(0, Math.ceil((bingoAsk.deadline - Date.now()) / 1000));
   $('#bingo-ask-timer').textContent = bingoAsk.sent
     ? `已送出，等大家答完就發卡（最多 ${left} 秒）`
@@ -1976,7 +1993,7 @@ const BINGO_ERROR_TEXT = {
   BAD_CELL: '請先點選要填的那一格。',
   FILLED: '這一格已經填過了。',
   SELF: '不能填自己喔。',
-  USED: '這個人在你卡上已經填夠多格了，去找別人吧。',
+  USED: '他已經填在你卡上別格了。這格符合的人不只一兩個，去找另一個人吧！',
   NO_OFFER: '這次的「順便填」已經過期了，請直接輸入他的配對碼。',
   MISMATCH: '這個人不符合這一格的條件，再問問別人。',
   NOT_FOUND: '查無這組配對碼，請對方再唸一次（碼每分鐘會換）。',
@@ -2007,6 +2024,10 @@ function renderBingo() {
       : '你開局沒有勾任何一題自我介紹';
   }
 
+  // 底部輸入列：還沒點格子時只顯示提示，點了才出現輸入框
+  $('#bingo-hint').hidden = bingoPick !== null;
+  $('#bingo-entry').hidden = bingoPick === null;
+
   const grid = $('#bingo-grid');
   grid.replaceChildren();
   bingoCard.cells.forEach((c, i) => {
@@ -2033,6 +2054,7 @@ function pickBingoCell(i) {
   $('#bingo-msg').hidden = true;
   $('#bingo-entry-label').textContent = `「${bingoCard.cells[i].label}」：輸入他的配對碼`;
   $('#bingo-entry').hidden = false;
+  $('#bingo-hint').hidden = true;
   bingoInput.value = '';
   renderBingo();
   setTimeout(() => bingoInput.focus(), 50);
@@ -2062,7 +2084,7 @@ function tickBingoTimer() {
   const el = $('#bingo-timer');
   if (!bingoDeadline) { el.textContent = ''; return; }
   const left = Math.max(0, bingoDeadline - Date.now());
-  el.textContent = `剩 ${Math.floor(left / 60000)} 分 ${String(Math.floor(left / 1000) % 60).padStart(2, '0')} 秒`;
+  el.textContent = `⏱ 剩 ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, '0')}`;
 }
 
 $('#bingo-banner').addEventListener('click', openBingo);
@@ -2084,10 +2106,10 @@ function handleBingoMessage(msg) {
     case EV.BINGO_ASK:
       bingoAsk = {
         key: Date.now(), facts: Array.isArray(msg.facts) ? msg.facts : [],
-        deadline: Date.now() + (msg.remainingMs ?? 30_000), sent: false,
+        deadline: Number.isFinite(msg.remainingMs) ? Date.now() + msg.remainingMs : null, sent: false,
       };
       clearInterval(bingoAskTimer);
-      bingoAskTimer = setInterval(tickBingoAsk, 1000);
+      if (bingoAsk.deadline !== null) bingoAskTimer = setInterval(tickBingoAsk, 1000);
       tickBingoAsk();
       // 主持人剛宣布開始，大家都在看手機：直接打開，不要讓人找橫幅
       openBingoAsk();
@@ -2169,12 +2191,14 @@ function handleMissionMessage(msg) {
     case EV.PAIR_CODE: {
       const changed = myCode && myCode !== '----' && myCode !== msg.code;
       myCode = msg.code;
+      if (Number.isFinite(msg.nextInMs)) myCodeNextAt = Date.now() + msg.nextInMs;
+      tickCodeTimers();
       // 面板開著的時候碼換了：可能正唸到一半，講一聲，免得對方照舊碼輸入卻以為輸錯
       if (changed && (!sheet.hidden || !bingoSheet.hidden)) {
-        showToast(`你的配對碼換成 ${msg.code}（剛才那組 1 分鐘內還能用）`);
+        showToast(`你的配對碼換成 ${msg.code}（剛才那組 100 秒內還能用）`);
       }
       renderMission();
-      // 賓果卡上也印著自己的碼（別人要填你時用），每分鐘輪換時要跟著換
+      // 賓果卡上也印著自己的碼（別人要填你時用），輪換時要跟著換
       renderBingo();
       break;
     }

@@ -9,7 +9,7 @@ test('只改幾項時，其餘沿用目前的值', () => {
   const r = normalizeScoring({ quizCorrect: 50 }, base);
   assert.equal(r.ok, true);
   assert.equal(r.value.quizCorrect, 50);
-  assert.equal(r.value.pairCompletion, base.pairCompletion);
+  assert.equal(r.value.missionFinish, base.missionFinish);
   assert.deepEqual(Object.keys(r.value), SCORING_FIELDS.map((f) => f.key));
 });
 
@@ -35,4 +35,19 @@ test('不認得的欄位不會被帶進去（排行榜長度、廣播節流不�
   assert.equal(r.ok, true);
   assert.equal('leaderboardSize' in r.value, false);
   assert.equal('broadcastMs' in r.value, false);
+});
+
+test('預設配分（2026-10-19）：任務只有「達標」一項，配對本身不給分', () => {
+  assert.deepEqual(base, {
+    quizCorrect: 10, quizSpeedBonus: 10, missionFinish: 10, bingoCell: 5, bingoLine: 20, bingoFull: 40, wordcloudAnswer: 5,
+  });
+  assert.ok(!SCORING_FIELDS.some((f) => f.key === 'pairCompletion'));
+  assert.equal(SCORING.pairCompletion, undefined);
+});
+
+test('舊存檔裡的「每完成一次配對」直接忽略，不會讓還原失敗', () => {
+  const r = normalizeScoring({ pairCompletion: 20, missionFinish: 50, quizCorrect: 100 }, base);
+  assert.equal(r.ok, true);
+  assert.equal(r.value.pairCompletion, undefined);
+  assert.equal(r.value.missionFinish, 50);
 });

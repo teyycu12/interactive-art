@@ -241,9 +241,63 @@ export function arrangeByAffinity(agents, strength, field) {
     const slot = slots[i];
     if (slot) out.set(id, slot);
     else {
+      // 沒有座標的（合照的臨時人物，見 guestSpots）排不進去就不出現，不會有「原地」可留
       const a = agents.find((x) => x.id === id);
-      out.set(id, { x: a.x, y: a.y });
+      if (Number.isFinite(a?.x) && Number.isFinite(a?.y)) out.set(id, { x: a.x, y: a.y });
     }
   });
+  return out;
+}
+
+/**
+ * 合照的臨時人物要站哪裡（原地拍時）。
+ *
+ * 有參與、但按快門時不在場上的人（先走的、斷線的）也要在合照裡（2026-10-19）。
+ * 原地拍時在場的人不動，臨時人物補進人群旁邊的空位：離人群中心越近越先選，
+ * 與在場的人、彼此之間都保持一個身位，避開道具與牆。
+ * 依互動排位時不用這個 —— 臨時人物直接一起排進隊形（arrangeByAffinity）。
+ *
+ * 間距：角色在大螢幕上約 100 寬、150 高，名牌在腳下。並排時左右至少 115；
+ * 不並排（左右重疊）時前後要差 175 以上 —— 只差半個身位的話，後面那人的
+ * 名牌與下半身會被前面那人擋住（2026-10-19 實拍：臨時人物的名字被蓋掉）。
+ *
+ * @param {number} n 臨時人物的人數
+ * @param {{x: number, y: number}[]} occupied 在場的人站的位置
+ * @param {Parameters<typeof formationSlots>[1] & {gapX?: number, gapY?: number, step?: number}} field
+ * @returns {{x: number, y: number}[]} 最多 n 個；場地塞滿時會少於 n
+ */
+export function guestSpots(n, occupied, { stage, obstacles, obstacleDistance, gapX = 115, gapY = 175, step = 40 }) {
+  if (n <= 0) return [];
+  const minX = stage.width * 0.06;
+  const maxX = stage.width * 0.94;
+  const minY = stage.height * 0.2;
+  const maxY = stage.height * 0.92;
+  const center = occupied.length
+    ? {
+      x: occupied.reduce((t, p) => t + p.x, 0) / occupied.length,
+      y: occupied.reduce((t, p) => t + p.y, 0) / occupied.length,
+    }
+    : { x: stage.width / 2, y: stage.height * 0.6 };
+
+  const candidates = [];
+  for (let y = minY; y <= maxY; y += step) {
+    for (let x = minX; x <= maxX; x += step) {
+      if (obstacles.some((o) => obstacleDistance(o, x, y) < o.r + 40)) continue;
+      // 縱向權重大一點：人群往左右延伸比往前後疊好看，臉才不會被擋
+      candidates.push({ x, y, d: Math.hypot(x - center.x, (y - center.y) * 1.4) });
+    }
+  }
+  candidates.sort((a, b) => a.d - b.d);
+
+  const taken = occupied.map((p) => ({ x: p.x, y: p.y }));
+  const clear = (c) => taken.every((p) => Math.abs(c.x - p.x) >= gapX || Math.abs(c.y - p.y) >= gapY);
+  const out = [];
+  for (const c of candidates) {
+    if (out.length >= n) break;
+    if (!clear(c)) continue;
+    const spot = { x: Math.round(c.x), y: Math.round(c.y) };
+    out.push(spot);
+    taken.push(spot);
+  }
   return out;
 }

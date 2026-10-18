@@ -63,6 +63,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# 合照 QR 指向外網網址：測試的人不在這台電腦的區網裡，給區網位址他們掃了也打不開
+export PUBLIC_HOST="https://${DOMAIN}"
+
 bash "$ROOT_DIR/start.sh" &
 START_PID=$!
 

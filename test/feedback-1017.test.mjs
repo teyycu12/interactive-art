@@ -44,3 +44,13 @@ test('新碼不會跟仍在寬限內的舊碼撞號（寬限拉長後更要緊�
   const fresh = new Set([...Array(300).keys()].map((i) => p.codeOf(`u${i}`)));
   for (const [, code] of olds) assert.ok(!fresh.has(code), `新碼 ${code} 跟某人的舊碼一樣`);
 });
+
+test('配對碼輪換改成 100 秒，手機拿得到「還剩幾秒換新碼」（2026-10-19）', () => {
+  assert.equal(PAIRING.rotateMs, 100_000);
+  const p = new PairingSession(new SocialGraph());
+  const t = 1_000_000;
+  p.rotate(t);
+  assert.equal(p.msUntilRotate(t), 100_000);
+  assert.equal(p.msUntilRotate(t + 30_000), 70_000);
+  assert.equal(p.msUntilRotate(t + 200_000), 0, '不會是負的');
+});

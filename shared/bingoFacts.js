@@ -22,9 +22,6 @@
 /** 每一輪最多問幾題。題目太多，開局就變成填表 */
 export const BINGO_FACTS_ASK = 6;
 
-/** 開局勾題目最多等多久。全部人答完會提早發卡 */
-export const BINGO_ASK_MS = 30_000;
-
 /** 主辦端自訂題目的限制 */
 export const BINGO_FACT_LIMITS = { min: 3, max: 20, minLength: 2, maxLength: 16 };
 

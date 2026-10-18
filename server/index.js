@@ -38,7 +38,8 @@ import {
 import { Stage, tokensMatch } from './state.js';
 import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
-import { photoUrlBase, savePhoto } from './photos.js';
+import { photoUrlBase, savePhoto, requestOrigin, rankLanAddresses } from './photos.js';
+import { Attendance } from './attendance.js';
 import { startTicker } from './scheduler.js';
 import { MissionBoard } from './missions.js';
 import { SocialGraph } from './socialgraph.js';
@@ -62,10 +63,10 @@ import { ScoreBoard } from './scores.js';
 import { SnapshotStore, Directory } from './persistence.js';
 import { createHttpLayer } from './httplayer.js';
 import { buildReport } from './report.js';
-import { affinityFrom, arrangeByAffinity } from './photoLayout.js';
+import { affinityFrom, arrangeByAffinity, guestSpots } from './photoLayout.js';
 import { isBlockedName } from './nameFilter.js';
 import {
-  defaultBingoFacts, validateBingoFacts, BINGO_FACTS_ASK, BINGO_ASK_MS,
+  defaultBingoFacts, validateBingoFacts, BINGO_FACTS_ASK,
 } from '../shared/bingoFacts.js';
 import { EventLog, sessionName, sessionKind, generationIdOf } from './eventlog.js';
 import { pairRule, traitCatalog, buildRule, feasibility, GatherTracker } from './missionRules.js';
@@ -83,6 +84,8 @@ const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
 /** 今天遇見的人（手機名單與紀念卡）。比圖譜寬：揮手、乾杯、同桌也算，見 encounters.js */
 const encounters = new Encounters();
+// 今天來過、有參與的人：大合照連不在場的也要放進去（server/attendance.js）
+const attendance = new Attendance({ ttlMs: PERSISTENCE.directoryTtlMs });
 // 揮手要尊重私訊的封鎖：封鎖了卻還能讓對方手機一直跳出「某某在跟你揮手」，封鎖就沒有意義
 const greetings = new Greetings({ ...GREET, isBlocked: (by, target) => messages.isBlocked(by, target) });
 const quiz = new QuizSession();
@@ -131,6 +134,7 @@ if (snapshot) {
   traits.hydrate(snapshot.traits ?? snapshot.survey?.traits);
   wordcloud.hydrate(snapshot.wordcloud);
   directory.hydrate(snapshot.directory);
+  attendance.hydrate(snapshot.attendance);
 }
 
 /**
@@ -138,8 +142,19 @@ if (snapshot) {
  * 直接改 SCORING 物件本身：計分的地方（這個檔案、quiz.js）都讀同一個物件，改一處就全部生效。
  */
 const SCORING_DEFAULTS = Object.freeze(editableScoring(SCORING));
+/**
+ * 2026-10-19 以前的預設。那時快照不分有沒有改過，一律把整份配分存進去 ——
+ * 存檔裡剛好等於舊預設，代表主持人從沒動過，這次改了預設就該跟著用新的，
+ * 不能把舊預設當成「主持人自訂」沿用下去。
+ */
+const LEGACY_SCORING_DEFAULTS = {
+  quizCorrect: 100, quizSpeedBonus: 100, pairCompletion: 20, missionFinish: 50, bingoCell: 5, bingoLine: 20, bingoFull: 40,
+};
+const isLegacyDefault = (s) => Object.keys(LEGACY_SCORING_DEFAULTS).every((k) => s?.[k] === LEGACY_SCORING_DEFAULTS[k])
+  && Object.keys(s).every((k) => k in LEGACY_SCORING_DEFAULTS);
 {
-  const saved = snapshot?.scoring ? normalizeScoring(snapshot.scoring, SCORING_DEFAULTS) : null;
+  const raw = snapshot?.scoring;
+  const saved = raw && !isLegacyDefault(raw) ? normalizeScoring(raw, SCORING_DEFAULTS) : null;
   if (saved?.ok) Object.assign(SCORING, saved.value);
 }
 const scoringView = () => {
@@ -227,12 +242,14 @@ const snapshotData = () => ({
   traits: traits.export(),
   wordcloud: wordcloud.export(),
   directory: directory.export(),
+  attendance: attendance.export(),
   theme: stageTheme,
   event: eventInfo,
   // 預設題目不存：之後改版預設題目時，沒改過的活動才會跟著用新版
   personaQuiz: personaQuiz === DEFAULT_PERSONA_QUIZ ? null : personaQuiz,
   bingoFacts: bingoFactsCustom,
-  scoring: editableScoring(SCORING),
+  // 只存主持人改過的配分：沒改過就存 null，之後調整預設值時，沒改過的活動才會跟著用新的
+  scoring: scoringView().isDefault ? null : editableScoring(SCORING),
 });
 
 /** 狀態有變動，等下一次自動存檔 */
@@ -430,6 +447,22 @@ const isPresent = (id) => stage.agents.has(id);
 const nameOf = (id) => stage.get(id)?.name ?? '';
 
 /** 主辦端的現況面板資料 */
+/**
+ * 大合照的下載 QR（照片上不放，改在大螢幕右下角）。拍完自動顯示，之後由主持人
+ * 在主控端切換顯示／隱藏（2026-10-19）。宣告在 hostState 之前：它會被讀到。
+ * @type {{id: string, qr: string, url: string, visible: boolean}|null}
+ */
+let photoQr = null;
+const photoQrPayload = () => (photoQr ? { qr: photoQr.qr, url: photoQr.url, visible: photoQr.visible } : null);
+
+/**
+ * 文字雲收題後，結果還留在大螢幕上嗎。主持人可以按「收起」；沒按的話一陣子後自動收起，
+ * 開始問答、賓果時也會先收起（滿版的結果不能蓋住下一個活動）。
+ */
+let wordcloudResultShown = false;
+let wordcloudResultTimer = null;
+const WORDCLOUD_RESULT_MS = 60_000;
+
 function hostState() {
   return {
     agents: [...stage.agents.values()].map((a) => ({
@@ -456,6 +489,9 @@ function hostState() {
     quizReveal: quiz.revealView(),
     leaderboard: scores.leaderboard(SCORING.leaderboardSize, nameOf, isPresent),
     personaSpread: personaSpread(),
+    // 主控端重新整理後也要能切換：帶 QR 圖
+    photoQr: photoQr ? { visible: photoQr.visible, qr: photoQr.qr } : null,
+    wordcloudResultShown,
   };
 }
 
@@ -679,7 +715,7 @@ function bingoPublicView() {
   return {
     phase: r.phase,
     answered: asking ? askers.filter((id) => bingo.hasAnswered(id)).length : null,
-    askRemainingMs: asking ? Math.max(0, r.askEndsAt - Date.now()) : null,
+    askRemainingMs: asking && r.askEndsAt !== null ? Math.max(0, r.askEndsAt - Date.now()) : null,
     remainingMs: r.endsAt ? Math.max(0, r.endsAt - Date.now()) : null,
     players: asking ? askers.length : r.cards.size,
     top: bingo.standings().slice(0, 5).map((s) => ({ name: nameOf(s.id), lines: s.lines, filled: s.filled })),
@@ -712,11 +748,13 @@ const pushBingoState = () => {
 function startBingo(ws, msg) {
   const busy = busyActivity('bingo');
   if (busy) { send(ws, EV.HOST_REJECT, { reason: busy }); return; }
-  const ids = [...stage.agents.keys()];
+  dismissWordCloudResult();
+  const ids = bingoPresent();
   const durationMs = Number(msg.durationMs) > 0 ? Math.min(Number(msg.durationMs), 30 * 60 * 1000) : null;
   const bank = bingoFactsView().facts;
   const facts = [...bank].sort(() => Math.random() - 0.5).slice(0, BINGO_FACTS_ASK);
-  const result = bingo.start(ids, bingoPool(), bingoTest, { durationMs, facts, askMs: BINGO_ASK_MS });
+  // 自我介紹不限時（2026-10-19）：在線的人都答完才發卡，有人一直不答就由主持人按「直接發卡」
+  const result = bingo.start(ids, bingoPool(), bingoTest, { durationMs, facts, askMs: null, present: bingoPresent });
   if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
   if (bingo.phase === 'ask') {
     for (const id of ids) sendToAgent(id, EV.BINGO_ASK, bingoAsk());
@@ -819,12 +857,19 @@ function handleBingoFacts(ws, msg) {
   }
 }
 
-/** ask 階段要等誰：連著線的人。斷線但還留在場上的人等不到，交給時間到 */
+/** ask 階段要等誰：連著線的人。斷線但還留在場上的人等不到，不等他（重連時再補卡） */
 const bingoAskers = () => [...controllers.keys()].filter((id) => stage.agents.has(id));
 
 /** 自我介紹收齊（或時間到）：發卡、開始計時 */
+/**
+ * 賓果算「在場」的人：連著線的角色。斷線、轉入漫遊的角色還留在場上，但人不在現場 ——
+ * 拿他們來判斷「場上有人符合」，就會出現怎麼找都找不到人的格子（2026-10-19 試玩）。
+ * 他們重連時照樣補一張卡（sendBingoCatchUp）。
+ */
+const bingoPresent = () => [...stage.agents.values()].filter((a) => !a.offline).map((a) => a.id);
+
 function startBingoPlay() {
-  bingo.beginPlay([...stage.agents.keys()]);
+  bingo.beginPlay(bingoPresent());
   for (const id of bingo.round.cards.keys()) sendBingoCard(id);
   pushBingoState();
   console.log(`[bingo] 發卡　${bingo.round.cards.size} 人`);
@@ -833,7 +878,7 @@ function startBingoPlay() {
 /** 這一輪要問的題目：從題庫隨機挑幾題，所有人問同一組，才找得到彼此 */
 function bingoAsk() {
   const r = bingo.round;
-  return { facts: r.facts, remainingMs: Math.max(0, r.askEndsAt - Date.now()) };
+  return { facts: r.facts, remainingMs: r.askEndsAt === null ? null : Math.max(0, r.askEndsAt - Date.now()) };
 }
 
 /**
@@ -847,7 +892,7 @@ function sendBingoCatchUp(agentId) {
     if (!bingo.hasAnswered(agentId)) sendToAgent(agentId, EV.BINGO_ASK, bingoAsk());
     return;
   }
-  bingo.dealCard(agentId, [...stage.agents.keys()]);
+  bingo.dealCard(agentId, bingoPresent());
   sendBingoCard(agentId);
 }
 
@@ -980,6 +1025,7 @@ function handleJoin(ws, msg) {
   controllers.set(agent.id, ws);
   // 記進身分目錄，讓這個人在伺服器重開後還認得回自己的角色與分數
   directory.remember(agent);
+  attendance.note(agent);
   applyPersona(agent.id, msg.persona);
   markDirty();
 
@@ -994,7 +1040,7 @@ function handleJoin(ws, msg) {
   sendClientRoster(ws);
 
   // 補送目前的任務狀態與配對碼，讓中途進場的人立刻能參與
-  send(ws, EV.PAIR_CODE, { code: pairing.register(agent.id) });
+  send(ws, EV.PAIR_CODE, { code: pairing.register(agent.id), nextInMs: pairing.msUntilRotate() });
   for (const m of missions.actives) send(ws, EV.MISSION_ANNOUNCE, missionAnnounceFor(agent.id, m));
   // 問答進行中就補送題目。剩餘時間由伺服器算，所以晚到的人拿到的是
   // 真正剩下的秒數，而不是從頭開始的完整倒數。
@@ -1250,7 +1296,7 @@ function completeGather(m, ids) {
   for (const id of ids) {
     const credit = missions.credit(m.id, id, { with: ids.filter((x) => x !== id) });
     if (!credit) continue;
-    award(id, SCORING.pairCompletion, { source: SCORE_SOURCES.GATHER, ref: m.id });
+    // 集合本身不給分，做到任務目標才給（2026-10-19）
     if (credit.count === m.target) award(id, SCORING.missionFinish, { source: SCORE_SOURCES.MISSION_DONE, ref: m.id });
     events.log('mission_progress', { mission: m.id, agent: id, count: credit.count, target: m.target, team: ids });
     if (credit.count === m.target) events.log('mission_complete', { mission: m.id, agent: id });
@@ -1360,11 +1406,9 @@ function handlePairConfirm(ws, msg) {
     [result.from, result.to, b],
     [result.to, result.from, a],
   ]) {
-    // 配對本身給一次分（不因同時算進好幾個任務而重複給）。達標獎勵每個任務各一次，
+    // 配對本身不給分（2026-10-19 起任務只看達標）。達標獎勵每個任務各一次，
     // 只在「剛好踏到目標次數」的那一次發：用 count === target 而不是 done ——
     // done 在超過目標後每次都為真，拿它當條件會讓達標的人每多配對一次就再領一次獎勵。
-    // 分數分開寫入帳本。合成一筆會讓配對的 20 分被記成 MISSION_DONE，
-    // bySource 統計、得分流水與手機上的來源文案就全都算錯了。
     let total = scores.totalOf(id);
     let earned = 0;
     const detail = { with: partner?.id ?? null };
@@ -1379,10 +1423,6 @@ function handlePairConfirm(ws, msg) {
         earned += SCORING.missionFinish;
         total = award(id, SCORING.missionFinish, { source: SCORE_SOURCES.MISSION_DONE, ref: mid, detail });
       }
-    }
-    if (still.length) {
-      earned += SCORING.pairCompletion;
-      total = award(id, SCORING.pairCompletion, { source: SCORE_SOURCES.PAIR, ref: still[0], detail });
     }
 
     sendToAgent(id, EV.PAIR_RESULT, {
@@ -1519,9 +1559,22 @@ function closeWordCloud(now = Date.now()) {
     words: result.words.slice(0, 20).map((w) => w.text),
   });
   blastAll(EV.WORDCLOUD_CLOSED, { result });
+  // 結果留在大螢幕上，等主持人收起（或時間到）
+  wordcloudResultShown = true;
+  clearTimeout(wordcloudResultTimer);
+  wordcloudResultTimer = setTimeout(() => dismissWordCloudResult(), WORDCLOUD_RESULT_MS);
   markDirty();
   pushHostState();
   console.log(`[wordcloud] 收題「${result.question}」　${result.participants} 人作答、${result.words.length} 個詞`);
+}
+
+/** 收起大螢幕上的文字雲結果（主持人按、時間到、或要開始下一個滿版活動） */
+function dismissWordCloudResult() {
+  clearTimeout(wordcloudResultTimer);
+  if (!wordcloudResultShown) return;
+  wordcloudResultShown = false;
+  blast(screens, EV.WORDCLOUD_DISMISS, {});
+  pushHostState();
 }
 
 function handleWordCloudAnswer(ws, msg) {
@@ -1530,6 +1583,8 @@ function handleWordCloudAnswer(ws, msg) {
   send(ws, EV.WORDCLOUD_ACK, r.ok ? { ok: true, mine: r.mine } : { ok: false, reason: r.reason, mine: r.mine ?? [] });
   if (r.ok) {
     wordcloudDirty = true;
+    // 每送出一個答案給一次分（2026-10-19）。被擋下的（重複、不雅字、超過 3 個）不給
+    award(ws.agentId, SCORING.wordcloudAnswer, { source: SCORE_SOURCES.WORDCLOUD, ref: wordcloud.publicView()?.id ?? null });
     // 只記誰送了幾個詞，不記內容：個別答案對應得到人，雲上只看得到彙整後的詞
     events.log('wordcloud_answer', { round: wordcloud.publicView()?.id, agent: ws.agentId, count: r.mine.length });
   }
@@ -1733,6 +1788,14 @@ function handleHostMessage(ws, msg) {
       endBingo('host');
       break;
 
+    // 自我介紹不限時，有人一直沒答時由主持人決定不等了
+    case EV.HOST_BINGO_DEAL:
+      if (bingo.phase === 'ask') {
+        console.log('[bingo] 主持人直接發卡');
+        startBingoPlay();
+      }
+      break;
+
     case EV.HOST_START_WORDCLOUD: {
       const busy = busyActivity('wordcloud');
       if (busy) { send(ws, EV.HOST_REJECT, { reason: busy }); return; }
@@ -1741,6 +1804,9 @@ function handleHostMessage(ws, msg) {
       if (wordcloud.isActive && msg.question && String(msg.question).trim()) closeWordCloud();
       const result = wordcloud.start({ question: msg.question });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
+      // 新題目會直接換掉大螢幕上的舊結果；舊結果的「時間到自動收起」不能收到新題目
+      clearTimeout(wordcloudResultTimer);
+      wordcloudResultShown = false;
       console.log(`[wordcloud] 出題「${result.round.question}」`);
       events.log('wordcloud_start', {
         round: result.round.id, question: result.round.question, present: stage.agents.size,
@@ -1763,6 +1829,18 @@ function handleHostMessage(ws, msg) {
 
     case EV.HOST_CLOSE_WORDCLOUD:
       closeWordCloud();
+      break;
+
+    case EV.HOST_DISMISS_WORDCLOUD:
+      dismissWordCloudResult();
+      break;
+
+    // 大螢幕右下角的合照下載 QR：主持人切換顯示／隱藏
+    case EV.HOST_PHOTO_QR:
+      if (!photoQr) return;
+      photoQr.visible = msg.visible === true;
+      blast(screens, EV.SCREEN_PHOTO_QR, photoQrPayload());
+      pushHostState();
       break;
 
     case EV.HOST_SET_THEME: {
@@ -1866,6 +1944,7 @@ function handleHostMessage(ws, msg) {
     case EV.HOST_START_QUIZ: {
       const busy = busyActivity('quiz');
       if (busy) { send(ws, EV.HOST_REJECT, { reason: busy }); return; }
+      dismissWordCloudResult();
       const result = quiz.start({
         question: msg.question,
         options: msg.options,
@@ -1910,6 +1989,7 @@ function handleHostMessage(ws, msg) {
       loggedMode.delete(target.id);
       const sock = controllers.get(target.id);
       detachAgent(target.id, { forget: true });
+      attendance.forget(target.id);
       stage.removeAgent(target.id);
       if (sock) {
         send(sock, EV.CLIENT_REJECT, { reason: '你已被主辦方請出現場' });
@@ -1923,8 +2003,10 @@ function handleHostMessage(ws, msg) {
   }
 }
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   ws.role = null;
+  // 這條連線是從哪個網址連進來的（例如 ngrok 網域）。主辦端拍合照時，QR 就指向同一個網址
+  ws.origin = requestOrigin(req, SCHEME);
   ws.agentId = null;
   ws.isAlive = true;
   ws.closing = false;
@@ -1997,6 +2079,7 @@ wss.on('connection', (ws) => {
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
         // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
         send(ws, EV.STAGE_LINKS, { edges: graphEdges() });
+        if (photoQr?.visible) send(ws, EV.SCREEN_PHOTO_QR, photoQrPayload());
         // 投影機在活動中途被重開是常態，補送當下的問答與排行榜，
         // 大螢幕才不會停在空白畫面等下一題
         if (quiz.isActive) {
@@ -2022,6 +2105,8 @@ wss.on('connection', (ws) => {
           ? clamp01(Math.hypot(x, y))
           : clamp01(finite(msg.intensity));
         stage.applyMove(ws.agentId, { x, y, intensity });
+        // 超過死區才算真的操控過（lastInputAt 由 applyMove 依死區判斷）
+        if (stage.get(ws.agentId)?.lastInputAt) attendance.markMoved(ws.agentId);
         break;
       }
 
@@ -2050,6 +2135,7 @@ wss.on('connection', (ws) => {
         if (!removed && !(entry && tokensMatch(entry.rejoinToken, msg.rejoinToken))) return;
         console.log(`[retire] ${id} 換新角色，舊角色離場`);
         detachAgent(id, { forget: true });
+        attendance.forget(id);   // 同一個人換了角色，合照名單只留新的那一個
         pushHostState();
         break;
       }
@@ -2184,6 +2270,7 @@ wss.on('connection', (ws) => {
       case EV.HOST_CHECK_MISSION:
       case EV.HOST_START_BINGO:
       case EV.HOST_END_BINGO:
+      case EV.HOST_BINGO_DEAL:
       case EV.HOST_SET_TOPICS:
       case EV.HOST_START_QUIZ:
       case EV.HOST_REVEAL_QUIZ:
@@ -2197,6 +2284,8 @@ wss.on('connection', (ws) => {
       case EV.HOST_SET_PERSONA_QUIZ:
       case EV.HOST_START_WORDCLOUD:
       case EV.HOST_CLOSE_WORDCLOUD:
+      case EV.HOST_DISMISS_WORDCLOUD:
+      case EV.HOST_PHOTO_QR:
       case EV.HOST_HIDE_WORD:
       case EV.HOST_SET_BINGO_FACTS:
       case EV.HOST_SET_SCORING:
@@ -2278,7 +2367,7 @@ const loop = startTicker({
     // 配對碼輪換。舊碼在寬限期內仍有效，因此輪換不會打斷正在進行的交換。
     if (pairing.rotate()) {
       for (const [id, sock] of controllers) {
-        send(sock, EV.PAIR_CODE, { code: pairing.codeOf(id) });
+        send(sock, EV.PAIR_CODE, { code: pairing.codeOf(id), nextInMs: pairing.msUntilRotate() });
       }
     }
 
@@ -2439,11 +2528,9 @@ const monitor = setInterval(() => {
 // ─────────────────────────────────────────────────────────────
 // 啟動
 // ─────────────────────────────────────────────────────────────
+/** 區網位址，手機最可能連得到的排前面（虛擬網卡排最後，見 photos.js 的 rankLanAddresses） */
 function lanAddresses() {
-  return Object.values(os.networkInterfaces())
-    .flat()
-    .filter((i) => i && i.family === 'IPv4' && !i.internal)
-    .map((i) => i.address);
+  return rankLanAddresses(os.networkInterfaces());
 }
 
 server.listen(PORT, '0.0.0.0', () => {
@@ -2505,22 +2592,24 @@ server.listen(PORT, '0.0.0.0', () => {
 
 // ── 大合照（M6）─────────────────────────────────────────────
 //
-// 流程：鎖定場域把角色定住並全部面向鏡頭 → 輪詢到位 → 帶著場上座標
-// 呼叫生成服務合成 → 解除鎖定。
+// 流程：決定每個人在合照裡站哪 → 大螢幕在看不見的畫布上合成全員到齊的房間
+// （public/screen/photoRender.js）→ 生成服務加上標題與 QR。
+//
+// 合照是另一條合成管線，不影響大螢幕的畫面（2026-10-19 主持人決定）：原本是把
+// 場上的人定住、轉向鏡頭（依互動排位時還要走到隊形裡）再截大螢幕，拍照那十幾秒
+// 全場動不了，而且只拍得到還在場的人。現在場上照常走動，合照裡另外放進
+// 「有參與但不在場」的人（server/attendance.js）。
 //
 // 預設採角色的實際座標而非重排隊形：這件作品要記錄的是集體共創的
 // 當下樣貌，誰跟誰聚在一起正是重點，排整齊會把那個訊息抹掉。
-// 因此預設的 lockStage() 用途是「原地定住並轉向鏡頭」，不是排隊形。
+// 不在場的人補進人群旁邊的空位（photoLayout.js 的 guestSpots）。
 //
 // 主辦端可以改選「依互動排位」（arrange: 'affinity'，server/photoLayout.js）：
-// 排成一個面向鏡頭的隊形，今天互動越多的人站得越近。兩種各有用處，所以是選項。
+// 排成一個面向鏡頭的隊形，今天互動越多的人站得越近；不在場的人一起排進去。
 const PHOTO_TIMEOUT_MS = 60000;   // 合成含外部圖床上傳，比生成寬鬆
-const PHOTO_SETTLE_MS = 12000;    // 等到位的上限；逾時就照現況拍，不卡住現場
-const PHOTO_POLL_MS = 200;
 let photoInFlight = false;
 
-/** 面向鏡頭（畫面下方＝觀眾席）的朝向角 */
-const FACING_CAMERA = Math.PI / 2;
+
 
 const CAPTURE_TIMEOUT_MS = 8000;
 
@@ -2534,7 +2623,7 @@ const CAPTURE_TIMEOUT_MS = 8000;
  *
  * 沒有大螢幕連線時回 null，呼叫端會退回 Python 端的舞台底圖。
  */
-const requestScreenCapture = () => new Promise((resolve) => {
+const requestScreenCapture = (people = null) => new Promise((resolve) => {
   const screen = [...screens].find(isCaptureScreen);
   if (!screen) { resolve(null); return; }
 
@@ -2545,7 +2634,8 @@ const requestScreenCapture = () => new Promise((resolve) => {
   }, CAPTURE_TIMEOUT_MS);
 
   pendingCaptures.set(requestId, { resolve, timer });
-  send(screen, EV.SCREEN_CAPTURE_REQ, { requestId });
+  // 帶 people 時大螢幕另外合成合照、不截當下畫面（public/screen/photoRender.js）
+  send(screen, EV.SCREEN_CAPTURE_REQ, people ? { requestId, people } : { requestId });
 });
 
 /**
@@ -2587,40 +2677,80 @@ function meetUp(a, b, via) {
   markDirty();
 }
 
-const photoRoster = () => {
-  const byId = new Map(stage.roster().map((a) => [a.id, a]));
-  return stage.snapshot().map((s) => {
-    const meta = byId.get(s.id) || {};
-    const avatar = meta.avatar || {};
-    const out = { id: s.id, name: meta.name || '', x: s.x, y: s.y };
-    // CV 角色：直接取未切片的全身圖。
-    // 這裡原本是從 head 的路徑字串推導出 full 的路徑 —— 因為當時 full 不在
-    // shared/avatars.js 的驗證白名單裡，取不到也不敢直接信。現在 full 與其他
-    // 三張走同一條路徑驗證（含「必須同屬一個資產目錄」），可以直接用，
-    // 不必再靠字串替換，也不會因為副檔名改動而悄悄失效。
-    const full = avatar.textures?.full;
-    if (typeof full === 'string') out.fullPng = full;
-    // 捏臉角色沒有生成圖，交給 photo_composer 程式化繪製樂高人偶
-    if (avatar.fallbackColors) {
-      out.outfit = {
-        inner_color: avatar.fallbackColors.torso,
-        lower_color: avatar.fallbackColors.legs,
-      };
-      out.face = {
-        skin_tone: avatar.fallbackColors.skin,
-        hair_color: avatar.fallbackColors.hair,
-      };
-    }
-    return out;
-  });
+/** 合照名冊裡的一個人：名字與畫得出來的外觀（在場的人另外帶座標） */
+const photoEntry = (id, name, avatarIn, extra = {}) => {
+  const avatar = avatarIn || {};
+  const out = { id, name: name || '', ...extra };
+  // CV 角色：直接取未切片的全身圖。
+  // 這裡原本是從 head 的路徑字串推導出 full 的路徑 —— 因為當時 full 不在
+  // shared/avatars.js 的驗證白名單裡，取不到也不敢直接信。現在 full 與其他
+  // 三張走同一條路徑驗證（含「必須同屬一個資產目錄」），可以直接用，
+  // 不必再靠字串替換，也不會因為副檔名改動而悄悄失效。
+  const full = avatar.textures?.full;
+  if (typeof full === 'string') out.fullPng = full;
+  // 捏臉角色沒有生成圖，交給 photo_composer 程式化繪製樂高人偶
+  if (avatar.fallbackColors) {
+    out.outfit = {
+      inner_color: avatar.fallbackColors.torso,
+      lower_color: avatar.fallbackColors.legs,
+    };
+    out.face = {
+      skin_tone: avatar.fallbackColors.skin,
+      hair_color: avatar.fallbackColors.hair,
+    };
+  }
+  return out;
 };
 
+/**
+ * 合照裡的每個人與站位：在場的人（原地或依互動排位）＋有參與但不在場的人。
+ * 只決定座標，不動場上的任何人 —— 合照是另外合成的（見上方大合照段落）。
+ * @returns {{people: {id: string, name: string, avatar: object|null, x: number, y: number}[], present: number, absent: number}}
+ */
+const photoPeople = (arrange) => {
+  const meta = new Map(stage.roster().map((a) => [a.id, a]));
+  const present = stage.snapshot().map((s) => ({
+    id: s.id, name: meta.get(s.id)?.name ?? '', avatar: meta.get(s.id)?.avatar ?? null, x: s.x, y: s.y,
+  }));
+  const absent = photoAbsent(new Set(present.map((p) => p.id)));
+  let spots;
+  if (arrange === 'affinity') {
+    spots = affinitySpots([...present, ...absent]);
+  } else {
+    const field = { stage: STAGE, obstacles: OBSTACLES, obstacleDistance };
+    const extra = guestSpots(absent.length, present, field);
+    spots = new Map([
+      ...present.map((p) => [p.id, { x: p.x, y: p.y }]),
+      ...absent.slice(0, extra.length).map((p, i) => [p.id, extra[i]]),
+    ]);
+  }
+  // 場地塞滿、排不進去的不在場者就不放（不能疊在別人身上或塞進沙發）
+  const people = [...present, ...absent]
+    .filter((p) => spots.has(p.id))
+    .map((p) => ({ ...p, ...spots.get(p.id) }));
+  return { people, present: present.length, absent: people.length - present.length };
+};
+
+/** 有沒有社交連結：配對過，或出現在任何人的相遇名單上（揮手、私訊、賓果……） */
+const hasSocial = (id) => graph.degree(id) > 0
+  || encounters.peersOf(id).length > 0
+  || [...encounters.byId.values()].some((peers) => peers.has(id));
+
+/**
+ * 有參與、但按快門時不在場上的人（先走的、斷線的）。合照下方的名單用。
+ * 門檻見 server/attendance.js：操控過移動，或有社交連結。
+ */
+const photoAbsent = (presentIds) => attendance.participants(hasSocial)
+  .filter((e) => !presentIds.has(e.id))
+  // 外觀以身分目錄為準（重連時更新過），已離場、目錄忘掉的人才用進場時記下的那份
+  .map((e) => ({ id: e.id, name: e.name, avatar: directory.get(e.id)?.avatar ?? e.avatar ?? null }));
+
 /** 合照在這台電腦上的網址前綴（QR 指向這裡，除非上傳到雲端圖床） */
-const localPhotoBase = () => photoUrlBase({
-  scheme: SCHEME, port: PORT, lanAddrs: lanAddresses(), publicHost: process.env.PUBLIC_HOST,
+const localPhotoBase = (viewerOrigin = null) => photoUrlBase({
+  scheme: SCHEME, port: PORT, lanAddrs: lanAddresses(), publicHost: process.env.PUBLIC_HOST, viewerOrigin,
 });
 
-const requestCompose = (characters, backdrop) => new Promise((resolve) => {
+const requestCompose = (characters, backdrop, { photoBase = localPhotoBase() } = {}) => new Promise((resolve) => {
   const body = Buffer.from(JSON.stringify({
     characters,
     backdrop,
@@ -2628,7 +2758,7 @@ const requestCompose = (characters, backdrop) => new Promise((resolve) => {
     // 原本 Python 寫死 1920×1080，場地加寬到 2596 之後人整體往右偏、間距也被壓窄
     field: { width: STAGE.width, height: STAGE.height },
     // 手機連得到的位址：沒設雲端圖床時 QR 就指向這裡（見 server/photos.js）
-    photoUrlBase: localPhotoBase(),
+    photoUrlBase: photoBase,
   }), 'utf8');
   const up = http.request({
     host: VISION_HOST, port: VISION_PORT, path: '/compose', method: 'POST',
@@ -2650,50 +2780,38 @@ const requestCompose = (characters, backdrop) => new Promise((resolve) => {
 /** 合照的站位方式。不認得的值一律當原地拍：預設行為不該因為一個打錯的參數而改變 */
 const PHOTO_ARRANGE = new Set(['stay', 'affinity']);
 
-/** 依互動排位：誰該站到哪裡（面向鏡頭） */
-function affinityAssignments(agents) {
+/** 依互動排位：誰該站到哪裡。不在場的人沒有座標，排不進隊形就不出現 */
+function affinitySpots(people) {
   // 封鎖雙向濾掉（同紀念卡）：封鎖過的兩人不能因為之前互動過就被排在隔壁
   const hidden = (a) => (b) => messages.isBlocked(a, b) || messages.isBlocked(b, a);
   const strength = affinityFrom((id) => encounters.peersOf(id, { hidden: hidden(id) }));
-  const spots = arrangeByAffinity(agents, strength, { stage: STAGE, obstacles: OBSTACLES, obstacleDistance });
-  return new Map([...spots].map(([id, p]) => [id, { ...p, heading: FACING_CAMERA }]));
+  return arrangeByAffinity(people, strength, { stage: STAGE, obstacles: OBSTACLES, obstacleDistance });
 }
 
 const takeGroupPhoto = async (ws, { arrange = 'stay' } = {}) => {
   if (!PHOTO_ARRANGE.has(arrange)) arrange = 'stay';
-  // 合成期間場域是鎖住的，重入會讓第二次的 unlockStage 提前解鎖第一次
   if (photoInFlight) {
     send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error: '合照進行中' });
     return;
   }
-  const agents = stage.snapshot();
-  if (agents.length === 0) {
+  const { people, present, absent } = photoPeople(arrange);
+  if (people.length === 0) {
     send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error: '場上沒有角色' });
     return;
   }
   photoInFlight = true;
   try {
-    // 原地定住並全部轉向鏡頭；依互動排位時改走到隊形裡的位置
-    const assignments = arrange === 'affinity'
-      ? affinityAssignments(agents)
-      : new Map(agents.map((a) => [a.id, { x: a.x, y: a.y, heading: FACING_CAMERA }]));
-    const n = stage.lockStage(assignments);
-    events.log('photo_start', { count: n, arrange });
-    send(ws, EV.HOST_PHOTO_STATE, { phase: 'STAGING', count: n, arrange });
-    console.log(`[photo] ${arrange === 'affinity' ? '依互動排位' : '原地定位'} ${n} 位角色…`);
+    events.log('photo_start', { count: people.length, present, absent, arrange });
+    send(ws, EV.HOST_PHOTO_STATE, { phase: 'COMPOSING', count: people.length, arrange });
+    console.log(`[photo] 合成 ${people.length} 人（在場 ${present}、不在場 ${absent}）${arrange === 'affinity' ? '　依互動排位' : ''}`);
 
-    // 輪詢到位而非固定秒數等待：移動時間取決於角色原本散得多開。
-    // 但仍設上限 —— 現場不能因為某個角色卡住就永遠拍不成。
-    const deadline = Date.now() + PHOTO_SETTLE_MS;
-    while (!stage.allArrived() && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, PHOTO_POLL_MS));
-    }
-
-    // 先跟大螢幕要一張當下畫面當底圖，角色與 3D 房間都已經在上面了。
-    // 拿不到（沒有大螢幕連線、逾時）就傳 null，Python 端會退回自己畫的舞台。
-    const backdrop = await requestScreenCapture();
-    send(ws, EV.HOST_PHOTO_STATE, { phase: 'COMPOSING' });
-    const res = await requestCompose(photoRoster(), backdrop);
+    // 大螢幕在看不見的畫布上合成（畫面不變）；拿不到（沒有大螢幕、3D 主題、逾時）
+    // 就傳 null，Python 端退回自己畫的舞台，角色照座標畫上去
+    const backdrop = await requestScreenCapture(people);
+    // QR 指向主持人開主辦端用的那個網址（經 ngrok 就是 ngrok 網域），見 photos.js
+    const photoBase = localPhotoBase(ws.origin);
+    const roster = people.map((p) => photoEntry(p.id, p.name, p.avatar, { x: p.x, y: p.y }));
+    const res = await requestCompose(roster, backdrop, { photoBase });
     if (res && res.ok) {
       // 有雲端圖床時 QR 指向雲端，本機這份只是備份；沒有時 QR 指向的就是這份
       if (!savePhoto(PHOTOS_DIR, res.photo_id, res.photo_b64)) {
@@ -2701,10 +2819,16 @@ const takeGroupPhoto = async (ws, { arrange = 'stay' } = {}) => {
       }
       console.log(`[photo] 完成　${res.character_count} 人　${res.photo_id}　${res.photo_url}`);
       events.log('photo', {
-        ok: true, photoId: res.photo_id, count: res.character_count,
+        ok: true, photoId: res.photo_id, count: res.character_count, absent,
         backdrop: backdrop !== null,
-        uploaded: typeof res.photo_url === 'string' && !res.photo_url.startsWith(localPhotoBase()),
+        uploaded: typeof res.photo_url === 'string' && !res.photo_url.startsWith(photoBase),
       });
+      // 下載 QR 交給大螢幕右下角顯示（照片上不放）
+      if (typeof res.qr_b64 === 'string') {
+        photoQr = { id: res.photo_id, qr: res.qr_b64, url: res.photo_url, visible: true };
+        blast(screens, EV.SCREEN_PHOTO_QR, photoQrPayload());
+        pushHostState();
+      }
       send(ws, EV.HOST_PHOTO_STATE, {
         phase: 'DONE',
         photoId: res.photo_id,
@@ -2722,8 +2846,6 @@ const takeGroupPhoto = async (ws, { arrange = 'stay' } = {}) => {
       send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error });
     }
   } finally {
-    // 無論成功或失敗都必須解鎖，否則場域永遠卡在 STAGED、所有人都動不了
-    stage.unlockStage();
     photoInFlight = false;
   }
 };

@@ -169,3 +169,22 @@ describe('顏色預檢不可成為枚舉管道', () => {
     assert.equal(p.inCooldown('me'), false);
   });
 });
+
+describe('暗色不誤判成紅（2026-10-19 試玩）', () => {
+  test('黑上衣在暖光下取樣成暗咖啡 → 黑白灰，不是紅', () => {
+    assert.equal(familyOf('#4D2A24'), 'MONO');
+    assert.equal(familyOf('#3B2A22'), 'MONO');   // 深咖啡褲
+    assert.equal(familyOf('#2E3440'), 'MONO');   // 深灰藍（看起來是黑）
+  });
+
+  test('暗但鮮豔的顏色保留色族：酒紅仍是紅、深藍仍是藍', () => {
+    assert.equal(familyOf('#800000'), 'RED');
+    assert.equal(familyOf('#8B0000'), 'RED');
+    assert.equal(familyOf('#1F3A93'), 'BLUE');
+  });
+
+  test('一般亮度的顏色不受影響', () => {
+    assert.equal(familyOf('#E63946'), 'RED');
+    assert.equal(familyOf('#C7A885'), 'ORANGE');
+  });
+});

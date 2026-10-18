@@ -136,18 +136,99 @@ def _median_color(img: PILImage.Image, region: Optional[Tuple[float, float, floa
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
+# 衣服取色時，離膚色這麼近（RGB 歐氏距離）的像素當作皮膚、不算衣服。
+# 放寬到 70：手腳通常比臉亮一階（打光），48 會把露出的小腿當成衣服
+SKIN_TOLERANCE = 70
+# 排除皮膚後剩下的像素少於這個比例，就當作那一塊本來就是皮膚（短褲露腿、無袖）
+MIN_CLOTH_SHARE = 0.08
+
+
+def _hex_rgb(hex_str: str) -> Tuple[int, int, int]:
+    n = int(hex_str[1:], 16)
+    return (n >> 16) & 255, (n >> 8) & 255, n & 255
+
+
+def _dominant_hex(rgb: np.ndarray) -> str:
+    """一群像素裡最主要的顏色：量化成 16 階找出最多的那一格，再取那一格附近（含跨格的
+    相鄰色）所有像素的中位數。只取格子的平均會被量化邊界切歪 —— #F4C08A 的綠色剛好在
+    192 這條邊界上，縮放後一半像素掉到隔壁格。"""
+    keys = (rgb // 16) @ np.array([256, 16, 1])
+    values, counts = np.unique(keys, return_counts=True)
+    center = rgb[keys == values[np.argmax(counts)]].mean(axis=0)
+    near = rgb[np.linalg.norm(rgb - center, axis=1) <= 28]
+    r, g, b = (int(np.median(near[:, i])) for i in range(3))
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _clothing_color(img: PILImage.Image, region: Tuple[float, float, float, float], skin: str) -> str:
+    """衣服的代表色：排除膚色後，取出現最多的顏色。
+
+    不能直接取中位數：生成的角色是大頭 Q 版（約 2.2 頭身），CUTS 的「上身」那一塊
+    有將近一半是下巴與脖子 —— 中位數會落在膚色上，白襯衫被判成「橘黃」，賓果與
+    顏色任務因此出錯（2026-10-19 試玩）。CUTS 是跨語言耦合、改了會動到渲染，
+    所以修在取色這一步：先排除皮膚，再取「最多的那個顏色」（_dominant_hex），
+    不被釦子、陰影、口袋線拉偏。
+    """
+    arr = np.asarray(img)
+    h, w = arr.shape[:2]
+    x0, y0, x1, y1 = region
+    arr = arr[round(y0 * h):round(y1 * h), round(x0 * w):round(x1 * w)]
+    flat = arr.reshape(-1, 4)
+    opaque = flat[flat[:, 3] >= OPAQUE_ALPHA][:, :3].astype(int)
+    if len(opaque) == 0:
+        return _median_color(img, region)
+    skin_rgb = np.array(_hex_rgb(skin))
+    cloth = opaque[np.linalg.norm(opaque - skin_rgb, axis=1) > SKIN_TOLERANCE]
+    if len(cloth) < len(opaque) * MIN_CLOTH_SHARE:
+        return _median_color(img, region)
+    return _dominant_hex(cloth)
+
+
+def _skin_color(head: PILImage.Image, torso: PILImage.Image) -> str:
+    """膚色：頭部與上身裡「像皮膚的顏色」出現最多的那個。
+
+    原本取頭部中段的中位數，但大頭 Q 版的那一塊常常是瀏海、眼睛或鏡框 ——
+    實測取到 #464241、#141517 這種深色，衣服取色時就排除不到皮膚（2026-10-19）。
+    像皮膚的定義很寬（暖色相、不太暗不太亮；像素風的膚色很飽和，#F4C08A 的飽和度就有 0.83，
+    只排除純橘這種極飽和的），再取眾數。先只看頭部 —— 上身那塊若是橘色上衣，會被當成皮膚；
+    頭部找不到才加上身。都沒有（例如綠皮膚的怪物裝）才退回原本的中位數。
+    """
+    def skinlike(img):
+        a = np.asarray(img).reshape(-1, 4)
+        rgb = a[a[:, 3] >= OPAQUE_ALPHA][:, :3].astype(int)
+        if not len(rgb):
+            return rgb
+        mx, mn = rgb.max(axis=1), rgb.min(axis=1)
+        light = (mx + mn) / 510.0
+        d = (mx - mn) / 255.0
+        sat = np.where(d == 0, 0, d / np.maximum(1e-6, 1 - np.abs(2 * light - 1)))
+        r, g, b = rgb[:, 0], rgb[:, 1], rgb[:, 2]
+        # 皮膚：紅 > 綠 > 藍（暖色、色相約 0–50°）
+        return rgb[(r > g) & (g >= b) & (sat > 0.15) & (sat < 0.95) & (light > 0.3) & (light < 0.9)]
+
+    cand = skinlike(head)
+    if len(cand) < 20:
+        cand = np.concatenate([cand, skinlike(torso)])
+    if len(cand) >= 20:
+        return _dominant_hex(cand)
+    return _median_color(head, (0.30, 0.45, 0.70, 0.85))
+
+
 def sample_fallback_colors(parts: Dict[str, PILImage.Image]) -> Dict[str, str]:
-    """由正面取樣四個代表色，供背面 / 側面填補與貼圖載入前的替身使用。
+    """由正面取樣四個代表色，供背面 / 側面填補、貼圖載入前的替身，以及顏色判定
+    （賓果「衣服有紅色的人」、顏色任務，shared/colorFamily.js）使用。
 
     取樣區域刻意避開邊緣：
       hair 取頭部最上緣的橫帶，skin 取頭部中段（臉），
-      torso 與 legs 取各自的中央區塊，避開手臂與雙腿之間的鏤空。
+      torso 與 legs 取各自的中央區塊，避開手臂與雙腿之間的鏤空；
+      這兩塊排除膚色後取最多的顏色（見 _clothing_color）。
     """
+    skin = _skin_color(parts["head"], parts["torso"])
     return {
         "hair": _median_color(parts["head"], (0.25, 0.00, 0.75, 0.25)),
-        "skin": _median_color(parts["head"], (0.30, 0.45, 0.70, 0.85)),
-        "torso": _median_color(parts["torso"], (0.30, 0.20, 0.70, 0.80)),
-        "legs": _median_color(parts["legs"], (0.25, 0.10, 0.75, 0.70)),
+        "skin": skin,
+        "torso": _clothing_color(parts["torso"], (0.30, 0.10, 0.70, 0.95), skin),
+        "legs": _clothing_color(parts["legs"], (0.25, 0.10, 0.75, 0.70), skin),
     }
 
 

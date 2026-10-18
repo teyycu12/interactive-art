@@ -210,11 +210,11 @@ function handle(msg, key) {
 }
 
 // ── 大合照 ───────────────────────────────────────────────────
+// 合照是另外合成的，場上的人不會被帶去定位（2026-10-19），所以只有「合成中」一段
 const PHOTO_PHASES = {
-  STAGING: (m) => (m.arrange === 'affinity'
-    ? `正在依互動把 ${m.count ?? 0} 位角色排進隊形…`
-    : `正在把 ${m.count ?? 0} 位角色帶到定位…`),
-  COMPOSING: () => '角色已就位，合成中…',
+  COMPOSING: (m) => (m.arrange === 'affinity'
+    ? `正在依互動排位，合成 ${m.count ?? 0} 人的合照…`
+    : `正在合成 ${m.count ?? 0} 人的合照…`),
 };
 
 function renderPhotoState(msg) {
@@ -237,6 +237,10 @@ function renderPhotoState(msg) {
     dl.href = msg.photoB64 || '#';
     dl.download = `${msg.photoId || 'pixelair'}.png`;
     result.hidden = false;
+    $('#photo-actions').hidden = false;
+    // 拍完直接存到主控電腦（2026-10-19）：主持人不必再找下載鈕。
+    // 只有按下拍照的那台主辦端會收到 DONE（伺服器只回給它），不會每台主控都下載一次
+    if (msg.photoB64) dl.click();
     return;
   }
   if (msg.phase === 'ERROR') {
@@ -993,7 +997,8 @@ function renderBingo(round) {
   clearInterval(bingoCountdown);
   if (!round) return;
   const asking = round.phase === 'ask';
-  // ask 階段倒數的是勾自我介紹的時間，發卡之後才是本輪限時
+  $('#btn-bingo-deal').hidden = !asking;
+  // ask 階段倒數的是勾自我介紹的時間（預設不限時，就不倒數），發卡之後才是本輪限時
   const left0 = asking ? round.askRemainingMs : round.remainingMs;
   bingoDeadlineAt = left0 == null ? null : Date.now() + left0;
   const who = asking ? `勾自我介紹中 ${round.answered ?? 0}/${round.players} 人` : `${round.players} 人`;
@@ -1074,10 +1079,36 @@ $('#btn-bingo-end').addEventListener('click', () => {
   if (!confirm('確定要結束這一輪賓果嗎？')) return;
   ws?.send(JSON.stringify({ type: EV.HOST_END_BINGO }));
 });
+$('#btn-photo-qr').addEventListener('click', () => {
+  if (!photoQrState) return;
+  ws?.send(JSON.stringify({ type: EV.HOST_PHOTO_QR, visible: !photoQrState.visible }));
+});
+$('#btn-wordcloud-dismiss').addEventListener('click', () => {
+  ws?.send(JSON.stringify({ type: EV.HOST_DISMISS_WORDCLOUD }));
+});
+$('#btn-bingo-deal').addEventListener('click', () => {
+  if (!confirm('還沒勾完的人就當作都不符合，確定直接發卡嗎？')) return;
+  ws?.send(JSON.stringify({ type: EV.HOST_BINGO_DEAL }));
+});
 
+
+/** 大螢幕上的合照 QR 與文字雲結果（HOST_STATE 帶來） */
+let photoQrState = null;
+let wordcloudResultShown = false;
 
 function renderState(state) {
   roster = state.agents ?? [];
+  photoQrState = state.photoQr ?? null;
+  const qrBtn = $('#btn-photo-qr');
+  $('#photo-actions').hidden = !photoQrState;
+  qrBtn.setAttribute('aria-pressed', String(!!photoQrState?.visible));
+  if (photoQrState) {
+    qrBtn.textContent = photoQrState.visible ? 'QR 顯示中' : 'QR 已隱藏';
+    // 重新整理後沒有剛拍的那份圖：QR 改用伺服器給的（同一張照片）
+    if (photoQrState.qr) $('#photo-qr').src = photoQrState.qr;
+  }
+  wordcloudResultShown = state.wordcloudResultShown === true;
+  $('#btn-wordcloud-dismiss').hidden = !wordcloudResultShown;
   if (state.personaSpread) renderPersonaSpread(state.personaSpread);
   $('#stat-audience').textContent = state.audience ?? 0;
   topicsOn = state.topics !== false;
@@ -2310,6 +2341,10 @@ function liveItems() {
   if (!$('#wordcloud-live').hidden) {
     items.push({ key: 'wordcloud', tag: '文字雲', title: text('#wordcloud-live-q'), status: text('#wordcloud-count'),
       actions: [{ label: '收題', target: '#btn-wordcloud-close' }] });
+  } else if (wordcloudResultShown) {
+    // 收題後結果還蓋在大螢幕上：節目單這裡也要能收（主持人帶活動時只看節目單）
+    items.push({ key: 'wordcloud-result', tag: '文字雲', title: '大螢幕正在顯示結果', status: '',
+      actions: [{ label: '收起結果', target: '#btn-wordcloud-dismiss' }] });
   }
   for (const m of missionStates.values()) {
     const sec = missionLeft(m);
@@ -2318,8 +2353,13 @@ function liveItems() {
       actions: [{ label: '結算任務', onClick: () => closeMissionAsk(m.id) }] });
   }
   if (!$('#bingo-live').hidden) {
-    items.push({ key: 'bingo', tag: '人物賓果', title: '賓果進行中', status: text('#bingo-left'),
-      actions: [{ label: '結束賓果', target: '#btn-bingo-end' }] });
+    const asking = !$('#btn-bingo-deal').hidden;
+    items.push({ key: `bingo${asking ? '-ask' : ''}`, tag: '人物賓果', title: asking ? '賓果：大家在勾自我介紹' : '賓果進行中',
+      status: text('#bingo-left'),
+      actions: [
+        ...(asking ? [{ label: '直接發卡', target: '#btn-bingo-deal' }] : []),
+        { label: '結束賓果', target: '#btn-bingo-end' },
+      ] });
   }
   return items;
 }

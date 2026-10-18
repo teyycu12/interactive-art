@@ -220,6 +220,25 @@
     font-family: ui-monospace, Consolas, monospace;
     font-variant-numeric: tabular-nums; font-weight: 900;
   }
+  /* ── 大合照下載 QR ─────────────────────────────────────
+     拍完大合照後在右下角顯示，主持人在主控端切換顯示／隱藏；照片本身不帶 QR（2026-10-19）。
+     排行榜也在右下角：兩個都開著時 QR 排到排行榜左邊，不疊在一起。
+     QR 要隔著場地掃得到，所以印得大、白底留邊（QR 規格的安靜區）。 */
+  /* z-index 3：在問答、文字雲的滿版面板（4、5）後面 —— 面板開著時不該蓋在題目上（2026-10-19） */
+  .photo-qr {
+    position: fixed; right: 22px; bottom: 22px; z-index: 3;
+    width: 268px; box-sizing: border-box;
+    background: #fff;
+    border: 3px solid var(--ink);
+    border-radius: 18px;
+    padding: 14px 14px 12px;
+    text-align: center;
+  }
+  .photo-qr[hidden] { display: none; }
+  .ranks:not([hidden]) ~ .photo-qr { right: 340px; }
+  .photo-qr img { display: block; width: 236px; height: 236px; image-rendering: pixelated; }
+  .photo-qr p { margin: 8px 0 0; font-size: 20px; font-weight: 900; color: var(--ink); }
+
   /* 音效被瀏覽器擋住時的提示（public/screen/sfx.js）。給操作者看的，不是給觀眾：
      刻意小、低對比、放在不擋角色的右下角（見 docs/notes/UI-STYLING.md「刻意壓低對比的地方」）。
      點一下畫面解鎖後就消失。 */
@@ -290,6 +309,12 @@
 <div class="ranks" id="ranks" hidden>
   <h2>積分排行</h2>
   <ol id="ranks-list"></ol>
+</div>
+
+<!-- 大合照下載 QR：拍完後顯示幾分鐘（SCREEN_PHOTO_QR）。要放在 #ranks 後面，CSS 靠兄弟選擇器避開排行榜 -->
+<div class="photo-qr" id="photo-qr" hidden>
+  <img id="photo-qr-img" alt="大合照下載 QR Code">
+  <p>📸 掃描下載大合照</p>
 </div>
 
 <div class="toasts" id="toasts"></div>
