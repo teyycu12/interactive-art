@@ -323,8 +323,14 @@ function commitName() {
   return true;
 }
 
-$('#btn-start').addEventListener('click', () => {
+// 起始頁的第二條路：生成服務在的話是素體換裝（跟拍照生成的角色同一種），
+// 不在才是捏臉 —— 捏臉是刻意保留的備援，不能拿掉。按鈕字跟著實際會去的地方
+$('#btn-start').addEventListener('click', async () => {
   if (!commitName()) return;
+  if (await loadDressupCatalog()) {
+    openDressup({ fromStart: true });
+    return;
+  }
   ensureTokenConfig();
   refresh();
   showScreen('builder');
@@ -578,6 +584,11 @@ async function offerDressup() {
   $('#btn-dressup').hidden = !(await loadDressupCatalog());
 }
 
+/** 起始頁第二顆按鈕：換裝能用就寫「自己換裝」，不能用（生成服務沒開）維持「改用捏臉」 */
+async function labelStartButton() {
+  $('#btn-start').textContent = (await loadDressupCatalog()) ? '自己換裝' : '改用捏臉';
+}
+
 const duPartsOf = (cat) => duCatalog.parts.filter((p) => p.category === cat);
 const duPart = (id) => duCatalog.parts.find((p) => p.id === id);
 
@@ -591,10 +602,14 @@ function duHidden() {
   return hidden;
 }
 
-function openDressup() {
+/**
+ * fromStart：從起始頁直接來（不是拍照失敗）。右上角改成「回前一頁」回起始頁選拍照；
+ * 從失敗頁來的維持「改用捏臉」。拍照量到的顏色只有失敗頁那條才有。
+ */
+function openDressup({ fromStart = false } = {}) {
   if (!duCatalog) return;
   stopScanStream();
-  const fb = lastFallbackColors ?? {};
+  const fb = (!fromStart && lastFallbackColors) || {};
   const isHex = (c) => typeof c === 'string' && /^#[0-9A-Fa-f]{6}$/.test(c);
   duState = {
     selection: Object.fromEntries(duCatalog.categories.map((c) => [c.id, c.multi ? [] : null])),
@@ -608,7 +623,9 @@ function openDressup() {
     },
     tab: 'hair',
     accFocus: null,
+    fromStart,
   };
+  $('#btn-du-to-builder').textContent = fromStart ? '回前一頁' : '改用捏臉';
   showScreen('dressup');
   renderDressup();
   requestDuPreview();
@@ -768,8 +785,12 @@ $('#btn-du-done').addEventListener('click', async () => {
   }
 });
 
-$('#btn-du-to-builder').addEventListener('click', () => fallbackToBuilder(null));
-$('#btn-dressup').addEventListener('click', openDressup);
+$('#btn-du-to-builder').addEventListener('click', () => {
+  if (duState?.fromStart) showScreen('entry');
+  else fallbackToBuilder(null);
+});
+$('#btn-dressup').addEventListener('click', () => openDressup());
+labelStartButton();
 
 /**
  * 生成風格選單。

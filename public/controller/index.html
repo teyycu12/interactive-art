@@ -32,6 +32,7 @@
     </div>
     <div class="foot">
       <button class="btn-primary" id="btn-scan" disabled>拍照生成角色</button>
+      <!-- 生成服務在時 app.js 改寫成「自己換裝」（素體換裝）；不在才是捏臉 -->
       <button class="btn-ghost" id="btn-start" disabled>改用捏臉</button>
     </div>
   </section>
@@ -64,7 +65,7 @@
     <div class="flow-head">
       <h1>拍照生成</h1>
       <span class="sub" id="scan-step-label">1 / 3　拍照</span>
-      <!-- 回命名畫面。捏臉備援仍在：命名畫面的「改用捏臉」與生成失敗頁的「改用捏臉」 -->
+      <!-- 回命名畫面。捏臉備援仍在：生成服務沒開時命名畫面的第二顆按鈕、與生成失敗頁的「改用捏臉」 -->
       <button class="btn-link" id="btn-scan-back" type="button">回前一頁</button>
     </div>
     <div class="steps" id="scan-steps">
@@ -225,6 +226,7 @@
     <div class="flow-head">
       <h1>幫自己換裝</h1>
       <span class="sub" id="du-sub">挑髮型、衣服和顏色</span>
+      <!-- 從起始頁來是「回前一頁」，從拍照失敗頁來是「改用捏臉」（app.js openDressup） -->
       <button class="btn-link" id="btn-du-to-builder" type="button">改用捏臉</button>
     </div>
     <div class="preview stage-frame du-preview">
