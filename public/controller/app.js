@@ -225,7 +225,13 @@ function syncStartButton() {
   $('#btn-start').disabled = empty;
   $('#btn-scan').disabled = empty;
 }
-nameInput.addEventListener('input', syncStartButton);
+// 只聽 input 不夠：iOS Safari 用注音／拼音輸入時，字還在選字（ㄛㄎ 底下有底線）
+// 的整段期間可能完全不發 input，選完字也不一定補發，按鈕就一直是灰的，
+// 看起來像「名字填了卻不能按」（2026-10-18 實機回報）。組字事件與失焦都補同步一次；
+// compositionupdate 發生時 value 還沒更新，所以延到下一輪再讀。
+for (const ev of ['input', 'compositionupdate', 'compositionend', 'change', 'keyup', 'blur']) {
+  nameInput.addEventListener(ev, () => setTimeout(syncStartButton, 0));
+}
 nameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && nameInput.value.trim()) $('#btn-scan').click();
 });
@@ -1624,7 +1630,6 @@ function connect() {
       chatLog.dropOthers();
       renderChatsButton();
       $('#my-name').textContent = msg.name;
-      $('#my-id').textContent = msg.userId;
       setStatus('已連線', 'ok');
     } else if (msg.type === EV.CLIENT_SYNC) {
       // 個人視角座標（10Hz）。畫布可能還沒建立（剛連上、尚未進場），
@@ -2744,7 +2749,6 @@ function enterStage() {
   requestWakeLock();
   showPortrait($('#mini-avatar'), config);
   $('#my-name').textContent = displayName;
-  $('#my-id').textContent = '—';
   setStatus('連線中…');
   // nipplejs 與畫布都需要量測已顯示區塊的尺寸，因此必須在 showScreen 之後才初始化
   requestAnimationFrame(() => { initJoystick(); initRenderer(); });
