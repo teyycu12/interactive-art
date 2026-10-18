@@ -177,7 +177,7 @@
 {
   "ok": true,
   "photo_id": "photo_1771720000_12p",
-  "photo_url": "http://127.0.0.1:5001/photos/photo_1771720000_12p.png",
+  "photo_url": "https://192.168.1.20:3000/photos/photo_1771720000_12p_1a2b3c4d.png",
   "photo_b64": "data:image/png;base64,...",
   "qr_b64": "data:image/png;base64,...",
   "character_count": 12,

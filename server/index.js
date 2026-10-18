@@ -37,6 +37,7 @@ import {
 import { Stage, tokensMatch } from './state.js';
 import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
+import { photoUrlBase, savePhoto } from './photos.js';
 import { startTicker } from './scheduler.js';
 import { MissionBoard } from './missions.js';
 import { SocialGraph } from './socialgraph.js';
@@ -99,6 +100,9 @@ const messages = new MessageRelay();
 // 而且伺服器重開後角色本來就該重新入場。還原的是重來一次會心痛的東西：
 // 積分、社交圖譜、任務與問答紀錄，以及讓參與者認領回自己角色的身分目錄。
 // ─────────────────────────────────────────────────────────────
+// 大合照存在這裡，Gateway 以 /photos/<id>.png 送給掃 QR 的手機（server/photos.js）
+const PHOTOS_DIR = path.join(ROOT, 'data', 'photos');
+
 const store = new SnapshotStore(
   path.isAbsolute(PERSISTENCE.file) ? PERSISTENCE.file : path.join(ROOT, PERSISTENCE.file),
   { enabled: PERSISTENCE.enabled },
@@ -345,6 +349,7 @@ const { handleRequest } = createHttpLayer({
   keyMatches,
   onScreenCapture: resolveScreenCapture,
   getPersonaQuiz: () => personaView(),
+  photosDir: PHOTOS_DIR,
 });
 
 const server = tlsOptions
@@ -2601,6 +2606,11 @@ const photoRoster = () => {
   });
 };
 
+/** 合照在這台電腦上的網址前綴（QR 指向這裡，除非上傳到雲端圖床） */
+const localPhotoBase = () => photoUrlBase({
+  scheme: SCHEME, port: PORT, lanAddrs: lanAddresses(), publicHost: process.env.PUBLIC_HOST,
+});
+
 const requestCompose = (characters, backdrop) => new Promise((resolve) => {
   const body = Buffer.from(JSON.stringify({
     characters,
@@ -2608,7 +2618,8 @@ const requestCompose = (characters, backdrop) => new Promise((resolve) => {
     // 場地尺寸：沒有大螢幕底圖、改由 Python 自己畫時，座標要照這個換算。
     // 原本 Python 寫死 1920×1080，場地加寬到 2596 之後人整體往右偏、間距也被壓窄
     field: { width: STAGE.width, height: STAGE.height },
-    photoUrlBase: `http://${VISION_HOST}:${VISION_PORT}/photos`,
+    // 手機連得到的位址：沒設雲端圖床時 QR 就指向這裡（見 server/photos.js）
+    photoUrlBase: localPhotoBase(),
   }), 'utf8');
   const up = http.request({
     host: VISION_HOST, port: VISION_PORT, path: '/compose', method: 'POST',
@@ -2675,11 +2686,15 @@ const takeGroupPhoto = async (ws, { arrange = 'stay' } = {}) => {
     send(ws, EV.HOST_PHOTO_STATE, { phase: 'COMPOSING' });
     const res = await requestCompose(photoRoster(), backdrop);
     if (res && res.ok) {
-      console.log(`[photo] 完成　${res.character_count} 人　${res.photo_id}`);
+      // 有雲端圖床時 QR 指向雲端，本機這份只是備份；沒有時 QR 指向的就是這份
+      if (!savePhoto(PHOTOS_DIR, res.photo_id, res.photo_b64)) {
+        console.warn(`[photo] 存檔失敗：${res.photo_id}，QR Code 會打不開`);
+      }
+      console.log(`[photo] 完成　${res.character_count} 人　${res.photo_id}　${res.photo_url}`);
       events.log('photo', {
         ok: true, photoId: res.photo_id, count: res.character_count,
         backdrop: backdrop !== null,
-        uploaded: typeof res.photo_url === 'string' && !res.photo_url.includes(`${VISION_HOST}:${VISION_PORT}`),
+        uploaded: typeof res.photo_url === 'string' && !res.photo_url.startsWith(localPhotoBase()),
       });
       send(ws, EV.HOST_PHOTO_STATE, {
         phase: 'DONE',

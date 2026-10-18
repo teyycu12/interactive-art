@@ -655,7 +655,12 @@ function drawDebugOverlay(a, pos) {
  * 不重畫就可能讀到上一幀甚至空白（配合 preserveDrawingBuffer）。
  */
 function captureStageFrame() {
-  if (activeScene) activeScene.render();
+  // 整幀重畫（場景＋角色），不只重畫場景：大螢幕分頁在背景或縮小時瀏覽器會暫停
+  // 動畫，角色那層停在很久以前的樣子 —— 合照只有房間沒有人（2026-10-17 實測：
+  // 另開了一個沒在看的大螢幕分頁，伺服器挑到它）。角色先貼到最新位置：
+  // 內插是給連續動畫用的，暫停過的分頁會差一大截
+  for (const a of latest) view.set(a.id, { x: a.x, y: a.y });
+  drawFrame(performance.now());
 
   const out = document.createElement('canvas');
   out.width = canvas.width;
@@ -688,7 +693,13 @@ if (new URLSearchParams(location.search).get('voxel') === '1') {
 }
 let lastFrameAt = 0;
 
+/** 每一幀：畫完再排下一幀。截圖要的是「畫一幀」，不能多排一條動畫迴圈（見 captureStageFrame） */
 function render(now) {
+  drawFrame(now);
+  requestAnimationFrame(render);
+}
+
+function drawFrame(now) {
   const time = now / 1000;
   // 上限 0.1 秒：分頁切回來時的第一幀不要讓角色一口氣轉好幾圈
   const dt = lastFrameAt ? Math.min(0.1, (now - lastFrameAt) / 1000) : 0;
@@ -827,7 +838,6 @@ function render(now) {
   drawTopicBubbles(now);
 
   if (debug) updateHud();
-  requestAnimationFrame(render);
 }
 
 /**

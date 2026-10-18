@@ -21,6 +21,7 @@ import { listHistoricalAvatars } from './devAvatars.js';
 import { VISION_HOST, VISION_PORT, GEN_MAX_CONCURRENT } from './config.js';
 import { GenerateQueue, isValidTicket } from './generateQueue.js';
 import { clientIp } from './clientIp.js';
+import { photoPath } from './photos.js';
 
 /**
  * 建立 HTTP 層。依賴以參數注入而非 import，方向才不會繞回 index.js。
@@ -31,10 +32,13 @@ import { clientIp } from './clientIp.js';
  * @param {(input: string) => boolean} deps.keyMatches  主辦端密鑰比對（歷史代理用）
  * @param {(requestId: string, image: string|null) => boolean} deps.onScreenCapture
  * @param {() => object} [deps.getPersonaQuiz] 進場問卷的題目（手機進場前讀取）
+ * @param {string} [deps.photosDir] 大合照存放的目錄（/photos/<id>.png 由這裡送出）
  *        大螢幕回傳合照底圖。回傳 false 表示 requestId 認不得。
  * @returns {{handleRequest: (req, res) => void, resolveStatic: (p: string) => string|null}}
  */
-export function createHttpLayer({ root, publicDir, keyMatches, onScreenCapture, getPersonaQuiz = () => null }) {
+export function createHttpLayer({
+  root, publicDir, keyMatches, onScreenCapture, getPersonaQuiz = () => null, photosDir = null,
+}) {
 const ROOT = root;
 const PUBLIC_DIR = publicDir;
 
@@ -708,6 +712,19 @@ function handleRequest(req, res) {
 
   if (urlPath === '/api/host/history' || urlPath.startsWith('/api/host/history/')) {
     handleHostHistory(req, res, urlPath, new URL(req.url, 'http://localhost').searchParams);
+    return;
+  }
+
+  // 大合照下載：QR Code 指向這裡（見 server/photos.js）。只收合照檔名的形狀，
+  // 其餘一律 404，data/ 底下的其他檔案（state.json 有主辦密鑰）碰不到
+  if (urlPath.startsWith('/photos/')) {
+    const file = photosDir && photoPath(photosDir, urlPath);
+    if (!file) { res.writeHead(404).end('Not Found'); return; }
+    fs.readFile(file, (err, data) => {
+      if (err) { res.writeHead(404).end('Not Found'); return; }
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' });
+      res.end(data);
+    });
     return;
   }
 
