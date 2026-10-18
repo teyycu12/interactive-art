@@ -177,10 +177,10 @@ const GENERATE_RATE = { capacity: 3, refillPerSec: 1 / 30, violationLimit: Infin
  * GEN_MAX_CONCURRENT；Python 端每個請求在 CV 階段要 4 個 worker（共 16 個），
  * 調到 4 以上時那段會短暫排隊，但只佔幾百毫秒，不是瓶頸。
  *
- * 排隊上限 40：一場 30 人全部同時按也排得下。再多就回 too_busy，
- * 那種量代表場上有東西在狂送請求，不是真的有 40 個人在等。
+ * 排隊上限 60：一場 40 人（MAX_AGENTS）全部同時按，再加上一輪驗證失敗重拍
+ * 也排得下。再多就回 too_busy，那種量代表場上有東西在狂送請求。
  */
-const MAX_QUEUED_GENERATES = 40;
+const MAX_QUEUED_GENERATES = 60;
 const generateQueue = new GenerateQueue({
   maxActive: GEN_MAX_CONCURRENT, maxQueued: MAX_QUEUED_GENERATES,
 });

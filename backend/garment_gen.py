@@ -13,6 +13,7 @@ generated PNG as base64. The frontend overlays this on the lego character.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import os
 import time
@@ -135,6 +136,25 @@ def _pil_to_data_url(pil: PILImage.Image) -> str:
     pil.save(buf, format="PNG")
     b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{b64}"
+
+
+# 風格參考圖集與姿勢參考圖每一次生成都一樣，但原本每次都重新壓一次 PNG ——
+# 2048×1152 的圖集約 0.3 秒 CPU，四人同時生成時還互搶 GIL。以內容為鍵而不是
+# 物件身分：樂高／皮克斯的姿勢圖每次呼叫都是新物件，內容卻相同。
+# 只給固定的參考圖用；參與者的照片每次不同，快取只會無限長大。
+_reference_url_cache: Dict[Tuple[Any, ...], str] = {}
+_REFERENCE_URL_CACHE_MAX = 8
+
+
+def _reference_data_url(pil: PILImage.Image) -> str:
+    key = (pil.mode, pil.size, hashlib.blake2b(pil.tobytes(), digest_size=16).digest())
+    url = _reference_url_cache.get(key)
+    if url is None:
+        url = _pil_to_data_url(pil)
+        if len(_reference_url_cache) >= _REFERENCE_URL_CACHE_MAX:
+            _reference_url_cache.clear()
+        _reference_url_cache[key] = url
+    return url
 
 
 def _crop_norm_region(rgb: np.ndarray, region: Optional[Dict[str, float]], size: int = 480) -> Optional[PILImage.Image]:
@@ -970,9 +990,9 @@ def _compose_inputs(
     parts: List[Tuple[str, str]] = [(person_url, _ROLE_PERSON)]
     if detail_sheet is not None:
         parts.append((_pil_to_data_url(detail_sheet), _ROLE_DETAIL))
-    parts.append((_pil_to_data_url(pose_image or _canonical_lego_pose()), role_pose_text or _ROLE_POSE))
+    parts.append((_reference_data_url(pose_image or _canonical_lego_pose()), role_pose_text or _ROLE_POSE))
     if style_sheet is not None:
-        parts.append((_pil_to_data_url(style_sheet), role_style_text or _ROLE_STYLE))
+        parts.append((_reference_data_url(style_sheet), role_style_text or _ROLE_STYLE))
 
     text = "\n\n### HOW TO USE THE INPUT IMAGES\n" + "\n".join(
         f"Image {index}: {role}" for index, (_, role) in enumerate(parts, 1)
