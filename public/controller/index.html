@@ -534,6 +534,21 @@
 
 <!-- nipplejs 由本機 node_modules 直出，不走 CDN（現場網路不穩時仍可載入） -->
 
+<!-- 經 ngrok 免費網域對外時，ngrok 會先擋一頁「You are about to visit…」提醒頁，
+     按過 Visit Site 的記錄 iOS Safari 只套用在 /controller/ 這層。/shared/、/vendor/
+     的請求於是拿到提醒頁的 HTML，模組載入失敗、整支 app.js 不執行，兩顆按鈕永遠是灰的
+     （2026-10-18 iPhone 實測）。偵測到就跳去根目錄讓提醒頁出現在 / ，按過後
+     index.html 依 next 送回來。區網直連時拿到的是 JS，這段什麼都不做。 -->
+<script>
+  fetch('/shared/protocol.js', { cache: 'no-store' }).then(function (r) {
+    if (!/text\/html/.test(r.headers.get('content-type') || '')) return;
+    try {
+      if (sessionStorage.getItem('pixelair.ngrokHop')) return;   // 跳過一次還不行就別無限循環
+      sessionStorage.setItem('pixelair.ngrokHop', '1');
+    } catch (e) { /* 私密模式照樣跳一次 */ }
+    location.replace('/?next=' + encodeURIComponent(location.pathname + location.search + location.hash));
+  }).catch(function () { /* 離線：讓頁面自己顯示連線中 */ });
+</script>
 <script src="/vendor/nipplejs.js"></script>
 <script type="module" src="app.js"></script>
 </body>

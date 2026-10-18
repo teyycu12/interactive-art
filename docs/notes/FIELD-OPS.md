@@ -156,6 +156,22 @@ ngrok 轉發進來的連線 `remoteAddress` 全是 127.0.0.1。生成限流是�
 採信它的話，每次請求換一個假值就拿到新的額度，一支手機能塞滿整個生成排隊。
 多一層代理（例如 ngrok 前面再架一層）時，最右邊會變成那一層的位址，要跟著改。
 
+### 對外固定網址：ngrok 免費提醒頁會讓 iPhone 整頁失效（2026-10-18）
+
+`bash start-public.sh` 用 `.env` 的 `NGROK_DOMAIN`（免費帳號自動配的 dev domain，
+在 dashboard 的 Domains 頁；自取名稱要付費）。網址固定，但服務仍跑在這台電腦上。
+
+免費版對每個瀏覽器請求先回一頁「You are about to visit…」（ERR_NGROK_6024），按過
+Visit Site 才放行。iPhone Safari 把這筆記錄只套用在**當下那一層路徑**：在
+`/controller/` 按過，`/shared/`、`/vendor/` 仍拿到提醒頁的 HTML，模組因 MIME 不符
+全部載入失敗，app.js 不執行 —— 畫面正常、兩顆按鈕永遠是灰的，**沒有任何錯誤訊息**。
+桌機 Chrome 把記錄存在 `/`，測不出來。
+
+`controller/index.html` 開頭先抓一次 `/shared/protocol.js`，拿到 HTML 就跳
+`/?next=…`，讓提醒頁出現在根目錄，按過再由 `index.html` 送回來。提醒頁本身拿不掉
+（只認自訂標頭或非瀏覽器 UA），要去掉得付費或改 Cloudflare Tunnel＋自有網域；
+它還會把這台電腦的對外 IP 顯示給訪客。
+
 ### 集合任務的頻寬陷阱
 
 CLIENT_SYNC 只送視野半徑（`CLIENT_SYNC_RADIUS` = 320）內的鄰居，所以單支手機

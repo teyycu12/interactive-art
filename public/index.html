@@ -27,6 +27,14 @@
   a.ghost { border-style: dashed; border-color: var(--line); }
   footer { margin-top: 26px; font-size: 12px; color: var(--soft); line-height: 1.8; }
 </style>
+<script>
+  // 手機頁偵測到 ngrok 提醒頁時會跳來這裡（見 controller/index.html），按過
+  // Visit Site 後依 next 送回去。只收站內路徑，擋掉 //evil.com 這種開放轉址
+  (function () {
+    var next = new URLSearchParams(location.search).get('next');
+    if (next && next.charAt(0) === '/' && next.charAt(1) !== '/' && next.charAt(1) !== '\\') location.replace(next);
+  })();
+</script>
 </head>
 <body>
 <main>
