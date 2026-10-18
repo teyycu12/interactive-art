@@ -87,7 +87,7 @@ body {
    蓋掉最上面那一列（.bar 的頭像、積分、連線狀態與離開鍵），而且因為
    html 設了 overflow:hidden，被切掉的部分是捲不出來的 —— 使用者按不到
    離開鍵，也看不到自己是否還連著線。 */
-#entry, #return, #builder, #dressup, #scan, #controller, #farewell {
+#entry, #return, #dressup, #scan, #controller, #farewell {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -179,8 +179,8 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 .scan-stage.is-pixel img { image-rendering: pixelated; }
 #entry #name-input { max-width: 320px; margin-top: 6px; }
 
-/* ── 捏臉流程 ───────────────────────────────────────────── */
-/* 捏臉與拍照共用的標題列：左邊標題牌、右邊第幾步，最右是切換到另一條路徑 */
+/* ── 拍照、換裝共用的版面 ──────────────────────────────── */
+/* 拍照與換裝共用的標題列：左邊標題牌、右邊第幾步，最右是切換到另一條路徑 */
 .flow-head { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .flow-head h1 {
   margin: 0; font-size: 17px; letter-spacing: .06em;
@@ -205,7 +205,7 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 }
 .btn-link:active { transform: none; box-shadow: none; color: var(--ink); }
 
-/* 舞台框：捏臉預覽與拍照取景共用。地磚底呼應大螢幕的地板 */
+/* 舞台框：換裝預覽與拍照取景共用。地磚底呼應大螢幕的地板 */
 .stage-frame {
   border: 2.5px solid var(--ink);
   border-radius: var(--r);
@@ -230,39 +230,6 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   flex: 0 1 auto;
 }
 .preview svg { height: min(24dvh, 190px); width: auto; }
-
-.step-body { flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.step-body[hidden] { display: none; }
-
-.step-title { font-size: 14px; font-weight: 700; margin: 0; }
-
-.options {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  overflow-y: auto;
-  padding: 2px 2px 6px;
-  min-height: 0;
-  flex: 0 1 auto;
-  /* 不設的話，格子會被拉高去填滿整欄，卡片裡上下一大片空白 */
-  align-content: start;
-}
-.opt {
-  padding: 6px 4px 6px;
-  border: 2px dashed var(--line);
-  border-radius: var(--r);
-  background: var(--paper);
-  box-shadow: none;
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-}
-.opt svg { width: 100%; height: 66px; }
-.opt span { font-size: 11px; color: var(--ink-soft); font-weight: 600; }
-.opt[aria-pressed="true"] {
-  border: 2.5px solid var(--ink);
-  background: var(--sunk);
-  box-shadow: var(--drop-sm);
-}
-.opt[aria-pressed="true"] span { color: var(--ink); }
 
 /* 色票 */
 .swatches { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -298,7 +265,7 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 #name-input::placeholder { color: #B5A68F; font-weight: 500; }
 
 /* ── 素體換裝 ──────────────────────────────────────────────
-   與捏臉同一套元件（舞台框、色票）。預覽是生成服務組好的像素圖，放大不能糊 */
+   與拍照頁同一套元件（舞台框、色票）。預覽是生成服務組好的像素圖，放大不能糊 */
 .du-preview { padding: 8px 4px; }
 .du-preview img {
   display: block;
@@ -590,7 +557,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
    滾動」，而視窗矮到這個程度時本來就不是實際的操作情境（現場是直立
    手機），能看到完整資訊比維持不可捲更重要。 */
 @media (max-height: 420px) {
-  #entry, #return, #builder, #dressup, #scan, #controller, #farewell {
+  #entry, #return, #dressup, #scan, #controller, #farewell {
     padding-top: calc(8px + env(safe-area-inset-top));
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
     gap: 6px;
@@ -966,7 +933,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 /* 相機開不起來時不顯示空的取景框（見 app.js 的 showScanFailure） */
 .scan-stage.is-empty { display: none; }
 
-/* 成果展示：淺色地磚襯托透明背景的角色，與捏臉預覽同一種舞台（.stage-frame） */
+/* 成果展示：淺色地磚襯托透明背景的角色，與換裝預覽同一種舞台（.stage-frame） */
 .scan-stage.is-result {
   background-color: var(--sunk);
   background-image: repeating-conic-gradient(rgba(122, 76, 49, .08) 0 25%, transparent 0 50%);
@@ -1433,7 +1400,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 
 }
 
-/* ── 捏臉與拍照：同一套版面 ──────────────────────────────
+/* ── 換裝與拍照：同一套版面 ──────────────────────────────
    兩條進場路徑共用：標題列（.flow-head）→ 三段進度（.steps）→
    舞台（取景框／角色預覽）＋ 操作區。橫式時舞台在左、操作在右；
    直式時上下堆疊。主要按鈕列（.foot-main）在操作區捲動時黏在底部，
@@ -1450,7 +1417,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
   box-shadow: 0 -12px 12px -4px var(--paper);
 }
 .scan-panel h1 { font-size: 22px; }
-.scan-side, .step-body { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.scan-side { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 
 @media (max-aspect-ratio: 1/1) {
   .scan-split { align-items: stretch; gap: 12px; }
@@ -1467,7 +1434,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 @media (orientation: landscape) {
   /* 進場各頁也收在與控制器相同的 16:9 畫框裡，外面同一種深色邊 */
   body { background-color: #383c43; background-image: none; }
-  #entry, #return, #builder, #dressup, #scan, #farewell {
+  #entry, #return, #dressup, #scan, #farewell {
     flex: none;
     margin: auto;
     width: min(100%, calc(100dvh * 16 / 9));
@@ -1480,32 +1447,9 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
     background-size: 28px 28px;
   }
 
-  /* 捏臉：預覽在左、選項在右 */
-  #builder {
-    display: grid;
-    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.5fr);
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
-    column-gap: 18px;
-    row-gap: 10px;
-  }
-  #builder > .flow-head,
-  #builder > .steps { grid-column: 1 / -1; }
-  #builder > .preview { grid-column: 1; grid-row: 3 / 5; }
-  #builder > .step-body { grid-column: 2; grid-row: 3; overflow-y: auto; }
-  #builder > .foot { grid-column: 2; grid-row: 4; }
-  #builder .preview svg { height: calc(100% - 8px); max-height: 320px; }
-  #builder .options {
-    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-    overflow: visible;
-    /* 捲動交給整個 .step-body；選項自己不能被壓縮，否則會疊到下面的色票標題 */
-    flex-shrink: 0;
-  }
-  #builder > .foot { display: grid; grid-template-columns: 1fr 1fr 1.5fr; }
-  #builder > .foot button { white-space: nowrap; padding-inline: 8px; }
-
   .scan-stage { height: min(100%, 74dvh); }
 
-  /* 換裝：預覽在左、分類與選項在右（同捏臉） */
+  /* 換裝：預覽在左、分類與選項在右 */
   #dressup {
     display: grid;
     grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.5fr);
@@ -1523,7 +1467,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 
 /* 矮的橫式（手機橫拿）：標題列與留白縮到最小，把高度讓給舞台與按鈕 */
 @media (orientation: landscape) and (max-height: 500px) {
-  #entry, #return, #builder, #dressup, #scan, #farewell { overflow: hidden; gap: 6px; }
+  #entry, #return, #dressup, #scan, #farewell { overflow: hidden; gap: 6px; }
   .flow-head h1 { font-size: 14px; padding: 3px 9px 2px; }
   .btn-link { min-height: 30px; padding: 4px 8px; }
   .steps i { height: 4px; }
@@ -1532,9 +1476,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
   .scan-panel .lede { font-size: 13px; }
   .tips { gap: 4px; font-size: 12px; }
   .note { padding: 7px 9px; font-size: 11.5px; line-height: 1.45; }
-  .scan-panel .foot button, #builder .foot button { padding: 8px 12px; }
-  #builder .opt svg { height: 52px; }
-  .step-title { font-size: 13px; }
+  .scan-panel .foot button { padding: 8px 12px; }
   .swatch { width: 32px; height: 32px; }
 }
 

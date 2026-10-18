@@ -239,7 +239,7 @@ PIXELAIR_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 ### 顯示名稱過濾（server/nameFilter.js）
 
 名稱會投影在大螢幕上，`handleJoin` 在 `sanitizeName` 之後呼叫 `isBlockedName`，
-新入場與同連線改名兩條路徑都擋，回 `CLIENT_REJECT`（手機退回捏臉頁並跳出提示）。
+新入場與同連線改名兩條路徑都擋，回 `CLIENT_REJECT`（手機退回起始頁並跳出提示）。
 拒絕訊息刻意**不說是哪個字** —— 說了等於教人怎麼繞。
 
 詞表刻意只擋「明顯的」，兩個方向的錯代價不同：

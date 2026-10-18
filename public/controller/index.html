@@ -14,7 +14,7 @@
 <div id="app">
 
   <!-- ── 進場：命名 ──────────────────────────────────────
-       命名獨立成進場前的第一個畫面，而非塞在捏臉最後一步。
+       命名獨立成進場前的第一個畫面，而非塞在建立角色的最後一步。
        手機鍵盤會佔掉半個螢幕，與服裝選擇擠在同一頁時會蓋住角色預覽；
        獨立出來後鍵盤只開關一次，互動乾淨許多。 -->
   <section id="entry">
@@ -32,7 +32,8 @@
     </div>
     <div class="foot">
       <button class="btn-primary" id="btn-scan" disabled>拍照生成角色</button>
-      <button class="btn-ghost" id="btn-start" disabled>改用捏臉</button>
+      <!-- 不想拍照的人：素體換裝（跟拍照生成的角色同一種）。舊的捏臉 2026-10-18 拿掉了 -->
+      <button class="btn-ghost" id="btn-start" disabled>自己換裝</button>
     </div>
   </section>
 
@@ -59,12 +60,12 @@
     直向手機會改成上下堆疊（見 style.css 的 media query）。
   -->
   <section id="scan" hidden>
-    <!-- 與捏臉共用同一個標題列與三段進度：兩條路徑是同一件事的兩種做法，
+    <!-- 與換裝共用同一個標題列：兩條路徑是同一件事的兩種做法，
          參與者在兩者之間切換時不該覺得換了一個 App。 -->
     <div class="flow-head">
       <h1>拍照生成</h1>
       <span class="sub" id="scan-step-label">1 / 3　拍照</span>
-      <!-- 回命名畫面。捏臉備援仍在：命名畫面的「改用捏臉」與生成失敗頁的「改用捏臉」 -->
+      <!-- 回命名畫面（那裡可以改走「自己換裝」） -->
       <button class="btn-link" id="btn-scan-back" type="button">回前一頁</button>
     </div>
     <div class="steps" id="scan-steps">
@@ -154,7 +155,8 @@
           </div>
         </div>
 
-        <!-- 階段 4：失敗。降級到捏臉是保底，但不該替使用者決定 -->
+        <!-- 階段 4：失敗。只有照片本身的問題、相機開不起來會停在這裡；
+             生成服務掛了（額度、上游）直接帶去換裝（app.js 的 GEN_DEAD） -->
         <div class="scan-panel" data-phase="failed" hidden>
           <h1 id="fail-title">沒能生成角色</h1>
           <p class="lede" id="scan-error" role="status" aria-live="polite">再試一次通常就好了。</p>
@@ -163,10 +165,8 @@
             <button class="btn-primary" id="btn-retry">重拍一次</button>
             <button class="btn-ghost" id="btn-upload-alt">從相簿選</button>
           </div>
-          <!-- 素體換裝：生圖 API 不能用時的退路。生成服務本身也沒開就藏起來（app.js 的 loadDressupCatalog） -->
           <div class="foot">
-            <button class="btn-ghost" id="btn-dressup" hidden>自己換裝</button>
-            <button class="btn-ghost" id="btn-give-up">改用捏臉</button>
+            <button class="btn-ghost" id="btn-dressup">不拍了，自己換裝</button>
           </div>
         </div>
 
@@ -178,54 +178,14 @@
     <input type="file" id="upload-input" accept="image/*" hidden>
   </section>
 
-  <!-- ── 捏臉流程（3 步）────────────────────────────────── -->
-  <section id="builder" hidden>
-    <div class="flow-head">
-      <h1>捏一個你</h1>
-      <span class="sub" id="step-label">1 / 3　髮型與膚色</span>
-      <!-- 改走拍照路徑（拍照頁右上角是「回前一頁」，回命名畫面再選） -->
-      <button class="btn-link" id="btn-to-scan" type="button">改用拍照</button>
-    </div>
-    <div class="steps" id="builder-steps">
-      <i class="on"></i><i></i><i></i>
-    </div>
-
-    <!-- 預覽與拍照頁的取景框是同一種「舞台」：地磚底、粗框、硬陰影 -->
-    <div class="preview stage-frame" id="preview"></div>
-
-    <div class="step-body" data-step="1">
-      <p class="step-title">髮型</p>
-      <div class="options" id="opt-head"></div>
-      <p class="step-title">膚色</p>
-      <div class="swatches" id="opt-skin"></div>
-    </div>
-
-    <div class="step-body" data-step="2" hidden>
-      <p class="step-title">表情</p>
-      <div class="options" id="opt-face"></div>
-    </div>
-
-    <div class="step-body" data-step="3" hidden>
-      <p class="step-title">服裝</p>
-      <div class="options" id="opt-body"></div>
-      <p class="step-title">代表色</p>
-      <div class="swatches" id="opt-accent"></div>
-    </div>
-
-    <div class="foot">
-      <button class="btn-ghost" id="btn-random">隨機</button>
-      <button class="btn-ghost" id="btn-prev">上一步</button>
-      <button class="btn-primary" id="btn-next">下一步</button>
-    </div>
-  </section>
-
-  <!-- ── 素體換裝（生圖 API 不能用時）──────────────────────
-       與生成的角色同一種畫法：髮型、衣服、配件都是預先畫好的部件，在生成服務裡本機組合。 -->
+  <!-- ── 素體換裝 ─────────────────────────────────────────
+       不想拍照、或生成失敗時的路。與生成的角色同一種畫法：髮型、衣服、配件、
+       表情都是預先畫好的部件，在生成服務裡本機組合（不呼叫生圖 API、不花錢）。 -->
   <section id="dressup" hidden>
     <div class="flow-head">
       <h1>幫自己換裝</h1>
       <span class="sub" id="du-sub">挑髮型、衣服和顏色</span>
-      <button class="btn-link" id="btn-du-to-builder" type="button">改用捏臉</button>
+      <button class="btn-link" id="btn-du-back" type="button">回前一頁</button>
     </div>
     <div class="preview stage-frame du-preview">
       <img id="du-preview" alt="換裝後的角色">
@@ -524,7 +484,7 @@
   <span class="mn-text" id="msg-notice-text"></span>
 </button>
 
-<!-- 進場問卷（捏臉路徑）。拍照路徑是嵌在「生成中」那一頁，捏臉沒有等待時間，改在進場前跳出 -->
+<!-- 進場問卷（換裝路徑）。拍照路徑是嵌在「生成中」那一頁，換裝沒有等待時間，改在進場前跳出 -->
 <div class="overlay" id="persona-overlay" hidden>
   <div class="dialog" role="dialog" aria-modal="true" aria-label="進場問卷">
     <div class="persona-quiz" id="persona-builder"></div>

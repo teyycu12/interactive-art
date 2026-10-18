@@ -1,16 +1,15 @@
 /**
- * 模組 M1 — 手機端結構化捏臉與輸入控制器
+ * 模組 M1 — 手機端角色建立與輸入控制器
  *
- * 三段式流程：捏臉（3 步）→ CLIENT_JOIN → 搖桿控制。
+ * 流程：拍照生成或素體換裝 → CLIENT_JOIN → 搖桿控制。
+ * 舊的 token 捏臉（3 步）2026-10-18 從手機拿掉了；伺服器仍接受 token 外觀
+ * （壓測機器人、之前進過場的人回來時用的就是它）。
  * 素材目錄與協定常數皆由 /shared/ 載入，與伺服器共用同一份定義。
  */
 
 import '/shared/legacyStorage.js';   // 必須排第一個：先把改名前的舊鍵搬過來
 import { scorePersona, PERSONA_RESULT_MAP } from '/shared/persona.js';
-import {
-  HEADS, FACES, BODIES, SKIN_TONES, ACCENT_COLORS,
-  renderAvatarSVG, randomAvatarConfig,
-} from '/shared/avatars.js';
+import { SKIN_TONES } from '/shared/avatars.js';
 import {
   EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS, DIRECT_MESSAGE, MSG_ERRORS,
   QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME,
@@ -171,8 +170,8 @@ const LS = {
   avatar: 'pixelair.avatar',
 };
 
-let step = 1;
-let config = randomAvatarConfig();
+/** 角色外觀：拍照生成或換裝組出來的 {source:'CV', textures}；之前進過場的人可能是舊的 token 外觀 */
+let config = null;
 let displayName = '';
 /** 伺服器指派的角色 id */
 let myId = null;
@@ -182,77 +181,10 @@ try {
   const saved = localStorage.getItem(LS.avatar);
   if (saved) {
     const parsed = JSON.parse(saved);
-    // 掃描生成的外觀要整份取代，不能與隨機捏臉設定合併 —— 混在一起會得到
-    // 一個同時帶著 token 與 textures 的角色，之後改用捏臉時 source 還留著
-    // 'CV'，等於把人鎖在一組舊貼圖上。
-    config = parsed?.source === 'CV' ? parsed : { ...config, ...parsed };
+    config = parsed && typeof parsed === 'object' ? parsed : null;
   }
   displayName = localStorage.getItem(LS.name) ?? '';
 } catch { /* 隱私模式下 localStorage 可能拋錯，忽略即可 */ }
-
-/** 切回捏臉時，先把掃描的外觀清掉，否則調整選項不會有任何效果 */
-function ensureTokenConfig() {
-  if (config?.source === 'CV') config = randomAvatarConfig();
-}
-
-// ─────────────────────────────────────────────────────────────
-// 捏臉 UI
-// ─────────────────────────────────────────────────────────────
-const STEP_LABELS = ['1 / 3　髮型與膚色', '2 / 3　表情', '3 / 3　服裝與代表色'];
-
-/** 每個選項都渲染「換上該部件後的完整角色」，比只顯示零件更易判讀 */
-function buildParts(container, items, key) {
-  container.replaceChildren();
-  for (const item of items) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'opt';
-    btn.setAttribute('aria-pressed', String(config[key] === item.id));
-    btn.innerHTML = renderAvatarSVG({ ...config, [key]: item.id });
-    const label = document.createElement('span');
-    label.textContent = item.label;
-    btn.append(label);
-    btn.addEventListener('click', () => { config[key] = item.id; refresh(); });
-    container.append(btn);
-  }
-}
-
-function buildSwatches(container, colors, key) {
-  container.replaceChildren();
-  for (const color of colors) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'swatch';
-    btn.style.background = color;
-    btn.setAttribute('aria-pressed', String(config[key] === color));
-    btn.setAttribute('aria-label', color);
-    btn.addEventListener('click', () => { config[key] = color; refresh(); });
-    container.append(btn);
-  }
-}
-
-function refresh() {
-  // 掃描生成的外觀沒有 token 可選，捏臉 UI 對它沒有意義
-  if (config?.source === 'CV') return;
-  $('#preview').innerHTML = renderAvatarSVG(config);
-  buildParts($('#opt-head'), HEADS, 'head');
-  buildParts($('#opt-face'), FACES, 'face');
-  buildParts($('#opt-body'), BODIES, 'body');
-  buildSwatches($('#opt-skin'), SKIN_TONES, 'skinTone');
-  buildSwatches($('#opt-accent'), ACCENT_COLORS, 'accentColor');
-  try { localStorage.setItem(LS.avatar, JSON.stringify(config)); } catch { /* 略 */ }
-}
-
-function showStep(n) {
-  step = n;
-  $('#step-label').textContent = STEP_LABELS[n - 1];
-  document.querySelectorAll('.step-body').forEach((el) => {
-    el.hidden = Number(el.dataset.step) !== n;
-  });
-  setStepBar('#builder-steps', n);
-  $('#btn-prev').textContent = n === 1 ? '改名字' : '上一步';
-  $('#btn-next').textContent = n === 3 ? '完成，進入現場' : '下一步';
-}
 
 /**
  * 角色肖像放進容器：與場上同一格像素畫格（shared/avatarSprite.js 的 avatarPortrait）。
@@ -270,7 +202,7 @@ function showPortrait(el, avatar) {
   });
 }
 
-/** 三段進度條（捏臉與拍照共用同一個元件） */
+/** 三段進度條（拍照頁） */
 function setStepBar(selector, n) {
   document.querySelectorAll(`${selector} i`).forEach((el, i) => {
     el.classList.toggle('on', i < n);
@@ -279,7 +211,7 @@ function setStepBar(selector, n) {
 
 /** 只切換單一畫面，其餘全部隱藏 */
 function showScreen(id) {
-  for (const s of ['entry', 'return', 'scan', 'builder', 'dressup', 'controller', 'farewell']) {
+  for (const s of ['entry', 'return', 'scan', 'dressup', 'controller', 'farewell']) {
     $(`#${s}`).hidden = s !== id;
   }
 }
@@ -323,18 +255,16 @@ function commitName() {
   return true;
 }
 
-$('#btn-start').addEventListener('click', () => {
+// 起始頁的第二條路：不想拍照的人直接換裝（跟拍照生成的角色同一種）
+$('#btn-start').addEventListener('click', async () => {
   if (!commitName()) return;
-  ensureTokenConfig();
-  refresh();
-  showScreen('builder');
-  showStep(1);
+  await goDressup({ fromStart: true });
 });
 
 // ── 掃描生成 ──────────────────────────────────────────────
 //
-// 捏臉不會被這條路徑取代，而是降級為備援：相機權限被拒、非安全情境、
-// 生成失敗都會退回捏臉，參與者不會因此進不了場（整合計畫 §3.5）。
+// 相機權限被拒、非安全情境、照片不行時停在失敗頁（重拍、從相簿選、自己換裝）；
+// 生成服務本身掛了（額度、上游）直接帶去換裝 —— 參與者不會因此進不了場（整合計畫 §3.5）。
 
 let toastTimer = null;
 function showToast(text, durationMs = 3200) {
@@ -375,7 +305,7 @@ function showScanPhase(phase) {
   // 成果階段換白底。生成中顯示的是剛拍下的照片（深色框比較合適），
   // 只有最後展示角色時才轉白 —— 角色是透明背景，白底才襯得出來。
   $('.scan-stage')?.classList.toggle('is-result', phase === 'done');
-  // 與捏臉同一套三段進度：拍照 → 生成 → 確認。失敗停在第二段（卡在生成這一步）
+  // 三段進度：拍照 → 生成 → 確認。失敗停在第二段（卡在生成這一步）
   const [stepNo, stepName] = SCAN_STEPS[phase] ?? SCAN_STEPS.aim;
   $('#scan-step-label').textContent = `${stepNo} / 3　${stepName}`;
   setStepBar('#scan-steps', stepNo);
@@ -523,30 +453,19 @@ function stopScanStream() {
 }
 
 /**
- * 入場路徑，隨 CLIENT_JOIN 回報給伺服器的事件紀錄。
- * 拍照生成的角色伺服器自己認得出來（貼圖路徑），但「直接捏臉」與
- * 「拍照失敗才改捏臉」在伺服器眼中長得一樣 —— 只有手機知道走過哪一條。
- * @type {'builder'|'scan_fallback'}
+ * 入場路徑，隨 CLIENT_JOIN 回報給伺服器的事件紀錄。拍照與換裝的角色都是貼圖，
+ * 伺服器分不出來 —— 只有手機知道走過哪一條。null = 拍照（伺服器記成 photo）。
+ * @type {'dressup'|null}
  */
-let entryRoute = 'builder';
-
-function fallbackToBuilder(message) {
-  entryRoute = 'scan_fallback';
-  stopScanStream();
-  if (message) showToast(message);
-  ensureTokenConfig();
-  refresh();
-  showScreen('builder');
-  showStep(1);
-}
+let entryRoute = null;
 
 
-// ── 素體換裝（生圖 API 不能用時）──────────────────────────
+// ── 素體換裝 ──────────────────────────────────────────────
 //
-// 拍照生成失敗、尤其是額度用完或上游掛掉時的退路：髮型、衣服、配件是預先
-// 畫好的部件，由生成服務在本機組角色（backend/dressup.py）。組出來的角色跟
-// 生成的同一種，場上不會混進捏臉那種小人。生成服務本身也沒開時選單讀不到，
-// 按鈕就藏起來 —— 那時只剩捏臉（「掃描失敗一律降級，不擋人進場」）。
+// 不想拍照、或生成失敗（尤其額度用完、上游掛掉）時的路：髮型、衣服、配件、
+// 表情是預先畫好的部件，由生成服務在本機組角色（backend/dressup.py，不花錢）。
+// 組出來的角色跟生成的同一種。舊的捏臉 2026-10-18 拿掉了：換裝只靠生成服務，
+// 它沒開的話選單讀不到，手機請參與者通知工作人員（npm run doctor 會先抓到）。
 
 const DU_HAIR_COLORS = ['#1E1A1C', '#3B2A22', '#5B3A29', '#8A5A3B', '#C9A15E', '#E6D3A3', '#9A9A9A', '#B5523B'];
 const DU_CLOTH_COLORS = [
@@ -569,13 +488,21 @@ async function loadDressupCatalog() {
   try {
     const body = await (await fetch('/api/dressup/catalog')).json();
     if (body?.ok && Array.isArray(body.parts) && body.parts.length) duCatalog = body;
-  } catch { /* 生成服務沒開：沒有換裝，只剩捏臉 */ }
+  } catch { /* 生成服務沒開：讀不到選單，呼叫端會請參與者通知工作人員 */ }
   return duCatalog;
 }
 
-/** 失敗畫面的「自己換裝」：選單讀得到才出現 */
-async function offerDressup() {
-  $('#btn-dressup').hidden = !(await loadDressupCatalog());
+const DU_UNAVAILABLE = '換裝暫時不能用，請通知工作人員。';
+
+/** 進換裝頁。選單讀不到（生成服務沒開）就停在原地說明，不會卡在空白頁 */
+async function goDressup(opts = {}) {
+  if (!(await loadDressupCatalog())) {
+    showToast(DU_UNAVAILABLE, 5000);
+    return false;
+  }
+  openDressup(opts);
+  if (opts.message) showToast(opts.message, 4500);
+  return true;
 }
 
 const duPartsOf = (cat) => duCatalog.parts.filter((p) => p.category === cat);
@@ -591,10 +518,11 @@ function duHidden() {
   return hidden;
 }
 
-function openDressup() {
+/** fromStart：從起始頁直接來。拍照失敗才來的，用照片量到的顏色當起點 */
+function openDressup({ fromStart = false } = {}) {
   if (!duCatalog) return;
   stopScanStream();
-  const fb = lastFallbackColors ?? {};
+  const fb = (!fromStart && lastFallbackColors) || {};
   const isHex = (c) => typeof c === 'string' && /^#[0-9A-Fa-f]{6}$/.test(c);
   duState = {
     selection: Object.fromEntries(duCatalog.categories.map((c) => [c.id, c.multi ? [] : null])),
@@ -722,7 +650,7 @@ function requestDuPreview() {
       });
       const body = await res.json();
       if (seq === duPreviewSeq && body?.ok) $('#du-preview').src = body.previewPng;
-      if (body?.error === 'vision_service_unavailable') fallbackToBuilder('換裝暫時不能用，改用捏臉。');
+      if (body?.error === 'vision_service_unavailable') showToast(DU_UNAVAILABLE, 5000);
     } catch { /* 預覽漏一次沒關係，下一次點選會再送 */ }
   }, 120);
 }
@@ -761,15 +689,17 @@ $('#btn-du-done').addEventListener('click', async () => {
     try { localStorage.setItem(LS.avatar, JSON.stringify(config)); } catch { /* 略 */ }
     askPersonaThen(enterStage);
   } catch {
-    fallbackToBuilder('換裝沒有成功，改用捏臉。');
+    // 留在換裝頁：選好的都還在，再按一次通常就好
+    showToast('換裝沒有成功，再按一次「完成」試試。如果一直不行，請通知工作人員。', 5000);
   } finally {
     btn.disabled = false;
     btn.textContent = '完成，進入現場';
   }
 });
 
-$('#btn-du-to-builder').addEventListener('click', () => fallbackToBuilder(null));
-$('#btn-dressup').addEventListener('click', openDressup);
+// 回起始頁：那裡可以改走拍照
+$('#btn-du-back').addEventListener('click', () => showScreen('entry'));
+$('#btn-dressup').addEventListener('click', () => { stopScanStream(); goDressup(); });
 
 /**
  * 生成風格選單。
@@ -840,12 +770,12 @@ $('#btn-scan').addEventListener('click', async () => {
   // 拒絕，且錯誤訊息相當隱晦 —— 這裡先明講，免得現場以為是相機壞了。
   //
   // 但沒有相機**不等於**不能生成角色：從相簿上傳這條路徑完全不需要相機。
-  // 因此這裡不再直接踢回捏臉，而是停在失敗畫面上 —— 那個畫面同時放了
-  // 「從相簿選」與「改用捏臉」，由使用者自己選，而不是系統代為決定。
+  // 因此停在失敗畫面上 —— 那個畫面同時放了「從相簿選」與「自己換裝」，
+  // 由使用者自己選，而不是系統代為決定。
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     showScanFailure(
       '這個網址無法使用相機（需要 HTTPS）。',
-      '你仍然可以從相簿選一張全身照來生成角色，或改用捏臉。',
+      '你仍然可以從相簿選一張全身照來生成角色，或自己換裝。',
       { title: '相機無法使用', emptyStage: true, noRetry: true },
     );
     return;
@@ -937,8 +867,8 @@ async function openCamera() {
     if (seq !== cameraOpenSeq) return false;
     // 切到前鏡頭才失敗的話，重試要回到後鏡頭，否則「重新嘗試」會一直撞同一顆
     cameraFacing = 'environment';
-    // 不直接踢回捏臉：使用者可能只是誤按拒絕，或想去設定裡開啟。
-    // 捏臉仍在，但那是「他選的」而不是「系統替他決定的」。
+    // 不直接帶去換裝：使用者可能只是誤按拒絕，或想去設定裡開啟。
+    // 換裝就在失敗頁上，但那是「他選的」而不是「系統替他決定的」。
     const denied = err?.name === 'NotAllowedError';
     showScanFailure(
       denied ? '沒有取得相機權限。' : '開不起相機。',
@@ -951,7 +881,7 @@ async function openCamera() {
   }
 }
 
-// 右上角「回前一頁」：關掉相機回命名畫面（名字還留著，可以改走捏臉或重新拍照）
+// 右上角「回前一頁」：關掉相機回命名畫面（名字還留著，可以改走換裝或重新拍照）
 $('#btn-scan-back').addEventListener('click', () => {
   stopScanStream();
   stopPersonaDuringScan();
@@ -962,8 +892,6 @@ $('#btn-flip').addEventListener('click', () => {
   cameraFacing = cameraFacing === 'environment' ? 'user' : 'environment';
   openCamera();
 });
-// 捏臉頁的反向切換。名字在命名頁就存好了，直接走同一個入口
-$('#btn-to-scan').addEventListener('click', () => $('#btn-scan').click());
 
 /** 倒數中被按下取消時設為 true，讓倒數迴圈中止。
     宣告必須排在下方上傳處理器之前 —— let 不會提升，放在後面會落入
@@ -1243,6 +1171,13 @@ async function submitScanImage(image) {
 
   if (!body?.ok) {
     lastFallbackColors = body?.fallbackColors ?? null;
+    // 生成本身掛了（不是照片的問題）：重拍也一樣，直接帶去換裝。
+    // 照片量到的顏色會帶過去當起點。選單讀不到才停在失敗頁
+    if (GEN_DEAD.has(body?.error)) {
+      stopScanStream();
+      stopPersonaDuringScan();
+      if (await goDressup({ message: '生成暫時不能用，先幫自己換裝吧！' })) return;
+    }
     const known = SCAN_ERRORS[body?.error];
     showScanFailure(
       known ?? '這張照片沒能生成角色。',
@@ -1277,15 +1212,12 @@ async function submitScanImage(image) {
 }
 
 /**
- * 失敗畫面：保留重試的機會，而不是逕自把人踢回捏臉。
- *
- * 降級到捏臉是刻意保留的保底路徑（整合計畫 §3.5），但「自動降級」與
- * 「讓使用者選」是兩回事 —— 等了 25 秒換來一句 toast 然後被丟去捏臉，
- * 挫折感遠大於再按一次重拍。
+ * 失敗畫面：照片本身的問題、相機開不起來時停在這裡，保留重拍的機會。
+ * 「自己換裝」也在這一頁，由使用者選 —— 照片的問題多半重拍一次就好。
+ * 生成服務本身掛了則不停在這裡（見 GEN_DEAD）。
  */
 function showScanFailure(message, hint = '', opts = {}) {
   stopPersonaDuringScan();
-  offerDressup();
   // 相機開不起來時左邊沒有東西可看，留一個空黑框只是佔位。
   // 生成失敗則相反 —— 剛拍的那張照片正是使用者要判斷「哪裡不對」的依據。
   $('.scan-stage')?.classList.toggle('is-empty', !!opts.emptyStage);
@@ -1324,6 +1256,17 @@ const SCAN_ERRORS = {
   ticket_lost: '離開畫面太久，排隊的位子讓出去了，再拍一次。',
   no_person: '照片裡沒有偵測到人。',
 };
+
+/**
+ * 生成「本身」掛了的錯誤碼：額度用完、上游掛掉、排隊爆掉、生成服務不能生圖。
+ * 重拍也一樣，拍照失敗頁直接帶去換裝。照片的問題（沒偵測到人、驗證沒過）不在這裡 ——
+ * 那些重拍一次多半就好。
+ */
+const GEN_DEAD = new Set([
+  'insufficient_credits', 'circuit_open', 'imagegen_unavailable',
+  'upstream_rate_limited', 'upstream_error', 'upstream_unreachable', 'upstream_timeout',
+  'generation_timeout', 'queue_timeout', 'too_busy',
+]);
 
 /**
  * 生成進度提示。
@@ -1428,14 +1371,13 @@ $('#btn-accept').addEventListener('click', () => {
   if (!pendingScanConfig) return;
   config = pendingScanConfig;
   pendingScanConfig = null;
-  // 與捏臉路徑一致：存下外觀後由 enterStage 統一處理進場
+  // 與換裝路徑一致：存下外觀後由 enterStage 統一處理進場
   // （縮圖、搖桿初始化、舊 socket 清理都在那裡）
   try { localStorage.setItem(LS.avatar, JSON.stringify(config)); } catch { /* 略 */ }
   enterStage();
 });
 $('#btn-retake').addEventListener('click', () => openCamera());
 $('#btn-retry').addEventListener('click', () => openCamera());
-$('#btn-give-up').addEventListener('click', () => fallbackToBuilder(null));
 
 /**
  * 顯示「今天遇見了誰」。
@@ -1537,32 +1479,17 @@ linksSheet.addEventListener('click', (e) => { if (e.target === linksSheet) close
 $('#btn-keepsake').addEventListener('click', (e) => saveTodayCard(e.currentTarget, $('#keepsake-msg')));
 $('#btn-keepsake-farewell').addEventListener('click', (e) => saveTodayCard(e.currentTarget, null));
 
-// ── 捏臉 ──────────────────────────────────────────────────
-$('#btn-random').addEventListener('click', () => { config = randomAvatarConfig(); refresh(); });
-$('#btn-prev').addEventListener('click', () => {
-  if (step === 1) { showScreen('entry'); return; } // 第一步再往回即回到命名畫面
-  showStep(step - 1);
-});
-$('#btn-next').addEventListener('click', () => {
-  if (step < 3) { showStep(step + 1); return; }
-  try { localStorage.setItem(LS.avatar, JSON.stringify(config)); } catch { /* 略 */ }
-  // 捏臉沒有生成的等待時間，問卷改在進場前跳出（答過、略過或題目讀不到就直接進場）
-  askPersonaThen(enterStage);
-});
-
-refresh();
 showScreen(hasSavedCharacter() ? 'return' : 'entry');
 
 /**
  * 上次有沒有真的進過場。
  *
- * 看 userId 而不是看 LS.avatar：refresh() 一載入就會寫 avatar，
- * 第一次來的人也有。userId 只在伺服器回 CLIENT_WELCOME 後才寫，
- * 而主動離場會清掉它 —— 離場的人本來就該從頭建立新角色。
+ * 看 userId：只在伺服器回 CLIENT_WELCOME 後才寫，而主動離場會清掉它 ——
+ * 離場的人本來就該從頭建立新角色。外觀也要在（沒有外觀就沒東西可以接回）。
  */
 function hasSavedCharacter() {
   try {
-    return !!(localStorage.getItem(LS.userId) && displayName);
+    return !!(localStorage.getItem(LS.userId) && displayName && config);
   } catch { return false; }
 }
 
@@ -1577,7 +1504,7 @@ if (hasSavedCharacter()) {
 $('#btn-return').addEventListener('click', enterStage);
 
 $('#btn-new-character').addEventListener('click', () => {
-  entryRoute = 'builder';
+  entryRoute = null;
   // 一定要清掉憑證：帶著舊憑證進場，伺服器會認領回舊角色、
   // 沿用舊的外觀，新拍的照片等於白拍
   try {
@@ -1721,7 +1648,7 @@ function connect() {
       closeAudienceWait();
       setStatus('資料有誤', 'warn');
       showToast(`登入失敗：${msg.reason}`);
-      backToBuilder();
+      showScreen('entry');
     } else {
       handleMissionMessage(msg);
     }
@@ -1743,10 +1670,6 @@ function connect() {
   });
 }
 
-function backToBuilder() {
-  showScreen('builder');
-  showStep(3);
-}
 
 // ── 候補名單（人滿時）────────────────────────────────────
 const audienceWait = $('#audience-wait');
@@ -1767,14 +1690,14 @@ function closeAudienceWait() {
   return true;
 }
 
-/** 不等了：斷開這條連線（伺服器會把他移出名單），回到捏臉頁 */
+/** 不等了：斷開這條連線（伺服器會把他移出名單），回到起始頁 */
 function leaveAudience() {
   closeAudienceWait();
   if (ws) {
     ws.superseded = true;
     ws.close();
   }
-  backToBuilder();
+  showScreen('entry');
 }
 
 $('#btn-audience-leave').addEventListener('click', leaveAudience);
@@ -3441,7 +3364,7 @@ $('#btn-msg-report').addEventListener('click', () => {
 // 進場問卷（團隊分類用，見 shared/persona.js）
 // ─────────────────────────────────────────────────────────────
 // 拍照路徑：嵌在「生成中」那一頁，利用二十幾秒的等待作答。
-// 捏臉路徑：沒有等待，按「完成，進入現場」後跳出同一份題目。
+// 換裝路徑：沒有等待，按「完成，進入現場」後跳出同一份題目。
 // 一律可以略過 —— 掃描失敗都不擋人進場了，一份問卷更不該擋。
 
 const PERSONA_LS = 'pf.persona';
@@ -3623,7 +3546,7 @@ function showScanDone() {
   $('#scan-status').textContent = '角色已經好了！答完就能看到';
 }
 
-// ── 捏臉路徑：進場前跳出 ────────────────────────────────────
+// ── 換裝路徑：進場前跳出 ────────────────────────────────────
 async function askPersonaThen(next) {
   if (!personaQuiz) await loadPersonaQuiz();
   if (!personaQuiz || personaAnsweredCurrent()) { next(); return; }
