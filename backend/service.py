@@ -42,6 +42,7 @@ except ImportError:
 # config 必須先 import：它負責載入 .env，而 vlm_module 與 garment_gen
 # 都在 import 當下就讀環境變數。
 from config import config  # noqa: E402  isort:skip
+import build_info  # noqa: E402
 
 from avatar_pipeline import build_face_data, build_outfit_data, decode_frame
 from circuit_breaker import CircuitBreaker, CallFailed
@@ -342,6 +343,11 @@ def _sampled_colors(cv_result: Dict[str, Any], face_cv: Dict[str, Any]) -> Dict[
     return colors
 
 
+# 啟動當下的程式版本與參考圖指紋。scripts/doctor.py 拿它和硬碟上的比：
+# 對不上就是 git pull 之後沒重開生成服務（見 build_info.py）
+_BUILD = {"commit": build_info.git_commit(), "reference": build_info.reference_fingerprint()}
+
+
 @app.route("/health", methods=["GET"])
 def health():
     # 風格參考圖集因授權不可散布而未進版控 —— clone 下來的環境預設就是缺的。
@@ -388,6 +394,8 @@ def health():
         "vlm_model": config.VLM_MODEL,
         "style_reference": style_refs,
         "degraded": degraded,
+        "build": _BUILD,
+        "full_character_model": config.FULL_CHARACTER_MODEL,
     })
 
 

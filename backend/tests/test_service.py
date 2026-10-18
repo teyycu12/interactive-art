@@ -515,6 +515,14 @@ class TestVlmGate:
         assert "vlm_enabled" in body, "關著與一直失敗在現場長得一樣，必須報出來"
         assert body["vlm_model"]
 
+    def test_health_reports_the_build_it_started_with(self, client):
+        """scripts/doctor.py 拿它和硬碟上的比，抓「git pull 了沒重開」。"""
+        import build_info
+        body = client.get("/health").get_json()
+        assert body["build"]["reference"] == build_info.reference_fingerprint()
+        assert body["build"]["commit"]
+        assert body["full_character_model"]
+
 
 class TestSessionName:
     """場次名稱要與互動層（server/eventlog.js 的 sessionName）同一套規則，

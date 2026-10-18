@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { WebSocketServer } from 'ws';
 
@@ -100,6 +101,12 @@ const messages = new MessageRelay();
 // 而且伺服器重開後角色本來就該重新入場。還原的是重來一次會心痛的東西：
 // 積分、社交圖譜、任務與問答紀錄，以及讓參與者認領回自己角色的身分目錄。
 // ─────────────────────────────────────────────────────────────
+// 啟動當下的 commit。scripts/doctor.py 拿它和硬碟上的比：對不上就是 git pull 後沒重開
+const BUILD_COMMIT = (() => {
+  try { return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT }).toString().trim(); }
+  catch { return 'unknown'; }
+})();
+
 // 大合照存在這裡，Gateway 以 /photos/<id>.png 送給掃 QR 的手機（server/photos.js）
 const PHOTOS_DIR = path.join(ROOT, 'data', 'photos');
 
@@ -350,6 +357,7 @@ const { handleRequest } = createHttpLayer({
   onScreenCapture: resolveScreenCapture,
   getPersonaQuiz: () => personaView(),
   photosDir: PHOTOS_DIR,
+  buildCommit: BUILD_COMMIT,
 });
 
 const server = tlsOptions

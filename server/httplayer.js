@@ -33,11 +33,13 @@ import { photoPath } from './photos.js';
  * @param {(requestId: string, image: string|null) => boolean} deps.onScreenCapture
  * @param {() => object} [deps.getPersonaQuiz] 進場問卷的題目（手機進場前讀取）
  * @param {string} [deps.photosDir] 大合照存放的目錄（/photos/<id>.png 由這裡送出）
+ * @param {string} [deps.buildCommit] 啟動當下的 commit（/api/version，給 scripts/doctor.py 比對）
  *        大螢幕回傳合照底圖。回傳 false 表示 requestId 認不得。
  * @returns {{handleRequest: (req, res) => void, resolveStatic: (p: string) => string|null}}
  */
 export function createHttpLayer({
   root, publicDir, keyMatches, onScreenCapture, getPersonaQuiz = () => null, photosDir = null,
+  buildCommit = 'unknown',
 }) {
 const ROOT = root;
 const PUBLIC_DIR = publicDir;
@@ -697,6 +699,12 @@ function handleRequest(req, res) {
     if (req.method !== 'GET') { sendJSON(res, 405, { ok: false, error: 'method_not_allowed' }); return; }
     const view = getPersonaQuiz();
     sendJSON(res, 200, view ? { ok: true, ...view } : { ok: false });
+    return;
+  }
+
+  // 這個行程是用哪個 commit 啟動的。git pull 之後沒重開的話，跟硬碟上的會不一樣
+  if (urlPath === '/api/version') {
+    sendJSON(res, 200, { ok: true, commit: buildCommit });
     return;
   }
 

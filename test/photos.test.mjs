@@ -84,3 +84,26 @@ describe('合照存檔與下載', () => {
     }
   });
 });
+
+describe('/api/version', () => {
+  test('回報啟動時的 commit（scripts/doctor.py 比對「pull 了沒重開」）', async () => {
+    const { handleRequest } = createHttpLayer({
+      root: process.cwd(), publicDir: path.join(process.cwd(), 'public'),
+      keyMatches: () => false, onScreenCapture: () => false, buildCommit: 'abc1234',
+    });
+    const server = http.createServer(handleRequest);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const body = await new Promise((resolve) => {
+        http.get({ host: '127.0.0.1', port: server.address().port, path: '/api/version' }, (res) => {
+          let text = '';
+          res.on('data', (c) => { text += c; });
+          res.on('end', () => resolve(JSON.parse(text)));
+        });
+      });
+      assert.deepEqual(body, { ok: true, commit: 'abc1234' });
+    } finally {
+      server.close();
+    }
+  });
+});
