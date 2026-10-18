@@ -776,6 +776,99 @@ def _generate():
     return jsonify(result)
 
 
+# ── 素體換裝（生圖 API 不能用時的退路） ──────────────────────────────
+#
+# 不叫任何外部 API：用預先畫好的部件在本機組角色（backend/dressup.py）。
+# 組出來的三視圖跟生成的走同一條存檔路徑，場上看起來是同一種角色。
+# 生成服務本身也掛了的話這裡也不通 —— 手機端那時退回捏臉。
+
+_DRESSUP_PREVIEW_HEIGHT = 360   # 換裝頁的即時預覽：手機上約一半螢幕高，夠看清楚臉
+
+
+def _dressup_views(payload: Dict[str, Any], only_front: bool = False):
+    import base64
+    import io
+
+    import dressup
+    from garment_gen import _remove_white_background
+    from turnaround import split_turnaround
+
+    sel, col = dressup.clean_request(payload.get("selection"), payload.get("colors"))
+    if only_front:
+        # 預覽：素體的位置固定，只組正面那一塊，不必切三視圖
+        buf = io.BytesIO()
+        dressup.compose(sel, col, box=dressup.front_box()).save(buf, "PNG")
+        front = base64.b64encode(buf.getvalue()).decode("ascii")
+        return {"front": _remove_white_background(front, shield_mask=None)}, sel
+    sheet = dressup.compose(sel, col)
+    buf = io.BytesIO()
+    sheet.save(buf, "PNG")
+    views, count = split_turnaround(base64.b64encode(buf.getvalue()).decode("ascii"))
+    if not views or count != 3:
+        raise RuntimeError(f"dressup sheet split into {count} figures")
+    # 預覽只看正面：去背是逐張做的，三張都做要多花一倍時間
+    names = ("front",) if only_front else tuple(views)
+    return {name: _remove_white_background(views[name], shield_mask=None) for name in names}, sel
+
+
+@app.route("/dressup/catalog", methods=["GET"])
+def dressup_catalog():
+    try:
+        import dressup
+        return jsonify({"ok": True, **dressup.catalog()})
+    except Exception as e:
+        print(f"[vision] 換裝選單讀不到：{e!r}", file=sys.stderr)
+        return jsonify({"ok": False, "error": "dressup_unavailable"})
+
+
+@app.route("/dressup", methods=["POST"])
+def dressup_character():
+    """選好的髮型、衣服、顏色進，角色出（與 /generate 同一種回應）。preview=true 時只回正面縮圖。"""
+    payload = request.get_json(silent=True) or {}
+    started = time.perf_counter()
+    try:
+        views, sel = _dressup_views(payload, only_front=bool(payload.get("preview")))
+    except Exception as e:
+        print(f"[vision] 換裝組圖失敗：{e!r}", file=sys.stderr)
+        return jsonify({"ok": False, "error": "dressup_failed", "fallbackColors": DEFAULT_COLORS})
+
+    if payload.get("preview"):
+        import base64
+        import io
+
+        from PIL import Image
+
+        front = Image.open(io.BytesIO(base64.b64decode(views["front"]))).convert("RGBA")
+        front = front.crop(front.getbbox())
+        scale = _DRESSUP_PREVIEW_HEIGHT / front.height
+        front = front.resize((max(1, round(front.width * scale)), _DRESSUP_PREVIEW_HEIGHT), Image.NEAREST)
+        buf = io.BytesIO()
+        front.save(buf, "PNG")
+        return jsonify({"ok": True, "previewPng": "data:image/png;base64,"
+                        + base64.b64encode(buf.getvalue()).decode("ascii")})
+
+    request_id = uuid.uuid4().hex
+    _history_call(start_run, request_id, mode="dressup", style_id="pixel",
+                  source_type="dressup", experiment_id=session_name())
+    try:
+        result = slice_character(add_transparent_margin(views["front"]), ASSET_DIR, request_id)
+        for part in VIEW_PARTS:
+            if views.get(part):
+                result["textures"][part] = save_view(add_transparent_margin(views[part]), ASSET_DIR, request_id, part)
+    except Exception as e:
+        _history_call(finish_run, request_id, status="failed", stage="slice", height_class=None,
+                      duration_ms=int((time.perf_counter() - started) * 1000.0), cv_ms=None, vlm_ms=None,
+                      generation_ms=None, retry_count=0, error_code=f"slice_failed: {e}")
+        return jsonify({"ok": False, "error": "dressup_failed", "fallbackColors": DEFAULT_COLORS})
+    result["styleId"] = "pixel"
+    result["source"] = "dressup"
+    result["elapsedMs"] = round((time.perf_counter() - started) * 1000.0, 1)
+    _history_call(finish_run, request_id, status="ok", stage="base", height_class=None,
+                  duration_ms=int((time.perf_counter() - started) * 1000.0), cv_ms=None, vlm_ms=None,
+                  generation_ms=None, retry_count=0, output_png=views["front"])
+    return jsonify(result)
+
+
 # ── 主辦端歷史紀錄（原始照片、生成結果、token、花費、使用模型） ──────────
 #
 # 資料本身早就在寫（generation_history 由上面的 _history_call 每次生成都

@@ -363,6 +363,74 @@ function proxyStyles(req, res) {
   upstream.end();
 }
 
+// ── 素體換裝代理 ──────────────────────────────────────────
+//
+// 生圖 API 不能用時的退路（backend/dressup.py）：手機選髮型、衣服、顏色，
+// 生成服務在本機組角色。預覽每點一下就送一次，所以跟站位預覽共用同一個限流；
+// 請求只帶選項與色碼，上限設得很小。
+const DRESSUP_MAX_BYTES = 16 * 1024;
+const DRESSUP_TIMEOUT_MS = 15_000;
+const MAX_CONCURRENT_DRESSUPS = 6;
+let inFlightDressups = 0;
+
+function proxyDressup(req, res, upstreamPath) {
+  const isCatalog = upstreamPath === '/dressup/catalog';
+  if (req.method !== (isCatalog ? 'GET' : 'POST')) {
+    sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
+    return;
+  }
+  if (!isCatalog && previewLimiterFor(clientIp(req), Date.now()).check() !== 'ok') {
+    sendJSON(res, 200, { ok: false, error: 'rate_limited' });
+    return;
+  }
+  if (inFlightDressups >= MAX_CONCURRENT_DRESSUPS) {
+    sendJSON(res, 200, { ok: false, error: 'too_busy' });
+    return;
+  }
+  const chunks = [];
+  let size = 0;
+  let aborted = false;
+  req.on('data', (chunk) => {
+    if (aborted) return;
+    size += chunk.length;
+    if (size > DRESSUP_MAX_BYTES) {
+      aborted = true;
+      rejectTooLarge(req, res, { ok: false, error: 'request_too_large' });
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on('end', () => {
+    if (aborted) return;
+    const body = Buffer.concat(chunks);
+    inFlightDressups++;
+    let released = false;
+    const release = () => { if (!released) { released = true; inFlightDressups--; } };
+    const upstream = http.request({
+      host: VISION_HOST, port: VISION_PORT, path: upstreamPath, method: req.method,
+      headers: isCatalog ? {} : { 'Content-Type': 'application/json', 'Content-Length': body.length },
+      timeout: DRESSUP_TIMEOUT_MS,
+    }, (up) => {
+      const out = [];
+      up.on('data', (c) => out.push(c));
+      up.on('end', () => {
+        release();
+        let parsed = null;
+        try { parsed = JSON.parse(Buffer.concat(out).toString('utf8')); } catch { /* 見下 */ }
+        sendJSON(res, 200, parsed ?? { ok: false, error: 'bad_response' });
+      });
+    });
+    // 生成服務沒開：換裝也不通，手機端會退回捏臉
+    const degrade = () => {
+      release();
+      if (!res.headersSent) sendJSON(res, 200, { ok: false, error: 'vision_service_unavailable' });
+    };
+    upstream.on('timeout', () => { upstream.destroy(); degrade(); });
+    upstream.on('error', degrade);
+    upstream.end(isCatalog ? undefined : body);
+  });
+}
+
 // ── 主辦端生成歷史代理 ──────────────────────────────────────
 //
 // 原始照片、生成結果、token、花費、使用模型都已經由生成服務記在
@@ -705,6 +773,11 @@ function handleRequest(req, res) {
   // 這個行程是用哪個 commit 啟動的。git pull 之後沒重開的話，跟硬碟上的會不一樣
   if (urlPath === '/api/version') {
     sendJSON(res, 200, { ok: true, commit: buildCommit });
+    return;
+  }
+
+  if (urlPath === '/api/dressup' || urlPath === '/api/dressup/catalog') {
+    proxyDressup(req, res, urlPath === '/api/dressup' ? '/dressup' : '/dressup/catalog');
     return;
   }
 

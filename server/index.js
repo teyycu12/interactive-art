@@ -1014,7 +1014,8 @@ function handleJoin(ws, msg) {
   events.log('join', {
     agent: agent.id,
     name: agent.name,
-    entry: isCV ? 'photo' : (ENTRY_ROUTES.has(msg.entry) ? msg.entry : 'builder'),
+    // 換裝的角色也是貼圖（isCV），但要分得出來：實測要知道 API 掛掉時有多少人走這條
+    entry: isCV ? (msg.entry === 'dressup' ? 'dressup' : 'photo') : (ENTRY_ROUTES.has(msg.entry) ? msg.entry : 'builder'),
     genReq: isCV ? generationIdOf(agent.avatar) : undefined,
     rejoin,
     fromWaitlist: ws.fromWaitlist || undefined,
