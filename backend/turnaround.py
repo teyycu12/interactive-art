@@ -356,6 +356,36 @@ def face_right(png_b64: str, skin: Optional[Tuple[int, int, int]] = None) -> Tup
     return _encode(img.transpose(PILImage.FLIP_LEFT_RIGHT)), True
 
 
+# ── 背面畫成另一個側面 ──
+#
+# 實測（2026-10-18，備援模型 gemini-2.5-flash-image）第三個人畫成朝左的側臉，不是後腦勺。
+# 大螢幕上往上走時就變成一張側臉在倒退走。後腦勺是頭髮：真的背面，頭那一段的膚色
+# 只有耳朵、後頸，26 張主模型的背面最多 3.4%；那張側臉 9.3%，側面最少也有 6.9%。
+BACK_FACE_MAX = 0.055
+
+
+def face_fraction(png_b64: str, skin: Optional[Tuple[int, int, int]] = None) -> float:
+    """頭那一段（FACE_ZONE）裡膚色占的比例。skin 給了就只認接近正面膚色的。"""
+    arr = np.asarray(_decode_rgba(png_b64)).astype(np.int16)
+    solid = arr[..., 3] > 128
+    rows = np.where(solid.any(axis=1))[0]
+    if rows.size == 0:
+        return 0.0
+    top, bottom = rows[0], rows[-1]
+    head = slice(top, top + int((bottom - top + 1) * FACE_ZONE))
+    band = solid[head]
+    r, g, b = arr[head, :, 0], arr[head, :, 1], arr[head, :, 2]
+    face = band & _skin_like(r, g, b)
+    if skin is not None:
+        face &= (np.abs(r - skin[0]) + np.abs(g - skin[1]) + np.abs(b - skin[2])) <= SKIN_TOL
+    return float(face.sum()) / max(1, int(band.sum()))
+
+
+def back_shows_face(png_b64: str, skin: Optional[Tuple[int, int, int]] = None) -> bool:
+    """背面看得到臉：模型把背面畫成側面（或正面）了。"""
+    return face_fraction(png_b64, skin) > BACK_FACE_MAX
+
+
 # ── 側面的鞋子畫反 ──
 #
 # 實測（2026-10-14）模型畫側面時偶爾把鞋子畫反：人朝右，靴子的鞋尖朝左、

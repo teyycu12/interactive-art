@@ -101,6 +101,15 @@ class AppConfig:
     OUTFIT_GEN_MODEL: str = _get_str("OUTFIT_GEN_MODEL", "google/gemini-3.1-flash-image-preview")
     FULL_CHARACTER_MODEL: str = _get_str("FULL_CHARACTER_MODEL", "google/gemini-3-pro-image-preview")
     REFINE_CHARACTER_MODEL: Optional[str] = _get_str("REFINE_CHARACTER_MODEL", "") or None
+    # 主模型掛掉時才改用的備援生圖模型（service._imagegen_with_backup 決定什麼叫「掛掉」）。
+    # 同一家（Google）的前一代 Nano Banana：三視圖照樣切得出三個人、每張 US$0.04，
+    # 但髮色會飄、偶爾多畫一個包（2026-10-18 實測），所以非不得已不用。
+    # 預設寫在這裡，各台電腦的 .env 都不要設（doctor 會檢查）；設成 off 就關掉。
+    # 3.1 版（Nano Banana 2.1）當時上游共用額度天天滿、每次都 429，當備援等於沒有。
+    BACKUP_IMAGE_MODEL: Optional[str] = (
+        None if _get_str("BACKUP_IMAGE_MODEL", "google/gemini-2.5-flash-image").lower() == "off"
+        else _get_str("BACKUP_IMAGE_MODEL", "google/gemini-2.5-flash-image")
+    )
     # 服裝／臉部語意辨識用的 Gemini 模型（vlm_module）。這裡走的是 Google 官方
     # SDK，不經 OpenRouter，因此模型名沒有 "google/" 前綴 —— 與上面三個不同。
     #

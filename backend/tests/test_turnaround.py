@@ -19,8 +19,8 @@ from PIL import Image as PILImage
 
 from backend import garment_gen
 from backend.turnaround import (
-    BASE_BODY_CHIN, SQUASH_RANGE, chin_fraction, face_right, find_figures, fit_base_body,
-    fix_backward_feet, skin_tone, split_turnaround,
+    BACK_FACE_MAX, BASE_BODY_CHIN, SQUASH_RANGE, back_shows_face, chin_fraction, face_fraction, face_right,
+    find_figures, fit_base_body, fix_backward_feet, skin_tone, split_turnaround,
 )
 
 import service
@@ -267,6 +267,38 @@ class FaceRightTests(unittest.TestCase):
         self.assertTrue(all(abs(a - b) <= 8 for a, b in zip(tone, SKIN)), tone)
 
 
+def _back(ears=True) -> str:
+    """去背後的背面：整顆頭是頭髮，只露出兩邊耳朵一點點。"""
+    arr = np.zeros((900, 400, 4), dtype=np.uint8)
+    arr[20:380, 100:300] = (30, 25, 25, 255)
+    if ears:
+        arr[200:240, 92:100] = (*SKIN, 255)
+        arr[200:240, 300:308] = (*SKIN, 255)
+    arr[380:880, 120:280] = (*GRAY, 255)
+    return _rgba_to_b64(arr)
+
+
+class BackShowsFaceTests(unittest.TestCase):
+    """實測（2026-10-18，備援模型）：第三個人畫成朝左的側臉，不是後腦勺。"""
+
+    def test_back_of_the_head_is_a_back(self):
+        self.assertFalse(back_shows_face(_back(), skin_tone(_front())))
+
+    def test_a_profile_in_the_back_slot_is_caught(self):
+        self.assertTrue(back_shows_face(_profile("left"), skin_tone(_front())))
+
+    def test_threshold_sits_between_ears_and_a_face(self):
+        skin = skin_tone(_front())
+        self.assertLess(face_fraction(_back(), skin), BACK_FACE_MAX)
+        self.assertGreater(face_fraction(_profile("left"), skin), BACK_FACE_MAX)
+
+    def test_blond_back_of_the_head_is_not_a_face(self):
+        """淺金髮「看起來像膚色」：要用正面量到的膚色比，不然金髮的背面全被丟掉。"""
+        arr = np.asarray(_decode(_back())).copy()
+        arr[20:380, 100:300] = (*BLOND, 255)
+        self.assertFalse(back_shows_face(_rgba_to_b64(arr), skin_tone(_front(BLOND))))
+
+
 BEIGE = (214, 212, 181)   # 米色上衣：紅多藍少，也「看起來像膚色」
 
 
@@ -385,6 +417,27 @@ class GenerateSplitsBeforeBackgroundRemovalTests(unittest.TestCase):
         self.assertLess(out["base_body_scale"], 1)
         self.assertAlmostEqual(chin_fraction(out["body_png"]), BASE_BODY_CHIN, delta=0.01)
         self.assertEqual(_height(out["side_png"]), _height(out["body_png"]))
+
+    def test_back_view_with_a_face_is_dropped(self):
+        """背面畫成另一個側臉：不要它，大螢幕往上走時退回正面。"""
+        person = _person(0.42, alpha=False)[:, :, :3]
+        gap = np.full((900, 100, 3), 255, dtype=np.uint8)
+        sheet = np.concatenate([gap, person, gap, person, gap, person, gap], axis=1)
+        out = self._run(_rgba_to_b64(np.dstack([sheet, np.full(sheet.shape[:2], 255, np.uint8)])))
+        self.assertTrue(out["ok"])
+        self.assertNotIn("back_png", out)
+        self.assertTrue(out["back_dropped"])
+        self.assertIn("side_png", out)
+
+    def test_real_back_view_is_kept(self):
+        person = _person(0.42, alpha=False)[:, :, :3]
+        back = person.copy()
+        back[(back == SKIN).all(axis=2)] = (30, 25, 25)   # 後腦勺：臉的位置是頭髮
+        gap = np.full((900, 100, 3), 255, dtype=np.uint8)
+        sheet = np.concatenate([gap, person, gap, person, gap, back, gap], axis=1)
+        out = self._run(_rgba_to_b64(np.dstack([sheet, np.full(sheet.shape[:2], 255, np.uint8)])))
+        self.assertIn("back_png", out)
+        self.assertNotIn("back_dropped", out)
 
     def test_other_styles_do_not_split(self):
         out = self._run(_sheet([(150, 400), (700, 880), (1150, 1400)]), style_id="lego")

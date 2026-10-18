@@ -279,7 +279,7 @@ function setStepBar(selector, n) {
 
 /** 只切換單一畫面，其餘全部隱藏 */
 function showScreen(id) {
-  for (const s of ['entry', 'return', 'scan', 'builder', 'controller', 'farewell']) {
+  for (const s of ['entry', 'return', 'scan', 'builder', 'dressup', 'controller', 'farewell']) {
     $(`#${s}`).hidden = s !== id;
   }
 }
@@ -540,6 +540,236 @@ function fallbackToBuilder(message) {
   showStep(1);
 }
 
+
+// ── 素體換裝（生圖 API 不能用時）──────────────────────────
+//
+// 拍照生成失敗、尤其是額度用完或上游掛掉時的退路：髮型、衣服、配件是預先
+// 畫好的部件，由生成服務在本機組角色（backend/dressup.py）。組出來的角色跟
+// 生成的同一種，場上不會混進捏臉那種小人。生成服務本身也沒開時選單讀不到，
+// 按鈕就藏起來 —— 那時只剩捏臉（「掃描失敗一律降級，不擋人進場」）。
+
+const DU_HAIR_COLORS = ['#1E1A1C', '#3B2A22', '#5B3A29', '#8A5A3B', '#C9A15E', '#E6D3A3', '#9A9A9A', '#B5523B'];
+const DU_CLOTH_COLORS = [
+  '#F4F1EA', '#2B2B30', '#8A8C92', '#2F4C7A', '#4A6FA5', '#7FA7C9', '#2F6B4F',
+  '#84A98C', '#C94F5C', '#E9A9B8', '#E9C46A', '#D98B3A', '#8B5A2B', '#6D6875',
+];
+const DU_EYE_COLORS = ['#301810', '#141414', '#7A4A24', '#B07A2E', '#2E6FB5', '#6FA8D8', '#3E8E4F', '#7E8C96', '#7B4FA0', '#B23A48'];
+/** 分類的 palette（manifest）→ 色票；'none' 的分類（表情）不換色 */
+const DU_PALETTES = { hair: DU_HAIR_COLORS, cloth: DU_CLOTH_COLORS, eye: DU_EYE_COLORS };
+const DU_SKIN_TAB = { id: 'skin', label: '膚色' };
+
+/** @type {{categories: object[], parts: object[], defaults: object}|null} */
+let duCatalog = null;
+let duState = null;
+/** 拍照失敗時後端量到的真實顏色（髮、膚、上衣、褲子），換裝頁拿來當起點 */
+let lastFallbackColors = null;
+
+async function loadDressupCatalog() {
+  if (duCatalog) return duCatalog;
+  try {
+    const body = await (await fetch('/api/dressup/catalog')).json();
+    if (body?.ok && Array.isArray(body.parts) && body.parts.length) duCatalog = body;
+  } catch { /* 生成服務沒開：沒有換裝，只剩捏臉 */ }
+  return duCatalog;
+}
+
+/** 失敗畫面的「自己換裝」：選單讀得到才出現 */
+async function offerDressup() {
+  $('#btn-dressup').hidden = !(await loadDressupCatalog());
+}
+
+const duPartsOf = (cat) => duCatalog.parts.filter((p) => p.category === cat);
+const duPart = (id) => duCatalog.parts.find((p) => p.id === id);
+
+/** 這一套穿著蓋掉了哪些分類（洋裝蓋掉上衣與外套） */
+function duHidden() {
+  const hidden = new Set();
+  for (const [cat, id] of Object.entries(duState.selection)) {
+    if (cat === 'acc' || !id) continue;
+    for (const h of duPart(id)?.hides ?? []) hidden.add(h);
+  }
+  return hidden;
+}
+
+function openDressup() {
+  if (!duCatalog) return;
+  stopScanStream();
+  const fb = lastFallbackColors ?? {};
+  const isHex = (c) => typeof c === 'string' && /^#[0-9A-Fa-f]{6}$/.test(c);
+  duState = {
+    selection: Object.fromEntries(duCatalog.categories.map((c) => [c.id, c.multi ? [] : null])),
+    colors: {
+      ...duCatalog.defaults,
+      ...(isHex(fb.skin) && { skin: fb.skin }),
+      ...(isHex(fb.hair) && { hair: fb.hair }),
+      ...(isHex(fb.torso) && { top: fb.torso }),
+      ...(isHex(fb.legs) && { bottom: fb.legs }),
+      acc: {},
+    },
+    tab: 'hair',
+    accFocus: null,
+  };
+  showScreen('dressup');
+  renderDressup();
+  requestDuPreview();
+}
+
+function duButton(label, pressed, onClick) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'du-opt';
+  btn.textContent = label;
+  btn.setAttribute('aria-pressed', String(pressed));
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
+/** 色票：量到的那一色排在最前面，讓「照片裡的顏色」一定選得回來 */
+function duSwatches(palette, current, onPick) {
+  const box = $('#du-colors');
+  box.replaceChildren();
+  const colors = !current || palette.includes(current) ? palette : [current, ...palette];
+  for (const color of colors) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'swatch';
+    btn.style.background = color;
+    btn.setAttribute('aria-pressed', String(color === current));
+    btn.setAttribute('aria-label', color);
+    btn.addEventListener('click', () => { onPick(color); renderDressup(); requestDuPreview(); });
+    box.append(btn);
+  }
+  box.hidden = false;
+}
+
+function renderDressup() {
+  const tabs = [DU_SKIN_TAB, ...duCatalog.categories];
+  const hidden = duHidden();
+  const tabBox = $('#du-tabs');
+  tabBox.replaceChildren();
+  for (const t of tabs) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'du-tab';
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-selected', String(duState.tab === t.id));
+    btn.textContent = t.label;
+    btn.addEventListener('click', () => { duState.tab = t.id; renderDressup(); });
+    tabBox.append(btn);
+  }
+
+  const opts = $('#du-options');
+  const note = $('#du-note');
+  opts.replaceChildren();
+  note.hidden = true;
+  const tab = duState.tab;
+  const { selection, colors } = duState;
+
+  if (tab === 'skin') {
+    duSwatches(SKIN_TONES, colors.skin, (c) => { colors.skin = c; });
+    return;
+  }
+  const cat = duCatalog.categories.find((c) => c.id === tab);
+  if (hidden.has(tab)) {
+    note.textContent = `${duPart(selection.bottom)?.label ?? '這套衣服'}已經包含${cat.label}，換掉它才能選。`;
+    note.hidden = false;
+    $('#du-colors').hidden = true;
+    return;
+  }
+  if (cat.multi) {
+    for (const p of duPartsOf(tab)) {
+      const on = selection.acc.includes(p.id);
+      opts.append(duButton(p.label, on, () => {
+        selection.acc = on ? selection.acc.filter((x) => x !== p.id) : [...selection.acc, p.id];
+        duState.accFocus = on ? (selection.acc.at(-1) ?? null) : p.id;
+        renderDressup();
+        requestDuPreview();
+      }));
+    }
+    const focus = duState.accFocus;
+    if (focus && selection.acc.includes(focus)) {
+      duSwatches(DU_CLOTH_COLORS, colors.acc[focus] ?? DU_CLOTH_COLORS[1], (c) => { colors.acc[focus] = c; });
+      note.textContent = `${duPart(focus).label}的顏色`;
+      note.hidden = false;
+    } else {
+      $('#du-colors').hidden = true;
+    }
+    return;
+  }
+  const pick = (id) => () => { selection[tab] = id; renderDressup(); requestDuPreview(); };
+  // 眼睛沒有款式可選，只換顏色；外套的「不穿」也是一個選項：素體沒有外套
+  if (duPartsOf(tab).length) {
+    opts.append(duButton(cat.base_label, !selection[tab], pick(null)));
+    for (const p of duPartsOf(tab)) opts.append(duButton(p.label, selection[tab] === p.id, pick(p.id)));
+  }
+  const palette = DU_PALETTES[cat.palette];
+  if (!palette || (tab === 'outer' && !selection.outer)) { $('#du-colors').hidden = true; return; }
+  duSwatches(palette, colors[tab], (c) => { colors[tab] = c; });
+}
+
+let duPreviewTimer = null;
+let duPreviewSeq = 0;
+/** 即時預覽：連點時只送最後一次，晚回來的舊結果不蓋新的 */
+function requestDuPreview() {
+  clearTimeout(duPreviewTimer);
+  duPreviewTimer = setTimeout(async () => {
+    const seq = ++duPreviewSeq;
+    try {
+      const res = await fetch('/api/dressup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preview: true, selection: duState.selection, colors: duState.colors }),
+      });
+      const body = await res.json();
+      if (seq === duPreviewSeq && body?.ok) $('#du-preview').src = body.previewPng;
+      if (body?.error === 'vision_service_unavailable') fallbackToBuilder('換裝暫時不能用，改用捏臉。');
+    } catch { /* 預覽漏一次沒關係，下一次點選會再送 */ }
+  }, 120);
+}
+
+$('#btn-du-random').addEventListener('click', () => {
+  const any = (list) => list[Math.floor(Math.random() * list.length)];
+  const sel = duState.selection;
+  for (const cat of duCatalog.categories) {
+    if (cat.multi) {
+      sel.acc = duPartsOf(cat.id).filter(() => Math.random() < 0.25).map((p) => p.id);
+      for (const id of sel.acc) duState.colors.acc[id] = any(DU_CLOTH_COLORS);
+      continue;
+    }
+    // 一半機率維持素體原本那件，不然每次都穿得很滿
+    sel[cat.id] = Math.random() < 0.5 ? null : (any(duPartsOf(cat.id))?.id ?? null);
+    if (DU_PALETTES[cat.palette]) duState.colors[cat.id] = any(DU_PALETTES[cat.palette]);
+  }
+  renderDressup();
+  requestDuPreview();
+});
+
+$('#btn-du-done').addEventListener('click', async () => {
+  const btn = $('#btn-du-done');
+  btn.disabled = true;
+  btn.textContent = '換裝中…';
+  try {
+    const res = await fetch('/api/dressup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selection: duState.selection, colors: duState.colors }),
+    });
+    const body = await res.json();
+    if (!body?.ok) throw new Error(body?.error || 'dressup_failed');
+    config = { source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors };
+    entryRoute = 'dressup';
+    try { localStorage.setItem(LS.avatar, JSON.stringify(config)); } catch { /* 略 */ }
+    askPersonaThen(enterStage);
+  } catch {
+    fallbackToBuilder('換裝沒有成功，改用捏臉。');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '完成，進入現場';
+  }
+});
+
+$('#btn-du-to-builder').addEventListener('click', () => fallbackToBuilder(null));
+$('#btn-dressup').addEventListener('click', openDressup);
 
 /**
  * 生成風格選單。
@@ -1012,6 +1242,7 @@ async function submitScanImage(image) {
   }
 
   if (!body?.ok) {
+    lastFallbackColors = body?.fallbackColors ?? null;
     const known = SCAN_ERRORS[body?.error];
     showScanFailure(
       known ?? '這張照片沒能生成角色。',
@@ -1054,6 +1285,7 @@ async function submitScanImage(image) {
  */
 function showScanFailure(message, hint = '', opts = {}) {
   stopPersonaDuringScan();
+  offerDressup();
   // 相機開不起來時左邊沒有東西可看，留一個空黑框只是佔位。
   // 生成失敗則相反 —— 剛拍的那張照片正是使用者要判斷「哪裡不對」的依據。
   $('.scan-stage')?.classList.toggle('is-empty', !!opts.emptyStage);

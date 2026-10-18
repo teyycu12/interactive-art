@@ -515,6 +515,14 @@ class TestVlmGate:
         assert "vlm_enabled" in body, "關著與一直失敗在現場長得一樣，必須報出來"
         assert body["vlm_model"]
 
+    def test_health_reports_the_build_it_started_with(self, client):
+        """scripts/doctor.py 拿它和硬碟上的比，抓「git pull 了沒重開」。"""
+        import build_info
+        body = client.get("/health").get_json()
+        assert body["build"]["reference"] == build_info.reference_fingerprint()
+        assert body["build"]["commit"]
+        assert body["full_character_model"]
+
 
 class TestSessionName:
     """場次名稱要與互動層（server/eventlog.js 的 sessionName）同一套規則，
@@ -554,6 +562,8 @@ class TestUpstreamFailures:
     def _fast_retries(self, monkeypatch):
         # 熔斷器是模組層級的單例，前一個測試留下的失敗次數不能帶進下一個
         service._imagegen_breaker.reset()
+        # 這一組釘的是主模型自己的行為；備援模型另見 TestBackupModel
+        monkeypatch.setattr(service, "_BACKUP_MODEL", None)
         # 重試的等待縮到幾毫秒；行為一樣，測試不必真的等 2、4、8 秒
         monkeypatch.setattr(service, "_RETRY_BASE_S", 0.001)
         monkeypatch.setattr(service, "_RETRY_MAX_S", 0.001)
@@ -631,3 +641,84 @@ class TestUpstreamFailures:
         self._sequence(monkeypatch, [{"ok": True, "body_png": _png_b64()}])
         client.post("/generate", json={"image": _photo_b64()})
         assert service._gen_semaphore._value == before
+
+
+class TestBackupModel:
+    """主模型掛了才改用備援模型（前一代 Nano Banana）—— 非不得已不走這條。"""
+
+    BACKUP = "google/gemini-2.5-flash-image"
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        service._imagegen_breaker.reset()
+        service._backup_breaker.reset()
+        monkeypatch.setattr(service, "_BACKUP_MODEL", self.BACKUP)
+        monkeypatch.setattr(service, "_RETRY_BASE_S", 0.001)
+        monkeypatch.setattr(service, "_RETRY_MAX_S", 0.001)
+        monkeypatch.setattr(service, "_MIN_CALL_BUDGET_S", 0.0)
+        monkeypatch.setattr(service, "_BACKUP_RESERVE_S", 0.2)
+        monkeypatch.setattr(service, "_GENERATE_BUDGET_S", 0.5)
+        yield
+        service._imagegen_breaker.reset()
+        service._backup_breaker.reset()
+
+    @staticmethod
+    def _models(monkeypatch, primary, backup=None):
+        """假上游：主模型一直回 primary，備援回 backup（預設成功）。記下每次用哪個模型。"""
+        used = []
+
+        def _gen(*a, model_override=None, **k):
+            used.append(model_override)
+            if model_override:
+                return backup or {"ok": True, "body_png": _png_b64()}
+            return primary
+
+        monkeypatch.setattr(service, "generate_full_character_png", _gen)
+        return used
+
+    def test_primary_outage_switches_to_the_backup(self, client, monkeypatch):
+        used = self._models(monkeypatch, {"ok": False, "error": "InternalServerError"})
+        body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+        assert body["ok"] and body["backupModel"] == self.BACKUP
+        assert used[0] is None and used[-1] == self.BACKUP, "先試主模型，不行才換"
+
+    def test_rate_limit_retries_the_primary_before_switching(self, client, monkeypatch):
+        """429 是「慢一點」：先照常重試主模型，留給備援的時間到了才換。"""
+        used = self._models(monkeypatch, {"ok": False, "error": "RateLimitError"})
+        body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+        assert body["ok"] and body["backupModel"] == self.BACKUP
+        assert used.count(None) >= 2, "主模型被 429 一次就放棄了"
+
+    def test_open_breaker_goes_straight_to_the_backup(self, client, monkeypatch):
+        """主模型剛被確認掛了：後面的人不用再各等一次失敗。"""
+        used = self._models(monkeypatch, {"ok": False, "error": "InternalServerError"})
+        for _ in range(3):
+            service._imagegen_breaker.record_failure("upstream_error")
+        body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+        assert body["ok"] and used == [self.BACKUP]
+
+    def test_healthy_primary_never_touches_the_backup(self, client, monkeypatch):
+        used = self._models(monkeypatch, {"ok": True, "body_png": _png_b64()})
+        body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+        assert body["ok"] and "backupModel" not in body
+        assert used == [None]
+
+    @pytest.mark.parametrize("error", ["APITimeoutError", "insufficient_credits", "generation_failed"])
+    def test_not_a_reason_to_switch(self, client, monkeypatch, error):
+        """逾時（可能已收錢）、額度用完（同一個餘額）、這張照片生不出來：都不換。"""
+        used = self._models(monkeypatch, {"ok": False, "error": error})
+        client.post("/generate", json={"image": _photo_b64()})
+        assert self.BACKUP not in used
+
+    def test_both_down_reports_the_primary_error(self, client, monkeypatch):
+        used = self._models(monkeypatch, {"ok": False, "error": "InternalServerError"},
+                            {"ok": False, "error": "InternalServerError"})
+        body = client.post("/generate", json={"image": _photo_b64()}).get_json()
+        # 主模型重試途中自己的熔斷器就跳開了，所以可能是 circuit_open —— 總之是主模型那邊的原因
+        assert body["error"] in {"upstream_error", "circuit_open"} and self.BACKUP in used
+
+    def test_backup_can_be_turned_off(self, client, monkeypatch):
+        monkeypatch.setattr(service, "_BACKUP_MODEL", None)
+        used = self._models(monkeypatch, {"ok": False, "error": "InternalServerError"})
+        client.post("/generate", json={"image": _photo_b64()})
+        assert self.BACKUP not in used

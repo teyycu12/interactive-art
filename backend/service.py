@@ -42,6 +42,7 @@ except ImportError:
 # config 必須先 import：它負責載入 .env，而 vlm_module 與 garment_gen
 # 都在 import 當下就讀環境變數。
 from config import config  # noqa: E402  isort:skip
+import build_info  # noqa: E402
 
 from avatar_pipeline import build_face_data, build_outfit_data, decode_frame
 from circuit_breaker import CircuitBreaker, CallFailed
@@ -189,6 +190,8 @@ faulthandler.enable()
 # 不讓每個參與者都在現場等滿 120 秒的 timeout。
 _gemini_breaker = CircuitBreaker(name="gemini")
 _imagegen_breaker = CircuitBreaker(name="image_gen")
+# 備援模型自己一個熔斷器：它的失敗不該讓主模型被判成掛了，反之亦然
+_backup_breaker = CircuitBreaker(name="image_gen_backup")
 
 # 生成失敗時的預設外觀。參與者仍然進得了場，只是「外觀不像本人」——
 # 這是整合計畫 §3.5 明確要求的降級行為，不是無法參與。
@@ -271,23 +274,26 @@ def _normalize_gen_error(out: Any) -> Dict[str, Any]:
     return out
 
 
-def _call_imagegen(*args) -> Dict[str, Any]:
+def _call_imagegen(*args, **kwargs) -> Dict[str, Any]:
     """只有上游健康類的失敗才以 CallFailed 拋給熔斷器計數，其餘原樣回傳。"""
-    out = _normalize_gen_error(generate_full_character_png(*args))
+    out = _normalize_gen_error(generate_full_character_png(*args, **kwargs))
     if not out.get("ok") and out.get("error") in _HEALTH_FAILURES:
         raise CallFailed(out["error"], out)
     return out
 
 
-def _imagegen_once(args: tuple, deadline: float) -> Dict[str, Any]:
+def _imagegen_once(args: tuple, deadline: float, breaker: CircuitBreaker = _imagegen_breaker,
+                   model: Optional[str] = None) -> Dict[str, Any]:
     wait = deadline - time.perf_counter() - _MIN_CALL_BUDGET_S
     # 輪到時剩下的時間已經不夠生一張，就別再打了 —— 打了也送不回手機
     if wait <= 0 or not _gen_semaphore.acquire(timeout=wait):
         return {"ok": False, "error": "queue_timeout"}
     try:
-        return _imagegen_breaker.call(
+        # 主模型不帶 model_override：用風格與 config 決定的那一個
+        return breaker.call(
             _call_imagegen, *args, max_retries=0,
-            fallback=_open_fallback(_imagegen_breaker),
+            fallback=_open_fallback(breaker),
+            **({"model_override": model} if model else {}),
         )
     finally:
         # 名額的取還在同一個 try/finally：漏掉任何一條路徑，名額就會永久少一個，
@@ -295,19 +301,55 @@ def _imagegen_once(args: tuple, deadline: float) -> Dict[str, Any]:
         _gen_semaphore.release()
 
 
-def _imagegen_with_retry(args: tuple, deadline: float) -> Dict[str, Any]:
-    out = _imagegen_once(args, deadline)
+def _imagegen_with_retry(args: tuple, deadline: float, breaker: CircuitBreaker = _imagegen_breaker,
+                         give_up_at: Optional[float] = None, model: Optional[str] = None) -> Dict[str, Any]:
+    """give_up_at：重試到這個時間點就停（之後的時間留給備援模型）；沒給就用到 deadline。"""
+    stop = deadline if give_up_at is None else min(deadline, give_up_at)
+    out = _imagegen_once(args, deadline, breaker, model)
     delay = _RETRY_BASE_S
     while not out.get("ok") and out.get("error") in _RETRYABLE:
         # 抖動：三個人同時被 429，若都等整整 2 秒就會再同時撞一次
         pause = delay * (0.75 + 0.5 * random.random())
         delay = min(delay * 2, _RETRY_MAX_S)
-        if time.perf_counter() + pause + _MIN_CALL_BUDGET_S > deadline:
+        if time.perf_counter() + pause + _MIN_CALL_BUDGET_S > stop:
             break
         print(f"[vision] 生圖被上游拒絕（{out.get('error')}），{pause:.1f} 秒後重試",
               file=sys.stderr)
         time.sleep(pause)
-        out = _imagegen_once(args, deadline)
+        out = _imagegen_once(args, deadline, breaker, model)
+    return out
+
+
+# ── 備援模型：主模型掛了才用 ───────────────────────────────────────────
+#
+# 「非不得已」的定義：主模型本身不能用了 —— 上游 5xx、連不上、重試到最後還是 429，
+# 或主模型的熔斷器已經跳開（circuit_open：前幾個人剛確認它掛了）。
+# 以下**不換**：
+#   - 逾時：那一次主模型可能已經生完、已經收錢，換模型等於付兩次（與「逾時不重試」
+#     同一個理由）。主模型真的卡死的話，連三個逾時熔斷器就跳開，之後的人直接走備援
+#   - 額度用完（insufficient_credits）：兩個模型扣同一個 OpenRouter 餘額，換了也一樣
+#   - 模型回了文字沒回圖、驗證沒過：那是這一張照片的問題，不是模型掛了
+#   - 排隊逾時：名額滿了，換模型一樣要等名額
+_BACKUP_TRIGGERS = {"upstream_error", "upstream_unreachable", "upstream_rate_limited", "circuit_open"}
+# 主模型持續 429 時最多重試到這麼晚，剩下的時間留給備援。
+# 總預算 130 秒、一次生圖至少留 50 秒：主模型重試到第 70 秒還不行就換
+_BACKUP_RESERVE_S = _MIN_CALL_BUDGET_S + 10.0
+_BACKUP_MODEL = config.BACKUP_IMAGE_MODEL
+
+
+def _imagegen_with_backup(args: tuple, deadline: float) -> Dict[str, Any]:
+    backup = _BACKUP_MODEL
+    out = _imagegen_with_retry(args, deadline,
+                               give_up_at=(deadline - _BACKUP_RESERVE_S) if backup else None)
+    if out.get("ok") or not backup or out.get("error") not in _BACKUP_TRIGGERS:
+        return out
+    print(f"[vision] 主模型不能用（{out.get('error')}），改用備援模型 {backup}", file=sys.stderr)
+    second = _imagegen_with_retry(args, deadline, breaker=_backup_breaker, model=backup)
+    if second.get("ok"):
+        second = dict(second)
+        second["backup_model"] = backup
+        return second
+    # 兩個都不行：回主模型的錯誤碼 —— 手機上的說明、熔斷原因都是照主模型寫的
     return out
 
 
@@ -340,6 +382,11 @@ def _sampled_colors(cv_result: Dict[str, Any], face_cv: Dict[str, Any]) -> Dict[
             if isinstance(face_cv.get(src), str) and face_cv[src].startswith("#"):
                 colors[key] = face_cv[src]
     return colors
+
+
+# 啟動當下的程式版本與參考圖指紋。scripts/doctor.py 拿它和硬碟上的比：
+# 對不上就是 git pull 之後沒重開生成服務（見 build_info.py）
+_BUILD = {"commit": build_info.git_commit(), "reference": build_info.reference_fingerprint()}
 
 
 @app.route("/health", methods=["GET"])
@@ -388,6 +435,9 @@ def health():
         "vlm_model": config.VLM_MODEL,
         "style_reference": style_refs,
         "degraded": degraded,
+        "build": _BUILD,
+        "full_character_model": config.FULL_CHARACTER_MODEL,
+        "backup_image_model": config.BACKUP_IMAGE_MODEL,
     })
 
 
@@ -675,7 +725,7 @@ def _generate():
         # 熔斷器的 max_retries=0：它預設會自動重試一次，而這是整套系統唯一會花錢的
         # 呼叫 —— 失敗時多付一次錢，且那次重試不帶修正指令。自動重試只限上游在門口
         # 就拒絕、不收費的那幾種（_RETRYABLE）；要不要重生由下方的驗證結果決定。
-        out = _imagegen_with_retry(
+        out = _imagegen_with_backup(
             (rgb_full, body_poly, face_data, outfit_data, True, regions, style_id, correction),
             deadline,
         )
@@ -758,6 +808,9 @@ def _generate():
     # 回報實際採用的風格，而不是讓手機端假設它送出去的那個一定成立 ——
     # resolve_style_id 會靜默退回預設，沒有這個欄位就看不出退回發生過。
     result["styleId"] = style_id
+    if gen.get("backup_model"):
+        # 現場要知道今天有幾個人是備援模型生的：畫風若有落差，是它，不是那台電腦
+        result["backupModel"] = gen["backup_model"]
     _history_call(
         finish_run, request_id, status="ok", stage="base",
         height_class=height_class, duration_ms=int((time.perf_counter() - started) * 1000.0),
@@ -765,6 +818,99 @@ def _generate():
         validation=validation, output_png=gen["body_png"],
         height_ratio=height_ratio, height_measurement_valid=height_valid,
     )
+    return jsonify(result)
+
+
+# ── 素體換裝（生圖 API 不能用時的退路） ──────────────────────────────
+#
+# 不叫任何外部 API：用預先畫好的部件在本機組角色（backend/dressup.py）。
+# 組出來的三視圖跟生成的走同一條存檔路徑，場上看起來是同一種角色。
+# 生成服務本身也掛了的話這裡也不通 —— 手機端那時退回捏臉。
+
+_DRESSUP_PREVIEW_HEIGHT = 360   # 換裝頁的即時預覽：手機上約一半螢幕高，夠看清楚臉
+
+
+def _dressup_views(payload: Dict[str, Any], only_front: bool = False):
+    import base64
+    import io
+
+    import dressup
+    from garment_gen import _remove_white_background
+    from turnaround import split_turnaround
+
+    sel, col = dressup.clean_request(payload.get("selection"), payload.get("colors"))
+    if only_front:
+        # 預覽：素體的位置固定，只組正面那一塊，不必切三視圖
+        buf = io.BytesIO()
+        dressup.compose(sel, col, box=dressup.front_box()).save(buf, "PNG")
+        front = base64.b64encode(buf.getvalue()).decode("ascii")
+        return {"front": _remove_white_background(front, shield_mask=None)}, sel
+    sheet = dressup.compose(sel, col)
+    buf = io.BytesIO()
+    sheet.save(buf, "PNG")
+    views, count = split_turnaround(base64.b64encode(buf.getvalue()).decode("ascii"))
+    if not views or count != 3:
+        raise RuntimeError(f"dressup sheet split into {count} figures")
+    # 預覽只看正面：去背是逐張做的，三張都做要多花一倍時間
+    names = ("front",) if only_front else tuple(views)
+    return {name: _remove_white_background(views[name], shield_mask=None) for name in names}, sel
+
+
+@app.route("/dressup/catalog", methods=["GET"])
+def dressup_catalog():
+    try:
+        import dressup
+        return jsonify({"ok": True, **dressup.catalog()})
+    except Exception as e:
+        print(f"[vision] 換裝選單讀不到：{e!r}", file=sys.stderr)
+        return jsonify({"ok": False, "error": "dressup_unavailable"})
+
+
+@app.route("/dressup", methods=["POST"])
+def dressup_character():
+    """選好的髮型、衣服、顏色進，角色出（與 /generate 同一種回應）。preview=true 時只回正面縮圖。"""
+    payload = request.get_json(silent=True) or {}
+    started = time.perf_counter()
+    try:
+        views, sel = _dressup_views(payload, only_front=bool(payload.get("preview")))
+    except Exception as e:
+        print(f"[vision] 換裝組圖失敗：{e!r}", file=sys.stderr)
+        return jsonify({"ok": False, "error": "dressup_failed", "fallbackColors": DEFAULT_COLORS})
+
+    if payload.get("preview"):
+        import base64
+        import io
+
+        from PIL import Image
+
+        front = Image.open(io.BytesIO(base64.b64decode(views["front"]))).convert("RGBA")
+        front = front.crop(front.getbbox())
+        scale = _DRESSUP_PREVIEW_HEIGHT / front.height
+        front = front.resize((max(1, round(front.width * scale)), _DRESSUP_PREVIEW_HEIGHT), Image.NEAREST)
+        buf = io.BytesIO()
+        front.save(buf, "PNG")
+        return jsonify({"ok": True, "previewPng": "data:image/png;base64,"
+                        + base64.b64encode(buf.getvalue()).decode("ascii")})
+
+    request_id = uuid.uuid4().hex
+    _history_call(start_run, request_id, mode="dressup", style_id="pixel",
+                  source_type="dressup", experiment_id=session_name())
+    try:
+        result = slice_character(add_transparent_margin(views["front"]), ASSET_DIR, request_id)
+        for part in VIEW_PARTS:
+            if views.get(part):
+                result["textures"][part] = save_view(add_transparent_margin(views[part]), ASSET_DIR, request_id, part)
+    except Exception as e:
+        _history_call(finish_run, request_id, status="failed", stage="slice", height_class=None,
+                      duration_ms=int((time.perf_counter() - started) * 1000.0), cv_ms=None, vlm_ms=None,
+                      generation_ms=None, retry_count=0, error_code=f"slice_failed: {e}")
+        return jsonify({"ok": False, "error": "dressup_failed", "fallbackColors": DEFAULT_COLORS})
+    result["styleId"] = "pixel"
+    result["source"] = "dressup"
+    result["elapsedMs"] = round((time.perf_counter() - started) * 1000.0, 1)
+    _history_call(finish_run, request_id, status="ok", stage="base", height_class=None,
+                  duration_ms=int((time.perf_counter() - started) * 1000.0), cv_ms=None, vlm_ms=None,
+                  generation_ms=None, retry_count=0, output_png=views["front"])
     return jsonify(result)
 
 

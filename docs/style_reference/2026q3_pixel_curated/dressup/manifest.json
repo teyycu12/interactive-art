@@ -1,0 +1,642 @@
+{
+  "_說明": "素體換裝的部件清單。加新造型的步驟見同資料夾的 README.md",
+  "base": "../pose_turnaround.png",
+  "edit_prompt": "EDIT TASK. The image is a finished pixel-art turnaround of a plain mannequin character: front view, right-side profile, back view. Add exactly ONE thing to all three views: {part}. Paint the added item ONLY in shades of pure key green (from dark #0A5A0A through #18B418 to light #7CF07C) with the same pixel-art shading, cell size and one-cell darker outline as the rest of the figure - this green is a placeholder colour that will be replaced later, so every pixel of the added item is green and nothing else is green. Change NOTHING else: every other pixel stays exactly as it is - the same three figures at exactly the same positions and size on the canvas, the same pose, face, skin, grey clothes and shoes, the same pure white background. Do not add a fourth figure, text, a ground shadow or anything else. Hard pixel edges, no anti-aliasing.",
+  "categories": [
+    {
+      "id": "expression",
+      "label": "表情",
+      "base_label": "微笑",
+      "multi": false,
+      "palette": "none"
+    },
+    {
+      "id": "eyes",
+      "label": "眼睛",
+      "base_label": "眼睛",
+      "multi": false,
+      "palette": "eye"
+    },
+    {
+      "id": "brows",
+      "label": "眉毛",
+      "base_label": "一般",
+      "multi": false,
+      "palette": "hair"
+    },
+    {
+      "id": "hair",
+      "label": "髮型",
+      "base_label": "短髮",
+      "multi": false,
+      "region": [
+        0.0,
+        0.8
+      ],
+      "palette": "hair"
+    },
+    {
+      "id": "top",
+      "label": "上衣",
+      "base_label": "短袖T恤",
+      "multi": false,
+      "region": [
+        0.38,
+        0.8
+      ],
+      "palette": "cloth"
+    },
+    {
+      "id": "outer",
+      "label": "外套",
+      "base_label": "不穿",
+      "multi": false,
+      "region": [
+        0.38,
+        0.85
+      ],
+      "palette": "cloth"
+    },
+    {
+      "id": "bottom",
+      "label": "下身",
+      "base_label": "長褲",
+      "multi": false,
+      "region": [
+        0.55,
+        1.0
+      ],
+      "palette": "cloth"
+    },
+    {
+      "id": "shoes",
+      "label": "鞋子",
+      "base_label": "球鞋",
+      "multi": false,
+      "region": [
+        0.82,
+        1.0
+      ],
+      "palette": "cloth"
+    },
+    {
+      "id": "acc",
+      "label": "配件",
+      "base_label": "無",
+      "multi": true,
+      "region": [
+        0.0,
+        1.0
+      ],
+      "palette": "cloth"
+    }
+  ],
+  "parts": [
+    {
+      "id": "hair_long",
+      "category": "hair",
+      "label": "長直髮",
+      "prompt": "long straight hair falling past the shoulders to the middle of the back, with a fringe across the forehead. Front: hair frames both sides of the face down to the chest. Profile: hair covers the back of the head and falls down the back. Back: the whole back of the head is hair, falling to the middle of the back. Hair is a flat pixel-art silhouette with two or three shade steps only - no glossy highlight band, no individual strands."
+    },
+    {
+      "id": "hair_bun",
+      "category": "hair",
+      "label": "丸子頭",
+      "prompt": "hair pulled back into a round bun on top of the head, with the hairline visible on the forehead. Front: the bun shows above the head. Profile: the bun sits on the top-back of the head. Back: the bun and the gathered hair cover the back of the head. Hair is a flat pixel-art silhouette with two or three shade steps only - no glossy highlight band, no individual strands."
+    },
+    {
+      "id": "hair_wavy",
+      "category": "hair",
+      "label": "大波浪",
+      "prompt": "voluminous shoulder-length wavy hair. Front: waves frame the face down to the shoulders. Profile: waves cover the back of the head down to the shoulder. Back: the back of the head is wavy hair down to the shoulders. Hair is a flat pixel-art silhouette with two or three shade steps only - no glossy highlight band, no individual strands."
+    },
+    {
+      "id": "hair_ponytail",
+      "category": "hair",
+      "label": "馬尾",
+      "prompt": "hair tied into a ponytail at the back of the head that hangs down to the upper back, with a side-swept fringe. Front: the ponytail peeks out on one side. Profile: the ponytail hangs behind the head. Back: the ponytail hangs down the middle of the back. Hair is a flat pixel-art silhouette with two or three shade steps only - no glossy highlight band, no individual strands."
+    },
+    {
+      "id": "hair_short_curly",
+      "category": "hair",
+      "label": "短捲髮",
+      "prompt": "short curly hair for a young man: tight textured curls covering the top of the head, short on the sides, ears visible. Profile and back show the same short curls. Hair is a flat pixel-art silhouette with two or three shade steps only - no glossy highlight band, no individual strands."
+    },
+    {
+      "id": "hair_middle_part",
+      "category": "hair",
+      "label": "中分",
+      "prompt": "a young man's middle-part (centre-parted) hairstyle: medium-short hair parted in the centre with two curtain bangs falling to the eyebrows on each side, ears half covered, short at the nape. Profile and back show the same cut. Hair is a flat pixel-art silhouette with two or three shade steps only - no glossy highlight band, no individual strands."
+    },
+    {
+      "id": "top_shirt",
+      "category": "top",
+      "label": "有領襯衫",
+      "prompt": "a collared button-up shirt with short sleeves replacing the t-shirt: a pointed collar, a button line down the centre front, the hem over the waistband. Profile and back show the same shirt with the collar."
+    },
+    {
+      "id": "top_hoodie",
+      "category": "outer",
+      "label": "連帽外套",
+      "prompt": "an open zip-up hoodie with long sleeves worn over the t-shirt: the hood lies on the back of the neck and shoulders, two drawstrings hang at the chest, the front is open showing the t-shirt, sleeves reach the wrists. Profile and back show the same hoodie and hood."
+    },
+    {
+      "id": "bottom_shorts",
+      "category": "bottom",
+      "label": "短褲",
+      "prompt": "knee-length shorts replacing the trousers, from the waist to just above the knee, with a gap between the legs. Below the hem both legs are BARE SKIN in exactly the mannequin's skin colour and shading, like its arms - the grey trousers are completely gone, no grey remains on the legs; the shoes stay."
+    },
+    {
+      "id": "bottom_skirt",
+      "category": "bottom",
+      "label": "裙子",
+      "prompt": "a knee-length A-line skirt from the waist to the knees, replacing the trousers. Below the hem both legs are BARE SKIN in exactly the mannequin's skin colour and shading, like its arms - the grey trousers are completely gone, no grey remains on the legs; the shoes stay."
+    },
+    {
+      "id": "bottom_dress",
+      "category": "bottom",
+      "label": "洋裝",
+      "prompt": "a sleeveless one-piece dress worn over everything: it covers the torso from the shoulders and flares down to just below the knees as one unbroken shape, replacing both the t-shirt and the trousers; the arms are bare skin from the shoulders. Below the hem both legs are BARE SKIN in exactly the mannequin's skin colour and shading, like its arms - the grey trousers are completely gone, no grey remains on the legs; the shoes stay.",
+      "hides": [
+        "top",
+        "outer"
+      ]
+    },
+    {
+      "id": "shoes_boots",
+      "category": "shoes",
+      "label": "短靴",
+      "prompt": "ankle boots replacing the shoes: boots covering the feet and ankles up to the lower shin, with a thick sole. Profile shows the boot pointing right."
+    },
+    {
+      "id": "acc_glasses",
+      "category": "acc",
+      "label": "眼鏡",
+      "prompt": "a pair of round glasses with a thin frame over the eyes. Profile: the frame and the arm running back to the ear. Back: only the arms over the ears, barely visible."
+    },
+    {
+      "id": "acc_hat",
+      "category": "acc",
+      "label": "棒球帽",
+      "prompt": "a baseball cap on the head with the brim pointing forward. Profile: the brim points right. Back: the back of the cap with the strap opening."
+    },
+    {
+      "id": "acc_backpack",
+      "category": "acc",
+      "label": "後背包",
+      "prompt": "a small backpack. Front: two shoulder straps running down over the chest. Profile: the pack sits behind the back with a strap over the shoulder. Back: the whole pack covers the upper back."
+    },
+    {
+      "id": "acc_crossbody",
+      "category": "acc",
+      "label": "斜背包",
+      "prompt": "a small crossbody bag on a long strap: the strap runs from the right shoulder diagonally across the chest to the bag at the left hip. Profile: the strap over the shoulder and the bag at the hip. Back: the strap crosses the back diagonally."
+    },
+    {
+      "id": "acc_scarf",
+      "category": "acc",
+      "label": "圍巾",
+      "prompt": "a knitted scarf wrapped around the neck with one end hanging down the front of the chest. Profile and back show the scarf around the neck."
+    },
+    {
+      "id": "expr_grin",
+      "category": "expression",
+      "label": "開心",
+      "stamp": {
+        "front": {
+          "mouth": [
+            ".mmmmmm.",
+            ".mrrrrm.",
+            "..mttm.."
+          ]
+        },
+        "side": {
+          "mouth": [
+            "dmmm",
+            ".mrr",
+            "..mm"
+          ]
+        }
+      }
+    },
+    {
+      "id": "expr_laugh",
+      "category": "expression",
+      "label": "大笑",
+      "stamp": {
+        "front": {
+          "mouth": [
+            ".mwwwwm.",
+            ".mrrrrm.",
+            "..mmmm.."
+          ]
+        },
+        "side": {
+          "mouth": [
+            "dmww",
+            ".mrr",
+            "..mm"
+          ]
+        }
+      }
+    },
+    {
+      "id": "expr_joy",
+      "category": "expression",
+      "label": "瞇眼笑",
+      "stamp": {
+        "front": {
+          "eye": [
+            ".......",
+            "..kkk..",
+            ".k...k.",
+            "k.....k"
+          ],
+          "mouth": [
+            ".mmmmmm.",
+            ".mrrrrm.",
+            "..mttm.."
+          ]
+        },
+        "side": {
+          "eye": [
+            ".....",
+            ".kkk.",
+            "k...k"
+          ],
+          "mouth": [
+            "dmmm",
+            ".mrr",
+            "..mm"
+          ]
+        }
+      }
+    },
+    {
+      "id": "expr_wink",
+      "category": "expression",
+      "label": "眨眼",
+      "stamp": {
+        "front": {
+          "eye_r": [
+            ".......",
+            "..kkk..",
+            ".k...k.",
+            "k.....k"
+          ],
+          "mouth": [
+            "",
+            "..mmmm..",
+            "....tt.."
+          ]
+        },
+        "side": {
+          "mouth": [
+            "",
+            ".mmm",
+            "..tt"
+          ]
+        }
+      }
+    },
+    {
+      "id": "expr_calm",
+      "category": "expression",
+      "label": "閉眼",
+      "stamp": {
+        "front": {
+          "eye": [
+            ".......",
+            ".......",
+            "k.....k",
+            ".kkkkk."
+          ]
+        },
+        "side": {
+          "eye": [
+            ".....",
+            ".....",
+            "k...k",
+            ".kkk."
+          ]
+        }
+      }
+    },
+    {
+      "id": "expr_wow",
+      "category": "expression",
+      "label": "驚訝",
+      "stamp": {
+        "front": {
+          "mouth": [
+            "...mm...",
+            "..mrrm..",
+            "...mm..."
+          ]
+        },
+        "side": {
+          "mouth": [
+            "..mm",
+            ".mr.",
+            "..mm"
+          ]
+        }
+      }
+    },
+    {
+      "id": "expr_cool",
+      "category": "expression",
+      "label": "酷",
+      "stamp": {
+        "front": {
+          "mouth": [
+            "",
+            "..mmmm.."
+          ]
+        },
+        "side": {
+          "mouth": [
+            "",
+            ".mmm"
+          ]
+        }
+      }
+    },
+    {
+      "id": "brows_thin",
+      "category": "brows",
+      "label": "細眉",
+      "stamp": {
+        "front": {
+          "brow": [
+            "",
+            ".bbbbb.",
+            "b.....b"
+          ]
+        },
+        "side": {
+          "brow": [
+            "",
+            ".bbbb.",
+            "b....b"
+          ]
+        }
+      }
+    },
+    {
+      "id": "brows_thick",
+      "category": "brows",
+      "label": "粗眉",
+      "stamp": {
+        "front": {
+          "brow": [
+            "..bbbb.",
+            "bbbbbbb",
+            "bbbbbbb"
+          ]
+        },
+        "side": {
+          "brow": [
+            "..bbb.",
+            "bbbbbb",
+            "bbbbbb"
+          ]
+        }
+      }
+    },
+    {
+      "id": "brows_sharp",
+      "category": "brows",
+      "label": "劍眉",
+      "stamp": {
+        "front": {
+          "brow": [
+            "bb.....",
+            ".bbbb..",
+            "...bbbb"
+          ]
+        },
+        "side": {
+          "brow": [
+            "bb....",
+            ".bbb..",
+            "...bbb"
+          ]
+        }
+      }
+    },
+    {
+      "id": "brows_soft",
+      "category": "brows",
+      "label": "八字眉",
+      "stamp": {
+        "front": {
+          "brow": [
+            ".....bb",
+            "..bbbb.",
+            "bbbb..."
+          ]
+        },
+        "side": {
+          "brow": [
+            "....bb",
+            ".bbbb.",
+            "bbb..."
+          ]
+        }
+      }
+    }
+  ],
+  "face": {
+    "_說明": "臉部部件（表情、眉毛）不走生圖，是手畫的格子圖。slots：素體每個五官在 1376x768 三視圖上的位置（at 是左上角格子，clear 是畫之前先抹成皮膚的範圍）。ink：格子圖裡每個字代表的顏色與換色分類。",
+    "cell": 8,
+    "slots": {
+      "front": {
+        "brow_l": {
+          "feature": "brows",
+          "pair": "brow",
+          "at": [
+            262,
+            252
+          ],
+          "clear": [
+            262,
+            252,
+            320,
+            277
+          ]
+        },
+        "brow_r": {
+          "feature": "brows",
+          "pair": "brow",
+          "mirror": true,
+          "at": [
+            368,
+            252
+          ],
+          "clear": [
+            368,
+            252,
+            425,
+            277
+          ]
+        },
+        "eye_l": {
+          "feature": "eyes",
+          "pair": "eye",
+          "at": [
+            262,
+            284
+          ],
+          "clear": [
+            261,
+            283,
+            321,
+            327
+          ]
+        },
+        "eye_r": {
+          "feature": "eyes",
+          "pair": "eye",
+          "mirror": true,
+          "at": [
+            368,
+            284
+          ],
+          "clear": [
+            367,
+            283,
+            426,
+            327
+          ]
+        },
+        "mouth": {
+          "at": [
+            311,
+            351
+          ],
+          "clear": [
+            316,
+            349,
+            371,
+            376
+          ]
+        }
+      },
+      "side": {
+        "brow": {
+          "feature": "brows",
+          "at": [
+            741,
+            252
+          ],
+          "clear": [
+            740,
+            252,
+            789,
+            277
+          ]
+        },
+        "eye": {
+          "feature": "eyes",
+          "at": [
+            741,
+            284
+          ],
+          "clear": [
+            740,
+            283,
+            781,
+            327
+          ]
+        },
+        "mouth": {
+          "at": [
+            763,
+            351
+          ],
+          "clear": [
+            763,
+            349,
+            795,
+            376
+          ]
+        }
+      }
+    },
+    "ink": {
+      "s": {
+        "class": "skin",
+        "rgb": [
+          212,
+          147,
+          107
+        ]
+      },
+      "d": {
+        "class": "skin",
+        "rgb": [
+          176,
+          108,
+          79
+        ]
+      },
+      "k": {
+        "class": "fixed",
+        "rgb": [
+          24,
+          16,
+          12
+        ]
+      },
+      "m": {
+        "class": "fixed",
+        "rgb": [
+          134,
+          71,
+          63
+        ]
+      },
+      "r": {
+        "class": "fixed",
+        "rgb": [
+          92,
+          30,
+          36
+        ]
+      },
+      "t": {
+        "class": "fixed",
+        "rgb": [
+          212,
+          98,
+          104
+        ]
+      },
+      "w": {
+        "class": "fixed",
+        "rgb": [
+          250,
+          250,
+          250
+        ]
+      },
+      "b": {
+        "class": "brows",
+        "rgb": [
+          73,
+          46,
+          35
+        ]
+      },
+      "i": {
+        "class": "eyes",
+        "rgb": [
+          48,
+          24,
+          16
+        ]
+      }
+    }
+  }
+}

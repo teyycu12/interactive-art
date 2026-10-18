@@ -87,7 +87,7 @@ body {
    蓋掉最上面那一列（.bar 的頭像、積分、連線狀態與離開鍵），而且因為
    html 設了 overflow:hidden，被切掉的部分是捲不出來的 —— 使用者按不到
    離開鍵，也看不到自己是否還連著線。 */
-#entry, #return, #builder, #scan, #controller, #farewell {
+#entry, #return, #builder, #dressup, #scan, #controller, #farewell {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -296,6 +296,55 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   box-shadow: inset 0 3px 0 rgba(58, 46, 39, .08);
 }
 #name-input::placeholder { color: #B5A68F; font-weight: 500; }
+
+/* ── 素體換裝 ──────────────────────────────────────────────
+   與捏臉同一套元件（舞台框、色票）。預覽是生成服務組好的像素圖，放大不能糊 */
+.du-preview { padding: 8px 4px; }
+.du-preview img {
+  display: block;
+  height: min(30dvh, 240px); width: auto;
+  image-rendering: pixelated;
+}
+/* 分類全部攤開（十個：兩列各五）：原本可左右捲，「配件」被擠出畫面外，實測沒人發現它（2026-10-18） */
+.du-tabs {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px;
+  flex-shrink: 0;
+  padding-bottom: 4px;
+}
+.du-tab {
+  min-height: 40px;
+  padding: 6px 0;
+  font-size: 12.5px; font-weight: 700;
+  white-space: nowrap;
+  border: 2px dashed var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  box-shadow: none;
+}
+.du-tab[aria-selected="true"] {
+  border: 2.5px solid var(--ink);
+  background: var(--sunk);
+  color: var(--ink);
+  box-shadow: var(--drop-sm);
+}
+.du-body { flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
+.du-options { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; align-content: start; }
+.du-opt {
+  min-height: 44px;
+  padding: 6px 4px;
+  font-size: 13px; font-weight: 600;
+  border: 2px dashed var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  box-shadow: none;
+}
+.du-opt[aria-pressed="true"] {
+  border: 2.5px solid var(--ink);
+  background: var(--sunk);
+  color: var(--ink);
+  box-shadow: var(--drop-sm);
+}
+#dressup > .foot { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; }
 
 /* ── 控制器 ─────────────────────────────────────────────── */
 /* 狀態列。
@@ -541,7 +590,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
    滾動」，而視窗矮到這個程度時本來就不是實際的操作情境（現場是直立
    手機），能看到完整資訊比維持不可捲更重要。 */
 @media (max-height: 420px) {
-  #entry, #return, #builder, #scan, #controller, #farewell {
+  #entry, #return, #builder, #dressup, #scan, #controller, #farewell {
     padding-top: calc(8px + env(safe-area-inset-top));
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
     gap: 6px;
@@ -1418,7 +1467,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 @media (orientation: landscape) {
   /* 進場各頁也收在與控制器相同的 16:9 畫框裡，外面同一種深色邊 */
   body { background-color: #383c43; background-image: none; }
-  #entry, #return, #builder, #scan, #farewell {
+  #entry, #return, #builder, #dressup, #scan, #farewell {
     flex: none;
     margin: auto;
     width: min(100%, calc(100dvh * 16 / 9));
@@ -1455,11 +1504,26 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
   #builder > .foot button { white-space: nowrap; padding-inline: 8px; }
 
   .scan-stage { height: min(100%, 74dvh); }
+
+  /* 換裝：預覽在左、分類與選項在右（同捏臉） */
+  #dressup {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.5fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    column-gap: 18px;
+    row-gap: 10px;
+  }
+  #dressup > .flow-head { grid-column: 1 / -1; }
+  #dressup > .preview { grid-column: 1; grid-row: 2 / 5; }
+  #dressup > .du-tabs { grid-column: 2; grid-row: 2; }
+  #dressup > .du-body { grid-column: 2; grid-row: 3; }
+  #dressup > .foot { grid-column: 2; grid-row: 4; }
+  #dressup .du-preview img { height: calc(100% - 8px); max-height: 340px; }
 }
 
 /* 矮的橫式（手機橫拿）：標題列與留白縮到最小，把高度讓給舞台與按鈕 */
 @media (orientation: landscape) and (max-height: 500px) {
-  #entry, #return, #builder, #scan, #farewell { overflow: hidden; gap: 6px; }
+  #entry, #return, #builder, #dressup, #scan, #farewell { overflow: hidden; gap: 6px; }
   .flow-head h1 { font-size: 14px; padding: 3px 9px 2px; }
   .btn-link { min-height: 30px; padding: 4px 8px; }
   .steps i { height: 4px; }
