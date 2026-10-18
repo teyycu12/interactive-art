@@ -20,6 +20,10 @@ bash start.sh                      # 生成服務 :5055 + 互動層 :3000
 PIXELAIR_SESSION=live-1019 bash start.sh    # → data/events/live-1019.jsonl
 PIXELAIR_SESSION=rehearsal-1017 bash start.sh   # 彩排：非 live 開頭一律標為 test
 
+# 對外測試：不同網路的手機也能連（ngrok 固定網域，設定見 README「對外測試」）
+bash start-public.sh               # 需要 .env 的 NGROK_DOMAIN；環境變數照樣可加在前面
+PIXELAIR_HOST_KEY=ABC234 bash start-public.sh  # 主辦端密鑰寫死成 6 碼（互動層不讀 .env）
+
 # 或分別啟動（除錯時比較好看 log）
 npm start                          # 互動層，印出大螢幕/手機/主辦端三個網址
 python backend/service.py          # 角色生成服務（127.0.0.1:5055）

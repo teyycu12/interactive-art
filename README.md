@@ -36,6 +36,38 @@ bash start.sh                 # 生成服務 :5055 + 互動層 :3000
 - 主辦端控制台：<http://localhost:3000/host/>（需要終端機印出的通行密鑰）
 - 生成服務健康檢查：<http://127.0.0.1:5055/health>
 
+### 對外測試：測試人員用自己的網路連進來
+
+不在同一個 Wi-Fi 的人（4G、家裡網路）也要能玩時，改用 `start-public.sh`。
+它會一起開生成服務、互動層和 ngrok，網址固定，按 Ctrl+C 三個一起關。
+
+```bash
+bash start-public.sh
+# 手機控制器：https://<NGROK_DOMAIN>/controller/
+# 投影牆　　：https://<NGROK_DOMAIN>/screen/
+# 主辦端　　：https://<NGROK_DOMAIN>/host/
+```
+
+第一次在自己的電腦上用，先做三件事：
+
+1. `brew install ngrok`，到 <https://dashboard.ngrok.com> 註冊，執行
+   `ngrok config add-authtoken <你的 token>`。
+2. 在 dashboard 的 **Domains** 頁找到系統自動配的免費 dev domain（像
+   `xxx-xxx-xxx.ngrok-free.dev`），在 `.env` 加 `NGROK_DOMAIN=<那個網域>`。
+   自己取名的網域要付費，按 New Domain 會顯示 Requires Upgrade。
+3. 在 `.env` 填 `IMGBB_API_KEY`（到 <https://api.imgbb.com> 免費申請）。沒填的話，
+   大合照的 QR 指向區網位址，外網的人掃了打不開。
+
+要注意：
+
+- **網站跑在這台電腦上。** 電腦關機、睡眠或斷網，網址就打不開。
+  測試期間另開一個終端機執行 `caffeinate -dis`，防止電腦睡眠。
+- **每支手機第一次會看到 ngrok 的英文提醒頁**，按 **Visit Site** 就好。
+  這是免費版限制，拿不掉。手機頁會自動處理 iPhone Safari 的路徑問題，
+  詳見 [FIELD-OPS](docs/notes/FIELD-OPS.md)。
+- 經 ngrok 時，生成限流是全場共用的。
+- 每個 ngrok 帳號的網域只能由那個帳號使用。用別人的網域會出現 `ERR_NGROK_320`。
+
 完整說明見 [CLAUDE.md](CLAUDE.md)（精簡索引）與 [docs/notes/](docs/notes/)（各主題的踩坑筆記）。
 
 ---
