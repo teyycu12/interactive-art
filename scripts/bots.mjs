@@ -17,6 +17,7 @@
  *   node scripts/bots.mjs --url ws://192.168.1.5:3000
  *   node scripts/bots.mjs --colors        # 每種色族各保證一隻（測顏色任務）
  *   node scripts/bots.mjs --still         # 進場後不動，只當背景
+ *   node scripts/bots.mjs --gather        # 全部擠到場地中央打轉（量集合任務的頻寬尖峰）
  *
  * Ctrl-C 會讓機器人主動離場，不留幽靈角色。
  */
@@ -45,6 +46,7 @@ const COUNT = Math.max(1, Number(flag('count', 5)));
 const URL = flag('url', `ws://localhost:${process.env.PORT || 3000}`);
 const STILL = has('still');
 const BY_COLOR = has('colors');
+const GATHER = has('gather');
 
 const NAMES = [
   '小安', '阿哲', '婷婷', '大雄', '小美', '阿賓', '子瑜', '阿凱',
@@ -73,8 +75,19 @@ function avatarFor(index) {
   };
 }
 
-/** 隨機挑一個不在道具裡的目標點，讓機器人有地方可走 */
+/**
+ * 隨機挑一個不在道具裡的目標點，讓機器人有地方可走。
+ *
+ * --gather 時只在中央半徑 120 內挑：集合任務完成那一刻所有人擠在一起，
+ * 每支手機的鄰居從幾筆變成全場，頻寬尖峰就在這時候（FIELD-OPS「集合任務的頻寬陷阱」）。
+ * 不挑固定一點，是要大家持續小幅移動 —— 站定不動時伺服器送的資料量不同。
+ */
 function wanderTarget() {
+  if (GATHER) {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.random() * 120;
+    return { x: STAGE.width / 2 + Math.cos(a) * r, y: STAGE.height / 2 + Math.sin(a) * r };
+  }
   for (let i = 0; i < 30; i++) {
     const x = 150 + Math.random() * (STAGE.width - 300);
     const y = 150 + Math.random() * (STAGE.height - 300);

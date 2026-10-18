@@ -35,6 +35,7 @@ python -m pytest backend/tests
 # 一個人也能把場域填滿，實際玩一輪（開發／調校用，現場請勿使用）
 npm run bots -- --count 9          # 湊滿 10 人，自己佔 1 個
 npm run bots -- --colors           # 每種色族各保證一隻（測顏色任務）
+npm run bots -- --count 39 --gather   # 全部擠到中央（量集合任務的頻寬尖峰，見 FIELD-OPS）
 
 # 多人同時生成的壓測：假的生圖上游，不花錢、不碰 :5055、不寫帳本
 bash scripts/gen-burst/run.sh 3 --latency 13 --max-inflight 1
