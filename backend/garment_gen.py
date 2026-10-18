@@ -35,9 +35,11 @@ except Exception:
     )
 
 try:
-    from backend.turnaround import face_right, fit_base_body, fix_backward_feet, skin_tone, split_turnaround  # type: ignore
+    from backend.turnaround import (back_shows_face, face_right, fit_base_body,  # type: ignore
+                                    fix_backward_feet, skin_tone, split_turnaround)
 except Exception:  # pragma: no cover - 直接以 backend/ 為工作目錄時
-    from turnaround import face_right, fit_base_body, fix_backward_feet, skin_tone, split_turnaround  # type: ignore
+    from turnaround import (back_shows_face, face_right, fit_base_body,  # type: ignore
+                            fix_backward_feet, skin_tone, split_turnaround)
 
 try:
     from openai import OpenAI  # type: ignore
@@ -1142,6 +1144,12 @@ def generate_full_character_png(
                     views["side"], flipped = fix_backward_feet(views["side"])
                     if flipped:
                         print("[garment_gen] turnaround: side-view feet were backwards, flipped")
+                if "back" in views and back_shows_face(views["back"], skin):
+                    # 背面畫成了側臉（備援模型實測過）：寧可不要背面 —— 大螢幕往上走時
+                    # 退回正面，好過一張側臉倒退走（見 turnaround.back_shows_face）
+                    del views["back"]
+                    out["back_dropped"] = True
+                    print("[garment_gen] turnaround: back view shows a face, dropped")
                 if style.turnaround:
                     # 模型常照真人照片的比例畫（4 頭身、腿很長）；不重生，直接壓回
                     # 素體的頭身比，每個人同一個物種（見 turnaround.fit_base_body）
