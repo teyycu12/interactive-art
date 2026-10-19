@@ -2574,6 +2574,7 @@ $('#btn-confirm-exit').addEventListener('click', () => {
 
   // 清掉任務狀態，重新進場時會由伺服器重新公告
   clearIntros();
+  toggleEmotePalette(false);
   missions.clear();
   renderMission();
   closeSheet();

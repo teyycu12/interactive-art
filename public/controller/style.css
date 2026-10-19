@@ -1851,11 +1851,12 @@ body:has(#greet-invite:not([hidden])):has(#bingo-offer:not([hidden])) .toast { t
 .du-from-scan { display: block; margin: 10px auto 0; min-height: 44px; font-size: 14px; }
 
 /* ── 表情選單：從「表情」鍵往左上展開的小面板，不是覆蓋層 ── */
-#controller > .emote-palette {
-  position: absolute; z-index: 4;
-  right: calc(80px + env(safe-area-inset-right));
+.emote-palette {
+  position: fixed; z-index: 96;
+  right: calc(82px + env(safe-area-inset-right));
   bottom: calc(14px + env(safe-area-inset-bottom));
-  width: min(280px, calc(100vw - 110px));
+  width: min(300px, calc(100vw - 110px));
+  max-height: calc(100vh - 40px); overflow-y: auto;
   padding: 10px 12px 12px;
   background: var(--paper); border: 2.5px solid var(--ink); border-radius: var(--r);
   box-shadow: var(--drop);

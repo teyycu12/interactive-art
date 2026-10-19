@@ -301,15 +301,6 @@
       <span id="bingo-offer-text"></span>
       <button id="btn-bingo-accept">幫我填上</button>
     </div>
-    <!-- 表情選單：揮手（有「互相揮手」的判定）留在外面，其他表情與角色動作收在「表情」裡
-         （2026-10-19 回饋「角色可以有更多動作」「可以加入自己想表達的表情符號」）。
-         不是覆蓋層：選完就收起，搖桿照常可以推 -->
-    <div class="emote-palette" id="emote-palette" hidden role="group" aria-label="表情與動作">
-      <p class="ep-title">表情</p>
-      <div class="ep-grid" id="ep-emoji"></div>
-      <p class="ep-title">動作</p>
-      <div class="ep-grid ep-motions" id="ep-motion"></div>
-    </div>
     <div id="emotes">
       <button id="btn-emote-menu" aria-expanded="false" aria-controls="emote-palette"><em>😀</em>表情</button>
       <button data-action="WAVE"><em>👋</em>揮手</button>
@@ -551,6 +542,18 @@
     </div>
   </div>
 </div>
+
+  <!-- 表情選單：揮手（有「互相揮手」的判定）留在外面，其他表情與角色動作收在「表情」裡
+       （2026-10-19 回饋「角色可以有更多動作」「可以加入自己想表達的表情符號」）。
+       不是覆蓋層：選完就收起，搖桿照常可以推。
+       放在 #controller 外面：控制器裡每個元件都吃 `#controller > *:not(#pov-canvas)` 那條
+       高權重規則（position: relative），選單會被擠成版面裡的一格，橫向時還被左欄蓋住（2026-10-19 實測） -->
+  <div class="emote-palette" id="emote-palette" hidden role="group" aria-label="表情與動作">
+    <p class="ep-title">表情</p>
+    <div class="ep-grid" id="ep-emoji"></div>
+    <p class="ep-title">動作</p>
+    <div class="ep-grid ep-motions" id="ep-motion"></div>
+  </div>
 
 <!-- 新活動開始：整頁卡片（2026-10-19 試玩回饋「新活動出現時可以更清楚，不用一定得聽主持人說」）。
      任務、文字雲、賓果直接發卡時跳出；問答本身就是全螢幕、賓果自我介紹會直接打開面板，不再疊一張 -->
