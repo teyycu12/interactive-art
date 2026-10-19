@@ -2094,6 +2094,16 @@ wss.on('connection', (ws, req) => {
         console.log(ws.preview ? '[screen] 主控台預覽已連線' : `[screen] 大螢幕已連線　共 ${[...screens].filter((s) => !s.preview).length} 台`);
         break;
 
+      // 大螢幕上下載 QR 的 ×：跟主控端按「隱藏」同一件事，改的是伺服器的狀態，
+      // 所以每台大螢幕一起收起、主控端的按鈕也跟著變回「顯示」。
+      // 只能收、不能開：大螢幕這端沒有認證，開的權限留在主控端
+      case EV.SCREEN_PHOTO_QR_HIDE:
+        if (ws.role !== 'screen' || !photoQr?.visible) return;
+        photoQr.visible = false;
+        blast(screens, EV.SCREEN_PHOTO_QR, photoQrPayload());
+        pushHostState();
+        break;
+
       case EV.INPUT_MOVE: {
         if (ws.role !== 'controller') return;
         // 相容技術文件的兩種 payload 形狀：{vector,intensity} 與 {vx,vy}

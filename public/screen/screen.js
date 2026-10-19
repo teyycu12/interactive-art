@@ -201,6 +201,8 @@ let syncHz = 0;
 const avatarImage = (avatar) => buildAvatarImage(avatar, { enhance: true });
 
 let screenReconnectDelay = 1000;
+/** 目前這條連線。大螢幕平常只收不送；送的只有下載 QR 的 ×（見 showPhotoQr 上方） */
+let screenWs = null;
 
 const offlineEl = document.getElementById('offline');
 const offlineTextEl = document.getElementById('offline-text');
@@ -235,6 +237,7 @@ function setOffline(on, secondsLeft = 0) {
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}`);
+  screenWs = ws;
 
   ws.addEventListener('open', () => {
     screenReconnectDelay = 1000;
@@ -675,6 +678,13 @@ function drawDebugOverlay(a, pos) {
  */
 // ── 大合照下載 QR ─────────────────────────────────────────
 // 拍完自動顯示，之後由主持人在主控端切換顯示／隱藏（SCREEN_PHOTO_QR 的 visible）。
+// 右上角的 × 在大螢幕這台直接收起：先在本機藏起來（不等來回），再告訴伺服器，
+// 其他大螢幕與主控端的按鈕才會一致（server 的 SCREEN_PHOTO_QR_HIDE）
+document.getElementById('photo-qr-close').addEventListener('click', () => {
+  document.getElementById('photo-qr').hidden = true;
+  if (screenWs?.readyState === WebSocket.OPEN) screenWs.send(JSON.stringify({ type: EV.SCREEN_PHOTO_QR_HIDE }));
+});
+
 function showPhotoQr({ qr, visible } = {}) {
   const box = document.getElementById('photo-qr');
   if (!visible || typeof qr !== 'string' || !qr.startsWith('data:image/')) { box.hidden = true; return; }
