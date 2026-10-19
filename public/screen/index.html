@@ -98,6 +98,29 @@
   }
   @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
 
+  .headline {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    z-index: 60; max-width: min(1100px, 86vw);
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    padding: 34px 56px; text-align: center;
+    background: var(--paper); color: var(--ink);
+    border: 4px solid var(--ink); border-radius: 28px;
+    box-shadow: 0 12px 0 var(--ink), 0 30px 80px -20px rgba(47,42,38,.6);
+    pointer-events: none;
+    animation: hl-in .4s ease-out;
+  }
+  .headline[hidden] { display: none; }
+  .hl-kind {
+    padding: 6px 22px; border-radius: 999px;
+    background: var(--ink); color: var(--paper);
+    font-size: 24px; font-weight: 800; letter-spacing: .1em;
+  }
+  .hl-title { font-size: 64px; line-height: 1.2; overflow-wrap: anywhere; }
+  .hl-sub { font-size: 30px; line-height: 1.45; color: var(--ink); white-space: pre-line; }
+  .hl-sub:empty { display: none; }
+  @keyframes hl-in { from { opacity: 0; transform: translate(-50%, -46%) scale(.94); } to { opacity: 1; transform: translate(-50%, -50%); } }
+  @media (prefers-reduced-motion: reduce) { .headline { animation: none; } }
+
   /* ── 遊戲畫面：問答、任務、賓果、文字雲共用的滿版面板 ─────────
      蓋在場景上的整面紙色畫布。原本問答、任務、賓果是浮在上緣的橫幅、房間讓位縮小
      （UI-STYLING「大螢幕的橫幅不可疊在場景上」）；2026-10 統一成跟文字雲一樣滿版：
@@ -331,6 +354,13 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
+<!-- 新活動開始：中央大字標題，幾秒後自己收起（2026-10-19 試玩回饋「新活動出現時可以更清楚」）。
+     任務、賓果平常只佔上緣一小條（#now-bar），剛開始的那一下要讓全場都看到 -->
+<div class="headline" id="headline" hidden aria-live="polite">
+  <span class="hl-kind" id="hl-kind">新活動</span>
+  <b class="hl-title" id="hl-title"></b>
+  <span class="hl-sub" id="hl-sub"></span>
+</div>
 <!-- 除錯面板：預設隱藏，按 D 切換。保留自 M2 開發期，
      用於檢查 α 權重、剛體避障半徑與速度向量。 -->
 <div class="hud" id="hud" hidden>

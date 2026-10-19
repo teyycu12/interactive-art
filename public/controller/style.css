@@ -1815,3 +1815,20 @@ body:has(#greet-invite:not([hidden])):has(#bingo-offer:not([hidden])) .toast { t
 .pick-row b { overflow-wrap: anywhere; }
 .pick-face { flex: none; width: 40px; height: 44px; display: grid; place-items: center; }
 .pick-face canvas, .pick-face img { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+
+/* ── 新活動開始的整頁卡片 ─────────────────────────────── */
+.activity-intro { z-index: 140; background: rgba(47, 42, 38, .6); }
+.intro-card { text-align: center; max-width: 360px; padding: 28px 22px 22px; }
+.intro-kind {
+  display: inline-block; margin: 0 0 10px; padding: 4px 14px;
+  font-size: 13px; font-weight: 800; letter-spacing: .08em;
+  color: var(--paper); background: var(--ink); border-radius: 999px;
+}
+.intro-card h2 { margin: 0 0 12px; font-size: 24px; line-height: 1.35; overflow-wrap: anywhere; }
+.intro-rule { margin: 0 0 20px; font-size: 16px; line-height: 1.6; color: var(--ink); white-space: pre-line; }
+.intro-rule[hidden] { display: none; }
+.intro-card .btn-primary { width: 100%; min-height: 52px; font-size: 17px; }
+@media (prefers-reduced-motion: no-preference) {
+  .activity-intro:not([hidden]) .intro-card { animation: intro-pop .28s ease-out; }
+}
+@keyframes intro-pop { from { opacity: 0; transform: translateY(16px) scale(.96); } to { opacity: 1; transform: none; } }

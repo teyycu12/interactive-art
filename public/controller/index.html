@@ -537,6 +537,17 @@
   </div>
 </div>
 
+<!-- 新活動開始：整頁卡片（2026-10-19 試玩回饋「新活動出現時可以更清楚，不用一定得聽主持人說」）。
+     任務、文字雲、賓果直接發卡時跳出；問答本身就是全螢幕、賓果自我介紹會直接打開面板，不再疊一張 -->
+<div class="overlay activity-intro" id="activity-intro" hidden>
+  <div class="dialog intro-card" role="dialog" aria-modal="true" aria-labelledby="intro-title" aria-describedby="intro-rule">
+    <p class="intro-kind" id="intro-kind">新活動</p>
+    <h2 id="intro-title">—</h2>
+    <p class="intro-rule" id="intro-rule"></p>
+    <button class="btn-primary" id="btn-intro-ok">我知道了</button>
+  </div>
+</div>
+
 <!-- 非阻斷式通知 Toast -->
 <div id="toast" class="toast" hidden role="alert" aria-live="polite"></div>
 

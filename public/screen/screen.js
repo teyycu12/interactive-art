@@ -243,6 +243,7 @@ function connect() {
     screenReconnectDelay = 1000;
     setOffline(false);
     ws.send(JSON.stringify({ type: EV.SCREEN_HELLO, preview: PREVIEW }));
+    helloAt = Date.now();
   });
 
   ws.addEventListener('message', (e) => {
@@ -329,6 +330,7 @@ function connect() {
       case EV.MISSION_ANNOUNCE:
         if (msg.gather && msg.mission?.id) gatherStates.set(msg.mission.id, msg.gather);
         showMission(msg.mission);
+        headline('新任務', msg.mission?.title, msg.mission?.brief);
         break;
 
       case EV.MISSION_GATHER: {
@@ -391,6 +393,7 @@ function connect() {
         break;
 
       case EV.BINGO_STATE: {
+        if (msg.round && !bingoShown) headline('新活動', '人物賓果開始了', '打開手機，找符合格子條件的人，問他的配對碼');
         // 有人新連成一線：響一聲（BINGO_STATE 每填一格都會來，只有線數變多才響）
         const prevTop = bingoShown?.top?.[0]?.lines ?? 0;
         showBingo(msg.round);
@@ -507,6 +510,22 @@ function renderMissionsBar() {
     return item;
   }));
   syncBanners();
+}
+
+/** 連上（或重連）的時刻。之後一小段時間收到的公告是伺服器補送的進行中活動，不是剛開始的 */
+let helloAt = 0;
+let headlineTimer = null;
+
+/** 新活動開始：中央大字標題幾秒。重連補送的不跳 —— 那不是「剛開始」，而且一次會來好幾個 */
+function headline(kind, title, sub) {
+  if (!title || Date.now() - helloAt < 2000) return;
+  document.getElementById('hl-kind').textContent = kind;
+  document.getElementById('hl-title').textContent = title;   // 主持人輸入的文字，一律 textContent
+  document.getElementById('hl-sub').textContent = sub ?? '';
+  const el = document.getElementById('headline');
+  el.hidden = false;
+  clearTimeout(headlineTimer);
+  headlineTimer = setTimeout(() => { el.hidden = true; }, 4500);
 }
 
 function toast(text) {

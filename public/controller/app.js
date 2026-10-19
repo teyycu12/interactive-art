@@ -2074,6 +2074,59 @@ function showBingoMsg(text) {
   el.hidden = !text;
 }
 
+// ── 新活動開始：整頁卡片 ──────────────────────────────────
+// 原本任務只有上方一條橫幅、文字雲只震一下，沒聽到主持人說明的人不知道現在在做什麼
+// （2026-10-19 試玩回饋）。同一個活動只跳一次：重新整理、斷線接回時伺服器會補送公告，
+// 那時不該再跳 —— 看過的記在 sessionStorage（分頁關掉就清，換手機或新角色會再看到）。
+const INTRO_SEEN_KEY = 'pf.introSeen';
+const introSeen = new Set();
+try { for (const k of JSON.parse(sessionStorage.getItem(INTRO_SEEN_KEY) ?? '[]')) introSeen.add(k); } catch { /* 略 */ }
+/** @type {{key: string, kind: string, title: string, rule: string, then?: () => void}[]} */
+const introQueue = [];
+let introShown = null;
+
+/** 宣布一個新活動。key 相同的只會跳一次 */
+function announceActivity(item) {
+  if (!item?.key || introSeen.has(item.key)) return;
+  introSeen.add(item.key);
+  try { sessionStorage.setItem(INTRO_SEEN_KEY, JSON.stringify([...introSeen].slice(-50))); } catch { /* 略 */ }
+  introQueue.push(item);
+  if (!introShown) showNextIntro();
+}
+
+function showNextIntro() {
+  introShown = introQueue.shift() ?? null;
+  if (!introShown) return;
+  const el = $('#activity-intro');
+  $('#intro-kind').textContent = introShown.kind;
+  $('#intro-title').textContent = introShown.title;   // 主持人輸入的文字，一律 textContent
+  $('#intro-rule').textContent = introShown.rule ?? '';
+  $('#intro-rule').hidden = !introShown.rule;
+  el.hidden = false;
+  pushOverlay(el, { onEscape: closeIntro });
+  vibrate([60, 40, 60]);
+  $('#btn-intro-ok').focus({ preventScroll: true });
+}
+
+function closeIntro() {
+  const el = $('#activity-intro');
+  if (el.hidden) return;
+  el.hidden = true;
+  popOverlay(el);
+  const then = introShown?.then;
+  introShown = null;
+  then?.();
+  if (introQueue.length) setTimeout(showNextIntro, 250);
+}
+
+/** 離場、換角色：還沒看的公告不用再跳 */
+function clearIntros() {
+  introQueue.length = 0;
+  closeIntro();
+}
+
+$('#btn-intro-ok').addEventListener('click', closeIntro);
+
 function openBingo() {
   if (!bingoCard) { openBingoAsk(); return; }
   bingoSheet.hidden = false;
@@ -2130,6 +2183,16 @@ function handleBingoMessage(msg) {
         const wasOpen = !bingoAskSheet.hidden;
         clearBingoAsk();
         if (wasOpen || !bingoCard) showToast('賓果卡發下來了！點上方的橫幅打開');
+      }
+      // 沒有自我介紹題、直接發卡的那一輪：第一次拿到卡時宣布（有自我介紹題時，開局就直接打開了勾選面板）
+      if (!bingoCard && !bingoAsk) {
+        announceActivity({
+          key: `bingo:${msg.card?.cells?.map((c) => c.label).join('|')}`,
+          kind: '新活動',
+          title: '人物賓果開始了',
+          rule: '每一格找一個符合條件的人，問他的配對碼填進去。連成一線有加分。',
+          then: () => openBingo(),
+        });
       }
       bingoCard = msg.card;
       bingoMyFacts = Array.isArray(msg.myFacts) ? msg.myFacts : null;
@@ -2223,6 +2286,16 @@ function handleMissionMessage(msg) {
         });
       }
       renderMission();
+      if (msg.mission?.id) {
+        const entry = missions.get(msg.mission.id);
+        announceActivity({
+          key: `mission:${msg.mission.id}`,
+          kind: '新任務',
+          title: msg.mission.title,
+          // 條件（找哪一類、你是哪一類、到哪集合）比一般說明具體，有的話用條件
+          rule: [missionCondition(entry), msg.mission.brief].filter(Boolean).join('\n'),
+        });
+      }
       break;
 
     case EV.MISSION_GATHER: {
@@ -2267,6 +2340,13 @@ function handleMissionMessage(msg) {
 
     // ── 文字雲 ────────────────────────────────────────────
     case EV.WORDCLOUD_QUESTION:
+      announceActivity({
+        key: `wordcloud:${msg.cloud?.id}`,
+        kind: '文字雲',
+        title: msg.cloud?.question ?? '文字雲',
+        rule: `輸入一個詞送到大螢幕，最多 ${msg.cloud?.maxPerPerson ?? 3} 個。大家寫得越多，那個詞就越大。`,
+        then: () => wcInput.focus(),
+      });
       wcRound = msg.cloud;
       wcMine = [];
       wcSending = false;
@@ -2447,6 +2527,7 @@ $('#btn-confirm-exit').addEventListener('click', () => {
   joyEngaged = false;
 
   // 清掉任務狀態，重新進場時會由伺服器重新公告
+  clearIntros();
   missions.clear();
   renderMission();
   closeSheet();
