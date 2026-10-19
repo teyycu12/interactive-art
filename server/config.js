@@ -25,6 +25,12 @@ export const INPUT_DEADZONE = 0.08;           // 低於此強度視為未操控�
  */
 export const INPUT_STALE_MS = 500;
 
+/**
+ * 人物賓果開始（發卡）與結束前的 3、2、1（2026-10-19 試玩回饋）。
+ * 全場同一刻開始找人、同一刻停手，主持人不必喊「預備——開始」。
+ */
+export const BINGO_COUNTDOWN_MS = 3000;
+
 // ── 斷線處理（技術文件 §6 風險 1）──────────────────────────────
 export const DISCONNECT_GRACE_MS = 2000;      // 斷線逾 2 秒 → 標記離線並轉入 Boids
 export const AGENT_TTL_MS = 45000;            // 斷線逾 45 秒 → 從狀態矩陣移除。

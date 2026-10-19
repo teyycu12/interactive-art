@@ -1807,7 +1807,7 @@ check('引導端點擋下過大的影格',
 // ── 人物賓果 ──────────────────────────────────────────────
 {
   const capture = (box) => {
-    box.bingo = { ask: null, card: null, results: [], tagged: [], ended: null };
+    box.bingo = { ask: null, card: null, results: [], tagged: [], ended: null, countdowns: [] };
     box.ws.on('message', (d) => {
       const m = JSON.parse(d);
       if (m.type === 'BINGO_ASK') box.bingo.ask = m;
@@ -1815,6 +1815,7 @@ check('引導端點擋下過大的影格',
       if (m.type === 'BINGO_RESULT') box.bingo.results.push(m);
       if (m.type === 'BINGO_TAGGED') box.bingo.tagged.push(m);
       if (m.type === 'BINGO_ENDED') box.bingo.ended = m;
+      if (m.type === 'BINGO_COUNTDOWN') box.bingo.countdowns.push(m);
     });
     return box;
   };
@@ -1850,6 +1851,9 @@ check('引導端點擋下過大的影格',
   pA.ws.send(JSON.stringify({ type: 'BINGO_FACTS', yes: [] }));
   pB.ws.send(JSON.stringify({ type: 'BINGO_FACTS', yes: [facts[0].id, 'bogus'] }));
   await sleep(600);
+  check('答完先倒數 3、2、1，倒數完才發卡', pA.bingo.countdowns.at(-1)?.kind === 'start' && pA.bingo.card === null,
+    JSON.stringify(pA.bingo.countdowns));
+  await sleep(3000);
   check('大家都答完就發卡，每人一張 9 格的卡', pA.bingo.card?.cells?.length === 9 && pB.bingo.card?.cells?.length === 9);
   const factLabel = `${facts[0]?.text}的人`;
   check('甲的卡上有乙勾的那一題', pA.bingo.card?.cells?.some((c) => c.label === factLabel),
@@ -1906,6 +1910,11 @@ check('引導端點擋下過大的影格',
 
   bHost.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
   await sleep(300);
+  check('按結束先倒數 3、2、1，還沒公布結果', pA.bingo.countdowns.at(-1)?.kind === 'end' && pA.bingo.ended === null,
+    JSON.stringify(pA.bingo.countdowns.at(-1)));
+  bHost.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
+  await sleep(3100);
+  check('倒數中再按一次結束不會重新倒數', pA.bingo.countdowns.filter((c) => c.kind === 'end').length === 1);
   bHost.close();
   check('結束時全場收到結果', pA.bingo.ended !== null && Array.isArray(pB.bingo.ended?.winners), JSON.stringify(pA.bingo.ended));
 
@@ -1917,7 +1926,7 @@ check('引導端點擋下過大的影格',
   h2.send(JSON.stringify({ type: 'HOST_START_BINGO' }));
   await sleep(300);
   h2.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
-  await sleep(300);
+  await sleep(3300);
   check('沒人填任何一格就沒有贏家', pA.bingo.ended?.winners?.length === 0, JSON.stringify(pA.bingo.ended));
   h2.close();
   pA.ws.close();

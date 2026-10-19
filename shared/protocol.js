@@ -111,6 +111,7 @@ export const EV = {
   BINGO_TAGGED: 'BINGO_TAGGED',               // Server → Phone：有人把你填進他的卡 {byName, label, offer: {label}|null}
   BINGO_STATE: 'BINGO_STATE',                 // Server → Screen/Host：進度排行 {round}（null 代表沒有進行中的一輪）
   BINGO_ENDED: 'BINGO_ENDED',                 // Server → All：本輪結束 {winners}
+  BINGO_COUNTDOWN: 'BINGO_COUNTDOWN',         // Server → All：開始／結束前的 3、2、1 {kind: 'start'|'end', ms}
   BINGO_ASK: 'BINGO_ASK',                     // Server → Phone：開局先勾自我介紹題 {facts: [{id, text}], remainingMs}
   BINGO_FACTS: 'BINGO_FACTS',                 // Phone → Server：勾了哪幾題 {yes: string[]}
   BINGO_ACCEPT: 'BINGO_ACCEPT',               // Phone → Server：收下「順便填」的邀請（BINGO_TAGGED 的 offer）

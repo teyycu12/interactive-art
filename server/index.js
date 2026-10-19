@@ -33,7 +33,7 @@ import { avatarMatchesFamily, COLOR_FAMILIES, COLOR_FAMILY_MAP, familiesOfAvatar
 import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
-  PERSISTENCE, VISION_HOST, VISION_PORT, GREET, EVENTS,
+  BINGO_COUNTDOWN_MS, PERSISTENCE, VISION_HOST, VISION_PORT, GREET, EVENTS,
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
 import { RateLimiter } from './ratelimit.js';
@@ -774,14 +774,45 @@ function startBingo(ws, msg) {
   if (bingo.phase === 'ask') {
     for (const id of ids) sendToAgent(id, EV.BINGO_ASK, bingoAsk());
   } else {
-    for (const id of ids) sendBingoCard(id);
+    dealAfterCountdown();
   }
   events.log('bingo_start', { players: ids.length, durationMs: durationMs ?? undefined });
   pushBingoState();
   console.log(`[bingo] 開始　${ids.length} 人${durationMs ? `　限時 ${durationMs / 60000} 分鐘` : ''}`);
 }
 
+/**
+ * 3、2、1 倒數（BINGO_COUNTDOWN_MS）。手機與大螢幕各自畫數字，伺服器只負責「什麼時候真的開始／結束」。
+ * @type {{kind: 'start'|'end', timer: NodeJS.Timeout}|null}
+ */
+let bingoCountdown = null;
+
+function bingoCountdownThen(kind, then) {
+  clearTimeout(bingoCountdown?.timer);
+  blastAll(EV.BINGO_COUNTDOWN, { kind, ms: BINGO_COUNTDOWN_MS });
+  bingoCountdown = {
+    kind,
+    timer: setTimeout(() => { bingoCountdown = null; then(); }, BINGO_COUNTDOWN_MS),
+  };
+}
+
+/** 卡已經發好（beginPlay），倒數完才送到手機，限時也從那一刻才開始算 */
+function dealAfterCountdown() {
+  bingoCountdownThen('start', () => {
+    if (!bingo.isActive) return;
+    if (bingo.round.endsAt) bingo.round.endsAt += BINGO_COUNTDOWN_MS;
+    for (const id of bingo.round.cards.keys()) sendBingoCard(id);
+    pushBingoState();
+  });
+}
+
+/** 結束：先倒數 3、2、1，期間還可以填格；同一輪只倒數一次 */
 function endBingo(by = 'host') {
+  if (!bingo.isActive || bingoCountdown?.kind === 'end') return;
+  bingoCountdownThen('end', () => finishBingo(by));
+}
+
+function finishBingo(by) {
   if (!bingo.isActive) return;
   const top = bingo.standings();
   bingo.end();
@@ -893,7 +924,7 @@ const bingoPresent = () => [...stage.agents.values()].filter((a) => !a.offline).
 
 function startBingoPlay() {
   bingo.beginPlay(bingoPresent());
-  for (const id of bingo.round.cards.keys()) sendBingoCard(id);
+  dealAfterCountdown();
   pushBingoState();
   console.log(`[bingo] 發卡　${bingo.round.cards.size} 人`);
 }
@@ -916,6 +947,8 @@ function sendBingoCatchUp(agentId) {
     return;
   }
   bingo.dealCard(agentId, bingoPresent());
+  // 開始的倒數還沒數完：卡已經發好了，倒數結束時會跟大家一起送
+  if (bingoCountdown?.kind === 'start') return;
   sendBingoCard(agentId);
 }
 
@@ -2447,7 +2480,9 @@ const loop = startTicker({
       pushHostState();
     }
     if (bingo.phase === 'ask' && bingo.readyToPlay(bingoAskers(), now)) startBingoPlay();
-    if (bingo.shouldAutoEnd(now)) endBingo('time');
+    // 時間到前 3 秒開始倒數，數完剛好是時間到
+    if (bingo.phase === 'play' && bingo.round.endsAt && !bingoCountdown
+      && now >= bingo.round.endsAt - BINGO_COUNTDOWN_MS) endBingo('time');
     stepTopics(now);
     if (quiz.shouldAutoReveal(now)) revealQuiz(now);
     else if (quiz.shouldAutoEnd(now)) endQuiz();

@@ -2208,6 +2208,42 @@ $('#btn-bingo-submit').addEventListener('click', () => {
 });
 
 /** @returns {boolean} 是否處理了這則訊息 */
+// ── 3、2、1 倒數 ──
+// 全場同一刻開始找人、同一刻停手。不是覆蓋層：pointer-events: none，倒數中照樣可以點（結束前還能填最後一格）
+let c3Timer = null;
+function showCountdown321(label, finalText, ms = 3000) {
+  const el = $('#countdown-321');
+  const num = $('#c3-num');
+  $('#c3-label').textContent = label;
+  clearInterval(c3Timer);
+  const endAt = Date.now() + ms;
+  const tick = () => {
+    const left = endAt - Date.now();
+    if (left <= 0) {
+      num.textContent = finalText;
+      num.classList.add('final');
+      clearInterval(c3Timer);
+      setTimeout(() => { el.hidden = true; num.classList.remove('final'); }, 900);
+      vibrate(120);
+      return;
+    }
+    const n = String(Math.ceil(left / 1000));
+    if (num.textContent !== n) {
+      num.textContent = n;
+      num.classList.remove('final');
+      // 每換一個數字重播一次放大，數字的節奏才看得出來
+      num.style.animation = 'none';
+      void num.offsetWidth;
+      num.style.animation = '';
+      vibrate(30);
+    }
+  };
+  num.textContent = '';
+  el.hidden = false;
+  tick();
+  c3Timer = setInterval(tick, 100);
+}
+
 function handleBingoMessage(msg) {
   switch (msg.type) {
     case EV.BINGO_ASK:
@@ -2272,6 +2308,11 @@ function handleBingoMessage(msg) {
       vibrate([20, 60, 20]);
       // 他也符合我卡上空著的一格：給一顆按鈕，按下去就填上
       if (msg.offer?.label && bingoCard) showBingoOffer(msg.byName, msg.offer.label);
+      return true;
+
+    case EV.BINGO_COUNTDOWN:
+      showCountdown321(msg.kind === 'end' ? '人物賓果　即將結束' : '人物賓果　準備開始',
+        msg.kind === 'end' ? '時間到！' : '開始！', msg.ms);
       return true;
 
     case EV.BINGO_ENDED:

@@ -1872,3 +1872,24 @@ body:has(#greet-invite:not([hidden])):has(#bingo-offer:not([hidden])) .toast { t
 }
 .ep-item em { font-style: normal; font-size: 22px; line-height: 1; }
 .ep-item:active { transform: scale(.94); }
+
+/* ── 3、2、1 倒數：全螢幕大數字，不擋操作 ── */
+.countdown-321 {
+  position: fixed; inset: 0; z-index: 150;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  background: rgba(47, 42, 38, .55);
+  pointer-events: none;
+}
+.countdown-321[hidden] { display: none; }
+.c3-label {
+  padding: 6px 18px; border-radius: 999px;
+  background: var(--paper); color: var(--ink); font-size: 16px; font-weight: 800;
+}
+.c3-num {
+  font-size: min(42vw, 38vh); line-height: 1; font-weight: 900; color: var(--paper);
+  text-shadow: 0 6px 0 var(--ink), 0 0 24px rgba(0, 0, 0, .35);
+  animation: c3-pop .9s ease-out;
+}
+.c3-num.final { font-size: min(16vw, 14vh); }
+@keyframes c3-pop { from { transform: scale(1.5); opacity: .2; } 30% { opacity: 1; } to { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .c3-num { animation: none; } }

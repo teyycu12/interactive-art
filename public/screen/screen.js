@@ -401,6 +401,11 @@ function connect() {
         break;
       }
 
+      case EV.BINGO_COUNTDOWN:
+        countdown321(msg.kind === 'end' ? '人物賓果　即將結束' : '人物賓果　準備開始',
+          msg.kind === 'end' ? '時間到！' : '開始！', msg.ms);
+        break;
+
       case EV.BINGO_ENDED:
         showBingo(null);
         toast(msg.winners?.length ? `人物賓果結束！最多連線：${msg.winners.join('、')}` : '人物賓果結束！');
@@ -510,6 +515,40 @@ function renderMissionsBar() {
     return item;
   }));
   syncBanners();
+}
+
+/** 賓果開始／結束前的 3、2、1。大螢幕跟手機各自數，起點都是收到 BINGO_COUNTDOWN 的那一刻 */
+let c3Timer = null;
+function countdown321(label, finalText, ms = 3000) {
+  const el = document.getElementById('countdown-321');
+  const num = document.getElementById('c3-num');
+  document.getElementById('c3-label').textContent = label;
+  clearInterval(c3Timer);
+  const endAt = Date.now() + ms;
+  const tick = () => {
+    const left = endAt - Date.now();
+    if (left <= 0) {
+      num.textContent = finalText;
+      num.classList.add('final');
+      clearInterval(c3Timer);
+      sfx.play('fanfare');
+      setTimeout(() => { el.hidden = true; num.classList.remove('final'); }, 1100);
+      return;
+    }
+    const n = String(Math.ceil(left / 1000));
+    if (num.textContent !== n) {
+      num.textContent = n;
+      num.classList.remove('final');
+      num.style.animation = 'none';
+      void num.offsetWidth;
+      num.style.animation = '';
+      sfx.play('go');   // 每個數字一聲短嗶
+    }
+  };
+  num.textContent = '';
+  el.hidden = false;
+  tick();
+  c3Timer = setInterval(tick, 100);
 }
 
 /** 連上（或重連）的時刻。之後一小段時間收到的公告是伺服器補送的進行中活動，不是剛開始的 */

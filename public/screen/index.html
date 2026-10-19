@@ -110,6 +110,21 @@
     animation: hl-in .4s ease-out;
   }
   .headline[hidden] { display: none; }
+  .countdown-321 {
+    position: fixed; inset: 0; z-index: 70;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    background: rgba(47,42,38,.45); pointer-events: none;
+  }
+  .countdown-321[hidden] { display: none; }
+  .c3-label { padding: 10px 34px; border-radius: 999px; background: var(--paper); color: var(--ink); font-size: 40px; font-weight: 800; }
+  .c3-num {
+    font-size: 46vh; line-height: 1; font-weight: 900; color: var(--paper);
+    text-shadow: 0 14px 0 var(--ink), 0 0 50px rgba(0,0,0,.35);
+    animation: c3-pop .9s ease-out;
+  }
+  .c3-num.final { font-size: 20vh; }
+  @keyframes c3-pop { from { transform: scale(1.5); opacity: .2; } 30% { opacity: 1; } to { transform: scale(1); } }
+  @media (prefers-reduced-motion: reduce) { .c3-num { animation: none; } }
   .hl-kind {
     padding: 6px 22px; border-radius: 999px;
     background: var(--ink); color: var(--paper);
@@ -356,6 +371,11 @@
 <div class="toasts" id="toasts"></div>
 <!-- 新活動開始：中央大字標題，幾秒後自己收起（2026-10-19 試玩回饋「新活動出現時可以更清楚」）。
      任務、賓果平常只佔上緣一小條（#now-bar），剛開始的那一下要讓全場都看到 -->
+<!-- 賓果開始／結束前的 3、2、1 -->
+<div class="countdown-321" id="countdown-321" hidden>
+  <span class="c3-label" id="c3-label">人物賓果</span>
+  <b class="c3-num" id="c3-num">3</b>
+</div>
 <div class="headline" id="headline" hidden aria-live="polite">
   <span class="hl-kind" id="hl-kind">新活動</span>
   <b class="hl-title" id="hl-title"></b>
