@@ -210,8 +210,20 @@ export function resolveObstacleOverlap(agent) {
  * 合照定位中（targetX 不為 null）的角色不參與：排隊形時本來就要站很近，
  * 被推開就永遠到不了定位點。
  *
+ * **借過**（2026-10-19 試玩回饋「有時候會卡、操控不了」）：一個人擋路時繞得過去，
+ * 但三個人站成一排、一小群人聚在一起時，走過去的人會被整片擋死、怎麼推都過不去 ——
+ * 聚在一起正是現場最常見的樣子。所以撞上站著的人時，站著的人往**側邊**讓一點
+ * （與走路的方向垂直，不是被往前推著走），走路的人保留一部分前進的速度，慢慢擠過去。
+ * 兩個人都在走、或都站著時照舊。
+ *
  * @param {object[]} agents 全場角色（Stage.tick 在所有人移動完之後呼叫）
  */
+/** 借過：速度高於這個算「在走」、低於另一個算「站著」（之間的不套用，維持原本的分攤） */
+const SQUEEZE_WALK = 40;
+const SQUEEZE_STILL = 15;
+/** 站著的人每一幀讓出的比例；同時也是走路的人保留的前進速度比例 */
+const SQUEEZE_YIELD = 0.4;
+
 export function resolveAgentOverlap(agents, minDist = AGENT_BODY_DISTANCE) {
   const minSq = minDist * minDist;
   for (let i = 0; i < agents.length; i++) {
@@ -234,9 +246,38 @@ export function resolveAgentOverlap(agents, minDist = AGENT_BODY_DISTANCE) {
       const ny = dy / dist;
       const push = minDist - dist;
 
-      // 速度大的人讓得多；兩人都站著就各讓一半
       const sa = Math.hypot(a.vx, a.vy);
       const sb = Math.hypot(b.vx, b.vy);
+
+      // 借過：一個在走、一個站著
+      const walker = sa > SQUEEZE_WALK && sb < SQUEEZE_STILL ? a : sb > SQUEEZE_WALK && sa < SQUEEZE_STILL ? b : null;
+      if (walker) {
+        const stander = walker === a ? b : a;
+        // 從走路的人指向站著的人
+        const ux = walker === a ? nx : -nx;
+        const uy = walker === a ? ny : -ny;
+        const sp = walker === a ? sa : sb;
+        const vx = walker.vx / sp;
+        const vy = walker.vy / sp;
+        // 讓開的方向：與走路方向垂直、往站著的人原本偏的那一側（正中間就固定往右手邊）
+        const cross = vx * uy - vy * ux;
+        const side = cross >= 0 ? 1 : -1;
+        const asideX = -vy * side;
+        const asideY = vx * side;
+        stander.x += asideX * push * SQUEEZE_YIELD;
+        stander.y += asideY * push * SQUEEZE_YIELD;
+        walker.x -= ux * push * (1 - SQUEEZE_YIELD);
+        walker.y -= uy * push * (1 - SQUEEZE_YIELD);
+        // 前進的速度只消去一部分：留下的那份就是「擠過去」
+        const into = walker.vx * ux + walker.vy * uy;
+        if (into > 0) {
+          walker.vx -= into * ux * (1 - SQUEEZE_YIELD);
+          walker.vy -= into * uy * (1 - SQUEEZE_YIELD);
+        }
+        continue;
+      }
+
+      // 速度大的人讓得多；兩人都站著就各讓一半
       const wa = sa + sb > 0 ? sa / (sa + sb) : 0.5;
       const wb = 1 - wa;
       a.x -= nx * push * wa;

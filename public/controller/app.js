@@ -2547,6 +2547,8 @@ function initJoystick() {
 
   joystick.on('move', (_evt, data) => {
     if (!data?.vector) return;
+    // 按在別的角色上、還不知道是點人還是走路：先不動（見下方「私訊：點手機畫面上別人的角色」）
+    if (pendingTap) return;
     // nipplejs 的 y 軸向上為正，場域座標則向下為正，故取負號對齊
     joyVec = { x: data.vector.x, y: -data.vector.y };
     joyIntensity = Math.min(1, data.force ?? 0);
@@ -3018,9 +3020,13 @@ function handleQuizMessage(msg) {
 // ─────────────────────────────────────────────────────────────
 // 畫布本身是 pointer-events:none 的背景層，蓋在上面的是搖桿區 —— 而搖桿是 static 模式，
 // 搖桿區裡任何一點按下去都會被 nipplejs 接走、角色朝那個方向衝一下。
-// 因此在捕獲階段先攔：點到角色就自己處理並擋下事件，沒點到才放行給搖桿。
-// 三種事件都要擋：nipplejs 依瀏覽器支援挑 pointer / touch / mouse 其中一種來聽，
-// 而觸控裝置上同一下會先後觸發 pointerdown 與 touchstart。
+//
+// 原本在「按下」的當下就判定點人並擋下搖桿：人多的時候，想走路的手指剛好落在別人身上，
+// 就變成打開訊息、搖桿推不動 —— 試玩回饋的「有時候會卡、操控不了」（2026-10-19）。
+// 現在改成「放開時」才判定：按在角色上、幾乎沒移動、很快放開，才算點人；
+// 一拖動就是走路。等待判定的那一小段，搖桿的輸入先不送出，點人時自己的角色才不會被拉動一下。
+// pointer / touch / mouse 三種都聽：nipplejs 依瀏覽器支援挑其中一種，
+// 觸控裝置上同一下會先後觸發 pointerdown 與 touchstart（以 lastPickAt 去重）。
 
 /** 搖桿底座附近不判定點人：想走路的手指落在角色上時，走路優先 */
 const JOYSTICK_GUARD_PX = 85;
@@ -3039,19 +3045,51 @@ function pickTarget(e) {
   return ids.length ? ids : null;
 }
 
+/** 移動超過這麼多就是拖動（走路），不是點人 */
+const TAP_SLOP_PX = 12;
+/** 按住超過這麼久就是要走路 */
+const TAP_MAX_MS = 400;
+/** @type {{ids: string[], x: number, y: number, at: number}|null} 按在角色上、還沒決定是點人還是走路 */
+let pendingTap = null;
+
+const pointOf = (e) => e.changedTouches?.[0] ?? e.touches?.[0] ?? e;
+
 for (const type of ['pointerdown', 'touchstart', 'mousedown']) {
   $('#controller').addEventListener(type, (e) => {
+    // 同一下觸控的後續事件（touchstart 跟在 pointerdown 後面）不要覆蓋掉已記下的起點
+    if (pendingTap && Date.now() - pendingTap.at < 50) return;
     const ids = pickTarget(e);
-    if (!ids) return;
-    e.stopPropagation();
-    if (e.cancelable && type !== 'pointerdown') e.preventDefault();
-    // 同一下觸控會依序來 pointerdown → touchstart（→ mousedown），只開一次
+    const pt = pointOf(e);
+    pendingTap = ids ? { ids, x: pt.clientX, y: pt.clientY, at: Date.now() } : null;
+  }, { capture: true, passive: true });
+}
+
+for (const type of ['pointermove', 'touchmove', 'mousemove']) {
+  $('#controller').addEventListener(type, (e) => {
+    if (!pendingTap) return;
+    const pt = pointOf(e);
+    if (Math.hypot(pt.clientX - pendingTap.x, pt.clientY - pendingTap.y) > TAP_SLOP_PX
+      || Date.now() - pendingTap.at > TAP_MAX_MS) {
+      pendingTap = null;   // 是在走路：之後的搖桿輸入照常送出
+    }
+  }, { capture: true, passive: true });
+}
+
+for (const type of ['pointerup', 'touchend', 'mouseup']) {
+  $('#controller').addEventListener(type, () => {
+    const tap = pendingTap;
+    pendingTap = null;
+    if (!tap || Date.now() - tap.at > TAP_MAX_MS) return;
     if (Date.now() - lastPickAt < 600) return;
     lastPickAt = Date.now();
     // 好幾個人擠在一起：讓他自己選，不替他猜是哪一個
-    if (ids.length > 1) openPicker(ids);
-    else openComposer(ids[0]);
-  }, { capture: true, passive: false });
+    if (tap.ids.length > 1) openPicker(tap.ids);
+    else openComposer(tap.ids[0]);
+  }, { capture: true, passive: true });
+}
+
+for (const type of ['pointercancel', 'touchcancel']) {
+  $('#controller').addEventListener(type, () => { pendingTap = null; }, { capture: true, passive: true });
 }
 
 // ── 點到好幾個人時：選一個 ──

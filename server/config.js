@@ -16,6 +16,14 @@ export const TICK_MS = 1000 / TICK_HZ;
 export const ALPHA_RAMP_UP_MS = 300;          // 偵測到搖桿輸入 → 0.3 秒內線性升至 1.0
 export const ALPHA_DECAY_MS = 1200;           // 餘弦衰減回 0.0 所需時間
 export const INPUT_DEADZONE = 0.08;           // 低於此強度視為未操控，避免手指微顫誤觸
+/**
+ * 推桿中的手機每秒送 20 次（INPUT_HZ）。超過這麼久沒收到，就當作已經放手。
+ *
+ * 放手時手機只補送一則歸零封包；現場 Wi-Fi 掉了那一則，角色原本會照最後的方向
+ * 一直走到 3 秒閒置逾時 —— 試玩回饋的「有時候會卡方向」（2026-10-19）。
+ * 500ms 等於連掉 10 則，正常推桿不會碰到。
+ */
+export const INPUT_STALE_MS = 500;
 
 // ── 斷線處理（技術文件 §6 風險 1）──────────────────────────────
 export const DISCONNECT_GRACE_MS = 2000;      // 斷線逾 2 秒 → 標記離線並轉入 Boids

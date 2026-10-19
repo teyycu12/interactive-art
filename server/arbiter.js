@@ -21,7 +21,7 @@ import {
   IDLE_THRESHOLD_MS, ALPHA_RAMP_UP_MS, ALPHA_DECAY_MS,
   DISCONNECT_GRACE_MS, MAX_SPEED, WALK_THRESHOLD,
   ARRIVE, HEADING_TURN_RATE, IDLE_MOTION, FACING_FLIP_SPEED, FACING_DWELL_MS,
-  MANUAL_SMOOTH_TAU, VIEW_SIDE_RATIO, VIEW_RETURN_FRONT_MS,
+  MANUAL_SMOOTH_TAU, VIEW_SIDE_RATIO, VIEW_RETURN_FRONT_MS, INPUT_STALE_MS,
 } from './config.js';
 import { STAGE, AGENT_STATE, AGENT_MODE, AGENT_VIEW } from '../shared/protocol.js';
 import { integrateBoids, resolveObstacleOverlap, obstacleAvoidance } from './boids.js';
@@ -132,8 +132,11 @@ export function stepAgent(agent, agents, dt, now, affinity = null) {
   //
   // 濾在這裡而不是濾步態：步態只是症狀，真正在跳動的是速度本身，
   // 位置與朝向也都吃同一份速度。
-  const rawVx = agent.inputX * agent.inputIntensity * MAX_SPEED;
-  const rawVy = agent.inputY * agent.inputIntensity * MAX_SPEED;
+  // 推桿封包斷了太久：當作已經放手（見 INPUT_STALE_MS），交給下面的煞停收速度
+  const fresh = now - agent.lastInputAt <= INPUT_STALE_MS;
+  const push = fresh ? agent.inputIntensity : 0;
+  const rawVx = agent.inputX * push * MAX_SPEED;
+  const rawVy = agent.inputY * push * MAX_SPEED;
   const smoothK = 1 - Math.exp(-dt / MANUAL_SMOOTH_TAU);
   agent.manualVx += (rawVx - agent.manualVx) * smoothK;
   agent.manualVy += (rawVy - agent.manualVy) * smoothK;
