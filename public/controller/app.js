@@ -2773,6 +2773,7 @@ function enterStage() {
   requestWakeLock();
   showPortrait($('#mini-avatar'), config);
   $('#my-name').textContent = displayName;
+  renderBarPersona();
   setStatus('連線中…');
   // nipplejs 與畫布都需要量測已顯示區塊的尺寸，因此必須在 showScreen 之後才初始化
   requestAnimationFrame(() => { initJoystick(); initRenderer(); });
@@ -3410,7 +3411,8 @@ async function loadPersonaQuiz() {
   } catch { /* 讀不到就不問，不影響進場 */ }
   return personaQuiz;
 }
-loadPersonaQuiz();
+// 直接接回現場（重新整理）時題目可能比進場晚到，到了再補上頂欄的類型
+loadPersonaQuiz().then(renderBarPersona);
 
 /** 已經答過「現在這份」題目了嗎（主持人改了題目的話要重答） */
 const personaAnsweredCurrent = () => !!(personaQuiz && personaAnswers?.version === personaQuiz.version);
@@ -3594,6 +3596,14 @@ function renderDonePersona() {
   const result = personaAnsweredCurrent() ? PERSONA_RESULT_MAP[personaAnswers.resultId] : null;
   el.hidden = !result;
   if (result) el.textContent = `${result.emoji} 你是${result.name}（${result.style}）：${result.strengths}`;
+}
+
+/** 頂欄名字下方的類型。只顯示「現在這份題目」答出來的結果 —— 跟伺服器記的一致（applyPersona 會擋舊版本） */
+function renderBarPersona() {
+  const el = $('#my-persona');
+  const result = personaAnsweredCurrent() ? PERSONA_RESULT_MAP[personaAnswers.resultId] : null;
+  el.hidden = !result;
+  el.textContent = result ? `${result.emoji} ${result.name}` : '';
 }
 
 // 問卷出現時，直式版面把生成中的照片縮成小縮圖，讓題目不必捲動就看得完（style.css 的 .quiz-on）

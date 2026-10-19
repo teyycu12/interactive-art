@@ -336,6 +336,11 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   display: block; font-size: 16px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.bar .who small {
+  display: block; font-size: 12px; font-weight: 700; color: var(--ink-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bar .who small[hidden] { display: none; }
 
 /* 連線狀態做成大螢幕分區牌（「● 食材小站 PANTRY」）的樣子：深底、紙色字、
    前面一顆狀態燈。這顆 pill 是 11px，而且承載「你還連著線嗎」這個現場沒有
