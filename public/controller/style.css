@@ -331,14 +331,14 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 /* 名字是唯一可以被犧牲的元素：其餘（積分、連線狀態、離開鍵）都是
    固定寬度的功能性元件，min-width: 0 讓過長的名字在這裡截斷，
    而不是把右側的離開鍵推出畫面外。 */
-.bar .who { flex: 1; min-width: 0; }
+/* 名字與類型同一行：名字太長時縮名字（省略號），類型「🐨 無尾熊」永遠完整 */
+.bar .who { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
 .bar .who b {
-  display: block; font-size: 16px;
+  display: block; font-size: 16px; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .bar .who small {
-  display: block; font-size: 12px; font-weight: 700; color: var(--ink-soft);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: none; font-size: 13px; font-weight: 700; color: var(--ink-soft); white-space: nowrap;
 }
 .bar .who small[hidden] { display: none; }
 
