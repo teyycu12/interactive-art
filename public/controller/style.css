@@ -1548,7 +1548,6 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .pq-option:active, .pq-option:hover { border-color: var(--ink); }
 .pq-foot { display: flex; align-items: center; margin-top: 10px; }
 .pq-foot .btn-link { margin-left: 0; }
-.pq-foot .pq-skip.btn-link { margin-left: auto; }
 .pq-result { text-align: center; }
 .pq-emoji { display: block; font-size: 52px; line-height: 1.1; margin-bottom: 4px; }
 .pq-result h2 { margin: 0 0 6px; font-size: 19px; color: var(--ink); }

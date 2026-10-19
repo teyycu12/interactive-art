@@ -1595,7 +1595,7 @@ function connect() {
     } catch { /* 略 */ }
     sendMsg(EV.CLIENT_JOIN, {
       userId, rejoinToken, name: displayName, avatar: config, entry: entryRoute,
-      // 進場問卷的作答（沒答或略過就不帶）。伺服器依目前題目判定類型，見 server/index.js 的 applyPersona
+      // 進場問卷的作答（沒答就不帶，例如讀不到題目）。伺服器依目前題目判定類型，見 server/index.js 的 applyPersona
       ...(personaAnswers && { persona: { version: personaAnswers.version, answers: personaAnswers.answers } }),
     });
   });
@@ -3434,7 +3434,9 @@ $('#btn-msg-report').addEventListener('click', () => {
 // ─────────────────────────────────────────────────────────────
 // 拍照路徑：嵌在「生成中」那一頁，利用二十幾秒的等待作答。
 // 換裝路徑：沒有等待，按「完成，進入現場」後跳出同一份題目。
-// 一律可以略過 —— 掃描失敗都不擋人進場了，一份問卷更不該擋。
+// 不能略過（2026-10-19 試玩回饋）：原本有「略過問卷」，略過的人之後沒有機會再填，
+// 以進場類型為條件的任務、賓果格子、合照分組都把他排除在外。只有 4 題，
+// 拍照路徑又是利用生成的等待時間作答，不額外佔時間。讀不到題目時照樣不問、不擋進場。
 // 一個角色答一次：同一個角色重新整理不再問，建立新角色就重問（resetPersona）。
 
 const PERSONA_LS = 'pf.persona';
@@ -3473,7 +3475,7 @@ const personaAnsweredCurrent = () => !!(personaQuiz && personaAnswers?.version =
  * 在容器裡跑一輪問卷。
  * @param {HTMLElement} box
  * @param {{onFinish: (result: object|null) => void, finishLabel?: string}} opts
- *   onFinish 在按下結果卡的按鈕、或略過時呼叫；略過時 result 為 null
+ *   onFinish 在按下結果卡的按鈕時呼叫；萬一算不出類型（題目壞掉）時 result 為 null
  */
 function runPersonaQuiz(box, { onFinish, finishLabel = '繼續', autoFinish = false }) {
   const { quiz, version } = personaQuiz;
@@ -3505,7 +3507,7 @@ function runPersonaQuiz(box, { onFinish, finishLabel = '繼續', autoFinish = fa
     });
     const foot = document.createElement('div');
     foot.className = 'pq-foot';
-    // 上一題：按錯了可以回去改，不必整份略過或答完再重答
+    // 上一題：按錯了可以回去改，不必答完再重答
     if (i > 0) {
       const back = document.createElement('button');
       back.type = 'button';
@@ -3514,12 +3516,6 @@ function runPersonaQuiz(box, { onFinish, finishLabel = '繼續', autoFinish = fa
       back.addEventListener('click', () => { answers.pop(); renderQuestion(); });
       foot.append(back);
     }
-    const skip = document.createElement('button');
-    skip.type = 'button';
-    skip.className = 'btn-link pq-skip';
-    skip.textContent = '略過問卷';
-    skip.addEventListener('click', () => onFinish(null));
-    foot.append(skip);
     box.append(head, title, list, foot);
     list.querySelector('button')?.focus({ preventScroll: true });
     // 小螢幕上問卷可能落在畫面下緣之外：換題時把整份題目捲進畫面
@@ -3607,7 +3603,7 @@ function runPersonaInScan(box) {
     onFinish: (result) => {
       personaScanActive = false;
       // 角色已經好了：直接進確認頁（類型顯示在那一頁）。
-      // 還沒好：結果卡留在這裡陪他等，showScanDone 會自動換頁。略過（result 為 null）就收起來。
+      // 還沒好：結果卡留在這裡陪他等，showScanDone 會自動換頁。算不出類型（result 為 null）就收起來。
       if (scanReady) { box.hidden = true; showScanPhase('done'); }
       else if (!result) box.hidden = true;
     },
@@ -3619,7 +3615,7 @@ function stopPersonaDuringScan() {
   $('#persona-scan').hidden = true;
 }
 
-/** 生成完成。問卷還在作答就先等，答完（或略過）才換到確認頁 */
+/** 生成完成。問卷還在作答就先等，答完才換到確認頁 */
 function showScanDone() {
   scanReady = true;
   const box = $('#persona-scan');
@@ -3635,7 +3631,8 @@ async function askPersonaThen(next) {
   const overlay = $('#persona-overlay');
   overlay.hidden = false;
   const close = () => { overlay.hidden = true; popOverlay(overlay); };
-  pushOverlay(overlay, { onEscape: () => { close(); next(); } });
+  // Esc 不關：關掉就等於略過（問卷不能略過，見上方說明）
+  pushOverlay(overlay, { onEscape: () => {} });
   runPersonaQuiz($('#persona-builder'), {
     finishLabel: '進入現場',
     onFinish: () => { close(); next(); },
