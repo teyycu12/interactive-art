@@ -76,7 +76,7 @@ except Exception as _e:  # 最常見：OPENAI_API_KEY 未設定
     _degraded("garment_gen（AI 角色圖像生成）", _e)
     generate_full_character_png = None
     style_reference_report = lambda: {}
-    IMAGEGEN_TIMEOUT_S = 100.0
+    IMAGEGEN_TIMEOUT_S = 120.0
 
 # 品質關卡。validate_avatar_png 是唯一會觸發重生的檢查，而且它不只判定通過與否：
 # correction_for_validation 把失敗原因變成下一次生成的修正指令，
@@ -260,7 +260,7 @@ _RETRY_MAX_S = 10.0
 # 一次 /generate 從收到到回應的總預算，必須小於互動層代理的 GENERATE_TIMEOUT_MS
 # （150 秒，從送出才開始算，見 server/generateQueue.js）—— 超過的話手機早就收到
 # 逾時，這裡卻還在生、還在付錢。
-_GENERATE_BUDGET_S = float(os.environ.get("GENERATE_BUDGET_S") or 130)
+_GENERATE_BUDGET_S = float(os.environ.get("GENERATE_BUDGET_S") or 140)
 # 開始一次生圖前至少要留給它的秒數，與 garment_gen 的 API 逾時對齊（多留 5 秒給前後處理）
 _MIN_CALL_BUDGET_S = IMAGEGEN_TIMEOUT_S + 5.0
 
@@ -333,7 +333,7 @@ def _imagegen_with_retry(args: tuple, deadline: float, breaker: CircuitBreaker =
 #   - 排隊逾時：名額滿了，換模型一樣要等名額
 _BACKUP_TRIGGERS = {"upstream_error", "upstream_unreachable", "upstream_rate_limited", "circuit_open"}
 # 主模型持續 429 時最多重試到這麼晚，剩下的時間留給備援。
-# 總預算 130 秒、一次生圖至少留 50 秒：主模型重試到第 70 秒還不行就換
+# 主模型重試到「總預算 −（一次生圖要留的秒數 + 10）」還不行就換
 _BACKUP_RESERVE_S = _MIN_CALL_BUDGET_S + 10.0
 _BACKUP_MODEL = config.BACKUP_IMAGE_MODEL
 

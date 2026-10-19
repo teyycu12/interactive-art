@@ -274,7 +274,7 @@ export const VISION_PORT = Number(process.env.VISION_PORT || 5055);
  * 逾時已經開始計。若比 Python 小，則是白白少用了上游的配額。
  *
  * Node 不載入 .env（API 金鑰沒有理由進到這個行程），所以只從檔案裡挑出
- * 這一個值。預設 2 與 backend/config.py 相同。
+ * 這一個值。預設 40 與 backend/config.py 相同（2026-10-19 依 40 人壓測決定，見 FIELD-OPS）。
  */
 export const GEN_MAX_CONCURRENT = readGenMaxConcurrent();
 
@@ -287,7 +287,7 @@ function readGenMaxConcurrent() {
     } catch { /* 沒有 .env：用預設值 */ }
   }
   const n = Number.parseInt(raw ?? '', 10);
-  return Number.isFinite(n) && n >= 1 ? n : 2;
+  return Number.isFinite(n) && n >= 1 ? n : 40;
 }
 
 export const PERSISTENCE = {

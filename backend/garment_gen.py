@@ -73,8 +73,9 @@ def _resolve_model(*candidates: Optional[str]) -> str:
 # 生圖 API 一次最多等多久。原本 45 秒：單人生成中位 25 秒、九成在 33 秒內，夠用。
 # 但 30 人同時送出時上游不拒絕、而是每張都變慢（實測 67–72 秒），45 秒把 28/30
 # 都切成 upstream_timeout —— 圖可能已經在生、已經收費（2026-10-19 壓測）。
+# 同時 40 人時每張 82–148 秒，所以預設 120（見 docs/notes/FIELD-OPS.md）。
 # service.py 的 _MIN_CALL_BUDGET_S 跟著這個值算，總預算 _GENERATE_BUDGET_S 要容得下它。
-IMAGEGEN_TIMEOUT_S = float(os.environ.get("IMAGEGEN_TIMEOUT_S") or 100)
+IMAGEGEN_TIMEOUT_S = float(os.environ.get("IMAGEGEN_TIMEOUT_S") or 120)
 
 
 def _get_client() -> Optional["OpenAI"]:

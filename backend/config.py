@@ -80,7 +80,7 @@ class AppConfig:
     CORS_ALLOWED_ORIGINS: Any = _get_origins("CORS_ALLOWED_ORIGINS", "*")
 
     # M3 併發與蜂群設定
-    GEN_MAX_CONCURRENT: int = max(1, _get_int("GEN_MAX_CONCURRENT", 2))
+    GEN_MAX_CONCURRENT: int = max(1, _get_int("GEN_MAX_CONCURRENT", 40))
     MAX_SWARM_SIZE: int = max(10, _get_int("MAX_SWARM_SIZE", 300))
     MAX_BOTS_PER_INJECT: int = max(1, _get_int("MAX_BOTS_PER_INJECT", 100))
     AUTO_BOTS: int = max(0, _get_int("AUTO_BOTS", 0))

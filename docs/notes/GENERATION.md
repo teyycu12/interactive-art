@@ -482,7 +482,7 @@ garment_gen 把風格註冊進其中一份，service.py 從另一份查詢，查
 2. **熔斷器只算上游本身不能用**（逾時、5xx、連線、402）。429 不算 —— 一個人的三次重試
    就能讓全場熔斷；「模型回了文字沒回圖」也不算，那是這一張照片的問題。
 3. SDK 的例外類別名換成穩定的碼（`upstream_rate_limited`／`upstream_timeout`…），手機各有文案。
-4. 總預算 `_GENERATE_BUDGET_S`（130 秒）必須小於互動層的 `GENERATE_TIMEOUT_MS`（150 秒，
+4. 總預算 `_GENERATE_BUDGET_S`（預設 140 秒，2026-10-19 前是 130）必須小於互動層的 `GENERATE_TIMEOUT_MS`（150 秒，
    從送出才開始算，見 `server/generateQueue.js`）；剩下的時間不夠生一張就回 `queue_timeout`。
 
 **還沒驗證的**：上游真正的同時上限是多少。實測前用真金鑰三支手機同時拍一次，
