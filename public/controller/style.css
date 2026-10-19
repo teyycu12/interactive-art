@@ -1832,3 +1832,17 @@ body:has(#greet-invite:not([hidden])):has(#bingo-offer:not([hidden])) .toast { t
   .activity-intro:not([hidden]) .intro-card { animation: intro-pop .28s ease-out; }
 }
 @keyframes intro-pop { from { opacity: 0; transform: translateY(16px) scale(.96); } to { opacity: 1; transform: none; } }
+
+/* 換裝的快速套組：一排可以左右滑的小按鈕，放在分類分頁上面 */
+.du-presets {
+  display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 8px; margin: 0 0 4px;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.du-presets::-webkit-scrollbar { display: none; }
+.du-presets[hidden] { display: none; }
+.du-preset {
+  flex: none; min-height: 40px; padding: 6px 14px;
+  font: inherit; font-size: 14px; font-weight: 700; color: var(--ink);
+  background: #FFFCF5; border: 2px solid var(--ink); border-radius: 999px;
+}
+.du-preset:active { transform: translateY(1px); }

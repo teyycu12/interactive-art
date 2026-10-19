@@ -483,6 +483,44 @@ const DU_EYE_COLORS = ['#301810', '#141414', '#7A4A24', '#B07A2E', '#2E6FB5', '#
 const DU_PALETTES = { hair: DU_HAIR_COLORS, cloth: DU_CLOTH_COLORS, eye: DU_EYE_COLORS };
 const DU_SKIN_TAB = { id: 'skin', label: '膚色' };
 
+/**
+ * 快速套組：一鍵換上整套，再到各分類細調。
+ * 只換「款式」與幾個代表色，不動膚色、眼睛 —— 那些是參與者自己的樣子（拍照失敗時還是照片量到的）。
+ * 部件 id 對不到目前的選單（manifest 改過）就略過那一項，不會整組失效。
+ */
+const DU_PRESETS = [
+  { label: '女生 A', selection: { hair: 'hair_long', bottom: 'bottom_skirt', brows: 'brows_thin' }, colors: { bottom: '#2F4C7A', top: '#F4F1EA' } },
+  { label: '女生 B', selection: { hair: 'hair_ponytail', bottom: 'bottom_dress', brows: 'brows_soft' }, colors: { bottom: '#E9A9B8' } },
+  { label: '女生 C', selection: { hair: 'hair_bun', top: 'top_shirt', bottom: 'bottom_shorts', brows: 'brows_thin' }, colors: { top: '#84A98C', bottom: '#2B2B30' } },
+  { label: '女生 D', selection: { hair: 'hair_wavy', outer: 'top_hoodie', bottom: 'bottom_skirt', brows: 'brows_soft' }, colors: { outer: '#E9C46A', bottom: '#6D6875' } },
+  { label: '男生 A', selection: { hair: 'hair_short_curly', outer: 'top_hoodie', brows: 'brows_thick' }, colors: { outer: '#4A6FA5', bottom: '#2B2B30' } },
+  { label: '男生 B', selection: { hair: 'hair_middle_part', top: 'top_shirt', shoes: 'shoes_boots', brows: 'brows_sharp' }, colors: { top: '#F4F1EA', bottom: '#8B5A2B' } },
+];
+
+function applyDuPreset(preset) {
+  const sel = duState.selection;
+  // 先回到素體（套組之間不留上一套的東西），配件保留：那比較像個人的選擇
+  for (const cat of duCatalog.categories) if (!cat.multi) sel[cat.id] = null;
+  for (const [cat, id] of Object.entries(preset.selection)) {
+    if (duPart(id)?.category === cat) sel[cat] = id;
+  }
+  Object.assign(duState.colors, preset.colors);
+  renderDressup();
+  requestDuPreview();
+}
+
+function renderDuPresets() {
+  const box = $('#du-presets');
+  box.replaceChildren(...DU_PRESETS
+    .filter((p) => Object.values(p.selection).some((id) => duPart(id)))
+    .map((p) => {
+      const b = Object.assign(document.createElement('button'), { type: 'button', className: 'du-preset', textContent: p.label });
+      b.addEventListener('click', () => applyDuPreset(p));
+      return b;
+    }));
+  box.hidden = !box.children.length;
+}
+
 /** @type {{categories: object[], parts: object[], defaults: object}|null} */
 let duCatalog = null;
 let duState = null;
@@ -544,6 +582,7 @@ function openDressup({ fromStart = false } = {}) {
     accFocus: null,
   };
   showScreen('dressup');
+  renderDuPresets();
   renderDressup();
   requestDuPreview();
 }
