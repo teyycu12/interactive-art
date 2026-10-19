@@ -722,3 +722,11 @@ class TestBackupModel:
         used = self._models(monkeypatch, {"ok": False, "error": "InternalServerError"})
         client.post("/generate", json={"image": _photo_b64()})
         assert self.BACKUP not in used
+
+
+def test_api_timeout_fits_inside_the_budget():
+    """生圖逾時拉長（2026-10-19 壓測：30 人同時每張 67–72 秒）後，一次完整的生圖
+    仍要塞得進總預算，總預算也要比手機那頭代理的 150 秒短。"""
+    assert service.IMAGEGEN_TIMEOUT_S >= 90
+    assert service._MIN_CALL_BUDGET_S > service.IMAGEGEN_TIMEOUT_S
+    assert service._MIN_CALL_BUDGET_S < service._GENERATE_BUDGET_S < 150

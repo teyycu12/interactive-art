@@ -70,6 +70,13 @@ def _resolve_model(*candidates: Optional[str]) -> str:
     return _config.OUTFIT_GEN_MODEL
 
 
+# 生圖 API 一次最多等多久。原本 45 秒：單人生成中位 25 秒、九成在 33 秒內，夠用。
+# 但 30 人同時送出時上游不拒絕、而是每張都變慢（實測 67–72 秒），45 秒把 28/30
+# 都切成 upstream_timeout —— 圖可能已經在生、已經收費（2026-10-19 壓測）。
+# service.py 的 _MIN_CALL_BUDGET_S 跟著這個值算，總預算 _GENERATE_BUDGET_S 要容得下它。
+IMAGEGEN_TIMEOUT_S = float(os.environ.get("IMAGEGEN_TIMEOUT_S") or 100)
+
+
 def _get_client() -> Optional["OpenAI"]:
     """Build an OpenAI-SDK client. Auto-detects OpenRouter from key prefix."""
     global _client
@@ -90,7 +97,7 @@ def _get_client() -> Optional["OpenAI"]:
             base_url = "https://openrouter.ai/api/v1"
             print(f"[garment_gen] detected OpenRouter key, using base_url={base_url}")
 
-    client_options = {"api_key": api_key, "timeout": 45.0, "max_retries": 0}
+    client_options = {"api_key": api_key, "timeout": IMAGEGEN_TIMEOUT_S, "max_retries": 0}
     if base_url:
         client_options["base_url"] = base_url
     _client = OpenAI(**client_options)
