@@ -1511,6 +1511,7 @@ $('#btn-return').addEventListener('click', enterStage);
 
 $('#btn-new-character').addEventListener('click', () => {
   entryRoute = null;
+  resetPersona();
   // 一定要清掉憑證：帶著舊憑證進場，伺服器會認領回舊角色、
   // 沿用舊的外觀，新拍的照片等於白拍
   try {
@@ -2475,6 +2476,7 @@ $('#btn-rejoin').addEventListener('click', () => {
   reconnectDelay = 500;
   // 重新進場是全新的角色：上一個角色認識的人不能留在新角色的名單與紀念卡上
   renderSocialStrip({ peers: [] });
+  resetPersona();
   showScreen('entry');
   syncStartButton();
 });
@@ -3395,6 +3397,7 @@ $('#btn-msg-report').addEventListener('click', () => {
 // 拍照路徑：嵌在「生成中」那一頁，利用二十幾秒的等待作答。
 // 換裝路徑：沒有等待，按「完成，進入現場」後跳出同一份題目。
 // 一律可以略過 —— 掃描失敗都不擋人進場了，一份問卷更不該擋。
+// 一個角色答一次：同一個角色重新整理不再問，建立新角色就重問（resetPersona）。
 
 const PERSONA_LS = 'pf.persona';
 /** 主辦端設定的題目 {quiz, version}；讀不到時是 null，整個問卷就不出現 */
@@ -3402,6 +3405,17 @@ let personaQuiz = null;
 /** 這支手機的作答 {version, answers, resultId}。跟著 CLIENT_JOIN 送出 */
 let personaAnswers = null;
 try { personaAnswers = JSON.parse(localStorage.getItem(PERSONA_LS) ?? 'null'); } catch { personaAnswers = null; }
+
+/**
+ * 建立新角色時清掉上一次的作答（「重新進場」「換一個新角色」）。作答跟著角色走、不是跟著手機：
+ * 不清的話新角色進場不會再問（拍照或換裝都一樣），直接沿用上一個人的動物類型 ——
+ * 現場一支手機輪流給幾個人用時尤其明顯（2026-10-19 回報「換裝進場沒有問卷」）。
+ * 同一個角色重新整理、斷線接回不會經過這裡，不用重答。
+ */
+function resetPersona() {
+  personaAnswers = null;
+  try { localStorage.removeItem(PERSONA_LS); } catch { /* 略 */ }
+}
 
 async function loadPersonaQuiz() {
   try {
