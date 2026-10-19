@@ -111,8 +111,13 @@ export function orderByAffinity(ids, strength) {
  * 蛇行（這排由左到右、下一排由右到左）讓 orderByAffinity 排出來的相鄰兩人
  * 在畫面上也相鄰 —— 換排的地方是上下相鄰，不會從最右邊跳到最左邊。
  *
- * 間距照大螢幕上的角色大小取：角色約 170 單位高、100 單位寬，左右要留得比身寬大，
- * 前後排錯開半格，後排的人才不會整個被前排的頭擋住。
+ * 間距照大螢幕上的角色大小取：角色約 170 單位高、100 單位寬，左右要留得比身寬大。
+ * 前後排左右錯開半格，後排腳下的名牌落在前排兩顆頭之間。原本格點從左牆起算，
+ * 各排又各自找空位，錯開常常對不上，後排的名牌被前排蓋住（2026-10-19 30 人實拍）。
+ * 前後排差 120：再大的話地板被家具切得太碎，30 人就排不成整齊的幾排。
+ *
+ * 各排對齊舞台中心，不是對齊各排空位的平均：右邊休息區有沙發，空位段偏左，
+ * 照平均對齊整個隊形會往左偏、壓到開放工作區的桌子（同一次實拍）。
  * 站位避開道具與牆（比出生點多一點餘裕）；某一排被道具佔掉位子時，不足的人補到下一排。
  *
  * @param {number} n 人數
@@ -125,7 +130,7 @@ export function orderByAffinity(ids, strength) {
  * @param {number} [p.perRow] 每排最多幾人
  * @returns {{x: number, y: number}[]} 依隊形順序（後排先）
  */
-export function formationSlots(n, { stage, obstacles, obstacleDistance, dx = 130, dy = 105, perRow = 12 }) {
+export function formationSlots(n, { stage, obstacles, obstacleDistance, dx = 130, dy = 120, perRow = 12 }) {
   if (n <= 0) return [];
   const minX = stage.width * 0.06;
   const maxX = stage.width * 0.94;
@@ -133,34 +138,14 @@ export function formationSlots(n, { stage, obstacles, obstacleDistance, dx = 130
   const maxY = stage.height * 0.92;
   const free = (x, y) => !obstacles.some((o) => obstacleDistance(o, x, y) < o.r + 40);
 
-  /**
-   * 這一排最長的一段連續空位。隊形要排成一整段，不能被桌子從中間切開 ——
-   * 切開的話，排序上相鄰的兩個熟人會被分到桌子兩邊。
-   */
-  const bestRun = (y, offset) => {
-    let best = [];
-    let run = [];
-    const close = () => {
-      const mid = (r) => (r[0] + r.at(-1)) / 2;
-      if (run.length > best.length
-        || (run.length === best.length && run.length && Math.abs(mid(run) - stage.width / 2) < Math.abs(mid(best) - stage.width / 2))) {
-        best = run;
-      }
-      run = [];
-    };
-    for (let x = minX + offset; x <= maxX; x += dx) {
-      if (free(x, y)) run.push(x); else close();
-    }
-    close();
-    return best;
-  };
+  const center = stage.width / 2;
   const offsetOf = (i) => (i % 2 ? dx / 2 : 0);
 
   /**
-   * 在這一段裡取 k 個連續位置，盡量對齊 center：各排對齊同一個中心，
+   * 在這一段裡取 k 個連續位置，盡量對齊舞台中心：各排對齊同一個中心，
    * 蛇行換排時上下才接得起來（不對齊的話，熟人會在換排處被拆到畫面兩頭）。
    */
-  const segment = (run, k, center) => {
+  const segment = (run, k) => {
     if (k >= run.length) return run.slice();
     let best = 0;
     for (let i = 0; i + k <= run.length; i++) {
@@ -170,34 +155,72 @@ export function formationSlots(n, { stage, obstacles, obstacleDistance, dx = 130
     }
     return run.slice(best, best + k);
   };
+  const midOf = (xs) => (xs[0] + xs.at(-1)) / 2;
+
+  /**
+   * 這一排要站 want 人時用哪一段連續空位。隊形要排成一整段，不能被桌子從中間切開 ——
+   * 切開的話，排序上相鄰的兩個熟人會被分到桌子兩邊。
+   * 先比塞得下幾人，一樣多時取排出來離中心近的那段（不是最長的那段）。
+   */
+  const bestRun = (y, offset, want) => {
+    let best = [];
+    let run = [];
+    const fit = (r) => Math.min(r.length, want);
+    const close = () => {
+      if (run.length && (fit(run) > fit(best)
+        || (fit(run) === fit(best) && Math.abs(midOf(segment(run, want)) - center) < Math.abs(midOf(segment(best, want)) - center)))) {
+        best = run;
+      }
+      run = [];
+    };
+    // 格點從舞台中心往兩側展開，隊形才對得準中心（從左牆起算會差到半格）
+    const first = center + offset - Math.floor((center + offset - minX) / dx) * dx;
+    for (let x = first; x <= maxX; x += dx) {
+      if (free(x, y)) run.push(x); else close();
+    }
+    close();
+    return best;
+  };
 
   // 挑隊形放在哪幾排：每排都要塞得下 each 人、各排對得齊，越靠近地板中間越好
-  const rowsWanted = Math.ceil(n / perRow);
-  const each = Math.ceil(n / rowsWanted);
   const preferY = stage.height * 0.6;
+  const choose = (rowsWanted) => {
+    const each = Math.ceil(n / rowsWanted);
+    let pick = null;
+    for (let y0 = minY; y0 + (rowsWanted - 1) * dy <= maxY; y0 += dy / 4) {
+      const runs = [...Array(rowsWanted).keys()].map((i) => bestRun(y0 + i * dy, offsetOf(i), each));
+      const cap = Math.min(...runs.map((r) => r.length));
+      if (!cap) continue;
+      // 各排實際排出來的中點：彼此要對齊，也要靠近舞台中心
+      const mids = runs.map((r) => midOf(segment(r, each)));
+      const misalign = Math.max(...mids) - Math.min(...mids);
+      const offCenter = Math.max(...mids.map((m) => Math.abs(m - center)));
+      const mid = y0 + ((rowsWanted - 1) * dy) / 2;
+      const score = Math.min(cap, each) * 10000 - misalign * 3 - offCenter * 2 - Math.abs(mid - preferY);
+      const placed = runs.reduce((t, r) => t + Math.min(r.length, each), 0);
+      if (!pick || score > pick.score) pick = { y0, runs, score, rowsWanted, each, placed };
+    }
+    return pick;
+  };
+  // 某一排被桌子吃掉位子時，先試「多一排、每排少幾人」：不然多出來的兩三個人
+  // 會另起一排、落在隊形角落（2026-10-19 30 人實拍）。都排不滿時取預定的排裡
+  // 站得最多人的那種，剩下的才補排
+  const fewest = Math.ceil(n / perRow);
   let pick = null;
-  for (let y0 = minY; y0 + (rowsWanted - 1) * dy <= maxY; y0 += dy / 4) {
-    const runs = [...Array(rowsWanted).keys()].map((i) => bestRun(y0 + i * dy, offsetOf(i)));
-    const cap = Math.min(...runs.map((r) => r.length));
-    if (!cap) continue;
-    // 共同的中心：各段中點的平均；量各排實際排出來的中點離它多遠
-    const center = runs.reduce((t, r) => t + (r[0] + r.at(-1)) / 2, 0) / runs.length;
-    const mids = runs.map((r) => {
-      const seg = segment(r, Math.min(each, r.length), center);
-      return (seg[0] + seg.at(-1)) / 2;
-    });
-    const misalign = Math.max(...mids) - Math.min(...mids);
-    const mid = y0 + ((rowsWanted - 1) * dy) / 2;
-    const score = Math.min(cap, each) * 10000 - misalign * 3 - Math.abs(mid - preferY);
-    if (!pick || score > pick.score) pick = { y0, runs, score, center };
+  for (let r = fewest; r <= fewest + 2 && r <= n; r++) {
+    const p = choose(r);
+    if (p && (!pick || p.placed > pick.placed)) pick = p;
+    if (pick?.placed >= n) break;
   }
+  const rowsWanted = pick?.rowsWanted ?? fewest;
+  const each = pick?.each ?? Math.ceil(n / rowsWanted);
 
   const rows = [];
   let left = n;
   const place = (y, run) => {
     const k = Math.min(run.length, left, each);
     if (!k) return;
-    rows.push({ y, xs: segment(run, k, pick?.center ?? stage.width / 2) });
+    rows.push({ y, xs: segment(run, k) });
     left -= k;
   };
   pick?.runs.forEach((run, i) => place(pick.y0 + i * dy, run));
@@ -206,7 +229,7 @@ export function formationSlots(n, { stage, obstacles, obstacleDistance, dx = 130
   for (let k = 1; left > 0 && k < 20; k++) {
     for (const i of [rowsWanted - 1 + k, -k]) {
       const y = base + i * dy;
-      if (left > 0 && y >= minY && y <= maxY) place(y, bestRun(y, offsetOf(Math.abs(i))));
+      if (left > 0 && y >= minY && y <= maxY) place(y, bestRun(y, offsetOf(Math.abs(i)), each));
     }
   }
 

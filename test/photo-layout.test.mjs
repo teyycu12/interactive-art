@@ -112,6 +112,28 @@ describe('隊形站位', () => {
     }
   });
 
+  test('隊形置中，不會剩兩三個人另起一排（2026-10-19 30 人實拍）', () => {
+    for (const n of [16, 20, 30]) {
+      const rows = new Map();
+      for (const p of formationSlots(n, FIELD)) rows.set(p.y, [...(rows.get(p.y) ?? []), p.x]);
+      const sizes = [...rows.values()].map((xs) => xs.length);
+      assert.ok(Math.min(...sizes) >= Math.max(...sizes) - 2, `${n} 人排成 ${sizes.join('／')}`);
+      for (const [y, xs] of rows) {
+        const mid = (Math.min(...xs) + Math.max(...xs)) / 2;
+        assert.ok(Math.abs(mid - STAGE.width / 2) <= 200, `${n} 人：y=${y} 那排中點偏了 ${Math.round(mid - STAGE.width / 2)}`);
+      }
+    }
+  });
+
+  test('前後排左右錯開半格，後排的名牌露在前排兩人之間', () => {
+    const slots = formationSlots(30, FIELD);
+    for (const b of slots) {
+      for (const f of slots) {
+        if (f.y > b.y && f.y - b.y < 175) assert.ok(Math.abs(f.x - b.x) >= 60, `(${b.x}, ${b.y}) 正後方有人擋著名牌`);
+      }
+    }
+  });
+
   test('排位結果每個人都有位置；站位不夠的人留在原地', () => {
     const agents = ['A', 'B', 'C'].map((id, i) => ({ id, x: 100 + i, y: 100 }));
     const out = arrangeByAffinity(agents, () => 0, FIELD);
