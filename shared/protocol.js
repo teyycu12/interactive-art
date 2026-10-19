@@ -48,6 +48,7 @@ export const EV = {
   SCREEN_PHOTO_QR: 'SCREEN_PHOTO_QR',         // Server → Screen：大合照的下載 QR {qr, visible}，右下角顯示
   HOST_PHOTO_QR: 'HOST_PHOTO_QR',             // Host → Server：大螢幕的下載 QR 顯示／隱藏 {visible}
   SCREEN_CAPTURE: 'SCREEN_CAPTURE',           // Screen → Server：回傳截圖（合照底圖）
+  SCREEN_PHOTO_QR_HIDE: 'SCREEN_PHOTO_QR_HIDE', // Screen → Server：大螢幕上按了下載 QR 的 ×（等同主控端按「隱藏」）
 
   // ── 任務生命週期（規格 v3.0 §03）──────────────────────
   MISSION_ANNOUNCE: 'MISSION_ANNOUNCE',       // Server → All：任務公告

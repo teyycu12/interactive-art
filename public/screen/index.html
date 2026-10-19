@@ -238,6 +238,18 @@
   .ranks:not([hidden]) ~ .photo-qr { right: 340px; }
   .photo-qr img { display: block; width: 236px; height: 236px; image-rendering: pixelated; }
   .photo-qr p { margin: 8px 0 0; font-size: 20px; font-weight: 900; color: var(--ink); }
+  /* 右上角的小 ×：在大螢幕那台電腦上直接收起 QR（不必回主控端）。投影出去要不搶眼：
+     小、淡，滑鼠移上去才清楚 */
+  .photo-qr-close {
+    position: absolute; top: -12px; right: -12px;
+    width: 30px; height: 30px; padding: 0;
+    border: 2px solid var(--ink); border-radius: 50%;
+    background: #fff; color: var(--ink);
+    font: 900 18px/1 system-ui, sans-serif;
+    cursor: pointer; opacity: .45;
+    pointer-events: auto;
+  }
+  .photo-qr-close:hover, .photo-qr-close:focus-visible { opacity: 1; }
 
   /* 音效被瀏覽器擋住時的提示（public/screen/sfx.js）。給操作者看的，不是給觀眾：
      刻意小、低對比、放在不擋角色的右下角（見 docs/notes/UI-STYLING.md「刻意壓低對比的地方」）。
@@ -313,6 +325,7 @@
 
 <!-- 大合照下載 QR：拍完後顯示幾分鐘（SCREEN_PHOTO_QR）。要放在 #ranks 後面，CSS 靠兄弟選擇器避開排行榜 -->
 <div class="photo-qr" id="photo-qr" hidden>
+  <button class="photo-qr-close" id="photo-qr-close" type="button" aria-label="收起 QR Code">×</button>
   <img id="photo-qr-img" alt="大合照下載 QR Code">
   <p>📸 掃描下載大合照</p>
 </div>
