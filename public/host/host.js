@@ -2235,7 +2235,30 @@ for (const [id, format] of [['#btn-report-people', 'people'], ['#btn-report-acti
   });
 }
 
-const fmtTime = (ms) => (ms ? new Date(ms).toLocaleString('zh-TW', { hour12: false }) : '');
+// 日期、時間分兩欄。同一格寫「2026/10/8 12:09:10」時 Excel 會認成日期時間，
+// 預設欄寬放不下，整格顯示成 ########（2026-10-19 回報）。用 Excel 實測過：
+//   2026/10/16、10/16、10-16 → 也被認成日期，一樣 ########
+//   10月16日 → Excel 當成文字，完整顯示（年份在檔名裡）
+//   12:09 → 時間，放得下
+const two = (n) => String(n).padStart(2, '0');
+const fmtDate = (ms) => {
+  if (!ms) return '';
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+};
+const fmtClock = (ms) => {
+  if (!ms) return '';
+  const d = new Date(ms);
+  return `${two(d.getHours())}:${two(d.getMinutes())}`;
+};
+/**
+ * 結束時間：還沒收掉的（任務沒結束、問答沒公布、文字雲沒收）寫「進行中」，不留空白
+ * 讓人以為漏記；跨過午夜的標「隔天」，不然 23:50 → 00:10 看起來像倒著走
+ */
+const fmtEnd = (start, end) => {
+  if (!end) return start ? '進行中' : '';
+  return start && fmtDate(start) !== fmtDate(end) ? `${fmtClock(end)}（隔天）` : fmtClock(end);
+};
 
 /** CSV 欄位跳脫。名字是參與者自填的，可能含逗號、引號或換行 */
 function csvCell(v) {
@@ -2265,12 +2288,14 @@ function renderReport(format, report) {
   sum.hidden = false;
 
   const d = new Date(report.generatedAt);
-  const two = (n) => String(n).padStart(2, '0');
   const stamp = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}`;
   if (format === 'activities') {
     downloadCsv(`pixelair-活動紀錄-${stamp}.csv`, [
-      ['類型', '內容', '開始', '結束', '參與人數', '結果'],
-      ...report.activities.map((a) => [a.kind, a.title, fmtTime(a.startedAt), fmtTime(a.endedAt), a.participants, a.result]),
+      ['類型', '內容', '日期', '開始', '結束', '參與人數', '結果'],
+      ...report.activities.map((a) => [
+        a.kind, a.title, fmtDate(a.startedAt), fmtClock(a.startedAt), fmtEnd(a.startedAt, a.endedAt),
+        a.participants, a.result,
+      ]),
     ]);
   } else {
     downloadCsv(`pixelair-參與者-${stamp}.csv`, [
