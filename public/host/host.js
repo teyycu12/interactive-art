@@ -2220,9 +2220,12 @@ const fmtClock = (ms) => {
   const d = new Date(ms);
   return `${two(d.getHours())}:${two(d.getMinutes())}`;
 };
-/** 結束時間：跨過午夜的活動標「隔天」，不然 23:50 → 00:10 看起來像倒著走 */
+/**
+ * 結束時間：還沒收掉的（任務沒結束、問答沒公布、文字雲沒收）寫「進行中」，不留空白
+ * 讓人以為漏記；跨過午夜的標「隔天」，不然 23:50 → 00:10 看起來像倒著走
+ */
 const fmtEnd = (start, end) => {
-  if (!end) return '';
+  if (!end) return start ? '進行中' : '';
   return start && fmtDate(start) !== fmtDate(end) ? `${fmtClock(end)}（隔天）` : fmtClock(end);
 };
 
