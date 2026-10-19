@@ -645,7 +645,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .sheet-brief { margin: 0 0 16px; font-size: 13px; color: var(--ink-soft); }
 
 .bingo-mine {
-  margin: 0 0 10px; padding: 8px 12px;
+  margin: 0 0 10px; padding: 8px 12px; white-space: pre-line;
   font-size: 13px; font-weight: 700; line-height: 1.5; color: var(--ink);
   background: var(--wall-tint); border-radius: 10px;
 }

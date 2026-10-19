@@ -1893,6 +1893,8 @@ function onWordCloudAck(msg) {
 let bingoCard = null;
 /** 自己開局勾的自我介紹題（題目文字）；這一輪沒有自我介紹題時為 null */
 let bingoMyFacts = null;
+/** 系統判定自己的衣服顏色（「🔵 藍色」），別人卡上的顏色格子是照這個判的 */
+let bingoMyColors = [];
 let bingoDeadline = null;
 let bingoPick = null;
 let bingoTimer = null;
@@ -2018,12 +2020,14 @@ function renderBingo() {
   $('#bingo-prog').textContent = `${filled} / 9${bingoCard.lines ? `　連線 ${bingoCard.lines}` : ''}`;
   $('#bingo-mycode').textContent = myCode;
   const mine = $('#bingo-mine');
-  mine.hidden = bingoMyFacts === null;
+  const lines = [];
   if (bingoMyFacts) {
-    mine.textContent = bingoMyFacts.length
-      ? `你開局勾的：${bingoMyFacts.join('、')}`
-      : '你開局沒有勾任何一題自我介紹';
+    lines.push(bingoMyFacts.length ? `你開局勾的：${bingoMyFacts.join('、')}` : '你開局沒有勾任何一題自我介紹');
   }
+  // 顏色看的是大螢幕上的角色，不是本人的衣服：寫出來，別人問「你算不算藍色」時才答得出來
+  if (bingoMyColors.length) lines.push(`系統判定你的衣服：${bingoMyColors.join('、')}（照大螢幕上你的角色）`);
+  mine.hidden = !lines.length;
+  mine.textContent = lines.join('\n');
 
   // 底部輸入列：還沒點格子時只顯示提示，點了才出現輸入框
   $('#bingo-hint').hidden = bingoPick !== null;
@@ -2053,7 +2057,10 @@ function renderBingo() {
 function pickBingoCell(i) {
   bingoPick = i;
   $('#bingo-msg').hidden = true;
-  $('#bingo-entry-label').textContent = `「${bingoCard.cells[i].label}」：輸入他的配對碼`;
+  const cell = bingoCard.cells[i];
+  $('#bingo-entry-label').textContent = cell.color
+    ? `「${cell.label}」：看大螢幕上角色的衣服，不是本人的。輸入他的配對碼`
+    : `「${cell.label}」：輸入他的配對碼`;
   $('#bingo-entry').hidden = false;
   $('#bingo-hint').hidden = true;
   bingoInput.value = '';
@@ -2126,6 +2133,7 @@ function handleBingoMessage(msg) {
       }
       bingoCard = msg.card;
       bingoMyFacts = Array.isArray(msg.myFacts) ? msg.myFacts : null;
+      bingoMyColors = Array.isArray(msg.myColors) ? msg.myColors : [];
       bingoDeadline = msg.remainingMs == null ? null : Date.now() + msg.remainingMs;
       clearInterval(bingoTimer);
       if (bingoDeadline) bingoTimer = setInterval(tickBingoTimer, 1000);
@@ -2143,7 +2151,9 @@ function handleBingoMessage(msg) {
           : msg.newLines ? `連成一線！和 ${msg.name} 填好了`
           : `填好了：${msg.name}`);
       } else {
-        showBingoMsg(BINGO_ERROR_TEXT[msg.reason] ?? '沒填成功，請再試一次。');
+        showBingoMsg(msg.peerColors
+          ? `系統判定他的衣服是${msg.peerColors.length ? msg.peerColors.join('、') : '（看不出顏色）'}，不符合這一格。顏色是照大螢幕上的角色判定的。`
+          : (BINGO_ERROR_TEXT[msg.reason] ?? '沒填成功，請再試一次。'));
       }
       return true;
 

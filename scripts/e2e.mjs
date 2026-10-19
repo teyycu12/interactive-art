@@ -1803,7 +1803,7 @@ check('引導端點擋下過大的影格',
     box.ws.on('message', (d) => {
       const m = JSON.parse(d);
       if (m.type === 'BINGO_ASK') box.bingo.ask = m;
-      if (m.type === 'BINGO_CARD') { box.bingo.card = m.card; box.bingo.myFacts = m.myFacts; }
+      if (m.type === 'BINGO_CARD') { box.bingo.card = m.card; box.bingo.myFacts = m.myFacts; box.bingo.myColors = m.myColors; }
       if (m.type === 'BINGO_RESULT') box.bingo.results.push(m);
       if (m.type === 'BINGO_TAGGED') box.bingo.tagged.push(m);
       if (m.type === 'BINGO_ENDED') box.bingo.ended = m;
@@ -1850,6 +1850,11 @@ check('引導端點擋下過大的影格',
   check('手機上看得到自己開局勾了什麼（不認得的題號略過）',
     JSON.stringify(pB.bingo.myFacts) === JSON.stringify([facts[0]?.text]) && Array.isArray(pA.bingo.myFacts) && pA.bingo.myFacts.length === 0,
     JSON.stringify([pA.bingo.myFacts, pB.bingo.myFacts]));
+  // 甲的衣服是紅色（e2e 的 AVATAR）：手機要寫出系統判定的顏色，顏色格子要標出來
+  check('手機上看得到系統判定自己的衣服顏色', pA.bingo.myColors?.some((c) => c.includes('紅色')), JSON.stringify(pA.bingo.myColors));
+  check('顏色格子有標記（點了會提示看大螢幕上的角色）',
+    pB.bingo.card?.cells?.filter((c) => c.label.startsWith('衣服有')).every((c) => c.color === true),
+    JSON.stringify(pB.bingo.card?.cells));
   const pickOf = (name) => bingoRound?.picks?.find((p) => p.name === name);
   check('主辦端看得到每個人勾了哪幾題', JSON.stringify(pickOf('賓果乙')?.facts) === JSON.stringify([facts[0]?.text])
     && pickOf('賓果甲')?.facts?.length === 0, JSON.stringify(bingoRound?.picks));

@@ -29,7 +29,7 @@ import {
   SCORE_SOURCES, EVENT_INFO, GREET_OUTCOME,
 } from '../shared/protocol.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
-import { avatarMatchesFamily, COLOR_FAMILIES } from '../shared/colorFamily.js';
+import { avatarMatchesFamily, COLOR_FAMILIES, COLOR_FAMILY_MAP, familiesOfAvatar } from '../shared/colorFamily.js';
 import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
@@ -689,17 +689,32 @@ function bingoFactsOf(agentId) {
   return r.facts.filter((f) => bingo.hasFact(agentId, f.id)).map((f) => f.text);
 }
 
+/**
+ * 系統認定這個人的衣服是哪幾種顏色（「🔵 藍色」）。
+ * 看的是大螢幕上那個角色的上身與褲子各取一色，不是真人的衣服 —— 像素圖的顏色常跟本人不一樣，
+ * 而玩家原本完全看不到系統判成什麼（2026-10-19 試玩回饋「衣服顏色不知道怎麼判定」）。
+ */
+function colorLabelsOf(agentId) {
+  return familiesOfAvatar(stage.get(agentId)?.avatar)
+    .map((id) => COLOR_FAMILY_MAP[id]).filter(Boolean).map((f) => `${f.glyph} ${f.label}`);
+}
+
 function sendBingoCard(agentId) {
   const card = bingo.cardOf(agentId);
   if (!card) return;
   const r = bingo.round;
   sendToAgent(agentId, EV.BINGO_CARD, {
     card: {
-      cells: card.cells.map((c) => ({ label: c.cond.label, filled: !!c.by, name: c.by ? nameOf(c.by) : null })),
+      cells: card.cells.map((c) => ({
+        label: c.cond.label, filled: !!c.by, name: c.by ? nameOf(c.by) : null,
+        color: c.cond.id.startsWith('color:') || undefined,
+      })),
       lines: card.lines,
     },
     // 自己開局勾了什麼（2026-10-17 試玩回饋）：別人是照這個來找你的，勾完就忘的話會被問倒
     myFacts: bingoFactsOf(agentId),
+    // 別人卡上「衣服有藍色的人」是照這個判的，自己也要知道
+    myColors: colorLabelsOf(agentId),
     remainingMs: r.endsAt ? Math.max(0, r.endsAt - Date.now()) : null,
   });
 }
@@ -808,7 +823,15 @@ function handleBingoClaim(ws, msg) {
     reason: r.ok ? undefined : r.reason,
     newLines: r.ok ? r.newLines : undefined, full: r.ok ? r.full : undefined,
   });
-  if (!r.ok) { reply({ ok: false, reason: r.reason }); return; }
+  if (!r.ok) {
+    // 顏色格子填不進去：說出系統判定對方是什麼顏色。那是大螢幕上看得到的資訊，不是秘密；
+    // 只說「不符合」的話，玩家會跟眼前的真人衣服比，怎麼看都覺得系統錯了
+    const cond = bingo.cardOf(from)?.cells[msg.cell]?.cond;
+    const peerColors = r.reason === BINGO_ERRORS.MISMATCH && cond?.id.startsWith('color:')
+      ? colorLabelsOf(target) : undefined;
+    reply({ ok: false, reason: r.reason, peerColors });
+    return;
+  }
   bingoFilled(from, target, r, reply);
   // 被填進去的人也要知道：「剛剛那個人原來是在玩賓果」—— 這通常就是下一段對話的開頭。
   // 剛來找他的人若也符合他卡上空著的一格，順便問他要不要填（不必再輸碼：才剛當面拿過）
