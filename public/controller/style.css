@@ -1846,3 +1846,6 @@ body:has(#greet-invite:not([hidden])):has(#bingo-offer:not([hidden])) .toast { t
   background: #FFFCF5; border: 2px solid var(--ink); border-radius: 999px;
 }
 .du-preset:active { transform: translateY(1px); }
+
+/* 生成完成頁的「改用換裝」：次要動作，放在兩顆主按鈕下面 */
+.du-from-scan { display: block; margin: 10px auto 0; min-height: 44px; font-size: 14px; }

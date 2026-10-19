@@ -1422,6 +1422,13 @@ $('#btn-accept').addEventListener('click', () => {
   enterStage();
 });
 $('#btn-retake').addEventListener('click', () => openCamera());
+// 生成的角色不像：改用換裝，照片量到的顏色當起點（openDressup 讀 lastFallbackColors）。
+// 已經答過的進場問卷不會再問（askPersonaThen 看的是作答紀錄，不是走哪條路）
+$('#btn-scan-to-dressup').addEventListener('click', async () => {
+  lastFallbackColors = pendingScanConfig?.fallbackColors ?? lastFallbackColors;
+  stopScanStream();
+  await goDressup({ message: '照片的顏色已經幫你套上了，挑髮型和衣服就好' });
+});
 $('#btn-retry').addEventListener('click', () => openCamera());
 
 /**
