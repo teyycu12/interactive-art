@@ -19,7 +19,7 @@
  * 此處全部改為時間基準，並以 60fps 換算出等價常數，維持文件指定的觀感。
  */
 
-import { WALK_THRESHOLD, AGENT_VIEW } from '/shared/protocol.js';
+import { WALK_THRESHOLD, AGENT_VIEW, MOTION_IDS } from '/shared/protocol.js';
 import { dirFromHeading, PIXEL_W, PIXEL_H, PIXEL_POSES } from '/shared/pixelAvatar.js';
 import { spriteView, walkSprite, walkFrameIndex } from '/shared/spriteCache.js';
 
@@ -106,6 +106,51 @@ function stepPhase(key, time, rate) {
  * @param {object} opts
  */
 export function drawCharacter(ctx, agent, pos, sprite, opts) {
+  const m = MOTION_IDS.has(agent.emote) ? motionPose(agent.emote, opts.time ?? 0, opts.height ?? 150) : null;
+  if (!m) { drawCharacterBody(ctx, agent, pos, sprite, opts); return; }
+  // 角色動作：以腳底為支點整個角色一起動（跳起、翻面、搖擺），影子也跟著 —— 簡單但一眼看得出來
+  ctx.save();
+  ctx.translate(pos.x + m.dx, pos.y - m.lift);
+  ctx.rotate(m.rot);
+  ctx.scale(m.sx, 1);
+  ctx.translate(-pos.x, -pos.y);
+  drawCharacterBody(ctx, agent, pos, sprite, opts);
+  ctx.restore();
+}
+
+/**
+ * 角色動作（protocol.js 的 MOTION_EMOTES）每一刻的姿勢。
+ * 用絕對時間算而不是動作開始的時間：大螢幕、手機各自的時鐘不同，
+ * 動作只有兩秒，相位差一點看不出來，換來不必同步起始時間。
+ * @returns {{lift: number, dx: number, rot: number, sx: number}}
+ */
+export function motionPose(id, t, height) {
+  const TAU = Math.PI * 2;
+  switch (id) {
+    case 'JUMP': {
+      // 一下一下往上跳，落地時停一拍（取正半波）
+      const s = Math.sin((TAU * t) / 0.55);
+      return { lift: Math.max(0, s) * height * 0.22, dx: 0, rot: 0, sx: 1 };
+    }
+    case 'SPIN': {
+      // 像紙片一樣轉：水平縮放走一個 cos，翻到背面時是鏡像，看起來就是轉了一圈
+      const c = Math.cos((TAU * t) / 0.9);
+      return { lift: height * 0.03, dx: 0, rot: 0, sx: Math.abs(c) < 0.08 ? Math.sign(c || 1) * 0.08 : c };
+    }
+    case 'DANCE': {
+      // 左右搖擺加上小小的彈跳
+      const sway = Math.sin((TAU * t) / 0.6);
+      return {
+        lift: Math.abs(Math.sin((TAU * t) / 0.3)) * height * 0.05,
+        dx: sway * height * 0.05, rot: sway * 0.18, sx: 1,
+      };
+    }
+    default:
+      return { lift: 0, dx: 0, rot: 0, sx: 1 };
+  }
+}
+
+function drawCharacterBody(ctx, agent, pos, sprite, opts) {
   if (sprite?.pixelFrames) { drawPixelCharacter(ctx, agent, pos, sprite, opts); return; }
   const { time, maxSpeed, height = 150 } = opts;
   const speed = Math.hypot(agent.vx, agent.vy);
@@ -317,6 +362,7 @@ export const emoteIsPosed = (sprite, emote) => !!(sprite?.pixelPoses && PIXEL_PO
 
 /** 頭頂的社交動作氣泡 */
 export function drawEmote(ctx, pos, glyph, { height = 150 } = {}) {
+  if (!glyph) return;   // 角色動作（跳、轉圈、跳舞）沒有圖示
   ctx.save();
   ctx.font = `${Math.round(height * 0.28)}px system-ui, sans-serif`;
   ctx.textAlign = 'center';

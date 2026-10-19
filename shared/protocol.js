@@ -362,16 +362,51 @@ export const PAIR_ERRORS = {
   NOT_PAIR_MISSION: 'NOT_PAIR_MISSION', // 這個任務不是靠交換配對碼完成的（GATHER）
 };
 
-/** 社交動作白名單（技術文件 M1 §操控輸入發送規格） */
-// 乾杯已移除（2026-10-17）：EMOTE_GLYPH 與像素角色的碰杯姿勢留著，舊快照裡的動作仍畫得出來
-export const ACTIONS = ['HEART', 'WAVE'];
+/**
+ * 表情選單（2026-10-19 試玩回饋「除了揮手跟愛心之外，可以加入自己想表達的表情符號」）。
+ * 刻意是固定的一組、不開放自由輸入：投影在全場面前，自由輸入擋不完不雅的字。
+ * 順序就是手機選單上的順序。
+ */
+export const EMOJI_EMOTES = [
+  { id: 'HEART', glyph: '💗', label: '愛心' },
+  { id: 'LAUGH', glyph: '😂', label: '大笑' },
+  { id: 'CLAP', glyph: '👏', label: '拍手' },
+  { id: 'LOVE', glyph: '😍', label: '喜歡' },
+  { id: 'WOW', glyph: '😮', label: '驚訝' },
+  { id: 'THUMB', glyph: '👍', label: '讚' },
+  { id: 'PARTY', glyph: '🎉', label: '慶祝' },
+  { id: 'THINK', glyph: '🤔', label: '想想' },
+  { id: 'SHY', glyph: '🙈', label: '害羞' },
+  { id: 'FIRE', glyph: '🔥', label: '燃起來' },
+];
 
 /**
- * 社交動作的顯示圖示。
+ * 角色動作（同一次回饋「角色可以有更多動作」）。沒有頭上的圖示，是角色本身在動：
+ * 由 shared/character.js 的 drawCharacter 以位移、旋轉做出來，不需要新的角色圖，
+ * 拍照生成、換裝的角色都能做。
+ */
+export const MOTION_EMOTES = [
+  { id: 'JUMP', glyph: '⤴️', label: '跳一下' },
+  { id: 'SPIN', glyph: '🌀', label: '轉圈' },
+  { id: 'DANCE', glyph: '💃', label: '跳舞' },
+];
+
+/** 社交動作白名單（技術文件 M1 §操控輸入發送規格）。揮手另外有「互相揮手」的判定（server/greetings.js） */
+// 乾杯已移除（2026-10-17）：EMOTE_GLYPH 與像素角色的碰杯姿勢留著，舊快照裡的動作仍畫得出來
+export const ACTIONS = ['WAVE', ...EMOJI_EMOTES.map((e) => e.id), ...MOTION_EMOTES.map((e) => e.id)];
+
+/**
+ * 社交動作的頭上圖示。動作類（MOTION_EMOTES）不在這裡：它們不畫圖示，是角色本身在動。
  * 大螢幕與手機端 POV 都要畫，放在協定層避免兩邊各存一份而漂移
  * （與 QUIZ_CHOICES 的顏色符號是同一個理由）。
  */
-export const EMOTE_GLYPH = { CHEERS: '🍻', HEART: '💗', WAVE: '👋' };
+export const EMOTE_GLYPH = {
+  CHEERS: '🍻', WAVE: '👋',
+  ...Object.fromEntries(EMOJI_EMOTES.map((e) => [e.id, e.glyph])),
+};
+
+/** 是不是角色動作（不畫頭上圖示） */
+export const MOTION_IDS = new Set(MOTION_EMOTES.map((e) => e.id));
 
 /**
  * GREET_RESULT 的 outcome。揮手與乾杯共用（server/greetings.js）。

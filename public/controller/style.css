@@ -1849,3 +1849,25 @@ body:has(#greet-invite:not([hidden])):has(#bingo-offer:not([hidden])) .toast { t
 
 /* 生成完成頁的「改用換裝」：次要動作，放在兩顆主按鈕下面 */
 .du-from-scan { display: block; margin: 10px auto 0; min-height: 44px; font-size: 14px; }
+
+/* ── 表情選單：從「表情」鍵往左上展開的小面板，不是覆蓋層 ── */
+#controller > .emote-palette {
+  position: absolute; z-index: 4;
+  right: calc(80px + env(safe-area-inset-right));
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  width: min(280px, calc(100vw - 110px));
+  padding: 10px 12px 12px;
+  background: var(--paper); border: 2.5px solid var(--ink); border-radius: var(--r);
+  box-shadow: var(--drop);
+}
+.emote-palette[hidden] { display: none; }
+.ep-title { margin: 2px 0 6px; font-size: 12px; font-weight: 800; letter-spacing: .06em; color: var(--ink-soft); }
+.ep-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 8px; }
+.ep-grid.ep-motions { grid-template-columns: repeat(3, 1fr); margin-bottom: 0; }
+.ep-item {
+  display: grid; place-items: center; gap: 1px; min-height: 48px; padding: 4px 2px;
+  font: inherit; font-size: 10px; line-height: 1.1; color: var(--ink);
+  background: #FFFCF5; border: 2px solid var(--line); border-radius: 12px;
+}
+.ep-item em { font-style: normal; font-size: 22px; line-height: 1; }
+.ep-item:active { transform: scale(.94); }

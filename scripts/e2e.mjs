@@ -214,6 +214,14 @@ phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'CHEERS' }));
 phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'DROP_TABLE' }));
 await sleep(200);
 check('白名單外的動作被丟棄（含已移除的乾杯）', live()[0].emote === 'WAVE');
+await sleep(650);
+phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'LAUGH' }));
+await sleep(200);
+check('表情選單的表情傳得到大螢幕', live()[0].emote === 'LAUGH');
+await sleep(650);
+phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'JUMP' }));
+await sleep(200);
+check('角色動作（跳一下）傳得到大螢幕', live()[0].emote === 'JUMP');
 
 // ── M2：閒置交還控制權 ────────────────────────────────────
 await sleep(4600);

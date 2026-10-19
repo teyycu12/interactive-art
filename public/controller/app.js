@@ -12,7 +12,7 @@ import { scorePersona, PERSONA_RESULT_MAP } from '/shared/persona.js';
 import { SKIN_TONES } from '/shared/avatars.js';
 import {
   EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS, DIRECT_MESSAGE, MSG_ERRORS,
-  QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME,
+  QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME, EMOJI_EMOTES, MOTION_EMOTES,
 } from '/shared/protocol.js';
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
@@ -2815,16 +2815,54 @@ function showGreetResult(msg) {
   showToast(text(msg.otherName || '對方'), done ? 3200 : 2400);
 }
 
-$('#emotes').addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-action]');
-  if (!btn) return;
+function sendEmote(btn) {
   sendMsg(EV.INPUT_ACTION, { action: btn.dataset.action });
   vibrate([30, 40, 30]);
   btn.animate(
     [{ transform: 'scale(1)' }, { transform: 'scale(0.9)' }, { transform: 'scale(1)' }],
     { duration: 220 },
   );
+}
+
+$('#emotes').addEventListener('click', (e) => {
+  if (e.target.closest('#btn-emote-menu')) { toggleEmotePalette(); return; }
+  const btn = e.target.closest('button[data-action]');
+  if (btn) sendEmote(btn);
 });
+
+// ── 表情選單 ──
+{
+  const fill = (box, list) => box.replaceChildren(...list.map((e) => {
+    const b = Object.assign(document.createElement('button'), { type: 'button', className: 'ep-item' });
+    b.dataset.action = e.id;
+    b.setAttribute('aria-label', e.label);
+    b.append(Object.assign(document.createElement('em'), { textContent: e.glyph }),
+      Object.assign(document.createElement('span'), { textContent: e.label }));
+    return b;
+  }));
+  fill($('#ep-emoji'), EMOJI_EMOTES);
+  fill($('#ep-motion'), MOTION_EMOTES);
+}
+
+function toggleEmotePalette(open = $('#emote-palette').hidden) {
+  $('#emote-palette').hidden = !open;
+  $('#btn-emote-menu').setAttribute('aria-expanded', String(open));
+}
+
+$('#emote-palette').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  sendEmote(btn);
+  // 選完就收起：選單蓋著搖桿區的一角，留著會擋到走路
+  toggleEmotePalette(false);
+});
+
+// 點選單以外的地方收起（在捕獲階段看，但不攔：那一下照常給搖桿或別的按鈕）
+document.addEventListener('pointerdown', (e) => {
+  if ($('#emote-palette').hidden) return;
+  if (e.target.closest('#emote-palette, #btn-emote-menu')) return;
+  toggleEmotePalette(false);
+}, { capture: true });
 
 // ── 震動開關 ──────────────────────────────────────────────
 {

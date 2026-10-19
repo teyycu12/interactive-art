@@ -897,7 +897,7 @@ function drawFrame(now) {
     drawCharacter(ctx, a, pos, entry?.img,
       { time, maxSpeed: MAX_SPEED, height, voxel: voxels?.tile(a.id) });
     drawPlate(a.id, pos, name, fontSize, plateTarget.get(a.id));
-    if (a.emote && !emoteIsPosed(entry?.img, a.emote)) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
+    if (a.emote && !emoteIsPosed(entry?.img, a.emote)) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote], { height });
     if (a.offline) drawOffline(ctx, pos, { height });
   }
 

@@ -301,8 +301,17 @@
       <span id="bingo-offer-text"></span>
       <button id="btn-bingo-accept">幫我填上</button>
     </div>
+    <!-- 表情選單：揮手（有「互相揮手」的判定）留在外面，其他表情與角色動作收在「表情」裡
+         （2026-10-19 回饋「角色可以有更多動作」「可以加入自己想表達的表情符號」）。
+         不是覆蓋層：選完就收起，搖桿照常可以推 -->
+    <div class="emote-palette" id="emote-palette" hidden role="group" aria-label="表情與動作">
+      <p class="ep-title">表情</p>
+      <div class="ep-grid" id="ep-emoji"></div>
+      <p class="ep-title">動作</p>
+      <div class="ep-grid ep-motions" id="ep-motion"></div>
+    </div>
     <div id="emotes">
-      <button data-action="HEART"><em>💗</em>愛心</button>
+      <button id="btn-emote-menu" aria-expanded="false" aria-controls="emote-palette"><em>😀</em>表情</button>
       <button data-action="WAVE"><em>👋</em>揮手</button>
     </div>
   </section>
