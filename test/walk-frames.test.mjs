@@ -341,6 +341,46 @@ describe('側面', () => {
     }
   });
 
+  test('手臂背光的陰影與後緣描邊跟著手走；短袖的袖口不被撕開（2026-10-20 回報「手臂一部分黏在軀幹上」）', () => {
+    const OUTLINE = [110, 60, 45];
+    const SHADE = SKIN.map((v) => Math.round(v * 0.75));   // 同一種膚色、暗一階
+    const HEM = [40, 60, 110];
+    const TEE = [200, 204, 210];   // 淺色 T 恤（回報的是灰 T）：深色衣服本來就不收描邊，見上一個測試
+    const img = canvas();
+    fill(img, 22, 0, 38, 29, SKIN);
+    fill(img, 22, 0, 30, 29, HAIR);
+    fill(img, 27, 30, 32, 32, SKIN);
+    fill(img, 23, 33, 37, 58, TEE);
+    fill(img, 24, 59, 35, 85, PANTS);
+    fill(img, 24, 86, 38, 89, SHOE);
+    fill(img, 25, 42, 33, 42, HEM);       // 袖口：比手臂寬
+    fill(img, 26, 43, 26, 60, OUTLINE);   // 手臂後緣的描邊
+    fill(img, 27, 43, 28, 60, SHADE);     // 背光的陰影，兩格
+    fill(img, 29, 43, 31, 60, SKIN);
+    fill(img, 32, 43, 32, 60, OUTLINE);
+    const rig = buildWalkRig(img, 'side', { skin: SKIN });
+    const arm = rig.regions.find((r) => r.name === 'arm');
+    assert.ok(arm, names(rig).join());
+    const same = (fr, x, y, rgb) => {
+      const i = (y * img.width + x) * 4;
+      return fr.data[i + 3] && rgb.every((v, k) => Math.abs(fr.data[i + k] - v) <= 2);
+    };
+    for (const s of [1, -1]) {
+      const fr = walkFrame(img, rig, s);
+      // 手擺最開、還在上衣前面的那幾列：原本陰影與描邊的位置不該還是陰影、描邊
+      // （59 列起手掌在深色褲子前面，深色照規則不收，見「長褲」那個測試）
+      for (let y = 55 * CELL; y < 59 * CELL; y++) {
+        for (let x = 26 * CELL; x < 29 * CELL; x++) {
+          assert.ok(!same(fr, x, y, SHADE) && !same(fr, x, y, OUTLINE), `s=${s}：(${x}, ${y}) 還黏著手臂的陰影或描邊`);
+        }
+      }
+      // 袖口那一列整條不動
+      for (let x = 25 * CELL; x < 34 * CELL; x++) {
+        assert.ok(same(fr, x, 42 * CELL + 1, HEM), `s=${s}：袖口 (${x}) 被撕開`);
+      }
+    }
+  });
+
   test('大頭（約 2.2 頭身）：腿從比較低的髖部擺，垂得比較低的手掌也算在手上', () => {
     // 2026-10-15 參考圖集換成約 2.2 頭身。比例寫死成 3 頭身時，腿從腰上面擺、
     // 手掌（垂到 78%）被切在 74% 之外，原地留下一團殘影

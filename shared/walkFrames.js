@@ -139,6 +139,14 @@ export function skinTone(g, neck) {
 const SKIN_TOL = 32;
 const near = (a, b, tol) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) <= tol;
 
+// 背光的膚色：同一種膚色只是暗一些（亮度是膚色的 SHADE_MIN 到 1 倍）。
+// 側面手臂靠身體那一側常有一條 1–2 格寬的陰影，跟膚色差 100 上下，容差內收不到
+const SHADE_MIN = 0.55;
+function skinShade(rgb, skin) {
+  const k = luma(...rgb) / luma(...skin);
+  return k >= SHADE_MIN && k <= 1 && near(rgb, skin.map((v) => v * k), SKIN_TOL);
+}
+
 // 腿的顏色：一種顏色至少佔小腿這麼多才算（描邊約佔兩成，要收進來 ——
 // 黑色窄裙與膚色腿的描邊差很多，與黑褲子的描邊則一樣）
 const LEG_COLOR_SHARE = 0.1;
@@ -577,7 +585,20 @@ function sideArm(g, skin, maxRow, handRow = null) {
     while (k <= ARM_PAD && dark(from + step * k, r)) k++;
     return k <= ARM_PAD ? k : 0;
   };
-  const grow = (r, [a, b]) => [a - outline(r, a - 1, -1), b + outline(r, b + 1, 1)];
+  // 描邊之前先收背光的那一條陰影（最多 ARM_PAD 格）：手臂的帶子是照膚色的中心
+  // 擬的，偏向亮的那一側，陰影與它外面的描邊都在帶子外 —— 手一擺，一條陰影加
+  // 一條描邊黏在身上（2026-10-20 回報「手臂一部分黏在軀幹上」）
+  const shaded = (c, r) => solidCell(g, c, r) && skinShade(cellColor(g, c, r), skin);
+  const shadow = (r, from, step) => {
+    let k = 0;
+    while (k < ARM_PAD && shaded(from + step * k, r)) k++;
+    return k;
+  };
+  const grow = (r, [a, b]) => {
+    a -= shadow(r, a - 1, -1);
+    b += shadow(r, b + 1, 1);
+    return [a - outline(r, a - 1, -1), b + outline(r, b + 1, 1)];
+  };
   const rows = new Map();
   for (const j of best) {
     const c = j % W, r = Math.floor(j / W);
@@ -590,7 +611,10 @@ function sideArm(g, skin, maxRow, handRow = null) {
     const below = rows.get(r + 1);
     let lo = -1, hi = -1;
     for (let c = below[0] - 1; c <= below[1] + 1; c++) {
-      if (solidCell(g, c, r) && near(cellColor(g, c, r), skin, SKIN_TOL)) { if (lo < 0) lo = c; hi = c; }
+      if (solidCell(g, c, r) && (near(cellColor(g, c, r), skin, SKIN_TOL) || skinShade(cellColor(g, c, r), skin))) {
+        if (lo < 0) lo = c;
+        hi = c;
+      }
     }
     if (lo < 0) break;
     rows.set(r, [lo, hi]);
@@ -601,7 +625,10 @@ function sideArm(g, skin, maxRow, handRow = null) {
   if (Math.max(...rows.keys()) - handTop + 1 < H * SIDE_MIN_ARM) return null;
   // 往下多一列：手掌底下那一列是描邊，不是膚色，留在原地會變成一條橫線
   const bottom = Math.min(H - 1, Math.max(...rows.keys()) + 1);
-  const top = Math.min(handTop, neckRow + 2);
+  // 從露出膚色的第一列開始擺：無袖的手臂上面接回了肩膀，就從肩膀擺；有袖子的
+  // 從袖口底下擺，袖子不動。以前帶子一路延伸到脖子，但帶子只有手臂寬、比袖子窄，
+  // 袖子被撕成兩半，袖口那條深色的邊一半跟著手走、一半留在身上
+  const top = handTop;
   // 手臂是一條直的帶子：每一列膚色的中心拿來擬一條直線，寬度取各列的上四分位。
   // 不直接用每一列找到的膚色：手臂背光的那一側比膚色暗，落在容差外，
   // 那幾格會留在原地，手一擺就碎成一截一截
@@ -726,7 +753,11 @@ function pixelLabels(img, rig, skin) {
   const pix = new Int16Array(width * height).fill(-1);
   const opaque = (i) => data[i * 4 + 3] > ALPHA_SOLID;
   const pl = (i) => luma(data[i * 4], data[i * 4 + 1], data[i * 4 + 2]);
-  const skinPx = (i) => skin && near([data[i * 4], data[i * 4 + 1], data[i * 4 + 2]], skin, SKIN_TOL * 2);
+  const skinPx = (i) => {
+    if (!skin) return false;
+    const rgb = [data[i * 4], data[i * 4 + 1], data[i * 4 + 2]];
+    return near(rgb, skin, SKIN_TOL * 2) || skinShade(rgb, skin);
+  };
 
   for (let y = 0; y < height; y++) {
     const r = Math.floor((y - g.y0) / g.cell);
