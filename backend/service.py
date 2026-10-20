@@ -839,14 +839,16 @@ def _dressup_views(payload: Dict[str, Any], only_front: bool = False):
     from garment_gen import _remove_white_background
     from turnaround import split_turnaround
 
-    sel, col = dressup.clean_request(payload.get("selection"), payload.get("colors"))
+    # 男生／女生素體。舊版手機不送這個欄位 → 第一個素體（男生），行為跟以前一樣
+    base_id = dressup.clean_base(payload.get("base"))
+    sel, col = dressup.clean_request(payload.get("selection"), payload.get("colors"), base_id)
     if only_front:
         # 預覽：素體的位置固定，只組正面那一塊，不必切三視圖
         buf = io.BytesIO()
-        dressup.compose(sel, col, box=dressup.front_box()).save(buf, "PNG")
+        dressup.compose(sel, col, box=dressup.front_box(base_id=base_id), base_id=base_id).save(buf, "PNG")
         front = base64.b64encode(buf.getvalue()).decode("ascii")
         return {"front": _remove_white_background(front, shield_mask=None)}, sel
-    sheet = dressup.compose(sel, col)
+    sheet = dressup.compose(sel, col, base_id=base_id)
     buf = io.BytesIO()
     sheet.save(buf, "PNG")
     views, count = split_turnaround(base64.b64encode(buf.getvalue()).decode("ascii"))

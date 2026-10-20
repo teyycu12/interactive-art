@@ -1,6 +1,23 @@
 {
   "_說明": "素體換裝的部件清單。加新造型的步驟見同資料夾的 README.md",
-  "base": "../pose_turnaround.png",
+  "bases": [
+    {
+      "id": "male",
+      "label": "男生",
+      "image": "../pose_turnaround.png"
+    },
+    {
+      "id": "female",
+      "label": "女生",
+      "image": "base_female.png",
+      "base_labels": {
+        "hair": "中長髮"
+      },
+      "edit_note": "The mannequin has medium-length hair falling past the shoulders. If the added item is NOT a hairstyle, keep that hair EXACTLY as it is - same length, same shape, still falling past the shoulders - and let the item sit over or under it as it naturally would. Only if the added item IS a hairstyle does it replace the old hair completely: wherever the old hair is no longer covered, paint what was underneath in the mannequin's own colours (the neck and ears in skin colour, the grey t-shirt on the shoulders and back, white background) - NOT green.",
+      "prompt": "EDIT TASK. The image is a finished pixel-art turnaround of a plain mannequin character: front view, right-side profile, back view. Turn this mannequin into its FEMALE counterpart, changing as little as possible:\n- HAIR: medium-length straight hair that falls just past the shoulders, parted in the middle and swept to both sides. NO fringe, NO bangs: the whole forehead, both eyebrows and both eyes stay fully visible. Profile: the hair covers the back of the head and falls to just past the shoulder behind the neck. Back: the whole back of the head is hair falling just past the shoulders. Same dark brown hair colour as now, a flat pixel-art silhouette with two or three shade steps only - no glossy highlight band, no individual strands.\n- FACE: keep the face EXACTLY as it is - the same eyes, eyebrows, nose and mouth, pixel for pixel, at the same position and size. Do not add eyelashes, lipstick or blush.\n- BODY: the same height, the same head size, the same pose, and every figure at exactly the same position on the canvas. Only a slightly softer silhouette: shoulders one cell narrower, a slightly narrower waist. No exaggerated chest.\n- CLOTHES: the same plain light grey short-sleeve t-shirt (slightly more fitted), the same mid-grey long trousers and the same dark grey shoes, in exactly the same colours as now.\nKeep the same skin tone, the same pixel cell size and shading, the same one-cell darker outline, the same pure white background. Exactly three figures, no text, no ground shadow. Hard pixel edges, no anti-aliasing.",
+      "_說明": "由第一個素體（男生）用 prompt 改出來，再用 scripts/dressup_make_base.py 對齊、搬五官（見 README）"
+    }
+  ],
   "edit_prompt": "EDIT TASK. The image is a finished pixel-art turnaround of a plain mannequin character: front view, right-side profile, back view. Add exactly ONE thing to all three views: {part}. Paint the added item ONLY in shades of pure key green (from dark #0A5A0A through #18B418 to light #7CF07C) with the same pixel-art shading, cell size and one-cell darker outline as the rest of the figure - this green is a placeholder colour that will be replaced later, so every pixel of the added item is green and nothing else is green. Change NOTHING else: every other pixel stays exactly as it is - the same three figures at exactly the same positions and size on the canvas, the same pose, face, skin, grey clothes and shoes, the same pure white background. Do not add a fourth figure, text, a ground shadow or anything else. Hard pixel edges, no anti-aliasing.",
   "categories": [
     {
