@@ -10,6 +10,7 @@
 import base64
 import io
 
+import cv2
 import numpy as np
 import pytest
 from PIL import Image as PILImage
@@ -29,18 +30,19 @@ def _labels():
     return np.asarray(PILImage.open(dressup.LAYER_DIR / "_base_labels.png"))
 
 
-def test_every_part_in_the_manifest_has_its_raw_and_layers():
-    """manifest 加了一筆卻沒生成或沒切：catalog 會把它濾掉，手機上就是少一個選項。"""
+@pytest.mark.parametrize("base_id", [b["id"] for b in dressup.bases()])
+def test_every_part_in_the_manifest_has_its_raw_and_layers(base_id):
+    """manifest 加了一筆、或加了一個素體，卻沒生成或沒切：catalog 會把它濾掉，手機上就是少一個選項。"""
     missing = []
     for part in dressup.load_manifest()["parts"]:
         if part["category"] in dressup.FACE_CATEGORIES:
             continue   # 臉是格子圖，沒有原圖與圖層
-        for path in (dressup.RAW_DIR / f"{part['id']}.png",
-                     dressup.LAYER_DIR / f"{part['id']}.png",
-                     dressup.LAYER_DIR / f"{part['id']}_mask.png"):
+        for path in (dressup.raw_dir(base_id) / f"{part['id']}.png",
+                     dressup.layer_dir(base_id) / f"{part['id']}.png",
+                     dressup.layer_dir(base_id) / f"{part['id']}_mask.png"):
             if not path.exists():
                 missing.append(path.name)
-    assert not missing, f"缺：{missing}（見 dressup/README.md）"
+    assert not missing, f"{base_id} 素體缺：{missing}（見 dressup/README.md）"
 
 
 def test_every_part_uses_a_known_category():
@@ -210,6 +212,139 @@ def test_catalog_lists_the_face_tabs():
     assert {"expression", "brows"} <= {p["category"] for p in cat["parts"]}
 
 
+# ── 素體：男生、女生 ─────────────────────────────────────────
+
+
+def _female():
+    return next(b["id"] for b in dressup.bases()[1:])
+
+
+def test_bases_share_the_face():
+    """表情、眉毛、眼珠顏色是一套格子圖兩個素體共用：五官位置差一格，疊上去就歪了。"""
+    ref = dressup.base_canvas()
+    for b in dressup.bases()[1:]:
+        img = dressup.base_canvas(base_id=b["id"])
+        for slots in dressup.load_manifest()["face"]["slots"].values():
+            for slot in slots.values():
+                x0, y0, x1, y1 = slot["clear"]
+                diff = np.abs(img[y0:y1, x0:x1].astype(int) - ref[y0:y1, x0:x1].astype(int)).sum(axis=2) > 60
+                assert diff.mean() < 0.01, f"{b['id']} 的五官 {slot['clear']} 跟第一個素體差 {diff.mean():.0%}"
+
+
+def test_bases_stand_where_the_first_one_stands():
+    """三個人的位置、身高要一樣：前端切圖、大螢幕走路都照同一套比例。"""
+    ref = find_figures(PILImage.fromarray(dressup.base_canvas()))
+    for b in dressup.bases()[1:]:
+        figs = find_figures(PILImage.fromarray(dressup.base_canvas(base_id=b["id"])))
+        assert len(figs) == 3
+        for (ax0, ax1, ay0, ay1), (bx0, bx1, by0, by1) in zip(ref, figs):
+            assert abs(ay0 - by0) <= 3 and abs(ay1 - by1) <= 3, f"{b['id']} 身高跟第一個素體不同"
+
+
+def test_long_hair_below_the_ears_is_hair():
+    """女生素體披肩的長髮在正面被耳朵切開：耳朵以下那段也要跟著髮色換，不然金髮配一截棕髮。"""
+    rgb = dressup.base_canvas(base_id=_female())
+    labels = dressup.base_labels(rgb, dressup.load_manifest()["face"])
+    x0, x1, y0, y1 = find_figures(PILImage.fromarray(rgb))[0]
+    below_ears = (slice(y0 + int((y1 - y0) * 0.36), y0 + int((y1 - y0) * 0.48)), slice(x0, x1))
+    a = rgb[below_ears].astype(int)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    # 跟 base_labels 同一條髮色規則（臉的描邊紅多藍少超過 60，不算）
+    hairish = (r > g) & (g >= b) & (r - b >= 6) & (r - b < 60) & (_luma(a.astype(float)) < 100)
+    assert (labels[below_ears][hairish] == dressup.C_HAIR).mean() > 0.9
+
+
+def test_tee_sides_are_not_trousers():
+    """T 恤兩側那條深灰邊跟長褲同亮度：算成褲子的話，換紅褲子時 T 恤兩側也變紅。"""
+    for b in dressup.bases():
+        labels = dressup.base_labels(dressup.base_canvas(base_id=b["id"]), dressup.load_manifest()["face"])
+        top = labels == dressup.C_TOP
+        hem = np.where(top.any(axis=0), top.shape[0] - 1 - np.argmax(top[::-1], axis=0), -1)
+        ys, xs = np.nonzero(labels == dressup.C_BOTTOM)
+        assert not (ys <= hem[xs]).any(), f"{b['id']}：T 恤下擺以上有格子被算成褲子"
+
+
+def test_short_hair_on_the_long_haired_base_shows_the_chosen_top():
+    """女生素體換短髮：原本長髮蓋住的肩背露出 T 恤，要跟著選的上衣顏色，不能留成灰色。"""
+    base_id = _female()
+    if not dressup._usable({"id": "hair_short_curly", "category": "hair"}, base_id):
+        pytest.skip("女生素體還沒有短捲髮")
+    rgb = dressup.base_canvas(base_id=base_id)
+    was_hair = dressup._base_label_map(base_id) == dressup.C_HAIR
+    t = dressup._figure_rows(rgb.shape, find_figures(PILImage.fromarray(rgb)))
+    out = np.asarray(dressup.compose({"hair": "hair_short_curly"}, {"top": "#C94F5C"}, base_id=base_id)).astype(int)
+    zone = was_hair & (t >= 0.3) & (t < 0.8)
+    px = out[zone]
+    grey = (px.max(axis=1) - px.min(axis=1) <= 14) & (_luma(px.astype(float)) >= 150) & (px.min(axis=1) <= 236)
+    assert grey.mean() < 0.02, f"肩背上還有 {grey.mean():.1%} 是 T 恤的灰"
+
+
+PONYTAIL_LOOK = {"hair": "hair_ponytail", "outer": "top_hoodie", "acc": ["acc_backpack", "acc_crossbody"]}
+
+
+def test_background_shut_in_by_a_ponytail_is_a_hole():
+    """長髮換馬尾：馬尾、脖子、背包圍住的那塊背景要挖透明（去背從圖邊清，走不到），眼白不能挖。"""
+    for base_id in [b["id"] for b in dressup.bases()]:
+        img, holes = dressup.compose(PONYTAIL_LOOK, {}, base_id=base_id, with_holes=True)
+        rgb = np.asarray(img)
+        base = dressup.base_canvas(base_id=base_id)
+        eye_whites = (base.min(axis=2) > dressup.WHITE) & ~dressup._base_outside(base_id)
+        # 被圍住的白：連不到圖邊（去背清不到）、又不是眼白。部件本身一兩格的白色高光不算，只看成塊的
+        shut_in = (rgb.min(axis=2) > dressup.WHITE) & ~dressup._outside(rgb) & ~eye_whites & ~holes
+        _, _, stats, _ = cv2.connectedComponentsWithStats(shut_in.astype(np.uint8), connectivity=4)
+        blobs = stats[1:, cv2.CC_STAT_AREA]
+        assert (blobs < 60).all(), f"{base_id}：還有 {blobs.max()} 格一塊的白色背景沒挖掉"
+        assert not (holes & eye_whites).any(), f"{base_id}：眼白被當成背景"
+
+
+def test_hoodie_fills_where_the_long_hair_was():
+    """女生素體的外套原圖裡肩背被長髮蓋著沒畫到：換馬尾後那裡要是外套的顏色，不能露出白 T 恤。"""
+    base_id = _female()
+    rgb = dressup.base_canvas(base_id=base_id)
+    was_hair = dressup._base_label_map(base_id) == dressup.C_HAIR
+    t = dressup._figure_rows(rgb.shape, find_figures(PILImage.fromarray(rgb)))
+    img, holes = dressup.compose({"hair": "hair_ponytail", "outer": "top_hoodie"},
+                                 {"outer": "#2F6FD0", "top": "#F4F4F4"}, base_id=base_id, with_holes=True)
+    px = np.asarray(img).astype(int)[was_hair & ~holes & (t >= 0.3) & (t < 0.8)]
+    tee = (px.max(axis=1) - px.min(axis=1) <= 14) & (px.min(axis=1) >= 200)
+    assert tee.mean() < 0.02, f"肩背上還有 {tee.mean():.1%} 是白 T 恤"
+
+
+def test_preview_shows_only_the_front_figure():
+    """側面那個人的馬尾、包包伸進正面預覽的框裡：要洗掉，不能在換裝頁右邊留一條。"""
+    for base_id in [b["id"] for b in dressup.bases()]:
+        img, _ = dressup.compose_front(PONYTAIL_LOOK, {}, base_id=base_id)
+        assert len(find_figures(img)) == 1, base_id
+
+
+def test_unknown_base_falls_back_to_the_first():
+    """舊版手機不送 base：照以前用第一個素體（男生）。"""
+    assert dressup.clean_base(None) == dressup.default_base()
+    assert dressup.clean_base("../etc") == dressup.default_base()
+    assert dressup.clean_base(_female()) == _female()
+
+
+def test_catalog_lists_bases_and_where_each_part_is_drawn():
+    cat = dressup.catalog()
+    assert [b["id"] for b in cat["bases"]] == [b["id"] for b in dressup.bases()]
+    clothes = [p for p in cat["parts"] if p["category"] not in dressup.FACE_CATEGORIES]
+    assert clothes and all(p["bases"] for p in clothes)
+    faces = [p for p in cat["parts"] if p["category"] in dressup.FACE_CATEGORIES]
+    assert all(set(p["bases"]) == {b["id"] for b in dressup.bases()} for p in faces), "臉兩個素體共用"
+
+
+def test_part_missing_on_a_base_is_ignored(monkeypatch):
+    """某個素體還沒畫好的部件：手機送來也不能拿另一個素體的圖層硬疊（位置、身形都不同）。"""
+    base_id = _female()
+    real = dressup._usable
+    monkeypatch.setattr(dressup, "_usable",
+                        lambda part, b=None: False if part["id"] == "hair_bun" and b == base_id else real(part, b))
+    sel, _ = dressup.clean_request({"hair": "hair_bun"}, {}, base_id)
+    assert "hair" not in sel
+    plain = np.asarray(dressup.compose({}, base_id=base_id))
+    assert np.array_equal(np.asarray(dressup.compose({"hair": "hair_bun"}, base_id=base_id)), plain)
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "ASSET_DIR", str(tmp_path))
@@ -238,7 +373,60 @@ def test_final_character_has_all_three_views(client):
     assert {"full", "side", "back"} <= set(body["textures"]), "走路、轉身要三面都有"
 
 
+def test_final_female_character(client):
+    body = client.post("/dressup", json={"base": _female(), "selection": {"hair": "hair_bun"}}).get_json()
+    assert body["ok"] and {"full", "side", "back"} <= set(body["textures"])
+
+
 def test_garbage_request_still_makes_a_character(client):
     """手機送壞資料：不認得的全部忽略，照樣組出素體，不擋人進場。"""
     body = client.post("/dressup", json={"selection": "nope", "colors": [1, 2]}).get_json()
     assert body["ok"]
+
+
+# ── 走路擺手的手臂範圍 ─────────────────────────────────────────────
+
+def _arms_of(client, payload, tmp_path):
+    body = client.post("/dressup", json=payload).get_json()
+    assert body["ok"]
+    asset = body["textures"]["side"].split("/")[-2]
+    path = tmp_path / asset / "arms.json"
+    assert path.exists(), "換裝角色要寫 arms.json，大螢幕擺手才不必從圖上猜"
+    import json
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("base_id", [b["id"] for b in dressup.bases()])
+def test_every_base_has_arm_maps(base_id):
+    """素體與長袖外套都要有手臂標記圖（scripts/dressup_arms.py）。少了的話那個素體的換裝角色擺手又回去用猜的"""
+    assert (dressup.layer_dir(base_id) / "_arms.png").exists()
+    assert (dressup.layer_dir(base_id) / "top_hoodie_arms.png").exists()
+
+
+def test_arms_cover_every_view_even_with_a_crossbody_bag(client, tmp_path):
+    """斜背包擋住手與身體之間的縫：從圖上找，正面背面都找不到手（實測）。給了範圍就不必找"""
+    arms = _arms_of(client, {"selection": {"outer": "top_hoodie", "acc": ["acc_crossbody"]}}, tmp_path)
+    assert [a["name"] for a in arms["front"]] == ["armL", "armR"]
+    assert [a["name"] for a in arms["back"]] == ["armL", "armR"]
+    side = arms["side"]
+    assert [a["name"] for a in side] == ["arm"] and side[0].get("small") is True, "整條袖子只小幅擺"
+
+
+def test_arm_cells_line_up_with_the_walk_grid(client, tmp_path):
+    """手臂要落在身體的中段：外框量錯（例如用去背後被裁小的圖）會整條往下偏、落到腿上"""
+    arms = _arms_of(client, {"selection": {"top": "top_shirt"}}, tmp_path)
+    for view in ("front", "side", "back"):
+        for arm in arms[view]:
+            rows = [r for r, _, _ in arm["cells"]]
+            assert 35 <= min(rows) and max(rows) <= 75, f"{view} {arm['name']} 在第 {min(rows)}–{max(rows)} 列"
+    assert not any(a.get("small") for a in arms["side"]), "短袖照常擺"
+
+
+def test_long_hair_is_not_part_of_the_arm(client, tmp_path):
+    """女生的長髮垂在肩膀前面，找手時會被當成手臂的上半截：頭髮不能跟著手擺"""
+    arms = _arms_of(client, {"base": _female(), "selection": {}}, tmp_path)
+    male = _arms_of(client, {"selection": {}}, tmp_path)
+    top = lambda a: min(r for r, _, _ in a["cells"])
+    for view in ("front", "back"):
+        for f, m in zip(arms[view], male[view]):
+            assert top(f) >= top(m) - 2, f"{view} {f['name']} 從第 {top(f)} 列開始（男生 {top(m)}），包進了頭髮"

@@ -20,6 +20,10 @@ scripts/dressup_build.py。程式不必改。
 
 臉（表情、眉毛、眼珠顏色）不走生圖：五官只有幾格大，模型改不準，也不是「加一樣東西」。
 改用 manifest 的 face 段落裡手畫的格子圖（stamp），蓋在素體五官的固定位置上。
+
+素體不只一個（manifest 的 bases：男生、女生）。每個素體各有一套 raw 與 layers
+（第一個素體在 raw/、layers/，其他在 raw/<id>/、layers/<id>/），部件清單共用。
+臉是共用的：新素體的五官從第一個素體逐格搬過去（make_base），表情、眉毛不必重畫。
 """
 
 from __future__ import annotations
@@ -44,8 +48,9 @@ LAYER_DIR = DRESSUP_DIR / "layers"
 # 與生圖模型輸出的三視圖同尺寸：組好的圖直接走同一條後處理（turnaround.split_turnaround）
 CANVAS = (1376, 768)
 
-# 圖層裡每一格是什麼（layers/<id>_mask.png 的值）
-L_NONE, L_PART, L_SKIN, L_HAIR, L_ERASE, L_FIXED = 0, 1, 2, 3, 4, 5
+# 圖層裡每一格是什麼（layers/<id>_mask.png 的值）。L_TOP：部件拿掉了原本蓋著上衣的東西
+# （女生素體的長髮換成短髮，肩上露出 T 恤），露出來的上衣要跟著選的上衣顏色換
+L_NONE, L_PART, L_SKIN, L_HAIR, L_ERASE, L_FIXED, L_TOP = 0, 1, 2, 3, 4, 5, 6
 
 # 換色時每一格歸誰管（組圖時的分類圖）。配件從 ACC0 開始依序編號
 C_FIXED, C_SKIN, C_HAIR, C_TOP, C_OUTER, C_BOTTOM, C_SHOES, C_BG, C_EYES, C_BROWS = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
@@ -57,7 +62,9 @@ FACE_CATEGORIES = ("expression", "brows", "eyes")
 INK_CLASS = {"skin": C_SKIN, "fixed": C_FIXED, "eyes": C_EYES, "brows": C_BROWS}
 
 # 綠色占位色：生成時要求部件只用這個色系畫（manifest 的 edit_prompt）
-KEY_GREEN_MARGIN = 40           # 綠比紅、藍都多這麼多才算占位綠
+# 綠比紅、藍都多這麼多才算占位綠。原本 40：部件邊緣反鋸齒的那一圈深綠（約 (30,62,30)）
+# 差不到 40，被當成固定色留下來，換成紅裙子邊上還有一圈綠（2026-10-20 女生素體實測）
+KEY_GREEN_MARGIN = 25
 KEY_GREEN_REF = (24, 180, 24)   # 占位綠的中間調：換色時對應到參與者選的顏色本身
 
 # 素體各部位的中間調（量自 pose_turnaround.png 出現最多的顏色）。換色時這個亮度對應到選的顏色
@@ -99,6 +106,8 @@ def _hex(color: str) -> np.ndarray:
 
 _manifest_cache: Dict[str, dict] = {}
 _base_cache: Dict[str, np.ndarray] = {}
+_layer_cache: Dict[tuple, tuple] = {}
+_label_cache: Dict[tuple, np.ndarray] = {}
 
 
 def load_manifest(path: Path = MANIFEST_PATH) -> dict:
@@ -109,10 +118,40 @@ def load_manifest(path: Path = MANIFEST_PATH) -> dict:
     return _manifest_cache[key]
 
 
-def base_canvas(manifest: Optional[dict] = None) -> np.ndarray:
+def bases(manifest: Optional[dict] = None) -> List[dict]:
+    """素體清單（manifest 的 bases），第一個是預設。"""
+    return (manifest or load_manifest())["bases"]
+
+
+def default_base(manifest: Optional[dict] = None) -> str:
+    return bases(manifest)[0]["id"]
+
+
+def clean_base(value, manifest: Optional[dict] = None) -> str:
+    """手機送來的素體 id：認得就用，不認得（或沒給）用預設 —— 舊版手機不會送這個欄位。"""
+    ids = [b["id"] for b in bases(manifest)]
+    return value if isinstance(value, str) and value in ids else ids[0]
+
+
+def _base(base_id: str, manifest: Optional[dict] = None) -> dict:
+    return next(b for b in bases(manifest) if b["id"] == base_id)
+
+
+def raw_dir(base_id: Optional[str] = None) -> Path:
+    """部件原圖放哪：第一個素體在 raw/（素體換裝一開始只有它），其他在 raw/<素體>/。"""
+    base_id = base_id or default_base()
+    return RAW_DIR if base_id == default_base() else RAW_DIR / base_id
+
+
+def layer_dir(base_id: Optional[str] = None) -> Path:
+    base_id = base_id or default_base()
+    return LAYER_DIR if base_id == default_base() else LAYER_DIR / base_id
+
+
+def base_canvas(manifest: Optional[dict] = None, base_id: Optional[str] = None) -> np.ndarray:
     """素體縮到 CANVAS 大小（最近鄰，格子不糊）。回傳一份可以改的拷貝。"""
     manifest = manifest or load_manifest()
-    key = manifest["base"]
+    key = _base(base_id or default_base(manifest), manifest)["image"]
     if key not in _base_cache:
         base = Image.open(DRESSUP_DIR / key).convert("RGB")
         _base_cache[key] = np.asarray(base.resize(CANVAS, Image.NEAREST))
@@ -120,42 +159,54 @@ def base_canvas(manifest: Optional[dict] = None) -> np.ndarray:
 
 
 def catalog() -> dict:
-    """給手機換裝頁的選單：分類、部件名稱、預設顏色。不含生成用的 prompt。"""
+    """給手機換裝頁的選單：素體、分類、部件名稱、預設顏色。不含生成用的 prompt。
+
+    部件帶 bases：在哪些素體上畫好了（某個素體還沒生成的部件，手機上就不列）。
+    素體帶 base_labels：「什麼都不選」時那一格叫什麼（男生是短髮、女生是中長髮）。
+    """
     manifest = load_manifest()
+    base_ids = [b["id"] for b in bases(manifest)]
+    parts = []
+    for p in manifest["parts"]:
+        on = [b for b in base_ids if _usable(p, b)]
+        if on:
+            parts.append({"id": p["id"], "category": p["category"], "label": p["label"], "bases": on,
+                          **({"hides": p["hides"]} if p.get("hides") else {})})
     return {
+        "bases": [{"id": b["id"], "label": b["label"], "base_labels": b.get("base_labels", {})}
+                  for b in bases(manifest)],
         "categories": [{**{k: c[k] for k in ("id", "label", "base_label", "multi")},
                         "palette": c.get("palette", "cloth")} for c in manifest["categories"]],
-        "parts": [{"id": p["id"], "category": p["category"], "label": p["label"],
-                   **({"hides": p["hides"]} if p.get("hides") else {})}
-                  for p in manifest["parts"] if _usable(p)],
+        "parts": parts,
         "defaults": DEFAULT_COLORS,
     }
 
 
-def _usable(part: dict) -> bool:
-    """臉的部件是格子圖，有寫就能用；衣服髮型要切過圖層才能用。"""
+def _usable(part: dict, base_id: Optional[str] = None) -> bool:
+    """臉的部件是格子圖，有寫就能用；衣服髮型要在這個素體上切過圖層才能用。"""
     if part["category"] in FACE_CATEGORIES:
         return bool(part.get("stamp"))
-    return (LAYER_DIR / f"{part['id']}_mask.png").exists()
+    return (layer_dir(base_id) / f"{part['id']}_mask.png").exists()
 
 
-def front_box(pad: int = 48) -> tuple:
+def front_box(pad: int = 48, base_id: Optional[str] = None) -> tuple:
     """正面那個人在 CANVAS 上的範圍（加一點邊給帽沿、髮髻）。素體位置固定，算一次就好。"""
-    if "front" not in _label_cache:
-        x0, x1, y0, y1 = find_figures(Image.fromarray(base_canvas()))[0]
-        _label_cache["front"] = np.array([max(0, x0 - pad), max(0, y0 - pad),
-                                          min(CANVAS[0], x1 + pad), min(CANVAS[1], y1 + pad)])
-    return tuple(int(v) for v in _label_cache["front"])
+    key = ("front", base_id or default_base())
+    if key not in _label_cache:
+        x0, x1, y0, y1 = find_figures(Image.fromarray(base_canvas(base_id=key[1])))[0]
+        _label_cache[key] = np.array([max(0, x0 - pad), max(0, y0 - pad),
+                                      min(CANVAS[0], x1 + pad), min(CANVAS[1], y1 + pad)])
+    return tuple(int(v) for v in _label_cache[key])
 
 
 _COLOR_KEYS = ("skin", "hair", "top", "outer", "bottom", "shoes", "eyes", "brows")
 
 
-def clean_request(selection, colors) -> tuple:
-    """手機送來的選擇與顏色只留認得的：部件 id 要在清單裡、顏色要是 #RRGGBB。"""
+def clean_request(selection, colors, base_id: Optional[str] = None) -> tuple:
+    """手機送來的選擇與顏色只留認得的：部件 id 要在清單裡（而且這個素體上畫好了）、顏色要是 #RRGGBB。"""
     import re
 
-    known = {p["id"]: p["category"] for p in load_manifest()["parts"] if _usable(p)}
+    known = {p["id"]: p["category"] for p in load_manifest()["parts"] if _usable(p, base_id)}
     hex_re = re.compile(r"^#[0-9A-Fa-f]{6}$")
     sel = {}
     for cat_id in DRAW_ORDER + FACE_CATEGORIES:
@@ -200,12 +251,23 @@ def base_labels(rgb: np.ndarray, face: Optional[dict] = None) -> np.ndarray:
     neutral = (a.max(axis=2) - a.min(axis=2)) <= 14
     labels = np.full(rgb.shape[:2], C_FIXED, dtype=np.uint8)
     skin = (r > g) & (g > b) & (r - b >= 60) & (lum >= 100)
-    hair = _scalp_connected((r > g) & (g >= b) & (r - b >= 6) & (r - b < 60) & (lum < 100) & (t >= 0) & (t < 0.62), t)
+    hairy = (r > g) & (g >= b) & (r - b >= 6) & (r - b < 60) & (lum < 100) & (t >= 0) & (t < 0.62)
+    hair = _scalp_connected(hairy, t)
+    if face:
+        # 披肩的長髮在正面被耳朵整個切開，耳朵以下那段連不到頭頂（女生素體）。五官的位置
+        # 已知：夠大、又不碰到五官的同色塊也算頭髮。眉毛、眼珠都在五官的 slot 裡，不會被算進來
+        hair |= _loose_hair(hairy & ~hair, face)
     labels[skin] = C_SKIN
     labels[hair] = C_HAIR
     labels[neutral & (lum >= 150) & (t >= 0.3) & (t < 0.80)] = C_TOP
     labels[neutral & (lum >= 95) & (lum < 150) & (t >= 0.6) & (t < 0.93)] = C_BOTTOM
     labels[neutral & (lum < 115) & (t >= 0.9)] = C_SHOES
+    # T 恤兩側那條較深的灰邊跟長褲同一個亮度，上面的規則把它算成褲子：換紅褲子時 T 恤兩側也變紅。
+    # 在 T 恤下擺以上（同一欄最低的上衣格子）的「褲子」都改回上衣
+    top = labels == C_TOP
+    hem = np.where(top.any(axis=0), top.shape[0] - 1 - np.argmax(top[::-1], axis=0), -1)
+    rows = np.arange(labels.shape[0])[:, None]
+    labels[(labels == C_BOTTOM) & (rows <= hem[None, :])] = C_TOP
     # 背景最後蓋：白底在身旁的那幾列也是「亮的中性色」，不能被當成上衣
     labels[a.min(axis=2) > WHITE] = C_BG
     if face:
@@ -234,6 +296,23 @@ def _largest(mask: np.ndarray) -> np.ndarray:
     if count <= 1:
         return mask
     return lab == 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+
+
+LOOSE_HAIR_MIN = 300   # 像素。比這小的深棕色塊是陰影、雜點，不是一段頭髮
+
+
+def _loose_hair(mask: np.ndarray, face: dict) -> np.ndarray:
+    import cv2
+
+    features = np.zeros(mask.shape, dtype=bool)
+    for slots in face["slots"].values():
+        for slot in slots.values():
+            x0, y0, x1, y1 = slot["clear"]
+            features[y0:y1, x0:x1] = True
+    count, lab, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=4)
+    keep = [i for i in range(1, count)
+            if stats[i, cv2.CC_STAT_AREA] >= LOOSE_HAIR_MIN and not features[lab == i].any()]
+    return np.isin(lab, keep)
 
 
 def _scalp_connected(mask: np.ndarray, t: np.ndarray) -> np.ndarray:
@@ -282,8 +361,17 @@ def extract_layer(raw: np.ndarray, base: np.ndarray, base_lab: np.ndarray, regio
     white = a.min(axis=2) > WHITE
     skin = (r > g) & (g > b) & (r - b >= 60) & (lum >= 100)
     hair = (r > g) & (g >= b) & (r - b >= 6) & (r - b < 60) & (lum < 100)
+    # 部件畫完還是 T 恤的格子（亮的中性灰）：跟著選的上衣顏色換，不能照原樣留成灰色。
+    #   - 素體原本是頭髮：女生素體的長髮披在肩上，換短髮後露出 T 恤（頭髮的邊那一圈也算，
+    #     模型重畫時那一圈常變成 T 恤，漏掉的話背上留一條白線）
+    #   - 素體原本就是 T 恤、只是模型重畫時亮暗變了（頭髮下的陰影、敞開外套裡的 T 恤）
+    # 其他地方的淺灰（眼鏡反光、帽子亮面）是部件自己的顏色，不算
+    hair_zone = cv2.dilate((base_lab == C_HAIR).astype(np.uint8), np.ones((7, 7), np.uint8)).astype(bool)
+    tee = (((a.max(axis=2) - a.min(axis=2)) <= 14) & (lum >= 150) & ~white & (t >= 0.3) & (t < 0.8)
+           & (hair_zone | (base_lab == C_TOP)))
     mask[keep] = L_FIXED
     mask[keep & hair] = L_HAIR
+    mask[keep & tee] = L_TOP
     mask[keep & skin] = L_SKIN
     mask[keep & white] = L_ERASE
     mask[green] = L_PART
@@ -292,19 +380,22 @@ def extract_layer(raw: np.ndarray, base: np.ndarray, base_lab: np.ndarray, regio
     return aligned, mask
 
 
-def build_layers(ids: Optional[List[str]] = None) -> List[str]:
-    """把 raw/ 切成 layers/。回傳處理了哪些部件。"""
+def build_layers(ids: Optional[List[str]] = None, base_id: Optional[str] = None) -> List[str]:
+    """把這個素體的 raw 切成 layers。回傳處理了哪些部件。"""
     manifest = load_manifest()
+    base_id = base_id or default_base(manifest)
     regions = {c["id"]: c["region"] for c in manifest["categories"] if "region" in c}
-    base = base_canvas(manifest)
+    base = base_canvas(manifest, base_id)
     base_lab = base_labels(base, manifest.get("face"))
-    LAYER_DIR.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(base_lab).save(LAYER_DIR / "_base_labels.png")
+    out_dir = layer_dir(base_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(base_lab).save(out_dir / "_base_labels.png")
+    _label_cache.pop(("labels", base_id), None)
     done = []
     for part in manifest["parts"]:
         if (ids and part["id"] not in ids) or part["category"] not in regions:
             continue
-        raw_path = RAW_DIR / f"{part['id']}.png"
+        raw_path = raw_dir(base_id) / f"{part['id']}.png"
         if not raw_path.exists():
             continue
         raw = np.asarray(Image.open(raw_path).convert("RGB").resize(CANVAS, Image.NEAREST))
@@ -312,28 +403,76 @@ def build_layers(ids: Optional[List[str]] = None) -> List[str]:
         # 沒用到的格子顏色清成 0：透明處留著原圖的顏色，PNG 壓不小（一張 800KB → 不到 100KB）
         rgb = np.where((mask > 0)[..., None], rgb, 0).astype(np.uint8)
         rgba = np.dstack([rgb, np.where(mask > 0, 255, 0).astype(np.uint8)])
-        Image.fromarray(rgba, "RGBA").save(LAYER_DIR / f"{part['id']}.png")
-        Image.fromarray(mask).save(LAYER_DIR / f"{part['id']}_mask.png")
+        Image.fromarray(rgba, "RGBA").save(out_dir / f"{part['id']}.png")
+        Image.fromarray(mask).save(out_dir / f"{part['id']}_mask.png")
+        _layer_cache.pop((part["id"], base_id), None)
         done.append(part["id"])
     return done
 
 
-_layer_cache: Dict[str, tuple] = {}
-_label_cache: Dict[str, np.ndarray] = {}
+# 新素體從第一個素體搬五官時，往外多搬幾格：模型畫的眼睛常偏個幾像素，
+# 只搬 slot 範圍的話，slot 邊上會留下新素體自己那雙眼睛的一角
+FACE_COPY_PAD = 6
 
 
-def _base_label_map() -> np.ndarray:
-    if "base" not in _label_cache:
-        _label_cache["base"] = np.asarray(Image.open(LAYER_DIR / "_base_labels.png"))
-    return _label_cache["base"]
+def _outside(rgb: np.ndarray) -> np.ndarray:
+    """連到畫面邊緣的白色 = 背景。眼白也是白的，但被臉包住，不算背景。"""
+    import cv2
+
+    white = (rgb.min(axis=2) > WHITE).astype(np.uint8)
+    _, lab = cv2.connectedComponents(white, connectivity=4)
+    border = np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))
+    return np.isin(lab, border[border > 0])
 
 
-def _layer(part_id: str):
-    if part_id not in _layer_cache:
-        rgba = np.asarray(Image.open(LAYER_DIR / f"{part_id}.png").convert("RGBA"))
-        mask = np.asarray(Image.open(LAYER_DIR / f"{part_id}_mask.png"))
-        _layer_cache[part_id] = (rgba[..., :3], mask)
-    return _layer_cache[part_id]
+def make_base(raw: np.ndarray, manifest: Optional[dict] = None) -> np.ndarray:
+    """生圖模型畫的新素體 → 能跟第一個素體共用臉的素體（CANVAS 大小）。
+
+    1. 縮放到跟第一個素體一樣高（模型常畫大或小 1%，五官就差幾像素）
+    2. 平移對齊
+    3. 五官（眉毛、眼睛、嘴）從第一個素體逐格搬過來：模型會照自己的意思重畫一次臉，
+       差幾像素表情、眉毛的格子圖就疊不準。只搬兩邊都是臉的格子，頭髮、背景不動
+    """
+    manifest = manifest or load_manifest()
+    ref = base_canvas(manifest)
+    face = manifest["face"]
+    w, h = CANVAS
+    img = Image.fromarray(raw).resize(CANVAS, Image.NEAREST)
+    ref_fig = find_figures(Image.fromarray(ref))[0]
+    new_fig = find_figures(img)[0]
+    scale = (ref_fig[3] - ref_fig[2]) / max(1, new_fig[3] - new_fig[2])
+    scaled = img.resize((round(w * scale), round(h * scale)), Image.NEAREST)
+    canvas = Image.new("RGB", CANVAS, "white")
+    canvas.paste(scaled, (round((w - scaled.width) / 2), round((h - scaled.height) / 2)))
+    out = _align(np.asarray(canvas), ref).copy()
+
+    ref_lab, out_lab = base_labels(ref, face), base_labels(out, face)
+    keep = (ref_lab != C_HAIR) & (out_lab != C_HAIR) & ~_outside(ref) & ~_outside(out)
+    for slots in face["slots"].values():
+        for slot in slots.values():
+            x0, y0, x1, y1 = slot["clear"]
+            box = (slice(max(0, y0 - FACE_COPY_PAD), y1 + FACE_COPY_PAD),
+                   slice(max(0, x0 - FACE_COPY_PAD), x1 + FACE_COPY_PAD))
+            m = keep[box]
+            out[box][m] = ref[box][m]
+    return out
+
+
+def _base_label_map(base_id: Optional[str] = None) -> np.ndarray:
+    key = ("labels", base_id or default_base())
+    if key not in _label_cache:
+        _label_cache[key] = np.asarray(Image.open(layer_dir(key[1]) / "_base_labels.png"))
+    return _label_cache[key]
+
+
+def _layer(part_id: str, base_id: Optional[str] = None):
+    key = (part_id, base_id or default_base())
+    if key not in _layer_cache:
+        folder = layer_dir(key[1])
+        rgba = np.asarray(Image.open(folder / f"{part_id}.png").convert("RGBA"))
+        mask = np.asarray(Image.open(folder / f"{part_id}_mask.png"))
+        _layer_cache[key] = (rgba[..., :3], mask)
+    return _layer_cache[key]
 
 
 def _recolor(rgb: np.ndarray, sel: np.ndarray, ref: Sequence[int], target: np.ndarray) -> None:
@@ -392,8 +531,9 @@ def _apply_face(rgb: np.ndarray, cat: np.ndarray, part: dict, face: dict, origin
 
 
 def compose(selection: Optional[dict] = None, colors: Optional[dict] = None,
-            box: Optional[Sequence[int]] = None) -> Image.Image:
-    """組出一張三視圖（白底 RGB，CANVAS 大小）。
+            box: Optional[Sequence[int]] = None, base_id: Optional[str] = None,
+            with_holes: bool = False):
+    """組出一張三視圖（白底 RGB，CANVAS 大小）。with_holes=True 時回傳 (圖, holes)。
 
     selection：{"hair": id|None, "top": id|None, "outer": id|None, "bottom": id|None,
                 "shoes": id|None, "expression": id|None, "brows": id|None, "acc": [id, ...]}；
@@ -401,15 +541,20 @@ def compose(selection: Optional[dict] = None, colors: Optional[dict] = None,
     colors：{"skin", "hair", "top", "outer", "bottom", "shoes", "eyes", "brows": "#RRGGBB",
              "acc": {id: "#RRGGBB"}}
     box：只組這一塊 (x0, y0, x1, y1)（換裝頁的即時預覽只要正面，快三倍）
+    base_id：哪個素體（manifest 的 bases；沒給是第一個）
+    holes：組完之後確定是背景的格子（素體的背景、被擦掉的頭髮）。馬尾、脖子、背包
+           會把一塊背景圍住，去背只從圖邊往裡清、走不到 —— 呼叫端要把這些格子直接挖成透明。
+           眼白也是白的，但不連到素體的圖邊，不算
     """
     manifest = load_manifest()
+    base_id = base_id or default_base(manifest)
     parts = {p["id"]: p for p in manifest["parts"]}
     selection = dict(selection or {})
     colors = {**DEFAULT_COLORS, **{k: v for k, v in (colors or {}).items() if v}}
     x0, y0, x1, y1 = box or (0, 0, CANVAS[0], CANVAS[1])
     crop = (slice(y0, y1), slice(x0, x1))
-    rgb = base_canvas(manifest)[crop].copy()
-    cat = _base_label_map()[crop].copy()
+    rgb = base_canvas(manifest, base_id)[crop].copy()
+    cat = _base_label_map(base_id)[crop].copy()
     # 每一格換色時的參考中間調來源：0 = 素體配色，1 = 占位綠
     from_green = np.zeros(cat.shape, dtype=bool)
 
@@ -427,6 +572,13 @@ def compose(selection: Optional[dict] = None, colors: Optional[dict] = None,
             hidden.update(parts[pid].get("hides", []))
 
     acc_ids = [p for p in (selection.get("acc") or []) if p in parts]
+    base_hair = cat == C_HAIR
+    erased_hair = np.zeros(cat.shape, dtype=bool)
+    # 頭髮拿掉後露出來的上衣（L_TOP）：有穿外套就是外套 —— 長髮素體的外套原圖裡，
+    # 那一塊被頭髮蓋著沒畫到，只補 T 恤的話換馬尾時背上會露出一塊白
+    outer_on = (isinstance(selection.get("outer"), str) and selection["outer"] in parts
+                and "outer" not in hidden and _usable(parts[selection["outer"]], base_id))
+    tee_as_outer = np.zeros(cat.shape, dtype=bool)
     for cat_id in DRAW_ORDER:
         if cat_id in hidden:
             continue
@@ -434,20 +586,34 @@ def compose(selection: Optional[dict] = None, colors: Optional[dict] = None,
         for pid in ids:
             if not (isinstance(pid, str) and pid in parts):
                 continue
-            layer_rgb, mask = _layer(pid)
+            if not _usable(parts[pid], base_id):
+                continue
+            layer_rgb, mask = _layer(pid, base_id)
             layer_rgb, mask = layer_rgb[crop], mask[crop]
             code = C_ACC0 + acc_ids.index(pid) if cat_id == "acc" else CATEGORY_CODE[cat_id]
-            paint = (mask != L_NONE) & (mask != L_ERASE)
+            # 露出來的上衣只補在還是頭髮的地方：外套、上衣已經畫在那裡的話不蓋掉
+            tee = (mask == L_TOP) & (cat == C_HAIR)
+            paint = (mask != L_NONE) & (mask != L_ERASE) & ((mask != L_TOP) | tee)
             rgb[paint] = layer_rgb[paint]
             from_green[paint] = False
+            tee_as_outer &= ~paint
             cat[mask == L_PART] = code
             from_green[mask == L_PART] = True
             cat[mask == L_SKIN] = C_SKIN
             cat[mask == L_HAIR] = C_HAIR
+            if outer_on:
+                tee_as_outer |= tee
+                cat[tee] = C_FIXED
+            else:
+                cat[tee] = C_TOP
             cat[mask == L_FIXED] = C_FIXED
             erase = mask == L_ERASE
             rgb[erase] = 255
             cat[erase] = C_BG
+            erased_hair |= erase & base_hair
+            tee_as_outer &= ~erase
+
+    _recolor(rgb, tee_as_outer, BASE_REF[C_TOP], _hex(colors["outer"]))
 
     if "top" in hidden:
         # 無袖洋裝之類蓋掉上衣的：素體 T 恤沒被蓋到的地方（袖口）是手臂，換成皮膚
@@ -467,4 +633,144 @@ def compose(selection: Optional[dict] = None, colors: Optional[dict] = None,
         _recolor(rgb, sel & from_green, KEY_GREEN_REF, target)
         if code in BASE_REF:
             _recolor(rgb, sel & ~from_green, BASE_REF[code], target)
-    return Image.fromarray(rgb)
+    img = Image.fromarray(rgb)
+    if not with_holes:
+        return img
+    holes = (cat == C_BG) & (_base_outside(base_id)[crop] | erased_hair)
+    return img, holes
+
+
+def _base_outside(base_id: Optional[str] = None) -> np.ndarray:
+    """素體上連到圖邊的背景（快取）"""
+    key = ("outside", base_id or default_base())
+    if key not in _label_cache:
+        _label_cache[key] = _outside(base_canvas(base_id=key[1]))
+    return _label_cache[key]
+
+
+def compose_front(selection: Optional[dict] = None, colors: Optional[dict] = None,
+                  base_id: Optional[str] = None):
+    """換裝頁的即時預覽：只組正面那一塊，回傳 (圖, holes)。
+
+    框是素體正面左右各多留一點（帽沿、髮髻），但側面那個人的馬尾、包包可能伸進來 ——
+    從素體正面的右緣往右找第一條整欄全白的縫，縫右邊的全部洗白。
+    """
+    box = front_box(base_id=base_id)
+    img, holes = compose(selection, colors, box=box, base_id=base_id, with_holes=True)
+    rgb = np.asarray(img).copy()
+    x1 = _front_right(base_id) - box[0]
+    blank = (rgb.min(axis=2) >= 255 - NEIGHBOUR_WHITE_TOL).all(axis=0)
+    gap = np.nonzero(blank[x1:])[0]
+    if len(gap):
+        rgb[:, x1 + gap[0]:] = 255
+        holes[:, x1 + gap[0]:] = False
+    return Image.fromarray(rgb), holes
+
+
+# 找兩人之間的空白縫時，多白算白（跟 garment_gen 去背的容許值一樣）
+NEIGHBOUR_WHITE_TOL = 18
+
+
+def _front_right(base_id: Optional[str] = None) -> int:
+    """素體正面那個人的右緣（CANVAS 座標）"""
+    key = ("front_right", base_id or default_base())
+    if key not in _label_cache:
+        _label_cache[key] = np.array(find_figures(Image.fromarray(base_canvas(base_id=key[1])))[0][1])
+    return int(_label_cache[key])
+
+
+# ── 走路擺手的手臂範圍 ─────────────────────────────────────────────
+#
+# 大螢幕擺手要先知道手臂在哪。生成的角色只能從圖上猜（膚色、描邊、手與身體之間
+# 的縫），長袖、斜背包、寬袖、長髮都會猜錯。換裝角色疊在同一個素體上，手臂的
+# 位置事先就知道：layers/<素體>/_arms.png 是整張三視圖上每一格屬於哪隻手
+# （ARM_NAMES），只做一次（scripts/dressup_arms.py）。會改變手臂範圍的部件
+# （長袖外套：袖子比手臂寬）另有 <部件>_arms.png，選了它就用它的。
+# 組好的角色把這張圖換算成大螢幕走路格子的座標（arm_cells），存成 arms.json。
+
+ARM_NAMES = {1: "armL", 2: "armR", 3: "arm"}
+# 大螢幕把每一面的不透明範圍切成幾列（shared/voxelRig.js 的 GRID_ROWS）
+WALK_GRID_ROWS = 90
+# 大螢幕的外框只算不透明度超過這個值的像素（shared/spriteViews.js 的 ALPHA_SOLID）
+WALK_ALPHA_SOLID = 128
+
+
+def _arm_map(selection: dict, base_id: str):
+    """選了這些部件時的手臂標記圖（CANVAS 大小），與「是不是整條袖子」。沒有標記圖回傳 (None, False)。"""
+    parts = {p["id"]: p for p in load_manifest()["parts"]}
+    hidden = set()
+    for cat_id in DRAW_ORDER:
+        pid = selection.get(cat_id)
+        if isinstance(pid, str) and pid in parts:
+            hidden.update(parts[pid].get("hides", []))
+    path, sleeve = layer_dir(base_id) / "_arms.png", False
+    for cat_id in ("top", "outer"):
+        pid = selection.get(cat_id)
+        if cat_id in hidden or not isinstance(pid, str):
+            continue
+        own = layer_dir(base_id) / f"{pid}_arms.png"
+        if own.exists():
+            path, sleeve = own, True
+    if not path.exists():
+        return None, False
+    key = ("arms", str(path))
+    if key not in _label_cache:
+        _label_cache[key] = np.asarray(Image.open(path))
+    return _label_cache[key], sleeve
+
+
+def figure_boxes(sheet: Image.Image, holes: np.ndarray, lefts: Sequence[int]) -> dict:
+    """每一面在整張三視圖上的外框 {面: (x0, y0, x1, y1)}（含兩端）。
+
+    lefts：split_turnaround 切每一面時的左緣（一面的範圍到下一面的左緣為止）。前景是
+    背景與被圍住的洞以外的格子 —— 跟去背後不透明的範圍一樣（差在柔邊的一兩個像素）。
+    """
+    rgb = np.asarray(sheet)
+    fg = ~(holes | _outside(rgb))
+    edges = list(lefts) + [rgb.shape[1]]
+    boxes = {}
+    for name, x0, x1 in zip(("front", "side", "back"), edges, edges[1:]):
+        ys, xs = np.nonzero(fg[:, x0:x1])
+        if len(ys):
+            boxes[name] = (x0 + int(xs.min()), int(ys.min()), x0 + int(xs.max()), int(ys.max()))
+    return boxes
+
+
+def arm_cells(selection: dict, base_id: Optional[str], boxes: dict) -> Optional[dict]:
+    """每一面的手臂，換成大螢幕走路格子的座標：{面: [{"name", "cells": [[列, 起欄, 迄欄], …]}]}。
+
+    boxes：{面: (x0, y0, x1, y1)}，那一面在 CANVAS 上的不透明範圍（含兩端，不透明度
+    > WALK_ALPHA_SOLID）—— 大螢幕把這個範圍切成 WALK_GRID_ROWS 列的正方格，
+    取每格中心點，這裡照做一次。整條袖子（長袖外套）的側面加 "small": true：
+    擺開後原地要補布料的顏色，只能小幅擺。
+    """
+    base_id = base_id or default_base()
+    amap, sleeve = _arm_map(selection, base_id)
+    if amap is None:
+        return None
+    out = {}
+    for view, (x0, y0, x1, y1) in boxes.items():
+        cell = (y1 - y0 + 1) / WALK_GRID_ROWS
+        cols = max(1, int(np.ceil((x1 - x0 + 1) / cell)))
+        ys = np.minimum(amap.shape[0] - 1, np.floor(y0 + (np.arange(WALK_GRID_ROWS) + 0.5) * cell).astype(int))
+        xs = np.minimum(amap.shape[1] - 1, np.floor(x0 + (np.arange(cols) + 0.5) * cell).astype(int))
+        grid = amap[ys[:, None], xs[None, :]]
+        arms = []
+        for code, name in ARM_NAMES.items():
+            if (view == "side") != (code == 3):
+                continue
+            cells = []
+            for r in range(WALK_GRID_ROWS):
+                c = np.nonzero(grid[r] == code)[0]
+                if len(c):
+                    # 一列裡可能斷成幾段（手掌與袖口之間），每段各記一筆
+                    breaks = np.nonzero(np.diff(c) > 1)[0]
+                    for s, e in zip(np.r_[0, breaks + 1], np.r_[breaks, len(c) - 1]):
+                        cells.append([r, int(c[s]), int(c[e])])
+            if cells:
+                arm = {"name": name, "cells": cells}
+                if view == "side" and sleeve:
+                    arm["small"] = True
+                arms.append(arm)
+        out[view] = arms
+    return out

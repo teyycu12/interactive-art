@@ -128,6 +128,27 @@ describe('正面', () => {
     assert.deepEqual(names(rig).sort(), ['armL', 'armR', 'legL', 'legR']);
   });
 
+  test('給了手臂範圍就照給的擺（斜背包、寬袖擋住縫時從圖上找不到手）', () => {
+    const img = canvas();
+    head(img);
+    fill(img, 16, 33, 44, 58, SHIRT);    // 手與身體之間沒有縫
+    fill(img, 16, 52, 19, 56, SKIN);
+    fill(img, 41, 52, 44, 56, SKIN);
+    fill(img, 24, 59, 29, 85, PANTS);
+    fill(img, 31, 59, 36, 85, PANTS);
+    fill(img, 23, 86, 29, 89, SHOE);
+    fill(img, 31, 86, 37, 89, SHOE);
+    // 座標是格子的：從人的外框左緣（第 16 欄）算起
+    const rows = (c0, c1) => Array.from({ length: 24 }, (_, i) => [33 + i, c0 - 16, c1 - 16]);
+    const rig = buildWalkRig(img, 'front', { arms: [{ name: 'armL', cells: rows(16, 19) }, { name: 'armR', cells: rows(41, 44) }] });
+    for (const name of ['armL', 'armR']) {
+      const arm = rig.regions.find((r) => r.name === name);
+      assert.ok(arm, names(rig).join());
+      assert.deepEqual([arm.pivot, arm.bottom], [33, 56], `${name} 沒照給的範圍`);
+    }
+    assert.equal(rig.handRow, 56, '手掌高度照給的範圍算（側面要用）');
+  });
+
   test('兩腳併攏那一格與原圖逐像素相同', () => {
     const img = frontFigure();
     const rig = buildWalkRig(img, 'front');
@@ -284,10 +305,54 @@ describe('側面', () => {
     assert.ok(leg.pivot >= 60, `腿從第 ${leg.pivot} 列起，包進了上衣`);
   });
 
-  test('長袖只露出手掌時手不擺（手臂的範圍猜不準，一擺就撕破袖子）', () => {
+  test('長袖只露出手掌、袖子又沒有描邊：套姿勢參考圖的手臂模板，只小幅擺（每個角色都要會擺手）', () => {
     const rig = buildWalkRig(shortsFigure({ bareArm: false }), 'side', { skin });
-    assert.ok(!names(rig).includes('arm'), names(rig).join());
+    const arm = rig.regions.find((r) => r.name === 'arm');
+    assert.ok(arm, names(rig).join());
+    assert.ok(arm.swing <= 2, `擺 ${arm.swing} 格：手臂底下的身體不存在，只能小幅擺`);
     assert.ok(names(rig).includes('legFront'));
+  });
+
+  test('給了手臂範圍（換裝角色的 arms.json）就照給的擺，不從圖上找', () => {
+    const img = sideFigure();
+    // 座標是格子的：從人的外框左緣（第 22 欄）算起
+    const cells = [];
+    for (let r = 36; r <= 56; r++) cells.push([r, 27 - 22, 31 - 22]);
+    const rig = buildWalkRig(img, 'side', { skin: SKIN, arms: [{ name: 'arm', cells, small: true }] });
+    const arm = rig.regions.find((r) => r.name === 'arm');
+    assert.ok(arm, names(rig).join());
+    assert.equal(arm.pivot, 36);
+    assert.equal(arm.bottom, 56);
+    assert.ok(arm.swing <= 2, '整條袖子只小幅擺');
+    // 給的範圍裡沒有這一面的手：就是不擺，不退回去猜
+    const none = buildWalkRig(img, 'side', { skin: SKIN, arms: [] });
+    assert.ok(!names(none).includes('arm'), names(none).join());
+  });
+
+  test('長袖有描邊時沿著描邊找出整條袖子，從肩膀小幅擺（每個角色都要會擺手）', () => {
+    const TEE = [200, 204, 210];
+    const LINE = [90, 92, 98];
+    const img = canvas();
+    fill(img, 22, 0, 38, 29, SKIN);
+    fill(img, 22, 0, 30, 29, HAIR);
+    fill(img, 27, 30, 32, 32, SKIN);
+    fill(img, 23, 33, 37, 58, TEE);
+    fill(img, 24, 59, 35, 85, PANTS);
+    fill(img, 24, 86, 38, 89, SHOE);
+    fill(img, 27, 36, 27, 55, LINE);    // 袖子兩側的描邊
+    fill(img, 32, 36, 32, 55, LINE);
+    fill(img, 28, 56, 31, 59, SKIN);    // 只露出手掌
+    const rig = buildWalkRig(img, 'side', { skin: SKIN });
+    const arm = rig.regions.find((r) => r.name === 'arm');
+    assert.ok(arm, names(rig).join());
+    assert.ok(arm.pivot <= 40, `袖子從第 ${arm.pivot} 列才開始，沒有接到肩膀`);
+    assert.ok(arm.swing <= 2, `長袖擺 ${arm.swing} 格，原地補色會太大塊`);
+    const fr = walkFrame(img, rig, 1);
+    // 手掌往後移開（原本最前緣那一格不再是膚色）；袖子靠前的描邊也跟著走，不留在原地
+    const at = (y, x, rgb) => rgb.every((v, k) => fr.data[(y * img.width + x) * 4 + k] === v);
+    assert.ok(!at(58 * CELL, 31 * CELL, SKIN), '手掌沒動');
+    assert.ok(!at(54 * CELL, 32 * CELL, LINE), '袖子的描邊留在原地');
+    assert.ok(at(54 * CELL, 30 * CELL, LINE), '袖子的描邊沒有跟著手走');
   });
 
   test('窄裙：裙子只比腿寬一點，腿仍從裙襬底下擺（實測整件裙子被當成腿剪開）', () => {
@@ -337,6 +402,46 @@ describe('側面', () => {
         const i = (y * img.width + x) * 4;
         const isPants = fr.data[i + 3] && fr.data[i] === PANTS[0] && fr.data[i + 2] === PANTS[2];
         assert.ok(!isPants, `褲子被手帶到 (${x}, ${y})`);
+      }
+    }
+  });
+
+  test('手臂背光的陰影與後緣描邊跟著手走；短袖的袖口不被撕開（2026-10-20 回報「手臂一部分黏在軀幹上」）', () => {
+    const OUTLINE = [110, 60, 45];
+    const SHADE = SKIN.map((v) => Math.round(v * 0.75));   // 同一種膚色、暗一階
+    const HEM = [40, 60, 110];
+    const TEE = [200, 204, 210];   // 淺色 T 恤（回報的是灰 T）：深色衣服本來就不收描邊，見上一個測試
+    const img = canvas();
+    fill(img, 22, 0, 38, 29, SKIN);
+    fill(img, 22, 0, 30, 29, HAIR);
+    fill(img, 27, 30, 32, 32, SKIN);
+    fill(img, 23, 33, 37, 58, TEE);
+    fill(img, 24, 59, 35, 85, PANTS);
+    fill(img, 24, 86, 38, 89, SHOE);
+    fill(img, 25, 42, 33, 42, HEM);       // 袖口：比手臂寬
+    fill(img, 26, 43, 26, 60, OUTLINE);   // 手臂後緣的描邊
+    fill(img, 27, 43, 28, 60, SHADE);     // 背光的陰影，兩格
+    fill(img, 29, 43, 31, 60, SKIN);
+    fill(img, 32, 43, 32, 60, OUTLINE);
+    const rig = buildWalkRig(img, 'side', { skin: SKIN });
+    const arm = rig.regions.find((r) => r.name === 'arm');
+    assert.ok(arm, names(rig).join());
+    const same = (fr, x, y, rgb) => {
+      const i = (y * img.width + x) * 4;
+      return fr.data[i + 3] && rgb.every((v, k) => Math.abs(fr.data[i + k] - v) <= 2);
+    };
+    for (const s of [1, -1]) {
+      const fr = walkFrame(img, rig, s);
+      // 手擺最開、還在上衣前面的那幾列：原本陰影與描邊的位置不該還是陰影、描邊
+      // （59 列起手掌在深色褲子前面，深色照規則不收，見「長褲」那個測試）
+      for (let y = 55 * CELL; y < 59 * CELL; y++) {
+        for (let x = 26 * CELL; x < 29 * CELL; x++) {
+          assert.ok(!same(fr, x, y, SHADE) && !same(fr, x, y, OUTLINE), `s=${s}：(${x}, ${y}) 還黏著手臂的陰影或描邊`);
+        }
+      }
+      // 袖口那一列整條不動
+      for (let x = 25 * CELL; x < 34 * CELL; x++) {
+        assert.ok(same(fr, x, 42 * CELL + 1, HEM), `s=${s}：袖口 (${x}) 被撕開`);
       }
     }
   });
