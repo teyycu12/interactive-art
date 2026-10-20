@@ -305,9 +305,11 @@ describe('側面', () => {
     assert.ok(leg.pivot >= 60, `腿從第 ${leg.pivot} 列起，包進了上衣`);
   });
 
-  test('長袖只露出手掌時手不擺（手臂的範圍猜不準，一擺就撕破袖子）', () => {
+  test('長袖只露出手掌、袖子又沒有描邊：套姿勢參考圖的手臂模板，只小幅擺（每個角色都要會擺手）', () => {
     const rig = buildWalkRig(shortsFigure({ bareArm: false }), 'side', { skin });
-    assert.ok(!names(rig).includes('arm'), names(rig).join());
+    const arm = rig.regions.find((r) => r.name === 'arm');
+    assert.ok(arm, names(rig).join());
+    assert.ok(arm.swing <= 2, `擺 ${arm.swing} 格：手臂底下的身體不存在，只能小幅擺`);
     assert.ok(names(rig).includes('legFront'));
   });
 
