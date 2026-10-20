@@ -67,6 +67,19 @@
    `python scripts/dressup_build.py --base <id>` → 看 `_overview_<id>.png`
 5. `pytest backend/tests/test_dressup.py`：會檢查兩個素體的臉一樣、站的位置一樣、每個部件都畫齊了
 
+## 走路擺手的手臂範圍
+
+`layers/<素體>/_arms.png` 標著整張三視圖上每一格屬於哪隻手（1 左手、2 右手、3 側面的手），
+長袖外套另有 `<部件>_arms.png`（袖子比手臂寬）。每個換裝角色照它擺手，大螢幕不必從圖上猜
+（斜背包、長髮、長袖都會猜錯）。改了素體、加了長袖的部件之後：
+
+```bash
+python scripts/dressup_arms.py      # 要裝 Node；寫出 _arms.png 與 _arms_preview.png
+```
+
+**一定要看 `_arms_preview.png`**：紅、藍、紫要剛好蓋住兩隻手臂，不包頭髮、臉、包包。
+新的長袖部件要加進腳本裡的 `ARM_PARTS`。
+
 ## 加一個新分類
 
 （例如「耳環」想跟其他配件分開）要改程式：`backend/dressup.py` 的 `CATEGORY_CODE`、

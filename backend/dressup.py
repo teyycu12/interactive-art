@@ -677,3 +677,100 @@ def _front_right(base_id: Optional[str] = None) -> int:
     if key not in _label_cache:
         _label_cache[key] = np.array(find_figures(Image.fromarray(base_canvas(base_id=key[1])))[0][1])
     return int(_label_cache[key])
+
+
+# ── 走路擺手的手臂範圍 ─────────────────────────────────────────────
+#
+# 大螢幕擺手要先知道手臂在哪。生成的角色只能從圖上猜（膚色、描邊、手與身體之間
+# 的縫），長袖、斜背包、寬袖、長髮都會猜錯。換裝角色疊在同一個素體上，手臂的
+# 位置事先就知道：layers/<素體>/_arms.png 是整張三視圖上每一格屬於哪隻手
+# （ARM_NAMES），只做一次（scripts/dressup_arms.py）。會改變手臂範圍的部件
+# （長袖外套：袖子比手臂寬）另有 <部件>_arms.png，選了它就用它的。
+# 組好的角色把這張圖換算成大螢幕走路格子的座標（arm_cells），存成 arms.json。
+
+ARM_NAMES = {1: "armL", 2: "armR", 3: "arm"}
+# 大螢幕把每一面的不透明範圍切成幾列（shared/voxelRig.js 的 GRID_ROWS）
+WALK_GRID_ROWS = 90
+# 大螢幕的外框只算不透明度超過這個值的像素（shared/spriteViews.js 的 ALPHA_SOLID）
+WALK_ALPHA_SOLID = 128
+
+
+def _arm_map(selection: dict, base_id: str):
+    """選了這些部件時的手臂標記圖（CANVAS 大小），與「是不是整條袖子」。沒有標記圖回傳 (None, False)。"""
+    parts = {p["id"]: p for p in load_manifest()["parts"]}
+    hidden = set()
+    for cat_id in DRAW_ORDER:
+        pid = selection.get(cat_id)
+        if isinstance(pid, str) and pid in parts:
+            hidden.update(parts[pid].get("hides", []))
+    path, sleeve = layer_dir(base_id) / "_arms.png", False
+    for cat_id in ("top", "outer"):
+        pid = selection.get(cat_id)
+        if cat_id in hidden or not isinstance(pid, str):
+            continue
+        own = layer_dir(base_id) / f"{pid}_arms.png"
+        if own.exists():
+            path, sleeve = own, True
+    if not path.exists():
+        return None, False
+    key = ("arms", str(path))
+    if key not in _label_cache:
+        _label_cache[key] = np.asarray(Image.open(path))
+    return _label_cache[key], sleeve
+
+
+def figure_boxes(sheet: Image.Image, holes: np.ndarray, lefts: Sequence[int]) -> dict:
+    """每一面在整張三視圖上的外框 {面: (x0, y0, x1, y1)}（含兩端）。
+
+    lefts：split_turnaround 切每一面時的左緣（一面的範圍到下一面的左緣為止）。前景是
+    背景與被圍住的洞以外的格子 —— 跟去背後不透明的範圍一樣（差在柔邊的一兩個像素）。
+    """
+    rgb = np.asarray(sheet)
+    fg = ~(holes | _outside(rgb))
+    edges = list(lefts) + [rgb.shape[1]]
+    boxes = {}
+    for name, x0, x1 in zip(("front", "side", "back"), edges, edges[1:]):
+        ys, xs = np.nonzero(fg[:, x0:x1])
+        if len(ys):
+            boxes[name] = (x0 + int(xs.min()), int(ys.min()), x0 + int(xs.max()), int(ys.max()))
+    return boxes
+
+
+def arm_cells(selection: dict, base_id: Optional[str], boxes: dict) -> Optional[dict]:
+    """每一面的手臂，換成大螢幕走路格子的座標：{面: [{"name", "cells": [[列, 起欄, 迄欄], …]}]}。
+
+    boxes：{面: (x0, y0, x1, y1)}，那一面在 CANVAS 上的不透明範圍（含兩端，不透明度
+    > WALK_ALPHA_SOLID）—— 大螢幕把這個範圍切成 WALK_GRID_ROWS 列的正方格，
+    取每格中心點，這裡照做一次。整條袖子（長袖外套）的側面加 "small": true：
+    擺開後原地要補布料的顏色，只能小幅擺。
+    """
+    base_id = base_id or default_base()
+    amap, sleeve = _arm_map(selection, base_id)
+    if amap is None:
+        return None
+    out = {}
+    for view, (x0, y0, x1, y1) in boxes.items():
+        cell = (y1 - y0 + 1) / WALK_GRID_ROWS
+        cols = max(1, int(np.ceil((x1 - x0 + 1) / cell)))
+        ys = np.minimum(amap.shape[0] - 1, np.floor(y0 + (np.arange(WALK_GRID_ROWS) + 0.5) * cell).astype(int))
+        xs = np.minimum(amap.shape[1] - 1, np.floor(x0 + (np.arange(cols) + 0.5) * cell).astype(int))
+        grid = amap[ys[:, None], xs[None, :]]
+        arms = []
+        for code, name in ARM_NAMES.items():
+            if (view == "side") != (code == 3):
+                continue
+            cells = []
+            for r in range(WALK_GRID_ROWS):
+                c = np.nonzero(grid[r] == code)[0]
+                if len(c):
+                    # 一列裡可能斷成幾段（手掌與袖口之間），每段各記一筆
+                    breaks = np.nonzero(np.diff(c) > 1)[0]
+                    for s, e in zip(np.r_[0, breaks + 1], np.r_[breaks, len(c) - 1]):
+                        cells.append([r, int(c[s]), int(c[e])])
+            if cells:
+                arm = {"name": name, "cells": cells}
+                if view == "side" and sleeve:
+                    arm["small"] = True
+                arms.append(arm)
+        out[view] = arms
+    return out

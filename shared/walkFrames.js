@@ -296,7 +296,7 @@ function openGaps(g) {
  *   sign   這一塊跟 s 同向還是反向（左右腳、手腳反向）
  *   z      疊的順序：負的畫在身體後面，正的畫在前面
  */
-function frontRig(g, skin) {
+function frontRig(g, skin, given = null) {
   const ga = openGaps(g);
   const seg = segment(ga);
   const H = g.height;
@@ -353,7 +353,8 @@ function frontRig(g, skin) {
   const legTop = seg.crotch ?? Math.round(H * 0.8);
   let handRow = null;
   for (const [side, name, sign, inward] of [[-1, 'armL', -1, 1], [1, 'armR', 1, -1]]) {
-    const arm = frontArm(ga, g, skin, side, seg.neck, legTop);
+    // 給了手臂範圍（換裝角色）就用給的，不從圖上找：斜背包、長髮、寬袖都會擋住手與身體之間的縫
+    const arm = given ? givenArm(g, given, name) : frontArm(ga, g, skin, side, seg.neck, legTop);
     if (!arm) continue;
     handRow = Math.max(handRow ?? 0, arm.bottom);
     const idx = add({ name, pivot: arm.top, bottom: arm.bottom, lift: FRONT_ARM_LIFT, inward: inward * FRONT_ARM_IN, sign, z: 0 });
@@ -437,7 +438,7 @@ function frontArm(ga, g, skin, side, neck, legTop) {
  * segment 的手臂偵測靠「手與身體之間的縫」，側面的手貼在身體前面，沒有縫，
  * 所以改用膚色找手，再沿著手往上量出手臂。
  */
-function sideRig(g, skin, body = {}) {
+function sideRig(g, skin, body = {}, given = null) {
   const H = g.height;
   const W = g.width;
   const label = new Int16Array(W * H).fill(-1);
@@ -524,7 +525,23 @@ function sideRig(g, skin, body = {}) {
   let bare = 0, knee = 0;
   if (skin) for (let r = kneeTop; r < feetTop; r++, knee++) if (bareRow(g, r, skin)) bare++;
   const bareLegs = bare * 2 > knee;
-  const arm = skin ? sideArm(g, skin, bareLegs ? legTop - 1 : H - 1, body.handRow) : null;
+  let arm = null;
+  if (given) {
+    // 換裝角色：手臂範圍是事先在素體上做好的。整條袖子（長袖外套）一樣只小幅擺 ——
+    // 袖子底下的身體不存在，擺開後原地要補布料的顏色
+    const g0 = givenArm(g, given, 'arm');
+    if (g0) {
+      const cols = [];
+      for (let r = g0.top; r <= g0.bottom; r++) {
+        const rs = g0.rows.filter(([rr]) => rr === r);
+        cols.push(rs.length ? [Math.min(...rs.map((x) => x[1])), Math.max(...rs.map((x) => x[2]))] : [1, 0]);
+      }
+      const swing = g0.small ? SLEEVE_SWING : Math.max(1, Math.round((g0.bottom - g0.top) * SIDE_ARM_SWING));
+      arm = { top: g0.top, bottom: g0.bottom, cols, swing };
+    }
+  } else if (skin) {
+    arm = sideArm(g, skin, bareLegs ? legTop - 1 : H - 1, body.handRow);
+  }
   if (arm) {
     // fillBehind：手擺開後露出的身體要補顏色（pixelLabels 逐像素列算）
     const idx = add({ name: 'arm', pivot: arm.top, bottom: arm.bottom, swing: arm.swing, sign: -1, z: 1, fillBehind: true });
@@ -752,17 +769,40 @@ function traceSleeve(g, wrist, handTop, shoulder) {
 }
 
 /**
+ * 給定的手臂範圍（換裝角色的 arms.json，backend/dressup.arm_cells）→ { top, bottom, rows, small }。
+ * given：[{ name, cells: [[列, 起欄, 迄欄], …], small? }]，座標就是這裡的格子（同樣以不透明
+ * 範圍切 GRID_ROWS 列）。超出格子的部分丟掉（兩邊的外框可能差一欄）。沒有這隻手回傳 null。
+ */
+function givenArm(g, given, name) {
+  const arm = given.find((a) => a?.name === name);
+  if (!arm || !Array.isArray(arm.cells)) return null;
+  const rows = [];
+  for (const cell of arm.cells) {
+    if (!Array.isArray(cell) || cell.length !== 3 || !cell.every(Number.isInteger)) continue;
+    const [r, a, b] = cell;
+    if (r < 0 || r >= g.height || b < 0 || a >= g.width || a > b) continue;
+    rows.push([r, Math.max(0, a), Math.min(g.width - 1, b)]);
+  }
+  if (!rows.length) return null;
+  const top = Math.min(...rows.map((x) => x[0]));
+  const bottom = Math.max(...rows.map((x) => x[0]));
+  return { top, bottom, rows, small: arm.small === true };
+}
+
+/**
  * 分析一張圖。view：'front' | 'back' | 'side'（側面朝右）。
  * 側面需要膚色（opts.skin，從正面的 rig.skin 取）與手掌高度（opts.body =
  * { handRow }，從正面的 rig 取；沒有就用固定比例）。圖是空的回傳 null；
  * 分析不出任何會動的部位時 regions 是空的，walkFrame 會原樣照畫。
+ * opts.arms：這一面的手臂範圍（換裝角色才有，見 givenArm）；給了就不從圖上找手。
  */
 export function buildWalkRig(img, view, opts = {}) {
   const g = majorityAlpha(img, sampleGrid(img, GRID_ROWS));
   if (!g) return null;
   // 膚色：正面自己算；背面與側面用正面的（背面看不到臉）
   const skin = view === 'front' ? skinTone(g, findNeckRow(g)) : (opts.skin ?? null);
-  const rig = view === 'side' ? sideRig(g, skin, opts.body) : frontRig(g, skin);
+  const given = Array.isArray(opts.arms) ? opts.arms : null;
+  const rig = view === 'side' ? sideRig(g, skin, opts.body, given) : frontRig(g, skin, given);
   rig.label = growLabels(g, rig.label);
   rig.g = g;
   rig.view = view;

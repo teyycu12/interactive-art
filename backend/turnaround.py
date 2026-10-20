@@ -227,7 +227,8 @@ def find_figures(img: PILImage.Image) -> List[Tuple[int, int, int, int]]:
     return figures
 
 
-def split_turnaround(png_b64: str, holes: Optional[np.ndarray] = None) -> Tuple[Optional[dict], int]:
+def split_turnaround(png_b64: str, holes: Optional[np.ndarray] = None,
+                     lefts: Optional[list] = None) -> Tuple[Optional[dict], int]:
     """把三視圖切成 {"front", "side", "back"} 三張白底 PNG（base64）。
 
     回傳 (views, 找到幾個人)。找到的不是剛好三個時 views 只有 "front"：
@@ -241,6 +242,8 @@ def split_turnaround(png_b64: str, holes: Optional[np.ndarray] = None) -> Tuple[
 
     holes：呼叫端確定是背景的格子（整張圖的座標），一律挖成透明。素體換裝知道哪裡是
     頭髮被擦掉的地方，不必靠 _enclosed_gaps 猜（它整個略過側面）。
+    lefts：給一個空 list 的話，依 VIEW_ORDER 填入每一面在整張圖上的左緣（換裝要把
+    手臂的位置換算到切好的圖上）。
     """
     img = clean_sheet(_decode(png_b64))
     w = img.width
@@ -258,6 +261,8 @@ def split_turnaround(png_b64: str, holes: Optional[np.ndarray] = None) -> Tuple[
         if i + 1 < len(figures):
             right = min(right, (x1 + figures[i + 1][0]) // 2)
         box = (left, 0, right, img.height)
+        if lefts is not None:
+            lefts.append(left)
         rgb = np.asarray(img.crop(box))
         # 被圍住的白縫先挖成透明：_remove_white_background 會把透明當成背景
         # 保留下來（它只從圖邊 flood fill，走不到被圍住的縫）

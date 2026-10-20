@@ -82,3 +82,4 @@ ngrok.log
 
 # 素體換裝的總覽圖：scripts/dressup_build.py 每次重產，只給人目視檢查
 docs/style_reference/2026q3_pixel_curated/dressup/_overview*.png
+docs/style_reference/2026q3_pixel_curated/dressup/_arms_preview.png

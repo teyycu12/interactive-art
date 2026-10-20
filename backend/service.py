@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import faulthandler
+import json
 import os
 import random
 import re
@@ -851,16 +852,24 @@ def _dressup_views(payload: Dict[str, Any], only_front: bool = False):
         buf = io.BytesIO()
         Image.fromarray(rgba, "RGBA").save(buf, "PNG")
         front = base64.b64encode(buf.getvalue()).decode("ascii")
-        return {"front": _remove_white_background(front, shield_mask=None)}, sel
+        return {"front": _remove_white_background(front, shield_mask=None)}, sel, None
     sheet, holes = dressup.compose(sel, col, base_id=base_id, with_holes=True)
     buf = io.BytesIO()
     sheet.save(buf, "PNG")
-    views, count = split_turnaround(base64.b64encode(buf.getvalue()).decode("ascii"), holes=holes)
+    lefts: list = []
+    views, count = split_turnaround(base64.b64encode(buf.getvalue()).decode("ascii"), holes=holes, lefts=lefts)
     if not views or count != 3:
         raise RuntimeError(f"dressup sheet split into {count} figures")
-    # 預覽只看正面：去背是逐張做的，三張都做要多花一倍時間
-    names = ("front",) if only_front else tuple(views)
-    return {name: _remove_white_background(views[name], shield_mask=None) for name in names}, sel
+    out = {name: _remove_white_background(views[name], shield_mask=None) for name in views}
+    # 擺手用的手臂範圍要對到每一面的外框（大螢幕把外框切成格子）。外框直接在整張圖上
+    # 量：去背會把圖裁小，裁掉多少不知道，換不回整張圖的座標
+    boxes = dressup.figure_boxes(sheet, holes, lefts)
+    try:
+        arms = dressup.arm_cells(sel, base_id, boxes)
+    except Exception as e:   # 手臂範圍只是加分：算不出來就讓大螢幕照舊從圖上找
+        print(f"[vision] 換裝手臂範圍算不出來：{e!r}", file=sys.stderr)
+        arms = None
+    return out, sel, arms
 
 
 @app.route("/dressup/catalog", methods=["GET"])
@@ -879,7 +888,7 @@ def dressup_character():
     payload = request.get_json(silent=True) or {}
     started = time.perf_counter()
     try:
-        views, sel = _dressup_views(payload, only_front=bool(payload.get("preview")))
+        views, sel, arms = _dressup_views(payload, only_front=bool(payload.get("preview")))
     except Exception as e:
         print(f"[vision] 換裝組圖失敗：{e!r}", file=sys.stderr)
         return jsonify({"ok": False, "error": "dressup_failed", "fallbackColors": DEFAULT_COLORS})
@@ -907,6 +916,10 @@ def dressup_character():
         for part in VIEW_PARTS:
             if views.get(part):
                 result["textures"][part] = save_view(add_transparent_margin(views[part]), ASSET_DIR, request_id, part)
+        if arms:
+            # 跟貼圖放在同一個資料夾；大螢幕從側面貼圖的網址推得到（不必改傳輸格式）
+            with open(os.path.join(ASSET_DIR, request_id, "arms.json"), "w", encoding="utf-8") as f:
+                json.dump(arms, f, separators=(",", ":"))
     except Exception as e:
         _history_call(finish_run, request_id, status="failed", stage="slice", height_class=None,
                       duration_ms=int((time.perf_counter() - started) * 1000.0), cv_ms=None, vlm_ms=None,

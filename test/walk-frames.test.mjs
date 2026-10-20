@@ -128,6 +128,27 @@ describe('正面', () => {
     assert.deepEqual(names(rig).sort(), ['armL', 'armR', 'legL', 'legR']);
   });
 
+  test('給了手臂範圍就照給的擺（斜背包、寬袖擋住縫時從圖上找不到手）', () => {
+    const img = canvas();
+    head(img);
+    fill(img, 16, 33, 44, 58, SHIRT);    // 手與身體之間沒有縫
+    fill(img, 16, 52, 19, 56, SKIN);
+    fill(img, 41, 52, 44, 56, SKIN);
+    fill(img, 24, 59, 29, 85, PANTS);
+    fill(img, 31, 59, 36, 85, PANTS);
+    fill(img, 23, 86, 29, 89, SHOE);
+    fill(img, 31, 86, 37, 89, SHOE);
+    // 座標是格子的：從人的外框左緣（第 16 欄）算起
+    const rows = (c0, c1) => Array.from({ length: 24 }, (_, i) => [33 + i, c0 - 16, c1 - 16]);
+    const rig = buildWalkRig(img, 'front', { arms: [{ name: 'armL', cells: rows(16, 19) }, { name: 'armR', cells: rows(41, 44) }] });
+    for (const name of ['armL', 'armR']) {
+      const arm = rig.regions.find((r) => r.name === name);
+      assert.ok(arm, names(rig).join());
+      assert.deepEqual([arm.pivot, arm.bottom], [33, 56], `${name} 沒照給的範圍`);
+    }
+    assert.equal(rig.handRow, 56, '手掌高度照給的範圍算（側面要用）');
+  });
+
   test('兩腳併攏那一格與原圖逐像素相同', () => {
     const img = frontFigure();
     const rig = buildWalkRig(img, 'front');
@@ -288,6 +309,22 @@ describe('側面', () => {
     const rig = buildWalkRig(shortsFigure({ bareArm: false }), 'side', { skin });
     assert.ok(!names(rig).includes('arm'), names(rig).join());
     assert.ok(names(rig).includes('legFront'));
+  });
+
+  test('給了手臂範圍（換裝角色的 arms.json）就照給的擺，不從圖上找', () => {
+    const img = sideFigure();
+    // 座標是格子的：從人的外框左緣（第 22 欄）算起
+    const cells = [];
+    for (let r = 36; r <= 56; r++) cells.push([r, 27 - 22, 31 - 22]);
+    const rig = buildWalkRig(img, 'side', { skin: SKIN, arms: [{ name: 'arm', cells, small: true }] });
+    const arm = rig.regions.find((r) => r.name === 'arm');
+    assert.ok(arm, names(rig).join());
+    assert.equal(arm.pivot, 36);
+    assert.equal(arm.bottom, 56);
+    assert.ok(arm.swing <= 2, '整條袖子只小幅擺');
+    // 給的範圍裡沒有這一面的手：就是不擺，不退回去猜
+    const none = buildWalkRig(img, 'side', { skin: SKIN, arms: [] });
+    assert.ok(!names(none).includes('arm'), names(none).join());
   });
 
   test('長袖有描邊時沿著描邊找出整條袖子，從肩膀小幅擺（每個角色都要會擺手）', () => {

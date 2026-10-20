@@ -382,3 +382,51 @@ def test_garbage_request_still_makes_a_character(client):
     """手機送壞資料：不認得的全部忽略，照樣組出素體，不擋人進場。"""
     body = client.post("/dressup", json={"selection": "nope", "colors": [1, 2]}).get_json()
     assert body["ok"]
+
+
+# ── 走路擺手的手臂範圍 ─────────────────────────────────────────────
+
+def _arms_of(client, payload, tmp_path):
+    body = client.post("/dressup", json=payload).get_json()
+    assert body["ok"]
+    asset = body["textures"]["side"].split("/")[-2]
+    path = tmp_path / asset / "arms.json"
+    assert path.exists(), "換裝角色要寫 arms.json，大螢幕擺手才不必從圖上猜"
+    import json
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("base_id", [b["id"] for b in dressup.bases()])
+def test_every_base_has_arm_maps(base_id):
+    """素體與長袖外套都要有手臂標記圖（scripts/dressup_arms.py）。少了的話那個素體的換裝角色擺手又回去用猜的"""
+    assert (dressup.layer_dir(base_id) / "_arms.png").exists()
+    assert (dressup.layer_dir(base_id) / "top_hoodie_arms.png").exists()
+
+
+def test_arms_cover_every_view_even_with_a_crossbody_bag(client, tmp_path):
+    """斜背包擋住手與身體之間的縫：從圖上找，正面背面都找不到手（實測）。給了範圍就不必找"""
+    arms = _arms_of(client, {"selection": {"outer": "top_hoodie", "acc": ["acc_crossbody"]}}, tmp_path)
+    assert [a["name"] for a in arms["front"]] == ["armL", "armR"]
+    assert [a["name"] for a in arms["back"]] == ["armL", "armR"]
+    side = arms["side"]
+    assert [a["name"] for a in side] == ["arm"] and side[0].get("small") is True, "整條袖子只小幅擺"
+
+
+def test_arm_cells_line_up_with_the_walk_grid(client, tmp_path):
+    """手臂要落在身體的中段：外框量錯（例如用去背後被裁小的圖）會整條往下偏、落到腿上"""
+    arms = _arms_of(client, {"selection": {"top": "top_shirt"}}, tmp_path)
+    for view in ("front", "side", "back"):
+        for arm in arms[view]:
+            rows = [r for r, _, _ in arm["cells"]]
+            assert 35 <= min(rows) and max(rows) <= 75, f"{view} {arm['name']} 在第 {min(rows)}–{max(rows)} 列"
+    assert not any(a.get("small") for a in arms["side"]), "短袖照常擺"
+
+
+def test_long_hair_is_not_part_of_the_arm(client, tmp_path):
+    """女生的長髮垂在肩膀前面，找手時會被當成手臂的上半截：頭髮不能跟著手擺"""
+    arms = _arms_of(client, {"base": _female(), "selection": {}}, tmp_path)
+    male = _arms_of(client, {"selection": {}}, tmp_path)
+    top = lambda a: min(r for r, _, _ in a["cells"])
+    for view in ("front", "back"):
+        for f, m in zip(arms[view], male[view]):
+            assert top(f) >= top(m) - 2, f"{view} {f['name']} 從第 {top(f)} 列開始（男生 {top(m)}），包進了頭髮"
