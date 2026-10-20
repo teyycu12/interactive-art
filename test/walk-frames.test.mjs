@@ -290,6 +290,32 @@ describe('側面', () => {
     assert.ok(names(rig).includes('legFront'));
   });
 
+  test('長袖有描邊時沿著描邊找出整條袖子，從肩膀小幅擺（每個角色都要會擺手）', () => {
+    const TEE = [200, 204, 210];
+    const LINE = [90, 92, 98];
+    const img = canvas();
+    fill(img, 22, 0, 38, 29, SKIN);
+    fill(img, 22, 0, 30, 29, HAIR);
+    fill(img, 27, 30, 32, 32, SKIN);
+    fill(img, 23, 33, 37, 58, TEE);
+    fill(img, 24, 59, 35, 85, PANTS);
+    fill(img, 24, 86, 38, 89, SHOE);
+    fill(img, 27, 36, 27, 55, LINE);    // 袖子兩側的描邊
+    fill(img, 32, 36, 32, 55, LINE);
+    fill(img, 28, 56, 31, 59, SKIN);    // 只露出手掌
+    const rig = buildWalkRig(img, 'side', { skin: SKIN });
+    const arm = rig.regions.find((r) => r.name === 'arm');
+    assert.ok(arm, names(rig).join());
+    assert.ok(arm.pivot <= 40, `袖子從第 ${arm.pivot} 列才開始，沒有接到肩膀`);
+    assert.ok(arm.swing <= 2, `長袖擺 ${arm.swing} 格，原地補色會太大塊`);
+    const fr = walkFrame(img, rig, 1);
+    // 手掌往後移開（原本最前緣那一格不再是膚色）；袖子靠前的描邊也跟著走，不留在原地
+    const at = (y, x, rgb) => rgb.every((v, k) => fr.data[(y * img.width + x) * 4 + k] === v);
+    assert.ok(!at(58 * CELL, 31 * CELL, SKIN), '手掌沒動');
+    assert.ok(!at(54 * CELL, 32 * CELL, LINE), '袖子的描邊留在原地');
+    assert.ok(at(54 * CELL, 30 * CELL, LINE), '袖子的描邊沒有跟著手走');
+  });
+
   test('窄裙：裙子只比腿寬一點，腿仍從裙襬底下擺（實測整件裙子被當成腿剪開）', () => {
     const img = canvas();
     fill(img, 22, 0, 38, 29, SKIN);

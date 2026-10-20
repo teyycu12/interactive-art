@@ -620,9 +620,22 @@ function sideArm(g, skin, maxRow, handRow = null) {
     rows.set(r, [lo, hi]);
   }
   const handTop = Math.min(...rows.keys());
-  // 只看得到手掌（長袖）就不擺：手臂的範圍只能從手掌往上猜一條同寬的帶子，
-  // 比袖子窄，一擺就把袖子撕成一條（實測長袖毛衣）
-  if (Math.max(...rows.keys()) - handTop + 1 < H * SIDE_MIN_ARM) return null;
+  // 只看得到手掌（長袖）：手臂的範圍不能從手掌往上猜一條同寬的帶子 —— 比袖子窄，
+  // 一擺就把袖子撕成一條（實測長袖毛衣）。改沿著袖子兩側的描邊找出整條袖子；
+  // 找不到（描邊不比布料暗）才不擺
+  if (Math.max(...rows.keys()) - handTop + 1 < H * SIDE_MIN_ARM) {
+    const sleeve = traceSleeve(g, rows.get(handTop), handTop, neckRow + SLEEVE_TOP_BELOW_NECK);
+    if (!sleeve) return null;
+    const handBottom = Math.min(H - 1, Math.max(...rows.keys()) + 1);
+    const cols = [...sleeve.cols];
+    for (let r = handTop; r <= handBottom; r++) {
+      const hand = rows.get(r) ?? rows.get(r - 1) ?? rows.get(handTop);
+      cols.push(grow(r, hand));
+    }
+    // 長袖只小幅擺：袖子擺開後原地要補布料的顏色，擺得越開補得越大塊，袖子上的
+    // 明暗、花紋也被扯得越斜（實測灰毛衣擺 6 格，原地補出一塊深灰）
+    return { top: sleeve.top, bottom: handBottom, cols, swing: SLEEVE_SWING };
+  }
   // 往下多一列：手掌底下那一列是描邊，不是膚色，留在原地會變成一條橫線
   const bottom = Math.min(H - 1, Math.max(...rows.keys()) + 1);
   // 從露出膚色的第一列開始擺：無袖的手臂上面接回了肩膀，就從肩膀擺；有袖子的
@@ -653,6 +666,89 @@ function sideArm(g, skin, maxRow, handRow = null) {
   }
   const swing = Math.max(1, Math.round((bottom - top) * SIDE_ARM_SWING));
   return { top, bottom, cols, swing };
+}
+
+// 長袖：袖子從脖子往下幾格開始（肩膀），兩側描邊要比袖子裡面暗這麼多才算找到
+const SLEEVE_TOP_BELOW_NECK = 3;
+const SLEEVE_EDGE_DARKER = 0.8;
+// 袖子寬度相對手掌（袖子常比手掌窄一點或寬一點）；路徑每偏一格的罰分（描邊多半是直的）
+const SLEEVE_MIN_W = 0.5;
+const SLEEVE_MAX_W = 1.4;
+const SLEEVE_BEND = 24;
+const SLEEVE_SWING = 2;
+
+/**
+ * 長袖的手臂：從手腕往上到肩膀，找袖子兩側的描邊。
+ *
+ * 像素畫的袖子兩側各有一條連續的深色描邊，但布料常有花紋、摺痕，一格一格看
+ * 「暗不暗」分不出描邊與花紋。所以一次找一對路徑：每往上一列左右各最多偏一格、
+ * 兩條之間的寬度在手掌的 SLEEVE_MIN_W–SLEEVE_MAX_W 倍，取兩條加起來最暗的那一對，
+ * 偏一格罰 SLEEVE_BEND。透明格算最亮：算暗的話路徑直接滑到身體外面去。
+ * 描邊沒有比中間的布料明顯暗（黑衣服上的黑袖子之類）就當找不到，回傳 null。
+ * 回傳 { top, cols }：cols[i] 是第 top + i 列的 [左描邊, 右描邊]，到手腕上一列為止。
+ */
+function traceSleeve(g, wrist, handTop, shoulder) {
+  const W = g.width;
+  const [ha, hb] = wrist;
+  const handW = hb - ha + 1;
+  const minW = Math.max(2, Math.floor(handW * SLEEVE_MIN_W));
+  const maxW = Math.ceil(handW * SLEEVE_MAX_W) + 1;
+  const cost = (c, r) => (c < 0 || c >= W || !solidCell(g, c, r) ? 255 : luma(...cellColor(g, c, r)));
+  const rowsUp = [];
+  for (let r = handTop - 1; r >= shoulder; r--) rowsUp.push(r);
+  if (rowsUp.length < 3) return null;
+
+  // 動態規劃：狀態是（左描邊, 右描邊），中間至少 minW 格布料
+  const key = (a, b) => (a + 1) * (W + 2) + (b + 1);
+  let prev = new Map();
+  // 起點：手腕兩側附近。袖口可能比手掌窄，描邊落在手掌的範圍裡
+  for (let a = ha - 3; a <= ha + 2; a++) {
+    for (let b = hb - 2; b <= hb + 3; b++) {
+      const w = b - a - 1;
+      if (w < minW || w > maxW) continue;
+      prev.set(key(a, b), { a, b, cost: cost(a, rowsUp[0]) + cost(b, rowsUp[0]), back: null });
+    }
+  }
+  const layers = [prev];
+  for (let i = 1; i < rowsUp.length; i++) {
+    const r = rowsUp[i];
+    const next = new Map();
+    for (const s of prev.values()) {
+      for (let da = -1; da <= 1; da++) {
+        for (let db = -1; db <= 1; db++) {
+          const a = s.a + da, b = s.b + db;
+          const w = b - a - 1;
+          if (w < minW || w > maxW || a < -1 || b > W) continue;
+          const k = key(a, b);
+          const c = s.cost + cost(a, r) + cost(b, r) + (da ? SLEEVE_BEND : 0) + (db ? SLEEVE_BEND : 0);
+          const e = next.get(k);
+          if (!e || c < e.cost) next.set(k, { a, b, cost: c, back: s });
+        }
+      }
+    }
+    if (!next.size) return null;
+    layers.push(next);
+    prev = next;
+  }
+  let best = null;
+  for (const s of prev.values()) if (!best || s.cost < best.cost) best = s;
+  const path = [];
+  for (let s = best; s; s = s.back) path.push([s.a, s.b]);   // 肩膀 → 手腕
+  // 袖子是一條大致直的帶子：肩膀到手腕的中心橫移超過一個手掌寬，是沿著別的線走掉了
+  // （實測沿著背後的頭髮、外套前緣）
+  const mid = ([a, b]) => (a + b) / 2;
+  if (Math.abs(mid(path[0]) - mid(path[path.length - 1])) > handW) return null;
+
+  // 描邊要比袖子裡面暗：兩條路徑的平均亮度 vs 中間布料的平均亮度
+  let edge = 0, inner = 0, nIn = 0;
+  path.forEach(([a, b], i) => {
+    const r = shoulder + i;
+    edge += cost(a, r) + cost(b, r);
+    for (let c = a + 1; c < b; c++) if (solidCell(g, c, r)) { inner += luma(...cellColor(g, c, r)); nIn++; }
+  });
+  edge /= path.length * 2;
+  if (!nIn || edge > (inner / nIn) * SLEEVE_EDGE_DARKER) return null;
+  return { top: shoulder, cols: path.map(([a, b]) => [Math.max(0, a), Math.min(W - 1, b)]) };
 }
 
 /**
