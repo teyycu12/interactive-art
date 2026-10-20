@@ -531,8 +531,9 @@ def _apply_face(rgb: np.ndarray, cat: np.ndarray, part: dict, face: dict, origin
 
 
 def compose(selection: Optional[dict] = None, colors: Optional[dict] = None,
-            box: Optional[Sequence[int]] = None, base_id: Optional[str] = None) -> Image.Image:
-    """組出一張三視圖（白底 RGB，CANVAS 大小）。
+            box: Optional[Sequence[int]] = None, base_id: Optional[str] = None,
+            with_holes: bool = False):
+    """組出一張三視圖（白底 RGB，CANVAS 大小）。with_holes=True 時回傳 (圖, holes)。
 
     selection：{"hair": id|None, "top": id|None, "outer": id|None, "bottom": id|None,
                 "shoes": id|None, "expression": id|None, "brows": id|None, "acc": [id, ...]}；
@@ -541,6 +542,9 @@ def compose(selection: Optional[dict] = None, colors: Optional[dict] = None,
              "acc": {id: "#RRGGBB"}}
     box：只組這一塊 (x0, y0, x1, y1)（換裝頁的即時預覽只要正面，快三倍）
     base_id：哪個素體（manifest 的 bases；沒給是第一個）
+    holes：組完之後確定是背景的格子（素體的背景、被擦掉的頭髮）。馬尾、脖子、背包
+           會把一塊背景圍住，去背只從圖邊往裡清、走不到 —— 呼叫端要把這些格子直接挖成透明。
+           眼白也是白的，但不連到素體的圖邊，不算
     """
     manifest = load_manifest()
     base_id = base_id or default_base(manifest)
@@ -568,6 +572,13 @@ def compose(selection: Optional[dict] = None, colors: Optional[dict] = None,
             hidden.update(parts[pid].get("hides", []))
 
     acc_ids = [p for p in (selection.get("acc") or []) if p in parts]
+    base_hair = cat == C_HAIR
+    erased_hair = np.zeros(cat.shape, dtype=bool)
+    # 頭髮拿掉後露出來的上衣（L_TOP）：有穿外套就是外套 —— 長髮素體的外套原圖裡，
+    # 那一塊被頭髮蓋著沒畫到，只補 T 恤的話換馬尾時背上會露出一塊白
+    outer_on = (isinstance(selection.get("outer"), str) and selection["outer"] in parts
+                and "outer" not in hidden and _usable(parts[selection["outer"]], base_id))
+    tee_as_outer = np.zeros(cat.shape, dtype=bool)
     for cat_id in DRAW_ORDER:
         if cat_id in hidden:
             continue
@@ -580,18 +591,29 @@ def compose(selection: Optional[dict] = None, colors: Optional[dict] = None,
             layer_rgb, mask = _layer(pid, base_id)
             layer_rgb, mask = layer_rgb[crop], mask[crop]
             code = C_ACC0 + acc_ids.index(pid) if cat_id == "acc" else CATEGORY_CODE[cat_id]
-            paint = (mask != L_NONE) & (mask != L_ERASE)
+            # 露出來的上衣只補在還是頭髮的地方：外套、上衣已經畫在那裡的話不蓋掉
+            tee = (mask == L_TOP) & (cat == C_HAIR)
+            paint = (mask != L_NONE) & (mask != L_ERASE) & ((mask != L_TOP) | tee)
             rgb[paint] = layer_rgb[paint]
             from_green[paint] = False
+            tee_as_outer &= ~paint
             cat[mask == L_PART] = code
             from_green[mask == L_PART] = True
             cat[mask == L_SKIN] = C_SKIN
             cat[mask == L_HAIR] = C_HAIR
-            cat[mask == L_TOP] = C_TOP
+            if outer_on:
+                tee_as_outer |= tee
+                cat[tee] = C_FIXED
+            else:
+                cat[tee] = C_TOP
             cat[mask == L_FIXED] = C_FIXED
             erase = mask == L_ERASE
             rgb[erase] = 255
             cat[erase] = C_BG
+            erased_hair |= erase & base_hair
+            tee_as_outer &= ~erase
+
+    _recolor(rgb, tee_as_outer, BASE_REF[C_TOP], _hex(colors["outer"]))
 
     if "top" in hidden:
         # 無袖洋裝之類蓋掉上衣的：素體 T 恤沒被蓋到的地方（袖口）是手臂，換成皮膚
@@ -611,4 +633,47 @@ def compose(selection: Optional[dict] = None, colors: Optional[dict] = None,
         _recolor(rgb, sel & from_green, KEY_GREEN_REF, target)
         if code in BASE_REF:
             _recolor(rgb, sel & ~from_green, BASE_REF[code], target)
-    return Image.fromarray(rgb)
+    img = Image.fromarray(rgb)
+    if not with_holes:
+        return img
+    holes = (cat == C_BG) & (_base_outside(base_id)[crop] | erased_hair)
+    return img, holes
+
+
+def _base_outside(base_id: Optional[str] = None) -> np.ndarray:
+    """素體上連到圖邊的背景（快取）"""
+    key = ("outside", base_id or default_base())
+    if key not in _label_cache:
+        _label_cache[key] = _outside(base_canvas(base_id=key[1]))
+    return _label_cache[key]
+
+
+def compose_front(selection: Optional[dict] = None, colors: Optional[dict] = None,
+                  base_id: Optional[str] = None):
+    """換裝頁的即時預覽：只組正面那一塊，回傳 (圖, holes)。
+
+    框是素體正面左右各多留一點（帽沿、髮髻），但側面那個人的馬尾、包包可能伸進來 ——
+    從素體正面的右緣往右找第一條整欄全白的縫，縫右邊的全部洗白。
+    """
+    box = front_box(base_id=base_id)
+    img, holes = compose(selection, colors, box=box, base_id=base_id, with_holes=True)
+    rgb = np.asarray(img).copy()
+    x1 = _front_right(base_id) - box[0]
+    blank = (rgb.min(axis=2) >= 255 - NEIGHBOUR_WHITE_TOL).all(axis=0)
+    gap = np.nonzero(blank[x1:])[0]
+    if len(gap):
+        rgb[:, x1 + gap[0]:] = 255
+        holes[:, x1 + gap[0]:] = False
+    return Image.fromarray(rgb), holes
+
+
+# 找兩人之間的空白縫時，多白算白（跟 garment_gen 去背的容許值一樣）
+NEIGHBOUR_WHITE_TOL = 18
+
+
+def _front_right(base_id: Optional[str] = None) -> int:
+    """素體正面那個人的右緣（CANVAS 座標）"""
+    key = ("front_right", base_id or default_base())
+    if key not in _label_cache:
+        _label_cache[key] = np.array(find_figures(Image.fromarray(base_canvas(base_id=key[1])))[0][1])
+    return int(_label_cache[key])

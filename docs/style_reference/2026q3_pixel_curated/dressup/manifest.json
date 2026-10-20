@@ -131,7 +131,7 @@
       "id": "hair_ponytail",
       "category": "hair",
       "label": "馬尾",
-      "prompt": "hair tied into a ponytail at the back of the head that hangs down to the upper back, with a side-swept fringe. Front: the ponytail peeks out on one side. Profile: the ponytail hangs behind the head. Back: the ponytail hangs down the middle of the back. Hair is a flat pixel-art silhouette with two or three shade steps only - no glossy highlight band, no individual strands."
+      "prompt": "hair tied into a ponytail at the back of the head that hangs down to the upper back, with a side-swept fringe. Front: the lower part of the ponytail is clearly visible, hanging down behind the neck and sticking out past one side of the neck and shoulder - it must not be completely hidden behind the head. Profile: the ponytail hangs behind the head. Back: the ponytail hangs down the middle of the back. Hair is a flat pixel-art silhouette with two or three shade steps only - no glossy highlight band, no individual strands."
     },
     {
       "id": "hair_short_curly",

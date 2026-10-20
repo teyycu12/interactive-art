@@ -227,7 +227,7 @@ def find_figures(img: PILImage.Image) -> List[Tuple[int, int, int, int]]:
     return figures
 
 
-def split_turnaround(png_b64: str) -> Tuple[Optional[dict], int]:
+def split_turnaround(png_b64: str, holes: Optional[np.ndarray] = None) -> Tuple[Optional[dict], int]:
     """把三視圖切成 {"front", "side", "back"} 三張白底 PNG（base64）。
 
     回傳 (views, 找到幾個人)。找到的不是剛好三個時 views 只有 "front"：
@@ -238,6 +238,9 @@ def split_turnaround(png_b64: str) -> Tuple[Optional[dict], int]:
 
     每一張都是完整圖高、白底，左右切在人與人之間的白色欄：
     與正面同一個高度，normalize() 之後三張的比例尺相同，換面時角色不會忽大忽小。
+
+    holes：呼叫端確定是背景的格子（整張圖的座標），一律挖成透明。素體換裝知道哪裡是
+    頭髮被擦掉的地方，不必靠 _enclosed_gaps 猜（它整個略過側面）。
     """
     img = clean_sheet(_decode(png_b64))
     w = img.width
@@ -259,6 +262,8 @@ def split_turnaround(png_b64: str) -> Tuple[Optional[dict], int]:
         # 被圍住的白縫先挖成透明：_remove_white_background 會把透明當成背景
         # 保留下來（它只從圖邊 flood fill，走不到被圍住的縫）
         gaps = _enclosed_gaps(rgb, side_view=(i == 1 and len(figures) == 3))
+        if holes is not None:
+            gaps |= holes[:, left:right]
         rgba = np.dstack([rgb, np.where(gaps, 0, 255).astype(np.uint8)])
         return _encode(PILImage.fromarray(rgba, "RGBA"))
 

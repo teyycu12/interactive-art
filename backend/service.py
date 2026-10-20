@@ -837,6 +837,7 @@ def _dressup_views(payload: Dict[str, Any], only_front: bool = False):
 
     import dressup
     from garment_gen import _remove_white_background
+    from PIL import Image
     from turnaround import split_turnaround
 
     # 男生／女生素體。舊版手機不送這個欄位 → 第一個素體（男生），行為跟以前一樣
@@ -844,14 +845,17 @@ def _dressup_views(payload: Dict[str, Any], only_front: bool = False):
     sel, col = dressup.clean_request(payload.get("selection"), payload.get("colors"), base_id)
     if only_front:
         # 預覽：素體的位置固定，只組正面那一塊，不必切三視圖
+        img, holes = dressup.compose_front(sel, col, base_id=base_id)
+        # 被圍住的、頭髮擦掉的地方先挖成透明：去背會把透明當背景留著
+        rgba = np.dstack([np.asarray(img), np.where(holes, 0, 255).astype(np.uint8)])
         buf = io.BytesIO()
-        dressup.compose(sel, col, box=dressup.front_box(base_id=base_id), base_id=base_id).save(buf, "PNG")
+        Image.fromarray(rgba, "RGBA").save(buf, "PNG")
         front = base64.b64encode(buf.getvalue()).decode("ascii")
         return {"front": _remove_white_background(front, shield_mask=None)}, sel
-    sheet = dressup.compose(sel, col, base_id=base_id)
+    sheet, holes = dressup.compose(sel, col, base_id=base_id, with_holes=True)
     buf = io.BytesIO()
     sheet.save(buf, "PNG")
-    views, count = split_turnaround(base64.b64encode(buf.getvalue()).decode("ascii"))
+    views, count = split_turnaround(base64.b64encode(buf.getvalue()).decode("ascii"), holes=holes)
     if not views or count != 3:
         raise RuntimeError(f"dressup sheet split into {count} figures")
     # 預覽只看正面：去背是逐張做的，三張都做要多花一倍時間

@@ -10,6 +10,7 @@
 import base64
 import io
 
+import cv2
 import numpy as np
 import pytest
 from PIL import Image as PILImage
@@ -276,6 +277,44 @@ def test_short_hair_on_the_long_haired_base_shows_the_chosen_top():
     px = out[zone]
     grey = (px.max(axis=1) - px.min(axis=1) <= 14) & (_luma(px.astype(float)) >= 150) & (px.min(axis=1) <= 236)
     assert grey.mean() < 0.02, f"肩背上還有 {grey.mean():.1%} 是 T 恤的灰"
+
+
+PONYTAIL_LOOK = {"hair": "hair_ponytail", "outer": "top_hoodie", "acc": ["acc_backpack", "acc_crossbody"]}
+
+
+def test_background_shut_in_by_a_ponytail_is_a_hole():
+    """長髮換馬尾：馬尾、脖子、背包圍住的那塊背景要挖透明（去背從圖邊清，走不到），眼白不能挖。"""
+    for base_id in [b["id"] for b in dressup.bases()]:
+        img, holes = dressup.compose(PONYTAIL_LOOK, {}, base_id=base_id, with_holes=True)
+        rgb = np.asarray(img)
+        base = dressup.base_canvas(base_id=base_id)
+        eye_whites = (base.min(axis=2) > dressup.WHITE) & ~dressup._base_outside(base_id)
+        # 被圍住的白：連不到圖邊（去背清不到）、又不是眼白。部件本身一兩格的白色高光不算，只看成塊的
+        shut_in = (rgb.min(axis=2) > dressup.WHITE) & ~dressup._outside(rgb) & ~eye_whites & ~holes
+        _, _, stats, _ = cv2.connectedComponentsWithStats(shut_in.astype(np.uint8), connectivity=4)
+        blobs = stats[1:, cv2.CC_STAT_AREA]
+        assert (blobs < 60).all(), f"{base_id}：還有 {blobs.max()} 格一塊的白色背景沒挖掉"
+        assert not (holes & eye_whites).any(), f"{base_id}：眼白被當成背景"
+
+
+def test_hoodie_fills_where_the_long_hair_was():
+    """女生素體的外套原圖裡肩背被長髮蓋著沒畫到：換馬尾後那裡要是外套的顏色，不能露出白 T 恤。"""
+    base_id = _female()
+    rgb = dressup.base_canvas(base_id=base_id)
+    was_hair = dressup._base_label_map(base_id) == dressup.C_HAIR
+    t = dressup._figure_rows(rgb.shape, find_figures(PILImage.fromarray(rgb)))
+    img, holes = dressup.compose({"hair": "hair_ponytail", "outer": "top_hoodie"},
+                                 {"outer": "#2F6FD0", "top": "#F4F4F4"}, base_id=base_id, with_holes=True)
+    px = np.asarray(img).astype(int)[was_hair & ~holes & (t >= 0.3) & (t < 0.8)]
+    tee = (px.max(axis=1) - px.min(axis=1) <= 14) & (px.min(axis=1) >= 200)
+    assert tee.mean() < 0.02, f"肩背上還有 {tee.mean():.1%} 是白 T 恤"
+
+
+def test_preview_shows_only_the_front_figure():
+    """側面那個人的馬尾、包包伸進正面預覽的框裡：要洗掉，不能在換裝頁右邊留一條。"""
+    for base_id in [b["id"] for b in dressup.bases()]:
+        img, _ = dressup.compose_front(PONYTAIL_LOOK, {}, base_id=base_id)
+        assert len(find_figures(img)) == 1, base_id
 
 
 def test_unknown_base_falls_back_to_the_first():
