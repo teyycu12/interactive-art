@@ -54,7 +54,6 @@ export class DecodeRound {
     this.offlineSince = new Map();
     this.solved = 0;
     this.seq = 0;
-    this.colorCursor = 0;
   }
 
   /**
@@ -95,6 +94,13 @@ export class DecodeRound {
       }
     }
     this.#form(now, changed);
+    // 找了一陣子還沒解開：提示搭檔是誰（之前只有顏色）
+    for (const g of this.groups.values()) {
+      if (!g.revealed && now - g.startedAt >= DECODE.revealAfterMs) {
+        g.revealed = true;
+        for (const m of g.members) changed.add(m);
+      }
+    }
     return { changed };
   }
 
@@ -169,8 +175,9 @@ export class DecodeRound {
       books: new Map(bookers.map((m, i) => [m, halves[i]])),
       seq,
       code: seq.map((s) => s.digit).join(''),
-      color: DECODE.keyColors[this.colorCursor++ % DECODE.keyColors.length],
+      ...this.#pickColor(),
       startedAt: now,
+      revealed: false,
       wrong: 0,
       cooldownUntil: 0,
       lastHits: null,
@@ -180,6 +187,21 @@ export class DecodeRound {
       this.waiting.delete(m);
       this.memberOf.set(m, id);
       changed.add(m);
+    }
+  }
+
+  /**
+   * 這一組的鑰匙顏色：挑進行中的組沒在用的顏色。十種都在用時同色加號碼（紅 2）——
+   * 撞色的話兩組人會互相找錯，而手機上只有顏色可以對。
+   */
+  #pickColor() {
+    const used = new Set([...this.groups.values()].map((g) => `${g.color}#${g.mark}`));
+    for (let mark = 1; ; mark++) {
+      const free = DECODE.keyColors.filter((c) => !used.has(`${c.hex}#${mark}`));
+      if (free.length) {
+        const c = free[Math.floor(this.rng() * free.length)];
+        return { color: c.hex, colorName: c.name, mark };
+      }
     }
   }
 
@@ -229,6 +251,8 @@ export class DecodeRound {
   /**
    * 這個人手機上該看到的東西。**只有自己那一半**：拿符號的人沒有密碼本，
    * 拿密碼本的人沒有符號，任何人都沒有答案。
+   * 搭檔是誰在 revealAfterMs 之前也不給（連 id 都不給：手機有名冊，給 id 等於給名字），
+   * 只給鑰匙顏色 —— 「你也是綠色鑰匙嗎？」就是要大家開口問的那一句。
    */
   viewFor(agentId, now = Date.now()) {
     const g = this.groups.get(this.memberOf.get(agentId));
@@ -238,13 +262,16 @@ export class DecodeRound {
       state: 'playing',
       group: g.id,
       color: g.color,
+      colorName: g.colorName,
+      mark: g.mark,
       role,
       codeLength: this.codeLength,
-      partners: g.members.filter((m) => m !== agentId),
-      holder: g.holder,
+      teamSize: g.members.length,
+      revealInMs: g.revealed ? 0 : Math.max(0, g.startedAt + DECODE.revealAfterMs - now),
       cooldownMs: Math.max(0, g.cooldownUntil - now),
       lastHits: g.lastHits,
     };
+    if (g.revealed) view.partners = g.members.filter((m) => m !== agentId);
     if (role === ROLE.SYMBOLS) view.symbols = g.seq.map((s) => ({ glyph: s.glyph, name: s.name }));
     else view.book = g.books.get(agentId).map((s) => ({ glyph: s.glyph, name: s.name, digit: s.digit }));
     return view;
@@ -253,7 +280,9 @@ export class DecodeRound {
   /** 大螢幕與主辦端：誰跟誰一組、什麼顏色、解開了幾組。不含任何符號或數字 */
   publicView() {
     return {
-      groups: [...this.groups.values()].map((g) => ({ id: g.id, members: [...g.members], color: g.color })),
+      groups: [...this.groups.values()].map((g) => ({
+        id: g.id, members: [...g.members], color: g.color, mark: g.mark, holder: g.holder,
+      })),
       solved: this.solved,
       waiting: this.waiting.size,
     };

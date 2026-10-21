@@ -1433,7 +1433,8 @@ function handleDecodeGuess(ws, msg) {
   for (const id of g.members) {
     sendToAgent(id, EV.DECODE_RESULT, {
       id: m.id, ok: true, solved: res.solved, hits: res.hits, codeLength: r.codeLength,
-      cooldownMs: res.cooldownMs, byName: nameOf(ws.agentId), mine: id === ws.agentId,
+      // 還沒到提示時間就不講是誰輸入的：名字一講，「你也是綠色鑰匙嗎」那一步就省掉了
+      cooldownMs: res.cooldownMs, byName: g.revealed || res.solved ? nameOf(ws.agentId) : null, mine: id === ws.agentId,
       partnerNames: g.members.filter((x) => x !== id).map(nameOf),
     });
   }

@@ -1240,7 +1240,10 @@ host.on('message', (d) => {
   check('兩人被分成一組、一人拿符號一人拿密碼本',
     va?.state === 'playing' && vb?.state === 'playing' && va.group === vb.group
     && new Set([va.role, vb.role]).size === 2, `${va?.role} / ${vb?.role}`);
-  check('手機上寫著搭檔的名字', va?.partnerNames?.[0] === '阿賓' && vb?.partnerNames?.[0] === '小美');
+  // 只給顏色不給名字：要開口問「你也是紅色的嗎？」。連搭檔的 id 都不能在封包裡（手機有名冊）
+  check('手機上不寫搭檔是誰，只有同一個顏色',
+    !va?.partnerNames && !va?.partners && va?.colorName && va.colorName === vb?.colorName
+    && !JSON.stringify(va).includes(ben.welcome.userId), JSON.stringify(va));
   const sym = va?.role === 'symbols' ? va : vb;
   const book = va?.role === 'book' ? va : vb;
   const code = sym?.symbols?.map((s) => book.book.find((b) => b.glyph === s.glyph)?.digit).join('') ?? '';
@@ -1258,7 +1261,7 @@ host.on('message', (d) => {
   amy.ws.send(JSON.stringify({ type: 'DECODE_GUESS', id: amy.mission.mission.id, code: wrong }));
   await sleep(300);
   check('輸入錯誤時雙方都知道對了幾碼',
-    results.amy.at(-1)?.hits === 3 && results.ben.at(-1)?.hits === 3 && results.ben.at(-1)?.byName === '小美',
+    results.amy.at(-1)?.hits === 3 && results.ben.at(-1)?.hits === 3 && results.ben.at(-1)?.byName === null,
     JSON.stringify(results.ben.at(-1)));
 
   ben.ws.send(JSON.stringify({ type: 'DECODE_GUESS', id: amy.mission.mission.id, code }));

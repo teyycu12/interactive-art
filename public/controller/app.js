@@ -1888,8 +1888,11 @@ function missionCondition({ mission, progress, mine, inside, decode }) {
       : `你還沒答過「${r.title}」，這個任務沒辦法參加`;
     case 'DECODE': {
       const v = decode;
-      if (v?.state !== 'playing') return '等系統幫你找搭檔…';
-      return `跟 ${v.partnerNames.join('、')} 一起解碼（${v.role === 'symbols' ? '你拿符號' : '你拿密碼本'}）`;
+      if (v?.state !== 'playing') return '等系統幫你分隊…';
+      const t = decodeTeam(v);
+      return v.partnerNames
+        ? `你是${t.mine}・搭檔是 ${v.partnerNames.join('、')}`
+        : `你是${t.mine}・去找${t.color}${t.theirIcon}的${t.theirs}`;
     }
     case 'GATHER': return progress >= mission.target
       ? `你已經在「${r.label}」集合完成 ✓`
@@ -1953,6 +1956,24 @@ let decodeMsg = null;
 let decodeCooldownUntil = 0;
 let decodeCooldownTimer = null;
 
+/**
+ * 兩個陣營：符號隊頭上是🔒、密碼本隊是🔑，同一組同一個顏色。
+ * 手機上只寫顏色不寫名字 —— 要開口問「你也是紅色的嗎？」才找得到搭檔
+ */
+function decodeTeam(v) {
+  const symbols = v.role === 'symbols';
+  return {
+    mine: symbols ? '符號隊' : '密碼本隊',
+    theirs: symbols ? '密碼本隊' : '符號隊',
+    myIcon: symbols ? '🔒' : '🔑',
+    theirIcon: symbols ? '🔑' : '🔒',
+    color: `${v.colorName}色${v.mark > 1 ? ` ${v.mark} 號` : ''}`,
+  };
+}
+/** 提示搭檔名字的時刻（本機時鐘）。伺服器送的是還剩幾毫秒 */
+let decodeRevealAt = 0;
+let decodeRevealTimer = null;
+
 /** 目前的解碼任務（同時只會開一個，見 missions.js 的 ruleKey） */
 const decodeEntry = () => [...missions.values()].find((x) => x.mission.rule?.type === 'DECODE') ?? null;
 
@@ -1964,11 +1985,22 @@ function renderDecode() {
   const playing = v?.state === 'playing';
   dcBox.classList.toggle('is-waiting', !playing);
   dcBox.style.setProperty('--key', playing ? v.color : 'var(--line)');
-  $('#dc-partner').textContent = playing
-    ? `搭檔：${v.partnerNames.join('、')}`
-    : '等系統幫你找搭檔…';
+  const t = playing ? decodeTeam(v) : null;
+  $('#dc-icon').textContent = t?.myIcon ?? '🔑';
+  $('#dc-partner').textContent = playing ? `你是${t.mine}` : '等系統幫你分隊…';
   $('#dc-role').hidden = !playing;
-  $('#dc-role').textContent = playing ? (v.role === 'symbols' ? '你拿符號' : '你拿密碼本') : '';
+  $('#dc-role').textContent = playing ? t.color : '';
+  // 找誰：先只有顏色；過一陣子還沒解開才提示名字
+  const find = $('#dc-find');
+  find.hidden = !playing;
+  if (playing) {
+    const others = v.teamSize - 1;
+    const left = Math.ceil((decodeRevealAt - Date.now()) / 1000);
+    find.textContent = v.partnerNames
+      ? `提示：你的搭檔是 ${v.partnerNames.join('、')}`
+      : `去找頭上也是${t.color}${t.theirIcon}的${t.theirs}${others > 1 ? `（${others} 個人）` : ''}`
+        + (left > 0 ? `　找不到？${left} 秒後提示是誰` : '');
+  }
   const items = $('#dc-items');
   items.replaceChildren();
   items.classList.toggle('is-book', playing && v.role === 'book');
@@ -1989,8 +2021,8 @@ function renderDecode() {
   $('#dc-hint').textContent = !playing
     ? '解開的人會換搭檔再來一組，等一下就輪到你'
     : v.role === 'symbols'
-      ? `把這 ${v.codeLength} 個符號依序念給搭檔聽，他查密碼本告訴你數字`
-      : `搭檔念符號，你查這張表把數字報給他${v.partners.length > 1 ? '（另一半在另一個人手上）' : ''}`;
+      ? `找到搭檔後，把這 ${v.codeLength} 個符號依序念給他聽，他查密碼本告訴你數字`
+      : `找到搭檔後，他念符號，你查這張表把數字報給他${v.teamSize > 2 ? '（另一半密碼本在另一位同色🔑的人手上）' : ''}`;
   $('#dc-form').hidden = !playing;
   dcInput.maxLength = v?.codeLength ?? 4;
   dcInput.placeholder = '0'.repeat(v?.codeLength ?? 4);
@@ -2013,6 +2045,16 @@ $('#dc-form').addEventListener('submit', (e) => {
   if (!entry || $('#dc-send').disabled) return;
   sendMsg(EV.DECODE_GUESS, { id: entry.mission.id, code: dcInput.value });
 });
+
+/** 「N 秒後提示」的倒數：每秒重畫一次，提示出現（伺服器重送畫面）就停 */
+function syncDecodeReveal(view) {
+  clearInterval(decodeRevealTimer);
+  decodeRevealAt = view?.revealInMs ? Date.now() + view.revealInMs : 0;
+  if (decodeRevealAt) decodeRevealTimer = setInterval(() => {
+    if (Date.now() >= decodeRevealAt) clearInterval(decodeRevealTimer);
+    renderDecode();
+  }, 1000);
+}
 
 function startDecodeCooldown(ms) {
   decodeCooldownUntil = Date.now() + ms;
@@ -2047,7 +2089,7 @@ function handleDecodeResult(msg) {
     return;
   }
   // 搭檔輸入的也讓你知道，不然兩個人會同時亂按
-  const who = msg.mine ? '' : `${msg.byName} 輸入了，`;
+  const who = msg.mine ? '' : `${msg.byName ?? '搭檔'}輸入了，`;
   decodeMsg = { text: `${who}不對：對了 ${msg.hits} / ${msg.codeLength} 碼（不告訴你是哪幾碼）` };
   if (msg.mine) dcInput.select();
   if (msg.cooldownMs) startDecodeCooldown(msg.cooldownMs);
@@ -2559,6 +2601,7 @@ function handleMissionMessage(msg) {
           mine: msg.mine ?? null, inside: msg.gather?.inside ?? 0,
           decode: msg.decode ?? null,
         });
+        if (msg.mission.rule?.type === 'DECODE') syncDecodeReveal(msg.decode);
       }
       renderMission();
       renderDecode();
@@ -2592,6 +2635,7 @@ function handleMissionMessage(msg) {
       if (!entry) break;
       const was = entry.decode;
       entry.decode = msg.view;
+      syncDecodeReveal(msg.view);
       // 換了一組（新搭檔、新題目）：清掉上一組的訊息與輸入，震一下提醒去找人
       if (msg.view?.group && msg.view.group !== was?.group) {
         decodeMsg = null;

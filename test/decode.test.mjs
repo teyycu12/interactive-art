@@ -144,7 +144,7 @@ test('搭檔離場：那一組拆掉，留下的人回等待區，有人就重�
   // 新的人進場就跟他湊一組
   r.sync([...people(4).filter((p) => p.id !== leaver), { id: 'new' }], 200);
   assert.equal(r.viewFor(stayer).state, 'playing');
-  assert.deepEqual(r.viewFor(stayer).partners, ['new']);
+  assert.equal(r.memberOf.get(stayer), r.memberOf.get('new'));
 });
 
 test('斷線不馬上拆組，超過 dropOfflineMs 才拆', () => {
@@ -194,4 +194,27 @@ test('主辦端：碼長驗證、可行性、同時只能開一個解碼', () =>
   assert.ok(board.publish({ type: 'DECODE', target: 2, rule: ok.rule }).ok);
   const again = board.publish({ type: 'DECODE', target: 2, rule: buildRule('DECODE', { codeLength: 5 }, opts).rule });
   assert.equal(again.ok, false);
+});
+
+test('搭檔是誰一開始不給（連 id 都不給），只給顏色；revealAfterMs 後才提示', () => {
+  const r = round();
+  r.sync(people(2), 0);
+  const v = r.viewFor('p0', 0);
+  assert.ok(!('partners' in v));
+  assert.ok(!JSON.stringify(v).includes('p1'));
+  assert.ok(v.colorName && v.color);
+  assert.equal(v.revealInMs, DECODE.revealAfterMs);
+  const { changed } = r.sync(people(2), DECODE.revealAfterMs);
+  assert.ok(changed.has('p0') && changed.has('p1'), '提示時要重送兩人的畫面');
+  assert.deepEqual(r.viewFor('p0', DECODE.revealAfterMs).partners, ['p1']);
+});
+
+test('同時進行的組不撞色，顏色用完才加號碼', () => {
+  const r = round();
+  const n = DECODE.keyColors.length + 2;
+  r.sync(people(n * 2), 0);
+  const tags = [...r.groups.values()].map((g) => `${g.color}#${g.mark}`);
+  assert.equal(new Set(tags).size, tags.length);
+  assert.equal([...r.groups.values()].filter((g) => g.mark === 2).length, 2);
+  assert.equal(new Set(DECODE.keyColors.map((c) => c.name)).size, DECODE.keyColors.length);
 });

@@ -1388,6 +1388,15 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 }
 .dc-role { font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: var(--tag); color: var(--ink); }
 .dc-role[hidden] { display: none; }
+/* 顏色那顆膠囊就用這一組的顏色：手機上跟大螢幕頭頂的鎖／鑰匙一眼對得上 */
+.dc-role { background: #FFFDF8; color: var(--ink); border: 2px solid var(--ink); font-size: 13px; }
+/* 底色不直接用組色：白色、黃色那幾組壓白字讀不出來，改成前面一顆色點 */
+.dc-role::before {
+  content: ''; display: inline-block; width: 12px; height: 12px; margin-right: 4px; vertical-align: -1px;
+  border-radius: 50%; background: var(--key); border: 1.5px solid var(--ink);
+}
+.dc-find { margin: 6px 0 0; font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.4; }
+.dc-find[hidden] { display: none; }
 .dc-items { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
 .dc-items[hidden] { display: none; }
 .dc-item {
@@ -1470,7 +1479,9 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
   #controller > #decode-box #dc-input { width: 7.5em; flex: none; min-height: 38px; font-size: 18px; }
   #controller > #decode-box #dc-send { min-height: 38px; }
   #controller > #decode-box .dc-items,
+  #controller > #decode-box .dc-find,
   #controller > #decode-box .dc-msg { grid-column: 1 / -1; }
+  #controller > #decode-box .dc-find { margin-top: 2px; font-size: 13px; }
   #controller > #decode-box .dc-items { margin-top: 6px; gap: 4px; }
   #controller > #decode-box .dc-item { padding: 2px 4px; flex-wrap: nowrap; }
   #controller > #decode-box .dc-item b { font-size: 20px; }

@@ -1193,18 +1193,23 @@ function renderQuizOptions(revealed = null, counts = null) {
  * @type {Map<string, {groups: {id: string, members: string[], color: string}[], solved: number}>}
  */
 const decodeStates = new Map();
-/** @type {Map<string, string>} 角色 id → 他這一組的顏色 */
+/** @type {Map<string, {color: string, mark: number, lock: boolean}>} 角色 id → 他這一組的顏色、號碼、哪一隊 */
 const decodeKeys = new Map();
 
 function rebuildDecodeKeys() {
   decodeKeys.clear();
   for (const st of decodeStates.values()) {
-    for (const g of st.groups ?? []) for (const id of g.members) decodeKeys.set(id, g.color);
+    for (const g of st.groups ?? []) {
+      for (const id of g.members) decodeKeys.set(id, { color: g.color, mark: g.mark ?? 1, lock: id === g.holder });
+    }
   }
 }
 
-/** 頭頂右上的小圓牌：組別顏色底＋🔑。找搭檔時「頭上也是綠色鑰匙的那個人」 */
-function drawDecodeKey(pos, height, color) {
+/**
+ * 頭頂右上的小圓牌：組別顏色底＋符號隊🔒／密碼本隊🔑。手機上只寫顏色不寫名字，
+ * 找搭檔靠的就是這個：「頭上是紅色鑰匙的那個人」。顏色用完重複時右下角加號碼
+ */
+function drawDecodeKey(pos, height, { color, mark, lock }) {
   // 投影在遠處也要看得出顏色：比表情圖示小一點，但不能小到只剩一個點
   const r = Math.max(12, height * 0.17);
   const x = pos.x + height * 0.34;
@@ -1220,7 +1225,19 @@ function drawDecodeKey(pos, height, color) {
   ctx.font = `${r * 1.2}px system-ui, "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('🔑', x, y + r * 0.05);
+  ctx.fillText(lock ? '🔒' : '🔑', x, y + r * 0.05);
+  if (mark > 1) {
+    const rr = r * 0.48;
+    ctx.beginPath();
+    ctx.arc(x + r * 0.8, y + r * 0.8, rr, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, rr * 0.2);
+    ctx.stroke();
+    ctx.fillStyle = '#2F2A26';
+    ctx.font = `800 ${rr * 1.3}px system-ui, sans-serif`;
+    ctx.fillText(String(mark), x + r * 0.8, y + r * 0.82);
+  }
   ctx.restore();
 }
 
