@@ -325,7 +325,10 @@
       <span id="bingo-offer-text"></span>
       <button id="btn-bingo-accept">幫我填上</button>
     </div>
+    <!-- 傳球＋投籃（體育館）：拿著球時的狀態。在搖桿與表情鍵之間，不擋操作 -->
+    <p class="hoops-chip" id="hoops-chip" hidden role="status" aria-live="polite"></p>
     <div id="emotes">
+      <button id="btn-shoot" class="btn-shoot" hidden><em>🏀</em>投籃</button>
       <button id="btn-emote-menu" aria-expanded="false" aria-controls="emote-palette"><em>😀</em>表情</button>
       <button data-action="WAVE"><em>👋</em>揮手</button>
     </div>
@@ -462,6 +465,13 @@
 </div>
 
 <!-- 點到好幾個人擠在一起的地方：列出來讓他選，不替他猜（2026-10-17 試玩回饋） -->
+<!-- 投籃畫面：按住球往上滑。進不進由伺服器判定，這裡只送手勢（server/hoops.js） -->
+<div class="shoot-overlay" id="shoot-overlay" hidden role="dialog" aria-modal="true" aria-label="投籃">
+  <button class="sheet-close" id="btn-shoot-close" aria-label="關閉">✕</button>
+  <canvas id="shoot-canvas"></canvas>
+  <p class="shoot-msg" id="shoot-msg" role="status" aria-live="polite"></p>
+</div>
+
 <div class="sheet" id="pick-sheet" hidden>
   <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="pick-title">
     <button class="sheet-close" id="btn-pick-close" aria-label="關閉">✕</button>

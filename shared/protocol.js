@@ -60,6 +60,11 @@ export const EV = {
   DECODE_GUESS: 'DECODE_GUESS',               // Phone → Server：輸入密碼 {id, code}
   DECODE_RESULT: 'DECODE_RESULT',             // Server → Phone：輸入結果 {id, ok, hits, cooldownMs}
   DECODE_STATE: 'DECODE_STATE',               // Server → Screen/Host：各組與解開的組數 {id, groups, solved}（不含任何符號）
+  HOOPS_SELF: 'HOOPS_SELF',                   // Server → Phone：自己的投籃狀態 {active, view: {hasBall, from, assistMs, made, attempts, assists, points}}
+  HOOPS_PASS: 'HOOPS_PASS',                   // Phone → Server：傳球 {to}
+  HOOPS_SHOOT: 'HOOPS_SHOOT',                 // Phone → Server：投籃手勢 {angle, power}（進不進由伺服器判定）
+  HOOPS_RESULT: 'HOOPS_RESULT',               // Server → Phone：{kind: 'pass'|'caught'|'shot'|'assisted', ok, reason?, made?, name?}
+  HOOPS_STATE: 'HOOPS_STATE',                 // Server → Screen/Host：{active, holders, totals, top, event?}
 
   // ── 配對任務 ──────────────────────────────────────────
   PAIR_CODE: 'PAIR_CODE',                     // Server → Phone：下發本輪配對碼

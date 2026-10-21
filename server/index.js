@@ -50,7 +50,7 @@ import { Greetings } from './greetings.js';
 import { BingoRound, BINGO_ERRORS, STRANGER } from './bingo.js';
 import { TopicTables } from './topics.js';
 import { TOPIC_QUESTIONS, TOPIC_TABLES } from '../shared/topics.js';
-import { PROPS, OBSTACLES, obstacleDistance } from '../shared/scene.js';
+import { PROPS, OBSTACLES, obstacleDistance, setSceneTheme } from '../shared/scene.js';
 import { QuizSession } from './quiz.js';
 import { TraitStore } from './traits.js';
 import { WordCloudSession } from './wordcloud.js';
@@ -71,6 +71,8 @@ import {
 import { EventLog, sessionName, sessionKind, generationIdOf } from './eventlog.js';
 import { pairRule, traitCatalog, buildRule, feasibility, GatherTracker } from './missionRules.js';
 import { DecodeRound } from './decode.js';
+import { HoopCourt } from './hoops.js';
+import { hoopsFor } from '../shared/hoops.js';
 import { decodeSymbolsFor } from '../shared/decode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -170,6 +172,8 @@ const scoringView = () => {
  */
 // 快照裡若是已停用的場景（例如 3D 客廳），重開後退回預設，不再沿用
 let stageTheme = isSelectableTheme(snapshot?.theme) ? snapshot.theme : DEFAULT_THEME;
+// 道具與避障跟著主題（體育館拿掉盆栽）：boids 讀的是 shared/scene.js 的活綁定
+setSceneTheme(stageTheme);
 
 /**
  * 活動名稱，取代大螢幕左上角的場景名。null 代表還沒設定 ——
@@ -1100,6 +1104,7 @@ function handleJoin(ws, msg) {
   // 補送目前的任務狀態與配對碼，讓中途進場的人立刻能參與
   send(ws, EV.PAIR_CODE, { code: pairing.register(agent.id), nextInMs: pairing.msUntilRotate() });
   for (const m of missions.actives) send(ws, EV.MISSION_ANNOUNCE, missionAnnounceFor(agent.id, m));
+  if (court) sendHoopsSelf(agent.id);
   // 問答進行中就補送題目。剩餘時間由伺服器算，所以晚到的人拿到的是
   // 真正剩下的秒數，而不是從頭開始的完整倒數。
   if (quiz.isActive) sendQuestion(ws);
@@ -1216,6 +1221,7 @@ function detachAgent(agentId, { forget = false } = {}) {
     // 單純斷線則保留 —— 那個人多半還會用原憑證接回同一個角色。
     traits.forget(agentId);
     bingo.forget(agentId);
+    court?.forget(agentId);
     messages.forget(agentId);
     encounters.forget(agentId);
     markDirty();
@@ -1460,6 +1466,75 @@ function handleDecodeGuess(ws, msg) {
   pushDecodeState(m, g.members);
   markDirty();
   broadcastMissionState();
+}
+
+// ── 傳球＋投籃（server/hoops.js；只在主題有 hoops 設定時開，目前是體育館）──────────
+/** 目前主題的球場；沒有投籃的主題為 null。開機時依快照裡的主題建好，換主題時 resetHoops() 重建 */
+let court = hoopsFor(stageTheme) ? new HoopCourt(hoopsFor(stageTheme)) : null;
+
+function hoopsPublic(event) {
+  if (!court) return { active: false };
+  const v = court.publicView();
+  return { active: true, ...v, top: v.top.map((t) => ({ ...t, name: nameOf(t.id) })), event };
+}
+
+function pushHoopsState(event) {
+  blast([...screens, ...hosts], EV.HOOPS_STATE, hoopsPublic(event));
+}
+
+function sendHoopsSelf(agentId) {
+  const view = court?.viewFor(agentId) ?? null;
+  if (view?.from) view.fromName = nameOf(view.from);
+  sendToAgent(agentId, EV.HOOPS_SELF, { active: !!court, view });
+}
+
+/** 換主題時重建（球場的位置跟著主題走）；換到沒有投籃的主題就整個收掉 */
+function resetHoops() {
+  const cfg = hoopsFor(stageTheme);
+  court = cfg ? new HoopCourt(cfg) : null;
+  for (const id of controllers.keys()) sendHoopsSelf(id);
+  pushHoopsState();
+}
+
+function stepHoops() {
+  if (!court) return;
+  const { changed } = court.step(stage.agents.values());
+  if (!changed.size) return;
+  for (const id of changed) sendHoopsSelf(id);
+  pushHoopsState();
+}
+
+const posOf = (id) => { const a = stage.get(id); return a ? { x: a.x, y: a.y } : null; };
+
+function handleHoopsPass(ws, msg) {
+  if (!court) return;
+  const to = typeof msg.to === 'string' ? msg.to : '';
+  const r = court.pass(ws.agentId, to, posOf);
+  send(ws, EV.HOOPS_RESULT, { kind: 'pass', ok: r.ok, reason: r.reason, name: r.ok ? nameOf(to) : undefined });
+  if (!r.ok) return;
+  sendToAgent(to, EV.HOOPS_RESULT, { kind: 'caught', ok: true, name: nameOf(ws.agentId) });
+  sendHoopsSelf(ws.agentId);
+  sendHoopsSelf(to);
+  events.log('hoops_pass', { agent: ws.agentId, peer: to });
+  pushHoopsState({ kind: 'pass', from: ws.agentId, to });
+}
+
+function handleHoopsShoot(ws, msg) {
+  if (!court) return;
+  const r = court.shoot(ws.agentId, posOf(ws.agentId), { angle: msg.angle, power: msg.power });
+  if (!r.ok) { send(ws, EV.HOOPS_RESULT, { kind: 'shot', ok: false, reason: r.reason }); return; }
+  send(ws, EV.HOOPS_RESULT, {
+    kind: 'shot', ok: true, made: r.made, name: r.assist ? nameOf(r.assist) : undefined,
+  });
+  sendHoopsSelf(ws.agentId);
+  if (r.assist) {
+    sendToAgent(r.assist, EV.HOOPS_RESULT, { kind: 'assisted', ok: true, name: nameOf(ws.agentId) });
+    sendHoopsSelf(r.assist);
+    // 傳球、投進是兩個人一起完成的：記進今天遇見的人（大合照依互動排位也算得到）
+    meetUp(r.assist, ws.agentId, VIA.ASSIST);
+  }
+  events.log('hoops_shot', { agent: ws.agentId, made: r.made, assist: r.assist ?? undefined, chance: r.chance });
+  pushHoopsState({ kind: 'shot', shooter: ws.agentId, assist: r.assist, made: r.made });
 }
 
 function handlePairClaim(ws, msg) {
@@ -1823,6 +1898,8 @@ function messageReports() {
 function setStageTheme(theme) {
   if (theme === stageTheme) return;
   stageTheme = theme;
+  setSceneTheme(stageTheme);
+  resetHoops();
   console.log(`[theme] 切換為「${THEME_MAP[stageTheme].label}」`);
   events.log('theme_change', { theme: stageTheme });
   markDirty();
@@ -2237,6 +2314,7 @@ wss.on('connection', (ws, req) => {
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
         // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
         send(ws, EV.STAGE_LINKS, { edges: graphEdges() });
+        if (court) send(ws, EV.HOOPS_STATE, hoopsPublic());
         if (photoQr?.visible) send(ws, EV.SCREEN_PHOTO_QR, photoQrPayload());
         // 投影機在活動中途被重開是常態，補送當下的問答與排行榜，
         // 大螢幕才不會停在空白畫面等下一題
@@ -2338,6 +2416,16 @@ wss.on('connection', (ws, req) => {
         handleDecodeGuess(ws, msg);
         break;
 
+      case EV.HOOPS_PASS:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleHoopsPass(ws, msg);
+        break;
+
+      case EV.HOOPS_SHOOT:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleHoopsShoot(ws, msg);
+        break;
+
       case EV.QUIZ_ANSWER:
         if (ws.role !== 'controller' || !ws.agentId) return;
         handleQuizAnswer(ws, msg);
@@ -2420,6 +2508,7 @@ wss.on('connection', (ws, req) => {
           const dv = decodePublic(m);
           if (dv) send(ws, EV.DECODE_STATE, dv);
         }
+        if (court) send(ws, EV.HOOPS_STATE, hoopsPublic());
         send(ws, EV.HOST_SCORING, scoringView());
         // 主題選單只由 STAGE_THEME 驅動，重整後的主辦端要靠這則才知道目前選的是哪個
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
@@ -2603,6 +2692,7 @@ const loop = startTicker({
     for (const id of missions.expired(now)) closeMission('time', id);
     stepGather(now);
     stepDecode(now);
+    stepHoops();
 
     // 文字雲：有新答案時才廣播，最快每 300ms 一次。三十個人同時送出時
     // 逐則廣播等於每秒上百份整片雲，而大螢幕的動畫本來就跟不上那麼快。

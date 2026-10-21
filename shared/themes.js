@@ -51,6 +51,12 @@ export const THEMES = [
     brief: '木地板球場、暖身區與看台，室外有跑道，適合動態的團體活動。',
     // 號碼牌給集合任務用：暖身區三台器材當「站」，頒獎台與飲料桶各一個集合點
     spots: { tbl_1: '1號站', tbl_2: '2號站', tbl_3: '3號站', k_dining: '集合點', ctbl_1: '補給站' },
+    // 體育館不擺盆栽（2026-10-21）：球場上擺盆栽很怪，也擋住傳球的路線。
+    // 拿掉的道具不畫也不擋人（shared/scene.js 的 propsForTheme）
+    removedProps: ['plt_1', 'plt_2', 'plt_3', 'plt_4', 'plt_5'],
+    // 傳球＋投籃（shared/hoops.js、server/hoops.js）：走到球車拿球、在籃框區投。
+    // 用道具與分區的 id 指定，伺服器端不寫死「籃球」—— 換個場景也能接上別的投擲玩法
+    hoops: { cart: 'k_cart', hoop: 'k_island', zone: 'stage' },
     decodeSymbols: [
       { glyph: '⚽', name: '足球' }, { glyph: '🏀', name: '籃球' }, { glyph: '🏐', name: '排球' },
       { glyph: '🎾', name: '網球' }, { glyph: '🏓', name: '桌球' }, { glyph: '🏸', name: '羽球' },

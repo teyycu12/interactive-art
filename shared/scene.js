@@ -16,6 +16,7 @@
  */
 
 import { STAGE } from './protocol.js';
+import { THEME_MAP } from './themes.js';
 
 /**
  * 功能分區。這些是「可行走」的區域，不是障礙物 ——
@@ -46,7 +47,7 @@ export const ZONES = [
  * 裝飾物件兼物理障礙。
  * r 為碰撞半徑，通常略大於視覺尺寸，讓角色不會擦著邊緣走。
  */
-export const PROPS = [
+const ALL_PROPS = [
   // Kitchen additions use existing prop types so the alternate room also renders them.
   { id: 'k_cart', type: 'table', x: 1098, y: 160, r: 48 },
   { id: 'k_island', type: 'table', x: 1318, y: 160, r: 62 },
@@ -130,15 +131,38 @@ export const WALLS = WALL_LINES.flatMap(({ side, x, door }) => [
   { id: `wall_${side}_s`, x, y: door[1], x2: x, y2: STAGE.height, r: WALL_R },
 ]);
 
+const toObstacles = (props) => [
+  ...props.map((p) => ({ x: p.x, y: p.y, r: p.r })),
+  ...WALLS.map((w) => ({ x: w.x, y: w.y, x2: w.x2, y2: w.y2, r: w.r })),
+];
+
+/**
+ * 某個主題實際擺出來的道具：全部道具扣掉該主題的 `removedProps`（shared/themes.js）。
+ * 例如體育館拿掉盆栽。拿掉的道具**同時**不畫、也不擋人 ——
+ * 只在美術層不畫的話，伺服器還當它是障礙，現場會看到角色撞上一團空氣。
+ */
+export function propsForTheme(themeId) {
+  const removed = new Set(THEME_MAP[themeId]?.removedProps ?? []);
+  return removed.size ? ALL_PROPS.filter((p) => !removed.has(p.id)) : ALL_PROPS;
+}
+
+/**
+ * 目前主題的道具與避障清單。`export let` 是活的綁定：setSceneTheme() 換掉之後，
+ * 已經 import 的模組（boids.js、state.js…）下一次讀到的就是新的那一份，不必各自改成傳參數。
+ * 伺服器切主題時、大螢幕切場景時各呼叫一次。
+ */
+export let PROPS = ALL_PROPS;
 /**
  * 供 Boids 避障使用的精簡清單。
  * 道具在前、牆在後 —— 有幾組測試以 `OBSTACLES[n]` 取「某個道具」，
  * 把牆插在前面會讓它們改成測到一道牆。
  */
-export const OBSTACLES = [
-  ...PROPS.map((p) => ({ x: p.x, y: p.y, r: p.r })),
-  ...WALLS.map((w) => ({ x: w.x, y: w.y, x2: w.x2, y2: w.y2, r: w.r })),
-];
+export let OBSTACLES = toObstacles(ALL_PROPS);
+
+export function setSceneTheme(themeId) {
+  PROPS = propsForTheme(themeId);
+  OBSTACLES = toObstacles(PROPS);
+}
 
 /**
  * 障礙表面上離 (x, y) 最近的那一點。

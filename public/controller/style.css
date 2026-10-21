@@ -498,6 +498,34 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   font-size: 10px; line-height: 1.1; background: #FFFCF5;
 }
 #controller > #emotes button em { display: block; font-size: 22px; font-style: normal; line-height: 1; }
+/* 投籃鍵：只在拿著球、站在籃框區時出現，用球的顏色一眼看得出來 */
+#controller > #emotes .btn-shoot { background: #E07A2F; color: #fff; border-color: var(--ink); }
+#controller > #emotes .btn-shoot[hidden] { display: none; }
+/* 拿著球的狀態：搖桿（左下）與表情鍵（右下）之間 */
+#controller > .hoops-chip {
+  position: absolute; z-index: 3; margin: 0;
+  left: 50%; transform: translateX(-50%);
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  max-width: calc(100% - 260px); min-width: 120px;
+  padding: 6px 12px; border-radius: 14px;
+  background: #FFF4E6; border: 2px solid var(--ink); box-shadow: var(--drop-sm);
+  font-size: 12px; font-weight: 800; line-height: 1.35; text-align: center; color: var(--ink);
+}
+#controller > .hoops-chip[hidden] { display: none; }
+.shoot-overlay {
+  position: fixed; inset: 0; z-index: 9990;
+  background: linear-gradient(#3b4252, #1f232b);
+  display: flex; flex-direction: column;
+  touch-action: none;
+}
+.shoot-overlay[hidden] { display: none; }
+.shoot-overlay canvas { flex: 1; width: 100%; min-height: 0; touch-action: none; }
+.shoot-overlay .sheet-close { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 12px; z-index: 1; }
+.shoot-msg {
+  margin: 0; padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+  text-align: center; font-size: 17px; font-weight: 800; color: #FFF4E6; min-height: 1.4em;
+}
+
 /* 話題卡會出現在畫面最下方，右邊讓出表情鍵的寬度，按鈕才不會被蓋住 */
 #controller > .topic-card, #controller > .topic-chip { margin-right: 76px; }
 

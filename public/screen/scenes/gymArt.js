@@ -56,7 +56,7 @@ function paintOutside(c) {
   rect(0, 0, ROOM_W, ROOM_H, G.outside);
   for (let y = 0; y < ROOM_H; y += 48) rect(0, y, ROOM_W, 2, G.outsideLine);
   for (let x = 0; x < ROOM_W; x += 96) for (let y = 0; y < ROOM_H; y += 96) rect(x + (y / 96 % 2) * 48, y, 2, 48, G.outsideLine);
-  for (let x = 360; x < 2260; x += 220) plant(x, 1440, .8, x % 3);
+  // 盆栽全拿掉（2026-10-21）：球場邊擺盆栽很怪。場上那五盆在 themes.js 的 removedProps
 }
 
 // Room ------------------------------------------------------------------------
@@ -169,7 +169,6 @@ function paintCourt(c, zones) {
   rect(FX, 229, FW, 35, '#e3e6ea');
   for (let x = FX; x < FR; x += 96) { box(x + 4, 233, 88, 27, '#d3d8de'); rect(x + 44, 244, 8, 3, G.steelDark); }
   rect(FX, 262, FW, 8, G.cap);
-  for (const x of [260, 560, 1620, 2000]) plant(x, 218, .8, x % 3);
   for (let i = 0; i < 4; i++) ball(330 + i * 22, 206, 9);
   for (let i = 0; i < 3; i++) whiteBall(720 + i * 22, 206, 9, ['#3f6fa8', '#e7b54a', '#c8553d'][i]);
   box(1250, 196, 60, 20, '#3a4049'); rect(1256, 200, 48, 4, '#e7b54a');
@@ -221,7 +220,6 @@ function paintTrack(c) {
   // Starting blocks and a stopwatch stand near the finish line.
   for (let k = 0; k < 3; k++) { box(66 + k * 78, 1250, 30, 12, '#3a4049'); rect(70 + k * 78, 1246, 22, 4, '#9aa4b1'); }
   oval(262, 1010, 18, 8, '#2a1f1a33'); rect(258, 940, 6, 70, G.steelDark); box(246, 920, 30, 24, '#f6efe0'); rect(250, 924, 22, 10, '#3d6f8f');
-  plant(60, 1180, 1, 0); plant(270, 1150, .9, 2);
 }
 
 // Right margin: locker room -------------------------------------------------------
@@ -264,7 +262,6 @@ function paintLockerRoom(c) {
   for (let i = 0; i < 4; i++) { box(2450 + i * 22, 1130, 14, 36, ['#3f6fa8', '#c8553d', '#4f8a55', '#e7b54a'][i]); rect(2453 + i * 22, 1124, 8, 6, '#f6efe0'); }
   ball(2540, 1170, 12);
   oval(2446, 1302, 70, 16, '#2a1f1a30');
-  plant(2560, 1340, 1, 1); plant(2330, 1320, .9, 0);
 }
 
 // Props -----------------------------------------------------------------------

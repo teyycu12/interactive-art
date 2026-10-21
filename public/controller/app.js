@@ -24,6 +24,7 @@ import { makeKeepsake, saveKeepsake } from './keepsake.js';
 import { ChatLog } from './chatlog.js';
 import { encounterLabel } from '/shared/encounters.js';
 import { AvatarRenderer } from './avatarRenderer.js';
+import { HOOPS, hoopsFor, idealPower, inRect } from '/shared/hoops.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -1661,6 +1662,8 @@ function retireOldCharacter(userId, rejoinToken) {
 let ws = null;
 let reconnectDelay = 500;
 let joystick = null;
+/** 自己在場上的位置（CLIENT_SYNC，伺服器為準）。投籃要知道自己在不在籃框區、離籃框多遠 */
+let mySelfPos = null;
 /** 目前的場景主題（EV.STAGE_THEME）。可能比 POV 畫布更早送達，先記下來。 */
 let stageTheme = null;
 /** 最近一次的手機名冊。進場時名冊常比畫布先到，畫布建立後要補套。 */
@@ -1754,6 +1757,7 @@ function connect() {
       // α 是伺服器仲裁的真實結果，比本地計時器準確（見下方 #agency）
       serverAlpha = msg.self?.alpha ?? null;
       serverMode = msg.self?.mode ?? null;
+      if (msg.self) { mySelfPos = { x: msg.self.x, y: msg.self.y }; renderHoops(); }
       lastSyncSeenAt = Date.now();
     } else if (msg.type === EV.CLIENT_ROSTER) {
       // id → 名字與外觀。只在成員變動時送，供 POV 畫布畫出鄰居、標示是誰。
@@ -1763,6 +1767,7 @@ function connect() {
       // 個人視角畫的是大螢幕同一個場景的局部，主題要跟著主辦端切換
       stageTheme = msg.theme;
       renderer?.setTheme(stageTheme);
+      renderHoops();
     } else if (msg.type === EV.AUDIENCE_WAIT) {
       showAudienceWait(msg.ahead);
     } else if (msg.type === EV.CLIENT_REJECT) {
@@ -2095,6 +2100,239 @@ function handleDecodeResult(msg) {
   if (msg.cooldownMs) startDecodeCooldown(msg.cooldownMs);
   renderDecode();
 }
+
+// ── 傳球＋投籃（體育館；shared/hoops.js、server/hoops.js）──────────────────
+// 走到球車自動拿球 → 點別人傳球／到籃框區按「投籃」往上滑。進不進由伺服器判定，
+// 手機只送手勢。被傳球的人時限內投進算助攻，兩個人都得分 —— 要喊「傳給我」。
+/** 伺服器給的投籃狀態（HOOPS_SELF）；這個場景沒有投籃時為 null */
+let hoopsView = null;
+let hoopsViewAt = 0;
+const hoopsChip = $('#hoops-chip');
+const shootBtn = $('#btn-shoot');
+
+function hoopsCourt() { return hoopsView ? hoopsFor(stageTheme) : null; }
+
+function inShootZone() {
+  const c = hoopsCourt();
+  return !!(c && mySelfPos && inRect(c.zone, mySelfPos.x, mySelfPos.y));
+}
+
+function renderHoops() {
+  const has = !!hoopsView?.hasBall;
+  const zone = has && inShootZone();
+  shootBtn.hidden = !zone;
+  hoopsChip.hidden = !has;
+  if (!has) return;
+  const left = Math.ceil((hoopsViewAt + (hoopsView.assistMs ?? 0) - Date.now()) / 1000);
+  hoopsChip.textContent = hoopsView.fromName && left > 0
+    ? `🏀 ${hoopsView.fromName} 傳給你　${left} 秒內投進算助攻`
+    : zone ? '🏀 按右邊「投籃」，往上滑出去' : '🏀 你拿著球　點別人傳球・到籃框區投籃';
+}
+// 助攻倒數：每秒更新一次就好
+setInterval(() => { if (hoopsView?.hasBall && hoopsView.fromName) renderHoops(); }, 1000);
+
+function passBall(id) {
+  sendMsg(EV.HOOPS_PASS, { to: id });
+}
+
+const HOOP_ERROR_TEXT = {
+  NO_BALL: '你手上沒有球，先到球車拿一顆。',
+  SELF: '那是你自己喔。',
+  NOT_FOUND: '對方已經離開了。',
+  TOO_FAR: '太遠了，走近一點再傳（或喊他過來）。',
+  HAS_BALL: '他手上已經有球了。',
+  OUT_OF_ZONE: '要在籃框區裡才能投。',
+  COOLDOWN: '慢一點，再試一次。',
+  BAD_SHOT: '沒投出去，再滑一次。',
+};
+
+function handleHoopsResult(msg) {
+  if (!msg.ok) {
+    if (msg.kind === 'shot') shootFinish(null);
+    showToast(HOOP_ERROR_TEXT[msg.reason] ?? '沒有成功，再試一次。');
+    return;
+  }
+  if (msg.kind === 'pass') showToast(`🏀 傳給 ${msg.name} 了！`);
+  else if (msg.kind === 'caught') {
+    showToast(`🏀 ${msg.name} 傳球給你！${HOOPS.assistMs / 1000} 秒內到籃框區投進算助攻`);
+    navigator.vibrate?.([30, 40, 30]);
+  } else if (msg.kind === 'assisted') {
+    showToast(`🎉 你助攻 ${msg.name} 進球！+${HOOPS.points.assist}`);
+    navigator.vibrate?.([40, 60, 40]);
+  } else if (msg.kind === 'shot') shootFinish(msg);
+}
+
+// ── 投籃畫面：往上滑出去 ──
+const shootOverlay = $('#shoot-overlay');
+const shootCanvas = $('#shoot-canvas');
+/** @type {{phase: 'aim'|'fly'|'done', start?: object, shot?: object, result?: object|null, t0?: number}|null} */
+let shot = null;
+let shootRaf = 0;
+
+function openShoot() {
+  if (!inShootZone() || !hoopsView?.hasBall) return;
+  shot = { phase: 'aim' };
+  shootOverlay.hidden = false;
+  pushOverlay(shootOverlay, { onEscape: closeShoot });
+  $('#shoot-msg').textContent = '手指按住球，往籃框方向滑出去';
+  cancelAnimationFrame(shootRaf);
+  drawShoot();
+}
+
+function closeShoot() {
+  if (shootOverlay.hidden) return;
+  shootOverlay.hidden = true;
+  cancelAnimationFrame(shootRaf);
+  shot = null;
+  popOverlay(shootOverlay);
+}
+
+/** 離籃框多遠（場上單位） */
+function hoopDistance() {
+  const c = hoopsCourt();
+  return c && mySelfPos ? Math.hypot(mySelfPos.x - c.hoop.x, mySelfPos.y - c.hoop.y) : 200;
+}
+
+function shootGeom() {
+  const r = shootCanvas.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  if (shootCanvas.width !== Math.round(r.width * dpr)) {
+    shootCanvas.width = Math.round(r.width * dpr);
+    shootCanvas.height = Math.round(r.height * dpr);
+  }
+  const W = r.width;
+  const H = r.height;
+  // 愈遠籃框畫得愈小、愈高：看得出「這一球要大力一點」
+  const far = Math.min(1, hoopDistance() / 420);
+  return {
+    W, H, dpr,
+    hoop: { x: W / 2, y: H * (0.2 - far * 0.06), w: Math.min(W, H) * (0.28 - far * 0.08) },
+    ball: { x: W / 2, y: H * 0.8, r: Math.min(W, H) * 0.075 },
+  };
+}
+
+function drawShoot(now = performance.now()) {
+  const g = shootGeom();
+  const c = shootCanvas.getContext('2d');
+  c.setTransform(g.dpr, 0, 0, g.dpr, 0, 0);
+  c.clearRect(0, 0, g.W, g.H);
+  const { hoop } = g;
+  // 籃板與籃框
+  c.fillStyle = '#F7F7F2'; c.strokeStyle = '#2B2B30'; c.lineWidth = 3;
+  c.fillRect(hoop.x - hoop.w * 0.75, hoop.y - hoop.w * 0.9, hoop.w * 1.5, hoop.w * 0.9);
+  c.strokeRect(hoop.x - hoop.w * 0.75, hoop.y - hoop.w * 0.9, hoop.w * 1.5, hoop.w * 0.9);
+  c.strokeStyle = '#E63946';
+  c.strokeRect(hoop.x - hoop.w * 0.3, hoop.y - hoop.w * 0.55, hoop.w * 0.6, hoop.w * 0.45);
+  // 網子
+  c.strokeStyle = 'rgba(255,255,255,.85)'; c.lineWidth = 1.5;
+  for (let i = 0; i <= 4; i++) {
+    const x0 = hoop.x - hoop.w / 2 + (hoop.w / 4) * i;
+    c.beginPath(); c.moveTo(x0, hoop.y); c.lineTo(hoop.x - hoop.w * 0.3 + (hoop.w * 0.15) * i, hoop.y + hoop.w * 0.5); c.stroke();
+  }
+  c.strokeStyle = '#F4A261'; c.lineWidth = 5;
+  c.beginPath(); c.ellipse(hoop.x, hoop.y, hoop.w / 2, hoop.w * 0.12, 0, 0, Math.PI * 2); c.stroke();
+
+  // 球
+  let { x, y } = g.ball;
+  let r = g.ball.r;
+  if (shot?.phase === 'fly' || shot?.phase === 'done') {
+    const t = Math.min(1, (now - shot.t0) / 650);
+    const end = shotEnd(g);
+    x = g.ball.x + (end.x - g.ball.x) * t;
+    y = g.ball.y + (end.y - g.ball.y) * t - Math.sin(Math.PI * t) * g.H * 0.25;
+    r = g.ball.r * (1 - t * 0.45);
+    if (t >= 1 && shot.phase === 'fly' && shot.result !== undefined) landShot();
+  } else if (shot?.drag) {
+    x = shot.drag.x; y = shot.drag.y;
+  }
+  if (shot?.phase !== 'done' || shot.result?.made) {
+    c.fillStyle = '#E07A2F'; c.strokeStyle = '#2B2B30'; c.lineWidth = 2;
+    c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill(); c.stroke();
+    c.beginPath(); c.moveTo(x - r, y); c.lineTo(x + r, y); c.moveTo(x, y - r); c.lineTo(x, y + r); c.stroke();
+  }
+  if (shot && shot.phase !== 'done') shootRaf = requestAnimationFrame(drawShoot);
+}
+
+/** 球飛到哪：偏左偏右照手勢，力道不對就落在籃框前或飛過頭 */
+function shotEnd(g) {
+  const { angle, power } = shot.shot;
+  const dp = power - idealPower(hoopDistance());
+  return {
+    x: g.hoop.x + Math.sin(angle * Math.PI / 180) * g.H * 0.6,
+    y: g.hoop.y - dp * g.H * 0.6,
+  };
+}
+
+/** 給下一球的提示：方向或力道哪個偏得多，就講那個（進不進仍是伺服器說了算） */
+function shotHint({ angle, power }) {
+  const dp = power - idealPower(hoopDistance());
+  if (Math.abs(angle) / HOOPS.angleTol >= Math.abs(dp) / HOOPS.powerTol) {
+    if (Math.abs(angle) <= HOOPS.angleTol) return '';
+    return angle < 0 ? '偏左了' : '偏右了';
+  }
+  if (Math.abs(dp) <= HOOPS.powerTol) return '';
+  return dp < 0 ? '太小力了' : '太大力了';
+}
+
+function landShot() {
+  shot.phase = 'done';
+  const res = shot.result;
+  const hint = shotHint(shot.shot);
+  $('#shoot-msg').textContent = !res
+    ? '沒投出去'
+    : res.made
+      ? (res.name ? `🎉 進球！${res.name} 助攻　+${HOOPS.points.assisted}` : `🎉 進球！+${HOOPS.points.solo}`)
+      : `沒進${hint ? `，${hint}` : '，差一點'}　再去球車拿一顆，或請人傳給你`;
+  if (res?.made) navigator.vibrate?.([40, 60, 40]);
+  drawShoot();
+  setTimeout(closeShoot, res?.made ? 1600 : 2200);
+}
+
+/** 伺服器回來了（可能比動畫早或晚）。ok:false 時 msg 為 null */
+function shootFinish(msg) {
+  if (!shot) {
+    if (msg?.made) showToast(msg.name ? `🎉 進球！${msg.name} 助攻` : '🎉 進球！');
+    return;
+  }
+  shot.result = msg;
+  if (shot.phase === 'aim') { shot.phase = 'fly'; shot.shot = { angle: 0, power: 0 }; shot.t0 = performance.now() - 650; }
+}
+
+shootCanvas.addEventListener('pointerdown', (e) => {
+  if (shot?.phase !== 'aim') return;
+  const g = shootGeom();
+  const r = shootCanvas.getBoundingClientRect();
+  const p = { x: e.clientX - r.left, y: e.clientY - r.top };
+  // 按在球附近才算：整片都能按的話，隨手一碰就投出去了
+  if (Math.hypot(p.x - g.ball.x, p.y - g.ball.y) > g.ball.r * 2.5) return;
+  shootCanvas.setPointerCapture(e.pointerId);
+  shot.start = { ...p, at: performance.now() };
+  shot.drag = p;
+});
+shootCanvas.addEventListener('pointermove', (e) => {
+  if (!shot?.start) return;
+  const r = shootCanvas.getBoundingClientRect();
+  shot.drag = { x: e.clientX - r.left, y: e.clientY - r.top };
+});
+shootCanvas.addEventListener('pointerup', (e) => {
+  if (!shot?.start || shot.phase !== 'aim') return;
+  const g = shootGeom();
+  const r = shootCanvas.getBoundingClientRect();
+  const dx = e.clientX - r.left - shot.start.x;
+  const dy = e.clientY - r.top - shot.start.y;
+  shot.start = null; shot.drag = null;
+  if (dy > -20) return;   // 往下或沒滑：不算投
+  // 方向：偏離正上方幾度；力道：滑多長（畫面高度的 70% 算滿力）
+  const angle = Math.atan2(dx, -dy) * 180 / Math.PI;
+  const power = Math.min(1, Math.hypot(dx, dy) / (g.H * 0.7));
+  shot.shot = { angle, power };
+  shot.phase = 'fly';
+  shot.t0 = performance.now();
+  sendMsg(EV.HOOPS_SHOOT, { angle: Math.round(angle * 10) / 10, power: Math.round(power * 1000) / 1000 });
+});
+shootCanvas.addEventListener('pointercancel', () => { if (shot) { shot.start = null; shot.drag = null; } });
+$('#btn-shoot-close').addEventListener('click', closeShoot);
+shootBtn.addEventListener('click', openShoot);
 
 // ── 文字雲 ────────────────────────────────────────────────
 // 主持人出題時出現在搖桿區上方，輸入短答送到大螢幕。不是覆蓋層：邊走邊答也可以。
@@ -2651,6 +2889,17 @@ function handleMissionMessage(msg) {
       handleDecodeResult(msg);
       break;
 
+    case EV.HOOPS_SELF:
+      hoopsView = msg.active ? msg.view : null;
+      hoopsViewAt = Date.now();
+      renderHoops();
+      if (!hoopsView?.hasBall && shot?.phase === 'aim') closeShoot();
+      break;
+
+    case EV.HOOPS_RESULT:
+      handleHoopsResult(msg);
+      break;
+
     case EV.MISSION_CLOSED:
       // 只收掉結算的那一個；其他進行中的任務照常
       if (msg.id) missions.delete(msg.id); else missions.clear();
@@ -2873,6 +3122,9 @@ $('#btn-confirm-exit').addEventListener('click', () => {
   missions.clear();
   renderMission();
   renderDecode();
+  hoopsView = null;
+  renderHoops();
+  closeShoot();
   closeSheet();
   closeConfirmPair();
   // 賓果卡也要收：漏關任何一層，#app 的 inert 解不開，離場畫面就不能操作（UI-STYLING）
@@ -3554,9 +3806,11 @@ for (const type of ['pointerup', 'touchend', 'mouseup']) {
     if (!tap || Date.now() - tap.at > TAP_MAX_MS) return;
     if (Date.now() - lastPickAt < 600) return;
     lastPickAt = Date.now();
+    // 拿著球時點人就是傳球（像真的打球，不跳訊息框）；傳訊息仍可從聊天鍵進去
+    const act = hoopsView?.hasBall ? passBall : openComposer;
     // 好幾個人擠在一起：讓他自己選，不替他猜是哪一個
-    if (tap.ids.length > 1) openPicker(tap.ids);
-    else openComposer(tap.ids[0]);
+    if (tap.ids.length > 1) openPicker(tap.ids, act);
+    else act(tap.ids[0]);
   }, { capture: true, passive: true });
 }
 
@@ -3567,7 +3821,7 @@ for (const type of ['pointercancel', 'touchcancel']) {
 // ── 點到好幾個人時：選一個 ──
 const pickSheet = $('#pick-sheet');
 
-function openPicker(ids) {
+function openPicker(ids, onPick = openComposer) {
   const list = $('#pick-list');
   list.replaceChildren(...ids.map((id) => {
     const who = lookOf(id);
@@ -3576,9 +3830,10 @@ function openPicker(ids) {
     face.setAttribute('aria-hidden', 'true');
     showPortrait(face, who?.look ?? null);
     btn.append(face, Object.assign(document.createElement('b'), { textContent: who?.name || '（沒有名字）' }));
-    btn.addEventListener('click', () => { closePicker(); openComposer(id); });
+    btn.addEventListener('click', () => { closePicker(); onPick(id); });
     return btn;
   }));
+  $('#pick-title').textContent = onPick === passBall ? '🏀 要傳給哪一位？' : '你要找哪一位？';
   pickSheet.hidden = false;
   pushOverlay(pickSheet, { onEscape: closePicker });
   list.querySelector('button')?.focus();

@@ -12,7 +12,8 @@
 
 import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, QUIZ_PHASE, EMOTE_GLYPH, MISSION_TYPES } from '/shared/protocol.js';
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
-import { OBSTACLES, PROPS } from '/shared/scene.js';
+import { OBSTACLES, PROPS, setSceneTheme } from '/shared/scene.js';
+import { hoopsFor } from '/shared/hoops.js';
 import { WORDCLOUD } from '/shared/wordcloud.js';
 import { createScene, pinnedSceneId } from './scenes/registry.js';
 import { DEFAULT_THEME, isThemeId, THEME_MAP } from '/shared/themes.js';
@@ -135,6 +136,8 @@ async function switchScene(id) {
   const prev = activeScene;
   activeScene = null;
   if (prev?.dispose) prev.dispose(); else if (prev) sceneHost.replaceChildren();
+  // 道具跟著主題（體育館沒有盆栽）。PROPS 是 shared/scene.js 的活綁定，換完再傳
+  setSceneTheme(id);
   const next = await createScene(sceneHost, PROPS, id);
   // 載入期間又切了一次：丟掉這個過期的場景，不然兩張畫布會疊在一起
   if (token !== sceneToken) { next.dispose?.(); return; }
@@ -348,6 +351,10 @@ function connect() {
 
       case EV.MISSION_STATE:
         showMissionProgress(msg.mission);
+        break;
+
+      case EV.HOOPS_STATE:
+        onHoopsState(msg);
         break;
 
       case EV.DECODE_STATE: {
@@ -959,9 +966,12 @@ function drawFrame(now) {
     if (a.offline) drawOffline(ctx, pos, { height });
     const key = decodeKeys.get(a.id);
     if (key) drawDecodeKey(pos, height, key);
+    if (hoops.holders.has(a.id) && !ballInFlightFrom(a.id, now)) drawHeldBall(pos, height);
   }
 
   drawGatherLabels();
+  drawHoopsLabel();
+  drawBallFlights(now, frames);
   drawTopicBubbles(now);
 
   if (debug) updateHud();
@@ -1184,6 +1194,145 @@ function renderQuizOptions(revealed = null, counts = null) {
     }
     wrap.append(row);
   });
+}
+
+// ── 傳球＋投籃（體育館；server/hoops.js）──────────────────────────
+/** 伺服器的球場狀態：誰拿著球、全場進球與助攻。這個場景沒有投籃時 active 為 false */
+let hoops = { active: false, holders: new Set(), totals: null, top: [] };
+/** 正在飛的球：傳球（人到人）或投籃（人到籃框） */
+const ballFlights = [];
+const FLIGHT_MS = 650;
+
+function onHoopsState(msg) {
+  hoops = { active: !!msg.active, holders: new Set(msg.holders ?? []), totals: msg.totals ?? null, top: msg.top ?? [] };
+  const ev = msg.event;
+  if (!ev) return;
+  const name = (id) => roster.get(id)?.name ?? '';
+  const t = performance.now();
+  if (ev.kind === 'pass') {
+    ballFlights.push({ from: ev.from, to: ev.to, at: t });
+  } else if (ev.kind === 'shot') {
+    ballFlights.push({ from: ev.shooter, hoop: true, made: ev.made, at: t });
+    if (ev.made) {
+      // 助攻要講出來：被看見的是兩個人一起完成的那一球
+      toast(ev.assist ? `🏀 ${name(ev.assist)} 助攻 ${name(ev.shooter)} 進球！` : `🏀 ${name(ev.shooter)} 投進了！`);
+      // 球進框的那一刻才響、才發光（動畫的時間軸不能從未來開始，所以用計時器延後）
+      setTimeout(() => {
+        const at = performance.now();
+        sfx.play(ev.assist ? 'fanfare' : 'pair');
+        pulse.set(ev.shooter, at);
+        if (ev.assist) {
+          pulse.set(ev.assist, at);
+          sparks.push({ a: ev.assist, b: ev.shooter, at });
+        }
+      }, FLIGHT_MS);
+    }
+  }
+}
+
+const ballInFlightFrom = (id, now) => ballFlights.some((f) => f.from === id && now - f.at < FLIGHT_MS);
+
+function paintBall(x, y, r) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = '#E07A2F';
+  ctx.fill();
+  ctx.lineWidth = Math.max(1.5, r * 0.18);
+  ctx.strokeStyle = 'rgba(47,42,38,.9)';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - r, y); ctx.lineTo(x + r, y);
+  ctx.moveTo(x, y - r); ctx.lineTo(x, y + r);
+  ctx.lineWidth = Math.max(1, r * 0.12);
+  ctx.stroke();
+}
+
+/** 拿著球的人：球畫在手邊 —— 「球在誰手上」是要大家喊「傳給我」的那個公開資訊 */
+function drawHeldBall(pos, height) {
+  ctx.save();
+  paintBall(pos.x + height * 0.24, pos.y - height * 0.42, Math.max(6, height * 0.09));
+  ctx.restore();
+}
+
+/** 籃框的畫面座標（籃框掛在道具上方，大約一個半角色高） */
+function hoopScreenPos() {
+  const court = hoopsFor(sceneId);
+  if (!court) return null;
+  const p = toScreen(court.hoop);
+  return { x: p.x, y: p.y - characterHeightAt(court.hoop) * 1.45 };
+}
+
+function drawBallFlights(now, frames) {
+  for (let i = ballFlights.length - 1; i >= 0; i--) {
+    const f = ballFlights[i];
+    const t = (now - f.at) / FLIGHT_MS;
+    if (t >= 1.6) { ballFlights.splice(i, 1); continue; }
+    const a = frames.get(f.from);
+    const end = f.hoop ? hoopScreenPos() : frames.get(f.to)?.pos;
+    if (!a || !end) continue;
+    const h = a.height;
+    const sx = a.pos.x + h * 0.24;
+    const sy = a.pos.y - h * 0.42;
+    const ex = end.x + (f.hoop && !f.made ? h * 0.35 : 0);
+    const ey = f.hoop ? end.y : end.y - h * 0.42;
+    let x, y;
+    if (t <= 1) {
+      x = sx + (ex - sx) * t;
+      y = sy + (ey - sy) * t - Math.sin(Math.PI * t) * h * (f.hoop ? 1.1 : 0.5);
+    } else if (f.hoop) {
+      // 落地：進了從網子掉下去，沒進從籃框彈開
+      const u = t - 1;
+      x = ex + (f.made ? 0 : u * h * 1.2);
+      y = ey + u * h * (f.made ? 1.4 : 0.6) - (f.made ? 0 : Math.sin(Math.PI * u / 0.6) * h * 0.3);
+    } else continue;
+    ctx.save();
+    if (t > 1) ctx.globalAlpha = Math.max(0, 1 - (t - 1) / 0.6);
+    paintBall(x, y, Math.max(6, h * 0.09));
+    ctx.restore();
+    // 進球的那一刻：籃框閃一圈
+    if (f.hoop && f.made && t > 1 && t < 1.5) {
+      ctx.save();
+      ctx.globalAlpha = 1 - (t - 1) / 0.5;
+      ctx.strokeStyle = '#FFD166';
+      ctx.lineWidth = 4 * scale;
+      ctx.beginPath();
+      ctx.arc(ex, ey, h * (0.25 + (t - 1) * 0.8), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+/** 籃框上方的牌子：全場進球、助攻，還有目前分數最高的人 */
+function drawHoopsLabel() {
+  if (!hoops.active || !hoops.totals) return;
+  const court = hoopsFor(sceneId);
+  if (!court) return;
+  // 掛在籃框區上方的牆上（左半邊，避開籃板）：沒有人站得到那裡。
+  // 放在球車旁會蓋住正在拿球的人，放在籃框區上緣會壓住分區名牌
+  const pos = toScreen({ x: court.zone.x + court.zone.w * 0.27, y: court.zone.y });
+  const h = characterHeightAt(court.cart);
+  const font = Math.max(12, h * 0.24);
+  const lead = hoops.top[0];
+  const text = `🏀 進球 ${hoops.totals.made}・助攻 ${hoops.totals.assists}`
+    + (lead ? `　最佳 ${lead.name} ${lead.points} 分` : '　走到球車拿球');
+  ctx.save();
+  ctx.font = `800 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  const pad = font * 0.6;
+  const w = ctx.measureText(text).width + pad * 2;
+  const boxH = font + pad * 1.2;
+  const x = Math.max(8, pos.x - w / 2);
+  const y = pos.y - h * 0.95 - boxH / 2;
+  ctx.fillStyle = '#E07A2F';
+  ctx.strokeStyle = 'rgba(47,42,38,.85)';
+  ctx.lineWidth = Math.max(1.5, h * 0.025);
+  roundRect(ctx, x, y, w, boxH, boxH / 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#2F2A26';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + pad, y + boxH / 2);
+  ctx.restore();
 }
 
 // ── DECODE 任務：同一組的人頭上掛同一個顏色的🔑 ─────────────────

@@ -1279,6 +1279,30 @@ host.on('message', (d) => {
   await sleep(200);
 }
 
+// ── 傳球＋投籃（體育館；server/hoops.js）─────────────────────────
+// 只在主題有 hoops 設定時開；沒球不能傳也不能投；大螢幕收得到球場狀態。
+// 走到球車拿球、傳球距離、助攻計分由 test/hoops.test.mjs 驗（e2e 裡走路太慢）。
+{
+  const selfA = []; const resA = []; const scr = []; let theme = null;
+  const fa = (d) => { const m = JSON.parse(d); if (m.type === 'HOOPS_SELF') selfA.push(m); if (m.type === 'HOOPS_RESULT') resA.push(m); if (m.type === 'STAGE_THEME') theme = m.theme; };
+  const fs2 = (d) => { const m = JSON.parse(d); if (m.type === 'HOOPS_STATE') scr.push(m); };
+  amy.ws.on('message', fa); screen.on('message', fs2);
+  // 前面的測試把場景留在辦公室（話題桌、重開後保留都依賴它），最後要換回去
+  host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'gym' }));
+  await sleep(300);
+  check('換到體育館：手機收到投籃開啟', selfA.at(-1)?.active === true && selfA.at(-1)?.view?.hasBall === false, JSON.stringify(selfA.at(-1)));
+  check('換到體育館：大螢幕收到球場狀態', scr.at(-1)?.active === true && Array.isArray(scr.at(-1)?.holders));
+  amy.ws.send(JSON.stringify({ type: 'HOOPS_PASS', to: ben.welcome.userId }));
+  amy.ws.send(JSON.stringify({ type: 'HOOPS_SHOOT', angle: 0, power: 0.5 }));
+  await sleep(300);
+  check('沒拿球不能傳也不能投', resA.length >= 2 && resA.every((r) => r.ok === false && r.reason === 'NO_BALL'), JSON.stringify(resA));
+  host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'office' }));
+  await sleep(300);
+  check('換到沒有球場的場景：投籃關閉', selfA.at(-1)?.active === false && scr.at(-1)?.active === false);
+  check('換回辦公室', theme === 'office', theme);
+  amy.ws.off('message', fa); screen.off('message', fs2);
+}
+
 // ── 主辦端踢人 ────────────────────────────────────────────
 const benId = ben.welcome.userId;
 host.send(JSON.stringify({ type: 'HOST_KICK', agentId: benId }));

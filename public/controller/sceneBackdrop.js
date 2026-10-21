@@ -11,7 +11,7 @@
  * 3D 主題（room）沒有像素底圖，回傳 null，由呼叫端退回原本的地面網格。
  */
 
-import { PROPS, ZONES } from '/shared/scene.js';
+import { ZONES, propsForTheme } from '/shared/scene.js';
 import { THEME_MAP } from '/shared/themes.js';
 import {
   ROOM_W, ROOM_H, FLOOR_Y, CHARACTER_SCALE, spotBadge,
@@ -58,8 +58,6 @@ export function sceneBackdrop(themeId) {
   return canvas;
 }
 
-/** 由後往前畫，前面的道具蓋住後面的（同 PixelScene.render） */
-const PROPS_BY_DEPTH = [...PROPS].sort((a, b) => a.y - b.y);
 
 /**
  * 走近道具多遠算「經過」。與大螢幕 PixelScene.updateAgents 相同（道具半徑 + 65），
@@ -78,6 +76,10 @@ export class ScenePainter {
   constructor(themeId) {
     this.Scene = PIXEL_SCENES[themeId];
     this.spots = THEME_MAP[themeId]?.spots ?? {};
+    // 這個主題實際擺出來的道具（體育館沒有盆栽），與大螢幕、伺服器的避障同一份
+    this.props = propsForTheme(themeId);
+    /** 由後往前畫，前面的道具蓋住後面的（同 PixelScene.render） */
+    this.propsByDepth = [...this.props].sort((a, b) => a.y - b.y);
     this.effects = new Map();   // propId → 動畫開始時間
     this.near = new Set();      // `${角色 id}:${道具 id}`，只在剛走進範圍那一刻觸發
   }
@@ -85,7 +87,7 @@ export class ScenePainter {
   /** @param {Array<{id: string, x: number, y: number}>} walkers 舞台座標 */
   update(walkers, now) {
     const next = new Set();
-    for (const p of PROPS) for (const a of walkers) {
+    for (const p of this.props) for (const a of walkers) {
       if (Math.hypot(a.x - p.x, a.y - p.y) >= p.r + PROP_REACH) continue;
       const key = `${a.id}:${p.id}`;
       next.add(key);
@@ -102,7 +104,7 @@ export class ScenePainter {
    */
   draw(c, view, now, reduced) {
     const { Scene } = this;
-    for (const p of PROPS_BY_DEPTH) {
+    for (const p of this.propsByDepth) {
       // 道具往上畫得比較高（電話亭約 120），左右約 1.65 倍半徑；多留一點邊免得邊緣被切掉
       const x = ORIGIN_X + p.x, y = ORIGIN_Y + p.y, half = p.r * 1.65 + 60;
       if (x + half < view.x0 || x - half > view.x1 || y + 90 < view.y0 || y - 220 > view.y1) continue;
@@ -111,7 +113,7 @@ export class ScenePainter {
       if (elapsed > EFFECT_S) this.effects.delete(p.id);
       Scene.paintProp(c, p, (Scene.ITEMS[p.id] ?? Scene.FALLBACK)[0], elapsed, reduced);
     }
-    for (const p of PROPS) if (this.spots[p.id]) spotBadge(c, ORIGIN_X + p.x, ORIGIN_Y + p.y + 46, this.spots[p.id]);
+    for (const p of this.props) if (this.spots[p.id]) spotBadge(c, ORIGIN_X + p.x, ORIGIN_Y + p.y + 46, this.spots[p.id]);
   }
 }
 
