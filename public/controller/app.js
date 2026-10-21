@@ -1874,7 +1874,7 @@ function showPairMsg(text, ok = false) {
  * 任務條件，寫成一句走動時記得住的話。
  * 同類／不同類一定要先講「你是哪一類」—— 參與者多半不記得自己進場時被分成什麼。
  */
-function missionCondition({ mission, progress, mine, inside }) {
+function missionCondition({ mission, progress, mine, inside, decode }) {
   const r = mission?.rule;
   if (!r) return null;
   switch (r.type) {
@@ -1886,6 +1886,11 @@ function missionCondition({ mission, progress, mine, inside }) {
     case 'SAME_TRAIT': return mine
       ? `你是「${mine}」，去找同樣是的人`
       : `你還沒答過「${r.title}」，這個任務沒辦法參加`;
+    case 'DECODE': {
+      const v = decode;
+      if (v?.state !== 'playing') return '等系統幫你找搭檔…';
+      return `跟 ${v.partnerNames.join('、')} 一起解碼（${v.role === 'symbols' ? '你拿符號' : '你拿密碼本'}）`;
+    }
     case 'GATHER': return progress >= mission.target
       ? `你已經在「${r.label}」集合完成 ✓`
       : `到「${r.label}」湊滿 ${r.teamSize} 人　現在 ${inside} 人（看大螢幕上的圈）`;
@@ -1905,7 +1910,8 @@ function renderMission() {
   $('#mb-cond').hidden = !conds.length;
   $('#mb-cond').textContent = conds.join('\n');
   // 只有集合任務時不交換配對碼：配對碼那一行與「點此輸入」都收起來，免得有人一直點
-  const onlyGather = list.every((x) => x.mission.rule?.type === 'GATHER');
+  // 解碼也一樣：搭檔由系統指定，在下方的解碼面板裡輸入，不交換配對碼
+  const onlyGather = list.every((x) => x.mission.rule?.type === 'GATHER' || x.mission.rule?.type === 'DECODE');
   $('#mb-code-row').hidden = onlyGather;
   banner.classList.toggle('is-gather', onlyGather);
   $('#mb-code').textContent = myCode;
@@ -1934,6 +1940,118 @@ function renderMission() {
   $('#pair-progress').textContent = single
     ? (allDone ? `你已經完成任務了（${fracOf(list[0])}），還可以繼續認識新的人` : `你的進度　${fracOf(list[0])}`)
     : list.map((x) => `${x.mission.title}　${fracOf(x)}`).join('\n');
+}
+
+// ── 解碼任務 ──────────────────────────────────────────────
+// 一人拿符號、一人拿密碼本，只能用講的（server/decode.js）。手機上只有自己那一半，
+// 答案不在這支手機上 —— 對不對由伺服器判定。不是覆蓋層：邊走去找搭檔邊看也可以。
+const dcBox = $('#decode-box');
+const dcInput = $('#dc-input');
+/** {text, ok}：最近一次輸入的結果，換組時清掉 */
+let decodeMsg = null;
+/** 冷卻到什麼時候（本機時鐘）；伺服器送的是剩幾毫秒 */
+let decodeCooldownUntil = 0;
+let decodeCooldownTimer = null;
+
+/** 目前的解碼任務（同時只會開一個，見 missions.js 的 ruleKey） */
+const decodeEntry = () => [...missions.values()].find((x) => x.mission.rule?.type === 'DECODE') ?? null;
+
+function renderDecode() {
+  const entry = decodeEntry();
+  dcBox.hidden = !entry;
+  if (!entry) return;
+  const v = entry.decode;
+  const playing = v?.state === 'playing';
+  dcBox.classList.toggle('is-waiting', !playing);
+  dcBox.style.setProperty('--key', playing ? v.color : 'var(--line)');
+  $('#dc-partner').textContent = playing
+    ? `搭檔：${v.partnerNames.join('、')}`
+    : '等系統幫你找搭檔…';
+  $('#dc-role').hidden = !playing;
+  $('#dc-role').textContent = playing ? (v.role === 'symbols' ? '你拿符號' : '你拿密碼本') : '';
+  const items = $('#dc-items');
+  items.replaceChildren();
+  items.classList.toggle('is-book', playing && v.role === 'book');
+  if (playing) {
+    const list = v.role === 'symbols' ? v.symbols : v.book;
+    for (const it of list) {
+      const cell = document.createElement('span');
+      cell.className = 'dc-item';
+      const glyph = Object.assign(document.createElement('b'), { textContent: it.glyph });
+      const name = Object.assign(document.createElement('small'), { textContent: it.name });
+      cell.append(glyph);
+      if (v.role === 'book') cell.append(Object.assign(document.createElement('i'), { textContent: `= ${it.digit}` }));
+      cell.append(name);
+      items.append(cell);
+    }
+  }
+  items.hidden = !playing;
+  $('#dc-hint').textContent = !playing
+    ? '解開的人會換搭檔再來一組，等一下就輪到你'
+    : v.role === 'symbols'
+      ? `把這 ${v.codeLength} 個符號依序念給搭檔聽，他查密碼本告訴你數字`
+      : `搭檔念符號，你查這張表把數字報給他${v.partners.length > 1 ? '（另一半在另一個人手上）' : ''}`;
+  $('#dc-form').hidden = !playing;
+  dcInput.maxLength = v?.codeLength ?? 4;
+  dcInput.placeholder = '0'.repeat(v?.codeLength ?? 4);
+  const cooling = Date.now() < decodeCooldownUntil;
+  $('#dc-send').disabled = cooling || dcInput.value.length !== (v?.codeLength ?? 4);
+  const msgEl = $('#dc-msg');
+  msgEl.hidden = !decodeMsg;
+  msgEl.textContent = decodeMsg?.text ?? '';
+  msgEl.classList.toggle('ok', !!decodeMsg?.ok);
+}
+
+dcInput.addEventListener('input', () => {
+  dcInput.value = dcInput.value.replace(/\D/g, '');
+  renderDecode();
+});
+
+$('#dc-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const entry = decodeEntry();
+  if (!entry || $('#dc-send').disabled) return;
+  sendMsg(EV.DECODE_GUESS, { id: entry.mission.id, code: dcInput.value });
+});
+
+function startDecodeCooldown(ms) {
+  decodeCooldownUntil = Date.now() + ms;
+  clearInterval(decodeCooldownTimer);
+  const tick = () => {
+    const left = Math.ceil((decodeCooldownUntil - Date.now()) / 1000);
+    if (left <= 0) {
+      clearInterval(decodeCooldownTimer);
+      decodeMsg = { text: '可以再試了' };
+    } else {
+      decodeMsg = { text: `連錯 3 次，等 ${left} 秒再試` };
+    }
+    renderDecode();
+  };
+  tick();
+  decodeCooldownTimer = setInterval(tick, 500);
+}
+
+function handleDecodeResult(msg) {
+  if (!msg.ok) {
+    if (msg.reason === 'COOLDOWN' && msg.cooldownMs) startDecodeCooldown(msg.cooldownMs);
+    else if (msg.reason === 'BAD_CODE') decodeMsg = { text: '位數不對，再確認一次' };
+    renderDecode();
+    return;
+  }
+  if (msg.solved) {
+    decodeMsg = null;
+    dcInput.value = '';
+    showToast(`解開了！你跟 ${msg.partnerNames.join('、')} 合作成功，等一下換新搭檔`);
+    navigator.vibrate?.([40, 60, 40]);
+    renderDecode();
+    return;
+  }
+  // 搭檔輸入的也讓你知道，不然兩個人會同時亂按
+  const who = msg.mine ? '' : `${msg.byName} 輸入了，`;
+  decodeMsg = { text: `${who}不對：對了 ${msg.hits} / ${msg.codeLength} 碼（不告訴你是哪幾碼）` };
+  if (msg.mine) dcInput.select();
+  if (msg.cooldownMs) startDecodeCooldown(msg.cooldownMs);
+  renderDecode();
 }
 
 // ── 文字雲 ────────────────────────────────────────────────
@@ -2439,9 +2557,11 @@ function handleMissionMessage(msg) {
           mission: msg.mission, progress: msg.progress ?? 0,
           // DIFF／SAME：伺服器告訴這支手機「你在那一題是哪一類」；GATHER：集合點現在站了幾個人
           mine: msg.mine ?? null, inside: msg.gather?.inside ?? 0,
+          decode: msg.decode ?? null,
         });
       }
       renderMission();
+      renderDecode();
       if (msg.mission?.id) {
         const entry = missions.get(msg.mission.id);
         announceActivity({
@@ -2467,10 +2587,31 @@ function handleMissionMessage(msg) {
       break;
     }
 
+    case EV.DECODE_ASSIGN: {
+      const entry = missions.get(msg.id);
+      if (!entry) break;
+      const was = entry.decode;
+      entry.decode = msg.view;
+      // 換了一組（新搭檔、新題目）：清掉上一組的訊息與輸入，震一下提醒去找人
+      if (msg.view?.group && msg.view.group !== was?.group) {
+        decodeMsg = null;
+        $('#dc-input').value = '';
+        navigator.vibrate?.([30, 50, 30]);
+      }
+      renderMission();
+      renderDecode();
+      break;
+    }
+
+    case EV.DECODE_RESULT:
+      handleDecodeResult(msg);
+      break;
+
     case EV.MISSION_CLOSED:
       // 只收掉結算的那一個；其他進行中的任務照常
       if (msg.id) missions.delete(msg.id); else missions.clear();
       renderMission();
+      renderDecode();
       if (!missions.size) closeSheet();
       break;
 
@@ -2687,6 +2828,7 @@ $('#btn-confirm-exit').addEventListener('click', () => {
   toggleEmotePalette(false);
   missions.clear();
   renderMission();
+  renderDecode();
   closeSheet();
   closeConfirmPair();
   // 賓果卡也要收：漏關任何一層，#app 的 inert 解不開，離場畫面就不能操作（UI-STYLING）

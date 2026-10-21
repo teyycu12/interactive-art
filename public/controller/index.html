@@ -251,6 +251,24 @@
       <span class="mb-code" id="mb-code-row">你的配對碼 <b id="mb-code">----</b> <span class="code-timer" data-code-timer></span>　·　點此輸入對方的碼</span>
     </button>
 
+    <!-- 解碼任務（server/decode.js）：搭檔、自己那一半（符號或密碼本）、輸入密碼。
+         只有自己那一半，答案不在這支手機上。不擋搖桿，邊走去找搭檔邊看也可以 -->
+    <div class="dc-box" id="decode-box" hidden>
+      <p class="dc-head">
+        <span class="dc-key" aria-hidden="true">🔑</span>
+        <b id="dc-partner">—</b>
+        <span class="dc-role" id="dc-role" hidden></span>
+      </p>
+      <div class="dc-items" id="dc-items" hidden></div>
+      <p class="dc-hint" id="dc-hint"></p>
+      <form class="dc-form" id="dc-form" autocomplete="off" hidden>
+        <input id="dc-input" inputmode="numeric" pattern="[0-9]*" enterkeyhint="send"
+               maxlength="4" placeholder="0000" aria-label="輸入密碼">
+        <button class="btn-primary" id="dc-send" type="submit" disabled>解碼</button>
+      </form>
+      <p class="dc-msg" id="dc-msg" hidden role="status" aria-live="polite"></p>
+    </div>
+
     <!-- 文字雲：主持人出題時出現，輸入短答送到大螢幕。不擋搖桿，邊走邊答也可以 -->
     <div class="wc-box" id="wordcloud-box" hidden>
       <p class="wc-q"><span class="wc-tag">文字雲</span><b id="wc-question">—</b></p>

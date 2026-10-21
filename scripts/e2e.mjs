@@ -1206,6 +1206,76 @@ host.on('message', (d) => {
   await sleep(300);
 }
 
+// ── 解碼任務（server/decode.js）─────────────────────────────
+// 一人拿符號、一人拿密碼本。手機收到的原始封包裡絕不能有答案，
+// 也不能同時有符號和密碼本 —— 開發者工具一看就解開了（同尋寶的 publicView）。
+{
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
+  await sleep(200);
+  const raw = { amy: [], ben: [], screen: [] };
+  const views = new Map();
+  const results = { amy: [], ben: [] };
+  const screenStates = [];
+  const tap = (who, ws) => {
+    const fn = (d) => {
+      const str = d.toString();
+      raw[who].push(str);
+      const m = JSON.parse(str);
+      if (m.type === 'DECODE_ASSIGN') views.set(who, m.view);
+      if (m.type === 'MISSION_ANNOUNCE' && m.decode) views.set(who, m.decode);
+      if (m.type === 'DECODE_RESULT') results[who].push(m);
+      if (m.type === 'DECODE_STATE') screenStates.push(m);
+    };
+    ws.on('message', fn);
+    return () => ws.off('message', fn);
+  };
+  const untap = [tap('amy', amy.ws), tap('ben', ben.ws), tap('screen', screen)];
+
+  hostRejects = [];
+  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'DECODE', codeLength: 4, target: 1 }));
+  await sleep(600);
+  check('解碼任務發布成功', !hostRejects.length && amy.mission?.mission?.type === 'DECODE', hostRejects.at(-1)?.reason);
+  const va = views.get('amy');
+  const vb = views.get('ben');
+  check('兩人被分成一組、一人拿符號一人拿密碼本',
+    va?.state === 'playing' && vb?.state === 'playing' && va.group === vb.group
+    && new Set([va.role, vb.role]).size === 2, `${va?.role} / ${vb?.role}`);
+  check('手機上寫著搭檔的名字', va?.partnerNames?.[0] === '阿賓' && vb?.partnerNames?.[0] === '小美');
+  const sym = va?.role === 'symbols' ? va : vb;
+  const book = va?.role === 'book' ? va : vb;
+  const code = sym?.symbols?.map((s) => book.book.find((b) => b.glyph === s.glyph)?.digit).join('') ?? '';
+  check('符號拼密碼本拼得出完整的密碼', /^\d{4}$/.test(code), code);
+  // 任何一支手機、大螢幕的原始封包裡，都不能出現答案，也不能同時有符號與密碼本
+  const leaks = Object.entries(raw).filter(([, list]) => list.some((str) => str.includes(`"code":"${code}"`)));
+  check('答案不在任何一端的原始封包裡', leaks.length === 0, leaks.map(([w]) => w).join(','));
+  const both = ['amy', 'ben'].filter((w) => raw[w].some((str) => str.includes('"symbols":[')) && raw[w].some((str) => str.includes('"book":[')));
+  check('沒有一支手機同時收到符號與密碼本', both.length === 0, both.join(','));
+  check('大螢幕只收到分組與顏色，沒有任何符號',
+    screenStates.length > 0 && !raw.screen.some((str) => str.includes('DECODE') && str.includes('glyph')));
+
+  // 錯一次：雙方都收到「對了幾碼」
+  const wrong = code.split('').map((d, i) => (i === 0 ? String((Number(d) + 1) % 10) : d)).join('');
+  amy.ws.send(JSON.stringify({ type: 'DECODE_GUESS', id: amy.mission.mission.id, code: wrong }));
+  await sleep(300);
+  check('輸入錯誤時雙方都知道對了幾碼',
+    results.amy.at(-1)?.hits === 3 && results.ben.at(-1)?.hits === 3 && results.ben.at(-1)?.byName === '小美',
+    JSON.stringify(results.ben.at(-1)));
+
+  ben.ws.send(JSON.stringify({ type: 'DECODE_GUESS', id: amy.mission.mission.id, code }));
+  await sleep(400);
+  check('輸入正確就解開', results.amy.at(-1)?.solved === true && results.ben.at(-1)?.solved === true);
+  check('解開記一次任務進度、達標給分',
+    (hostStates.at(-1)?.missions ?? []).some((m) => m.type === 'DECODE' && m.finished === 2)
+    && amy.scores.at(-1)?.source === 'MISSION_DONE', JSON.stringify(amy.scores.at(-1)));
+  check('大螢幕收到哪幾個人剛解開', screenStates.some((st) => st.justSolved?.length === 2 && st.solved === 1));
+  check('一起解碼記進今天遇見的人', amy.social?.peers?.some((p) => p.via?.includes('decode')), JSON.stringify(amy.social?.peers));
+  check('解開後回到等搭檔（場上沒有別人，不會馬上跟同一個人再一組）', views.get('amy')?.state === 'waiting');
+
+  untap.forEach((f) => f());
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
+  await sleep(200);
+}
+
 // ── 主辦端踢人 ────────────────────────────────────────────
 const benId = ben.welcome.userId;
 host.send(JSON.stringify({ type: 'HOST_KICK', agentId: benId }));

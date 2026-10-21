@@ -124,6 +124,14 @@ export function buildRule(type, msg, { catalog, spots }) {
       }
       return { ok: true, rule: { type, spot: spot.id, label: spot.label, teamSize: n } };
     }
+    case 'codeLength': {
+      const { min, max } = spec.codeLength;
+      const n = Number(msg.codeLength ?? spec.codeLength.default);
+      if (!Number.isInteger(n) || n < min || n > max) {
+        return { ok: false, reason: `密碼長度須為 ${min} 至 ${max} 碼` };
+      }
+      return { ok: true, rule: { type, codeLength: n } };
+    }
     default:
       return { ok: false, reason: '不支援的任務參數' };
   }
@@ -163,6 +171,15 @@ export function feasibility(rule, { target, agents, ctx, connected }) {
   }
 
   if (total < 2) return { level: 'block', total, notes, summary: '場上不到 2 人，沒有人可以配對' };
+
+  // 解碼由伺服器分組，不看條件也不看配對過沒有：兩人以上就湊得成組，奇數時有一組三人
+  if (rule.type === 'DECODE') {
+    if (total % 2) notes.push('人數是奇數，會有一組三人（密碼本拆兩半）');
+    return {
+      level: 'ok', total, notes, canFinish: total,
+      summary: `${total} 人在場，可以分成 ${Math.floor(total / 2)} 組`,
+    };
+  }
 
   // 標籤類任務先說清楚資料夠不夠：沒答過的人在這個任務裡什麼都不能做
   if (rule.trait || rule.traitKey) {

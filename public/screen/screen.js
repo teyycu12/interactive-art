@@ -350,6 +350,23 @@ function connect() {
         showMissionProgress(msg.mission);
         break;
 
+      case EV.DECODE_STATE: {
+        if (!msg.id) break;
+        decodeStates.set(msg.id, msg);
+        rebuildDecodeKeys();
+        if (msg.justSolved?.length) {
+          const names = msg.justSolved.map((id) => roster.get(id)?.name ?? '').filter(Boolean);
+          toast(`${names.join('、')} 解開密碼了！（第 ${msg.solved} 組）`);
+          sfx.play('pair');
+          const t = performance.now();
+          for (const id of msg.justSolved) pulse.set(id, t);
+          for (let i = 1; i < msg.justSolved.length; i++) {
+            sparks.push({ a: msg.justSolved[0], b: msg.justSolved[i], at: t });
+          }
+        }
+        break;
+      }
+
       case EV.MISSION_COMPLETE:
         // 規格 v3.0 §3.1 第 05 步：每一次完成都必須在共享畫布上被看見，
         // 否則任務會退化成手機小遊戲
@@ -364,6 +381,8 @@ function connect() {
 
       case EV.MISSION_CLOSED:
         if (msg.id) gatherStates.delete(msg.id); else gatherStates.clear();
+        if (msg.id) decodeStates.delete(msg.id); else decodeStates.clear();
+        rebuildDecodeKeys();
         closeMissionShown(msg.id);
         toast(`任務結束　共 ${msg.totalCompletions} 次配對`);
         break;
@@ -938,6 +957,8 @@ function drawFrame(now) {
     drawPlate(a.id, pos, name, fontSize, plateTarget.get(a.id));
     if (a.emote && !emoteIsPosed(entry?.img, a.emote)) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote], { height });
     if (a.offline) drawOffline(ctx, pos, { height });
+    const key = decodeKeys.get(a.id);
+    if (key) drawDecodeKey(pos, height, key);
   }
 
   drawGatherLabels();
@@ -1163,6 +1184,44 @@ function renderQuizOptions(revealed = null, counts = null) {
     }
     wrap.append(row);
   });
+}
+
+// ── DECODE 任務：同一組的人頭上掛同一個顏色的🔑 ─────────────────
+/**
+ * 任務 id → DECODE_STATE（各組成員與顏色、解開幾組）。**不含任何符號或數字** ——
+ * 大螢幕是公開畫面，這個玩法的資訊落差全在手機上（server/decode.js）。
+ * @type {Map<string, {groups: {id: string, members: string[], color: string}[], solved: number}>}
+ */
+const decodeStates = new Map();
+/** @type {Map<string, string>} 角色 id → 他這一組的顏色 */
+const decodeKeys = new Map();
+
+function rebuildDecodeKeys() {
+  decodeKeys.clear();
+  for (const st of decodeStates.values()) {
+    for (const g of st.groups ?? []) for (const id of g.members) decodeKeys.set(id, g.color);
+  }
+}
+
+/** 頭頂右上的小圓牌：組別顏色底＋🔑。找搭檔時「頭上也是綠色鑰匙的那個人」 */
+function drawDecodeKey(pos, height, color) {
+  // 投影在遠處也要看得出顏色：比表情圖示小一點，但不能小到只剩一個點
+  const r = Math.max(12, height * 0.17);
+  const x = pos.x + height * 0.34;
+  const y = pos.y - height * 1.0;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1.5, r * 0.18);
+  ctx.strokeStyle = 'rgba(47,42,38,.9)';
+  ctx.stroke();
+  ctx.font = `${r * 1.2}px system-ui, "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('🔑', x, y + r * 0.05);
+  ctx.restore();
 }
 
 // ── GATHER 任務的集合點 ─────────────────────────────────────

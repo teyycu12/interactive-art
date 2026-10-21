@@ -1369,6 +1369,53 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .wc-msg { margin: 6px 0 0; font-size: 13px; font-weight: 700; color: var(--ink); }
 .wc-mine[hidden], .wc-msg[hidden] { display: none; }
 
+/* ── 解碼任務 ── 頭頂🔑的顏色（--key）就是大螢幕上這一組的顏色，找搭檔時對得上 */
+.dc-box {
+  --key: var(--line);
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--r);
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: inset 6px 0 0 var(--key), var(--drop-sm);
+  padding-left: 18px;
+}
+.dc-box[hidden] { display: none; }
+.dc-head { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; color: var(--ink); }
+.dc-key {
+  flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px;
+  border-radius: 50%; background: var(--key); border: 2px solid var(--ink); font-size: 15px;
+}
+.dc-role { font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: var(--tag); color: var(--ink); }
+.dc-role[hidden] { display: none; }
+.dc-items { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.dc-items[hidden] { display: none; }
+.dc-item {
+  display: inline-flex; flex-direction: column; align-items: center; min-width: 52px;
+  padding: 4px 6px; border-radius: var(--r-sm); background: #FFFDF8; border: 2px solid var(--line);
+}
+.dc-item b { font-size: 28px; line-height: 1.15; font-weight: 400; }
+.dc-item i { font-style: normal; font-size: 17px; font-weight: 800; color: var(--ink); }
+.dc-item small { font-size: 11px; color: var(--ink-soft); }
+/* 密碼本：符號＝數字橫排，八格排成兩列 */
+.dc-items.is-book { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.dc-items.is-book .dc-item { flex-direction: row; justify-content: center; gap: 4px; min-width: 0; flex-wrap: wrap; }
+.dc-items.is-book .dc-item b { font-size: 22px; }
+.dc-items.is-book .dc-item small { flex-basis: 100%; text-align: center; }
+.dc-hint { margin: 6px 0 0; font-size: 13px; color: var(--ink-soft); line-height: 1.4; }
+.dc-form { display: flex; gap: 8px; margin-top: 8px; }
+.dc-form[hidden] { display: none; }
+#dc-input {
+  flex: 1; min-width: 0; min-height: 44px; padding: 6px 12px; font: inherit; font-size: 22px;
+  letter-spacing: .3em; font-weight: 800; text-align: center;
+  border: 2px solid var(--line); border-radius: 12px; background: #FFFDF8; color: var(--ink);
+}
+#dc-input:focus { outline: none; border-color: var(--ink); }
+#dc-send { width: auto; flex: none; min-height: 44px; padding: 0 18px; }
+.dc-msg { margin: 6px 0 0; font-size: 13px; font-weight: 700; color: var(--accent-ink); }
+.dc-msg.ok { color: var(--ok-ink); }
+.dc-msg[hidden] { display: none; }
+
 /* ── 橫式：16:9 的畫框，所有控制都收在虛線框內 ─────────────
    畫面固定成 16:9、置中，外面留深色邊（與大螢幕像素場景的邊框同色）。
    搖桿區撐滿整個畫框、當作外框；其餘元件疊在它上面：
@@ -1407,10 +1454,31 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
   #controller > .bar { grid-column: 1 / -1; grid-row: 1; margin-bottom: 6px; min-height: 0; }
   #controller > #mission-banner,
   #controller > #wordcloud-box,
+  #controller > #decode-box,
   #controller > #links-strip,
   #controller > .agency-row { grid-column: 1; margin-bottom: 6px; }
   #controller > #mission-banner { grid-row: 2; }
   #controller > #wordcloud-box { grid-row: 4; }
+  #controller > #decode-box {
+    grid-row: 3; padding-block: 6px;
+    /* 橫式高度有限：輸入框放到標題列右邊，少佔一列 */
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: center;
+  }
+  #controller > #decode-box[hidden] { display: none; }
+  #controller > #decode-box .dc-head { grid-column: 1; grid-row: 1; }
+  #controller > #decode-box .dc-form { grid-column: 2; grid-row: 1; margin-top: 0; }
+  #controller > #decode-box #dc-input { width: 7.5em; flex: none; min-height: 38px; font-size: 18px; }
+  #controller > #decode-box #dc-send { min-height: 38px; }
+  #controller > #decode-box .dc-items,
+  #controller > #decode-box .dc-msg { grid-column: 1 / -1; }
+  #controller > #decode-box .dc-items { margin-top: 6px; gap: 4px; }
+  #controller > #decode-box .dc-item { padding: 2px 4px; flex-wrap: nowrap; }
+  #controller > #decode-box .dc-item b { font-size: 20px; }
+  #controller > #decode-box .dc-item i { font-size: 15px; }
+  /* 橫式高度有限：密碼本八格排成一列、說明收掉（搭檔與角色已經寫在標題列） */
+  #controller > #decode-box .dc-items.is-book { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  #controller > #decode-box .dc-item small,
+  #controller > #decode-box .dc-hint { display: none; }
   #controller > #links-strip { grid-row: 5; }
   #controller > .agency-row { grid-row: 6; }
 

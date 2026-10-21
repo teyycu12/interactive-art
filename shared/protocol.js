@@ -56,6 +56,10 @@ export const EV = {
   MISSION_COMPLETE: 'MISSION_COMPLETE',       // Server → All：完成事件，觸發大螢幕回饋
   MISSION_CLOSED: 'MISSION_CLOSED',           // Server → All：任務結束
   MISSION_GATHER: 'MISSION_GATHER',           // Server → All：GATHER 任務集合點目前站了幾個還沒完成的人
+  DECODE_ASSIGN: 'DECODE_ASSIGN',             // Server → Phone：解碼任務裡你這一組的狀態 {id, view}（只有自己那一半，不含答案）
+  DECODE_GUESS: 'DECODE_GUESS',               // Phone → Server：輸入密碼 {id, code}
+  DECODE_RESULT: 'DECODE_RESULT',             // Server → Phone：輸入結果 {id, ok, hits, cooldownMs}
+  DECODE_STATE: 'DECODE_STATE',               // Server → Screen/Host：各組與解開的組數 {id, groups, solved}（不含任何符號）
 
   // ── 配對任務 ──────────────────────────────────────────
   PAIR_CODE: 'PAIR_CODE',                     // Server → Phone：下發本輪配對碼
@@ -261,6 +265,21 @@ export const MISSION_TYPES = {
     holdMs: 2000,
     /** 集合點的範圍：道具半徑再加這麼多（世界座標）。伺服器判定與大螢幕畫的圈共用，兩邊才對得上 */
     reachRadius: 45,
+  },
+  /*
+   * 解碼：伺服器把人兩兩分組，一人拿符號、一人拿密碼本，只能用講的對出密碼
+   * （規則與理由見 docs/notes/INTERACTION-DESIGN.md「解碼任務」，判定在 server/decode.js）。
+   * 解開就換搭檔、交換角色再來一組；每解開一組算一次，做滿目標次數才給分。
+   */
+  DECODE: {
+    id: 'DECODE',
+    label: '兩人解碼',
+    brief: '跟系統指定的搭檔一起解碼：一人拿符號、一人拿密碼本，只能用講的',
+    defaultTarget: 2,
+    maxTarget: 10,
+    param: 'codeLength',
+    verify: 'decode',
+    codeLength: { min: 3, max: 6, default: 4 },
   },
 };
 

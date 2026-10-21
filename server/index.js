@@ -70,6 +70,8 @@ import {
 } from '../shared/bingoFacts.js';
 import { EventLog, sessionName, sessionKind, generationIdOf } from './eventlog.js';
 import { pairRule, traitCatalog, buildRule, feasibility, GatherTracker } from './missionRules.js';
+import { DecodeRound } from './decode.js';
+import { decodeSymbolsFor } from '../shared/decode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -1308,6 +1310,7 @@ function missionAnnounceFor(agentId, m) {
     progress: missions.progressOf(m.id, agentId),
     mine: myTraitLabel(agentId, m),
     gather: gatherView(m),
+    decode: decodeViewFor(agentId, m),
   };
 }
 
@@ -1358,6 +1361,102 @@ function completeGather(m, ids) {
     if (credit.count === m.target) events.log('mission_complete', { mission: m.id, agent: id });
   }
   console.log(`[mission] ${ids.map(nameOf).join('、')} 在「${m.rule.label}」集合完成`);
+  markDirty();
+  broadcastMissionState();
+}
+
+// ── DECODE：一人拿符號、一人拿密碼本（server/decode.js） ─────────────
+/**
+ * 每個進行中的 DECODE 任務一個分組與出題狀態。同 gatherTrackers，任務結算後於主迴圈清掉。
+ * 答案只在這裡：手機只收到 viewFor() 給的那一半（見 decode.js 開頭）。
+ * @type {Map<string, DecodeRound>}
+ */
+const decodeRounds = new Map();
+
+/** 這個人在這個解碼任務裡的手機畫面（加上搭檔的名字） */
+function decodeViewFor(agentId, m) {
+  const r = m?.type === 'DECODE' ? decodeRounds.get(m.id) : null;
+  if (!r) return null;
+  const view = r.viewFor(agentId);
+  if (view.partners) view.partnerNames = view.partners.map(nameOf);
+  return view;
+}
+
+function sendDecodeView(agentId, m) {
+  sendToAgent(agentId, EV.DECODE_ASSIGN, { id: m.id, view: decodeViewFor(agentId, m) });
+}
+
+/** 大螢幕畫頭頂的🔑、主辦端看進度。justSolved：剛解開的那幾個人（大螢幕放煙火） */
+function decodePublic(m, justSolved = undefined) {
+  const r = decodeRounds.get(m.id);
+  return r ? { id: m.id, ...r.publicView(), justSolved } : null;
+}
+
+function pushDecodeState(m, justSolved) {
+  const view = decodePublic(m, justSolved);
+  if (view) blast([...screens, ...hosts], EV.DECODE_STATE, view);
+}
+
+/** 今天已經認識了（配對過或有過任何互動）：分組時優先排還不認識的人 */
+const alreadyMet = (a, b) => graph.connected(a, b) || encounters.peersOf(a).some((p) => p.id === b);
+
+function stepDecode(now) {
+  const decodes = missions.actives.filter((m) => m.type === 'DECODE');
+  for (const id of decodeRounds.keys()) {
+    if (!decodes.some((m) => m.id === id)) decodeRounds.delete(id);
+  }
+  for (const m of decodes) {
+    let r = decodeRounds.get(m.id);
+    if (!r) {
+      r = new DecodeRound({ codeLength: m.rule.codeLength, symbols: decodeSymbolsFor(stageTheme), met: alreadyMet });
+      decodeRounds.set(m.id, r);
+    }
+    const { changed } = r.sync([...stage.agents.values()].map((a) => ({ id: a.id, offline: !!a.offline })), now);
+    if (!changed.size) continue;
+    for (const id of changed) sendDecodeView(id, m);
+    pushDecodeState(m);
+  }
+}
+
+function handleDecodeGuess(ws, msg) {
+  const m = missions.get(msg.id) ?? missions.actives.find((x) => x.type === 'DECODE');
+  const r = m?.type === 'DECODE' ? decodeRounds.get(m.id) : null;
+  if (!r) { send(ws, EV.DECODE_RESULT, { id: msg.id ?? null, ok: false, reason: 'NO_MISSION' }); return; }
+  const res = r.guess(ws.agentId, msg.code);
+  if (!res.ok) {
+    send(ws, EV.DECODE_RESULT, { id: m.id, ok: false, reason: res.reason, cooldownMs: res.cooldownMs });
+    return;
+  }
+  const g = res.group;
+  events.log('decode_guess', { mission: m.id, agent: ws.agentId, group: g.members, solved: res.solved, hits: res.hits });
+  // 結果送給整組：搭檔要知道「他剛輸入了，對了 2 碼」，不然兩邊會同時亂按
+  for (const id of g.members) {
+    sendToAgent(id, EV.DECODE_RESULT, {
+      id: m.id, ok: true, solved: res.solved, hits: res.hits, codeLength: r.codeLength,
+      cooldownMs: res.cooldownMs, byName: nameOf(ws.agentId), mine: id === ws.agentId,
+      partnerNames: g.members.filter((x) => x !== id).map(nameOf),
+    });
+  }
+  if (!res.solved) return;
+
+  for (const id of g.members) {
+    const credit = missions.credit(m.id, id, { with: g.members.filter((x) => x !== id) });
+    if (!credit) continue;
+    events.log('mission_progress', { mission: m.id, agent: id, count: credit.count, target: m.target, team: g.members });
+    if (credit.count === m.target) {
+      events.log('mission_complete', { mission: m.id, agent: id });
+      award(id, SCORING.missionFinish, { source: SCORE_SOURCES.MISSION_DONE, ref: m.id });
+    }
+  }
+  // 一起解開是雙方都出了力的互動：記進「今天遇見的人」，大合照依互動排位也算得到。
+  // 不寫進配對的社交圖譜 —— 寫了之後這兩人就不能再用配對碼配對（ALREADY_PAIRED）
+  for (let i = 0; i < g.members.length; i++) {
+    for (let j = i + 1; j < g.members.length; j++) meetUp(g.members[i], g.members[j], VIA.DECODE);
+  }
+  console.log(`[decode] ${g.members.map(nameOf).join('、')} 解開了（第 ${r.solved} 組）`);
+  // 解開的人先回等待畫面，下一拍 sync 湊新的組
+  for (const id of g.members) sendDecodeView(id, m);
+  pushDecodeState(m, g.members);
   markDirty();
   broadcastMissionState();
 }
@@ -2130,6 +2229,8 @@ wss.on('connection', (ws, req) => {
         for (const m of missions.actives) {
           send(ws, EV.MISSION_ANNOUNCE, { mission: missions.announcement(m.id), gather: gatherView(m) });
           send(ws, EV.MISSION_STATE, { mission: missions.state(m.id, stage.agents.size) });
+          const dv = decodePublic(m);
+          if (dv) send(ws, EV.DECODE_STATE, dv);
         }
         for (const st of missions.states(stage.agents.size)) send(ws, EV.MISSION_STATE, { mission: st });
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
@@ -2231,6 +2332,11 @@ wss.on('connection', (ws, req) => {
         handlePairConfirm(ws, msg);
         break;
 
+      case EV.DECODE_GUESS:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleDecodeGuess(ws, msg);
+        break;
+
       case EV.QUIZ_ANSWER:
         if (ws.role !== 'controller' || !ws.agentId) return;
         handleQuizAnswer(ws, msg);
@@ -2309,6 +2415,10 @@ wss.on('connection', (ws, req) => {
           scoring: SCORING,
         });
         send(ws, EV.HOST_STATE, hostState());
+        for (const m of missions.actives) {
+          const dv = decodePublic(m);
+          if (dv) send(ws, EV.DECODE_STATE, dv);
+        }
         send(ws, EV.HOST_SCORING, scoringView());
         // 主題選單只由 STAGE_THEME 驅動，重整後的主辦端要靠這則才知道目前選的是哪個
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
@@ -2491,6 +2601,7 @@ const loop = startTicker({
     // 被拖慢時會延後觸發，而這裡的時間到必須與大螢幕上的倒數一致。
     for (const id of missions.expired(now)) closeMission('time', id);
     stepGather(now);
+    stepDecode(now);
 
     // 文字雲：有新答案時才廣播，最快每 300ms 一次。三十個人同時送出時
     // 逐則廣播等於每秒上百份整片雲，而大螢幕的動畫本來就跟不上那麼快。

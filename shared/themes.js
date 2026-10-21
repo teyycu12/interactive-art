@@ -20,6 +20,13 @@ export const THEMES = [
     occasion: '交誼・破冰',
     brief: '溫暖的像素廚房，適合輕鬆的聚會與交流活動。',
     spots: { k_dining: '1號桌', ctbl_1: '2號桌' },
+    // 解碼任務的符號（shared/decode.js）：要一眼叫得出名字，念出來才不會對錯
+    decodeSymbols: [
+      { glyph: '🍎', name: '蘋果' }, { glyph: '🍌', name: '香蕉' }, { glyph: '🍇', name: '葡萄' },
+      { glyph: '🍋', name: '檸檬' }, { glyph: '🍓', name: '草莓' }, { glyph: '🍉', name: '西瓜' },
+      { glyph: '🥕', name: '紅蘿蔔' }, { glyph: '🌽', name: '玉米' }, { glyph: '🍄', name: '香菇' },
+      { glyph: '🥚', name: '蛋' },
+    ],
   },
   {
     id: 'office',
@@ -30,6 +37,12 @@ export const THEMES = [
     // 話題桌只在辦公室開（2026-10-17 試玩回饋）：其他場景的號碼牌是集合點與器材站，
     // 走過去是為了任務，跳出聊天題只會打斷人。spots 照樣給集合任務用
     topicTables: true,
+    decodeSymbols: [
+      { glyph: '📎', name: '迴紋針' }, { glyph: '✏️', name: '鉛筆' }, { glyph: '📌', name: '圖釘' },
+      { glyph: '📁', name: '資料夾' }, { glyph: '💡', name: '燈泡' }, { glyph: '☕', name: '咖啡' },
+      { glyph: '📅', name: '日曆' }, { glyph: '✂️', name: '剪刀' }, { glyph: '📏', name: '尺' },
+      { glyph: '💻', name: '筆電' },
+    ],
   },
   {
     id: 'gym',
@@ -38,6 +51,12 @@ export const THEMES = [
     brief: '木地板球場、暖身區與看台，室外有跑道，適合動態的團體活動。',
     // 號碼牌給集合任務用：暖身區三台器材當「站」，頒獎台與飲料桶各一個集合點
     spots: { tbl_1: '1號站', tbl_2: '2號站', tbl_3: '3號站', k_dining: '集合點', ctbl_1: '補給站' },
+    decodeSymbols: [
+      { glyph: '⚽', name: '足球' }, { glyph: '🏀', name: '籃球' }, { glyph: '🏐', name: '排球' },
+      { glyph: '🎾', name: '網球' }, { glyph: '🏓', name: '桌球' }, { glyph: '🏸', name: '羽球' },
+      { glyph: '🥇', name: '金牌' }, { glyph: '👟', name: '球鞋' }, { glyph: '⏱️', name: '碼錶' },
+      { glyph: '🚩', name: '旗子' },
+    ],
   },
   {
     id: 'room',
