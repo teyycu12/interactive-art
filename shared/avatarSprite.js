@@ -167,6 +167,17 @@ export function cvAvatarImage(avatar, { enhance = false, onPaint = null } = {}) 
     img.src = url;
   }
 
+  // 換裝角色的手臂範圍：生成服務寫在同一個資料夾的 arms.json（走路擺手直接用，
+  // 不從圖上猜 —— 斜背包、長髮、長袖都會猜錯）。只有側面貼圖的角色會擺手，所以
+  // 只在有側面時找；生成的角色沒有這個檔，404 就照舊從圖上找
+  const sideUrl = avatar.textures?.side;
+  if (typeof sideUrl === 'string' && typeof fetch === 'function') {
+    fetch(sideUrl.replace(/side\.webp$/, 'arms.json'))
+      .then((res) => (res.ok ? res.json() : null))
+      .then((arms) => { if (arms && typeof arms === 'object') canvas.arms = arms; })
+      .catch(() => {});
+  }
+
   // 整張圖是選用的：改版前生成的資產目錄只有三張切片，那些角色仍在場上，
   // 把它列為必要會讓一次改版就把先前生成的人全部踢出場。
   // 載入失敗也退回切片 —— 兩條路都通到同一個替身，參與者不會看到空白。

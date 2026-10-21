@@ -489,20 +489,26 @@ const DU_SKIN_TAB = { id: 'skin', label: '膚色' };
  * 部件 id 對不到目前的選單（manifest 改過）就略過那一項，不會整組失效。
  */
 const DU_PRESETS = [
-  { label: '女生 A', selection: { hair: 'hair_long', bottom: 'bottom_skirt', brows: 'brows_thin' }, colors: { bottom: '#2F4C7A', top: '#F4F1EA' } },
-  { label: '女生 B', selection: { hair: 'hair_ponytail', bottom: 'bottom_dress', brows: 'brows_soft' }, colors: { bottom: '#E9A9B8' } },
-  { label: '女生 C', selection: { hair: 'hair_bun', top: 'top_shirt', bottom: 'bottom_shorts', brows: 'brows_thin' }, colors: { top: '#84A98C', bottom: '#2B2B30' } },
-  { label: '女生 D', selection: { hair: 'hair_wavy', outer: 'top_hoodie', bottom: 'bottom_skirt', brows: 'brows_soft' }, colors: { outer: '#E9C46A', bottom: '#6D6875' } },
-  { label: '男生 A', selection: { hair: 'hair_short_curly', outer: 'top_hoodie', brows: 'brows_thick' }, colors: { outer: '#4A6FA5', bottom: '#2B2B30' } },
-  { label: '男生 B', selection: { hair: 'hair_middle_part', top: 'top_shirt', shoes: 'shoes_boots', brows: 'brows_sharp' }, colors: { top: '#F4F1EA', bottom: '#8B5A2B' } },
+  { base: 'female', label: '女生 A', selection: { hair: 'hair_long', bottom: 'bottom_skirt', brows: 'brows_thin' }, colors: { bottom: '#2F4C7A', top: '#F4F1EA' } },
+  { base: 'female', label: '女生 B', selection: { hair: 'hair_ponytail', bottom: 'bottom_dress', brows: 'brows_soft' }, colors: { bottom: '#E9A9B8' } },
+  { base: 'female', label: '女生 C', selection: { hair: 'hair_bun', top: 'top_shirt', bottom: 'bottom_shorts', brows: 'brows_thin' }, colors: { top: '#84A98C', bottom: '#2B2B30' } },
+  { base: 'female', label: '女生 D', selection: { hair: 'hair_wavy', outer: 'top_hoodie', bottom: 'bottom_skirt', brows: 'brows_soft' }, colors: { outer: '#E9C46A', bottom: '#6D6875' } },
+  { base: 'male', label: '男生 A', selection: { hair: 'hair_short_curly', outer: 'top_hoodie', brows: 'brows_thick' }, colors: { outer: '#4A6FA5', bottom: '#2B2B30' } },
+  { base: 'male', label: '男生 B', selection: { hair: 'hair_middle_part', top: 'top_shirt', shoes: 'shoes_boots', brows: 'brows_sharp' }, colors: { top: '#F4F1EA', bottom: '#8B5A2B' } },
 ];
+
+/** 這個部件在目前的素體上有沒有畫好 */
+function duOnBase(id) {
+  const p = duPart(id);
+  return !!p && (!p.bases || p.bases.includes(duState.base));
+}
 
 function applyDuPreset(preset) {
   const sel = duState.selection;
   // 先回到素體（套組之間不留上一套的東西），配件保留：那比較像個人的選擇
   for (const cat of duCatalog.categories) if (!cat.multi) sel[cat.id] = null;
   for (const [cat, id] of Object.entries(preset.selection)) {
-    if (duPart(id)?.category === cat) sel[cat] = id;
+    if (duPart(id)?.category === cat && duOnBase(id)) sel[cat] = id;
   }
   Object.assign(duState.colors, preset.colors);
   renderDressup();
@@ -512,7 +518,9 @@ function applyDuPreset(preset) {
 function renderDuPresets() {
   const box = $('#du-presets');
   box.replaceChildren(...DU_PRESETS
-    .filter((p) => Object.values(p.selection).some((id) => duPart(id)))
+    // 只列目前素體的套組：女生套組的部件畫在女生素體上，套到男生素體會整套不對
+    .filter((p) => (!p.base || p.base === duState.base)
+      && Object.values(p.selection).some((id) => duOnBase(id)))
     .map((p) => {
       const b = Object.assign(document.createElement('button'), { type: 'button', className: 'du-preset', textContent: p.label });
       b.addEventListener('click', () => applyDuPreset(p));
@@ -549,7 +557,13 @@ async function goDressup(opts = {}) {
   return true;
 }
 
-const duPartsOf = (cat) => duCatalog.parts.filter((p) => p.category === cat);
+/** 素體清單（男生、女生）。舊版生成服務沒有這個欄位：當成只有一個素體 */
+const duBases = () => (duCatalog?.bases?.length ? duCatalog.bases : [{ id: null, label: '', base_labels: {} }]);
+/** 這個分類在目前的素體上有哪些部件（某個素體還沒畫好的部件不列） */
+const duPartsOf = (cat) => duCatalog.parts.filter((p) => p.category === cat
+  && (!duState?.base || !p.bases || p.bases.includes(duState.base)));
+/** 「什麼都不選」那一格叫什麼：男生的頭髮是短髮、女生是中長髮 */
+const duBaseLabel = (cat) => duBases().find((b) => b.id === duState?.base)?.base_labels?.[cat.id] ?? cat.base_label;
 const duPart = (id) => duCatalog.parts.find((p) => p.id === id);
 
 /** 這一套穿著蓋掉了哪些分類（洋裝蓋掉上衣與外套） */
@@ -580,11 +594,70 @@ function openDressup({ fromStart = false } = {}) {
     },
     tab: 'hair',
     accFocus: null,
+    base: duBases()[0].id,
   };
   showScreen('dressup');
+  // 素體不只一個：先選男生／女生，再換裝
+  if (duBases().length > 1) { showDuPick(); return; }
+  showDuEditor();
+}
+
+/** 先選素體：每張卡片就是那個素體的樣子（用照片量到的膚色、髮色，選之前就看得到自己） */
+function showDuPick() {
+  $('#dressup').classList.add('is-picking');
+  $('#du-pick').hidden = false;
+  $('#du-sub').textContent = '先選一個，之後都還能換';
+  const box = $('#du-pick-options');
+  box.replaceChildren();
+  for (const b of duBases()) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'du-pick-card';
+    const img = document.createElement('img');
+    img.alt = '';
+    const label = document.createElement('span');
+    label.textContent = b.label;
+    card.append(img, label);
+    card.addEventListener('click', () => pickDuBase(b.id));
+    box.append(card);
+    fetchDuPreview({ base: b.id, selection: {}, colors: duState.colors })
+      .then((png) => { if (png) img.src = png; });
+  }
+}
+
+function pickDuBase(baseId) {
+  duState.base = baseId;
+  // 換了素體：這個素體上沒畫好的部件拿掉（目前每個部件兩個素體都有，以後加的不一定）
+  const sel = duState.selection;
+  const ok = (id) => duCatalog.parts.some((p) => p.id === id && (!p.bases || p.bases.includes(baseId)));
+  for (const [cat, id] of Object.entries(sel)) {
+    if (Array.isArray(id)) sel[cat] = id.filter(ok);
+    else if (id && !ok(id)) sel[cat] = null;
+  }
+  showDuEditor();
+}
+
+function showDuEditor() {
+  $('#dressup').classList.remove('is-picking');
+  $('#du-pick').hidden = true;
+  $('#du-sub').textContent = '挑髮型、衣服和顏色';
   renderDuPresets();
   renderDressup();
   requestDuPreview();
+}
+
+/** 跟生成服務要一張正面預覽圖（data URL）；失敗回 null */
+async function fetchDuPreview({ base, selection, colors }) {
+  try {
+    const res = await fetch('/api/dressup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ preview: true, base, selection, colors }),
+    });
+    const body = await res.json();
+    if (body?.error === 'vision_service_unavailable') showToast(DU_UNAVAILABLE, 5000);
+    return body?.ok ? body.previewPng : null;
+  } catch { return null; }
 }
 
 function duButton(label, pressed, onClick) {
@@ -672,7 +745,7 @@ function renderDressup() {
   const pick = (id) => () => { selection[tab] = id; renderDressup(); requestDuPreview(); };
   // 眼睛沒有款式可選，只換顏色；外套的「不穿」也是一個選項：素體沒有外套
   if (duPartsOf(tab).length) {
-    opts.append(duButton(cat.base_label, !selection[tab], pick(null)));
+    opts.append(duButton(duBaseLabel(cat), !selection[tab], pick(null)));
     for (const p of duPartsOf(tab)) opts.append(duButton(p.label, selection[tab] === p.id, pick(p.id)));
   }
   const palette = DU_PALETTES[cat.palette];
@@ -687,16 +760,9 @@ function requestDuPreview() {
   clearTimeout(duPreviewTimer);
   duPreviewTimer = setTimeout(async () => {
     const seq = ++duPreviewSeq;
-    try {
-      const res = await fetch('/api/dressup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ preview: true, selection: duState.selection, colors: duState.colors }),
-      });
-      const body = await res.json();
-      if (seq === duPreviewSeq && body?.ok) $('#du-preview').src = body.previewPng;
-      if (body?.error === 'vision_service_unavailable') showToast(DU_UNAVAILABLE, 5000);
-    } catch { /* 預覽漏一次沒關係，下一次點選會再送 */ }
+    // 預覽漏一次沒關係，下一次點選會再送
+    const png = await fetchDuPreview({ base: duState.base, selection: duState.selection, colors: duState.colors });
+    if (seq === duPreviewSeq && png) $('#du-preview').src = png;
   }, 120);
 }
 
@@ -725,7 +791,7 @@ $('#btn-du-done').addEventListener('click', async () => {
     const res = await fetch('/api/dressup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ selection: duState.selection, colors: duState.colors }),
+      body: JSON.stringify({ base: duState.base, selection: duState.selection, colors: duState.colors }),
     });
     const body = await res.json();
     if (!body?.ok) throw new Error(body?.error || 'dressup_failed');
@@ -742,8 +808,11 @@ $('#btn-du-done').addEventListener('click', async () => {
   }
 });
 
-// 回起始頁：那裡可以改走拍照
-$('#btn-du-back').addEventListener('click', () => showScreen('entry'));
+// 回前一頁：換裝中 → 回去重選男生／女生；選素體時（或只有一個素體）→ 回起始頁，那裡可以改走拍照
+$('#btn-du-back').addEventListener('click', () => {
+  if (duBases().length > 1 && $('#du-pick').hidden) { showDuPick(); return; }
+  showScreen('entry');
+});
 $('#btn-dressup').addEventListener('click', () => { stopScanStream(); goDressup(); });
 
 /**

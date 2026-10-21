@@ -313,6 +313,27 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 }
 #dressup > .foot { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; }
 
+/* 先選素體：兩張大卡片，卡片裡就是那個素體的樣子。選的時候換裝的其他部分先收起來 */
+#dressup.is-picking > .preview,
+#dressup.is-picking > .du-tabs,
+#dressup.is-picking > .du-body,
+#dressup.is-picking > .foot { display: none; }
+.du-pick { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
+.du-pick-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; width: 100%; }
+.du-pick-card {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 12px 8px 14px;
+  border: 2.5px solid var(--ink);
+  background: var(--paper);
+  box-shadow: var(--drop-sm);
+  font-size: 18px; font-weight: 800; color: var(--ink);
+}
+.du-pick-card img {
+  display: block; width: 100%; height: min(42dvh, 300px); object-fit: contain;
+  image-rendering: pixelated;
+}
+.du-pick-card:active { transform: translateY(2px); box-shadow: none; }
+
 /* ── 控制器 ─────────────────────────────────────────────── */
 /* 狀態列。
    flex-shrink: 0 讓它在視窗變矮時不被壓扁（該讓出空間的是搖桿區，
@@ -1464,6 +1485,9 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
   #dressup > .du-body { grid-column: 2; grid-row: 3; }
   #dressup > .foot { grid-column: 2; grid-row: 4; }
   #dressup .du-preview img { height: calc(100% - 8px); max-height: 340px; }
+  #dressup.is-picking > .du-pick { grid-column: 1 / -1; grid-row: 2 / 5; }
+  .du-pick-options { max-width: 640px; }
+  .du-pick-card img { height: min(52dvh, 300px); }
 }
 
 /* 矮的橫式（手機橫拿）：標題列與留白縮到最小，把高度讓給舞台與按鈕 */

@@ -47,7 +47,7 @@ const WALK_HEIGHT = 448;
 // 30 個人同時進場時一口氣算完會卡住好幾百毫秒
 const BUILD_BUDGET_MS = 6;
 
-const walkCache = new WeakMap();   // sprite → { version, views: { front, side, back } }
+const walkCache = new WeakMap();   // sprite → { version, arms, views: { front, side, back } }
 let budgetFrame = null;
 let budgetSpent = 0;
 
@@ -69,7 +69,7 @@ function withBudget(time, work) {
   return out;
 }
 
-function prepareView(src, view, skin, body) {
+function prepareView(src, view, skin, body, arms) {
   const scale = WALK_HEIGHT / src.height;
   const w = Math.round(src.width * scale);
   const c = makeCanvas(w, WALK_HEIGHT);
@@ -80,7 +80,7 @@ function prepareView(src, view, skin, body) {
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(src, 0, 0, w, WALK_HEIGHT);
   const img = ctx.getImageData(0, 0, w, WALK_HEIGHT);
-  const rig = buildWalkRig(img, view, { skin, body });
+  const rig = buildWalkRig(img, view, { skin, body, arms });
   return { img, rig, frames: new Array(WALK_FRAMES), w };
 }
 
@@ -119,21 +119,23 @@ export function walkSprite(sprite, view, k, time) {
   const src = v === AGENT_VIEW.FRONT ? sprite : sprite.views[v];
   if (!src?.complete || !src.naturalWidth) return null;
 
+  // sprite.arms：換裝角色的手臂範圍（arms.json，avatarSprite 載入）。比貼圖晚到時重算一次
   let entry = walkCache.get(sprite);
-  if (!entry || entry.version !== sprite.spriteVersion) {
-    entry = { version: sprite.spriteVersion, views: {} };
+  if (!entry || entry.version !== sprite.spriteVersion || entry.arms !== sprite.arms) {
+    entry = { version: sprite.spriteVersion, arms: sprite.arms, views: {} };
     walkCache.set(sprite, entry);
   }
+  const arms = (name) => sprite.arms?.[name];
   // 側面與背面要用正面的膚色與手掌高度找手，正面先算
   if (!entry.views.front) {
-    const built = withBudget(time, () => prepareView(sprite, AGENT_VIEW.FRONT, null));
+    const built = withBudget(time, () => prepareView(sprite, AGENT_VIEW.FRONT, null, undefined, arms(AGENT_VIEW.FRONT)));
     if (!built) return null;
     entry.views.front = built;
   }
   if (!entry.views[v]) {
     const fr = entry.views.front.rig;
     const body = fr && { handRow: fr.handRow ?? null };
-    const built = withBudget(time, () => prepareView(src, v, fr?.skin ?? null, body));
+    const built = withBudget(time, () => prepareView(src, v, fr?.skin ?? null, body, arms(v)));
     if (!built) return null;
     entry.views[v] = built;
   }

@@ -190,6 +190,10 @@
       <span class="sub" id="du-sub">挑髮型、衣服和顏色</span>
       <button class="btn-link" id="btn-du-back" type="button">回前一頁</button>
     </div>
+    <!-- 先選素體（男生／女生），再換裝。素體只有一個的話不出現（app.js 的 openDressup） -->
+    <div class="du-pick" id="du-pick" hidden>
+      <div class="du-pick-options" id="du-pick-options"></div>
+    </div>
     <div class="preview stage-frame du-preview">
       <img id="du-preview" alt="換裝後的角色">
     </div>

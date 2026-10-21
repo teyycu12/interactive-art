@@ -20,6 +20,7 @@
 
 import { sampleGrid, segment, GRID_ROWS } from './voxelRig.js';
 import { findNeckRow } from './spriteViews.js';
+import { ARM_TEMPLATE } from './armTemplate.js';
 
 /** 一個循環切幾格。8 格：最高速一秒約 8 格，整格位移下再多也只是重複 */
 export const WALK_FRAMES = 8;
@@ -138,6 +139,14 @@ export function skinTone(g, neck) {
 // 被當成手
 const SKIN_TOL = 32;
 const near = (a, b, tol) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) <= tol;
+
+// 背光的膚色：同一種膚色只是暗一些（亮度是膚色的 SHADE_MIN 到 1 倍）。
+// 側面手臂靠身體那一側常有一條 1–2 格寬的陰影，跟膚色差 100 上下，容差內收不到
+const SHADE_MIN = 0.55;
+function skinShade(rgb, skin) {
+  const k = luma(...rgb) / luma(...skin);
+  return k >= SHADE_MIN && k <= 1 && near(rgb, skin.map((v) => v * k), SKIN_TOL);
+}
 
 // 腿的顏色：一種顏色至少佔小腿這麼多才算（描邊約佔兩成，要收進來 ——
 // 黑色窄裙與膚色腿的描邊差很多，與黑褲子的描邊則一樣）
@@ -288,7 +297,7 @@ function openGaps(g) {
  *   sign   這一塊跟 s 同向還是反向（左右腳、手腳反向）
  *   z      疊的順序：負的畫在身體後面，正的畫在前面
  */
-function frontRig(g, skin) {
+function frontRig(g, skin, given = null) {
   const ga = openGaps(g);
   const seg = segment(ga);
   const H = g.height;
@@ -345,7 +354,8 @@ function frontRig(g, skin) {
   const legTop = seg.crotch ?? Math.round(H * 0.8);
   let handRow = null;
   for (const [side, name, sign, inward] of [[-1, 'armL', -1, 1], [1, 'armR', 1, -1]]) {
-    const arm = frontArm(ga, g, skin, side, seg.neck, legTop);
+    // 給了手臂範圍（換裝角色）就用給的，不從圖上找：斜背包、長髮、寬袖都會擋住手與身體之間的縫
+    const arm = given ? givenArm(g, given, name) : frontArm(ga, g, skin, side, seg.neck, legTop);
     if (!arm) continue;
     handRow = Math.max(handRow ?? 0, arm.bottom);
     const idx = add({ name, pivot: arm.top, bottom: arm.bottom, lift: FRONT_ARM_LIFT, inward: inward * FRONT_ARM_IN, sign, z: 0 });
@@ -429,7 +439,7 @@ function frontArm(ga, g, skin, side, neck, legTop) {
  * segment 的手臂偵測靠「手與身體之間的縫」，側面的手貼在身體前面，沒有縫，
  * 所以改用膚色找手，再沿著手往上量出手臂。
  */
-function sideRig(g, skin, body = {}) {
+function sideRig(g, skin, body = {}, given = null) {
   const H = g.height;
   const W = g.width;
   const label = new Int16Array(W * H).fill(-1);
@@ -516,10 +526,26 @@ function sideRig(g, skin, body = {}) {
   let bare = 0, knee = 0;
   if (skin) for (let r = kneeTop; r < feetTop; r++, knee++) if (bareRow(g, r, skin)) bare++;
   const bareLegs = bare * 2 > knee;
-  const arm = skin ? sideArm(g, skin, bareLegs ? legTop - 1 : H - 1, body.handRow) : null;
+  let arm = null;
+  if (given) {
+    // 換裝角色：手臂範圍是事先在素體上做好的。整條袖子（長袖外套）一樣只小幅擺 ——
+    // 袖子底下的身體不存在，擺開後原地要補布料的顏色
+    const g0 = givenArm(g, given, 'arm');
+    if (g0) {
+      const cols = [];
+      for (let r = g0.top; r <= g0.bottom; r++) {
+        const rs = g0.rows.filter(([rr]) => rr === r);
+        cols.push(rs.length ? [Math.min(...rs.map((x) => x[1])), Math.max(...rs.map((x) => x[2]))] : [1, 0]);
+      }
+      const swing = g0.small ? SLEEVE_SWING : Math.max(1, Math.round((g0.bottom - g0.top) * SIDE_ARM_SWING));
+      arm = { top: g0.top, bottom: g0.bottom, cols, swing };
+    }
+  } else if (skin) {
+    arm = sideArm(g, skin, bareLegs ? legTop - 1 : H - 1, body.handRow);
+  }
   if (arm) {
     // fillBehind：手擺開後露出的身體要補顏色（pixelLabels 逐像素列算）
-    const idx = add({ name: 'arm', pivot: arm.top, bottom: arm.bottom, swing: arm.swing, sign: -1, z: 1, fillBehind: true });
+    const idx = add({ name: 'arm', pivot: arm.top, bottom: arm.bottom, swing: arm.swing, sign: -1, z: 1, fillBehind: true, traced: arm.traced === true });
     for (let r = arm.top; r <= arm.bottom; r++) {
       const [a, b] = arm.cols[r - arm.top];
       for (let c = a; c <= b; c++) if (solidCell(g, c, r)) label[r * W + c] = idx;
@@ -565,19 +591,7 @@ function sideArm(g, skin, maxRow, handRow = null) {
   }
   if (!best || best.length < 4) return null;
 
-  // 每一列手的範圍（膚色），左右再吃進緊鄰的深色描邊（最多 ARM_PAD 格）。
-  // 不固定多拿幾格：手臂在側面常貼著衣服的前緣，多拿的那幾格是衣服，
-  // 會跟著手一起被拉走（實測裙子前緣被撕下一塊）。手以上（袖子）沿用最上面
-  // 那一列的寬度
-  // 深色只在 ARM_PAD 格內就結束時才是描邊；再往外還是深色的是黑衣服（手掌
-  // 垂在黑褲子前面），收進來的話整條褲管跟著手走，原地兩側都沒有衣服可補色
-  const dark = (c, r) => solidCell(g, c, r) && luma(...cellColor(g, c, r)) < OUTLINE_LUMA;
-  const outline = (r, from, step) => {
-    let k = 0;
-    while (k <= ARM_PAD && dark(from + step * k, r)) k++;
-    return k <= ARM_PAD ? k : 0;
-  };
-  const grow = (r, [a, b]) => [a - outline(r, a - 1, -1), b + outline(r, b + 1, 1)];
+  const grow = armGrower(g, skin);
   const rows = new Map();
   for (const j of best) {
     const c = j % W, r = Math.floor(j / W);
@@ -590,18 +604,37 @@ function sideArm(g, skin, maxRow, handRow = null) {
     const below = rows.get(r + 1);
     let lo = -1, hi = -1;
     for (let c = below[0] - 1; c <= below[1] + 1; c++) {
-      if (solidCell(g, c, r) && near(cellColor(g, c, r), skin, SKIN_TOL)) { if (lo < 0) lo = c; hi = c; }
+      if (solidCell(g, c, r) && (near(cellColor(g, c, r), skin, SKIN_TOL) || skinShade(cellColor(g, c, r), skin))) {
+        if (lo < 0) lo = c;
+        hi = c;
+      }
     }
     if (lo < 0) break;
     rows.set(r, [lo, hi]);
   }
   const handTop = Math.min(...rows.keys());
-  // 只看得到手掌（長袖）就不擺：手臂的範圍只能從手掌往上猜一條同寬的帶子，
-  // 比袖子窄，一擺就把袖子撕成一條（實測長袖毛衣）
-  if (Math.max(...rows.keys()) - handTop + 1 < H * SIDE_MIN_ARM) return null;
+  // 只看得到手掌（長袖）：手臂的範圍不能從手掌往上猜一條同寬的帶子 —— 比袖子窄，
+  // 一擺就把袖子撕成一條（實測長袖毛衣）。改沿著袖子兩側的描邊找出整條袖子；
+  // 找不到（描邊不比布料暗）才不擺
+  if (Math.max(...rows.keys()) - handTop + 1 < H * SIDE_MIN_ARM) {
+    const sleeve = traceSleeve(g, rows.get(handTop), handTop, neckRow + SLEEVE_TOP_BELOW_NECK);
+    if (!sleeve) return null;
+    const handBottom = Math.min(H - 1, Math.max(...rows.keys()) + 1);
+    const cols = [...sleeve.cols];
+    for (let r = handTop; r <= handBottom; r++) {
+      const hand = rows.get(r) ?? rows.get(r - 1) ?? rows.get(handTop);
+      cols.push(grow(r, hand));
+    }
+    // 長袖只小幅擺：袖子擺開後原地要補布料的顏色，擺得越開補得越大塊，袖子上的
+    // 明暗、花紋也被扯得越斜（實測灰毛衣擺 6 格，原地補出一塊深灰）
+    return { top: sleeve.top, bottom: handBottom, cols, swing: SLEEVE_SWING, traced: true };
+  }
   // 往下多一列：手掌底下那一列是描邊，不是膚色，留在原地會變成一條橫線
   const bottom = Math.min(H - 1, Math.max(...rows.keys()) + 1);
-  const top = Math.min(handTop, neckRow + 2);
+  // 從露出膚色的第一列開始擺：無袖的手臂上面接回了肩膀，就從肩膀擺；有袖子的
+  // 從袖口底下擺，袖子不動。以前帶子一路延伸到脖子，但帶子只有手臂寬、比袖子窄，
+  // 袖子被撕成兩半，袖口那條深色的邊一半跟著手走、一半留在身上
+  const top = handTop;
   // 手臂是一條直的帶子：每一列膚色的中心拿來擬一條直線，寬度取各列的上四分位。
   // 不直接用每一列找到的膚色：手臂背光的那一側比膚色暗，落在容差外，
   // 那幾格會留在原地，手一擺就碎成一截一截
@@ -628,18 +661,290 @@ function sideArm(g, skin, maxRow, handRow = null) {
   return { top, bottom, cols, swing };
 }
 
+// 長袖：袖子從脖子往下幾格開始（肩膀），兩側描邊要比袖子裡面暗這麼多才算找到
+const SLEEVE_TOP_BELOW_NECK = 3;
+const SLEEVE_EDGE_DARKER = 0.8;
+// 袖子寬度相對手掌（袖子常比手掌窄一點或寬一點）；路徑每偏一格的罰分（描邊多半是直的）
+const SLEEVE_MIN_W = 0.5;
+const SLEEVE_MAX_W = 1.4;
+const SLEEVE_BEND = 24;
+const SLEEVE_SWING = 2;
+
+/**
+ * 長袖的手臂：從手腕往上到肩膀，找袖子兩側的描邊。
+ *
+ * 像素畫的袖子兩側各有一條連續的深色描邊，但布料常有花紋、摺痕，一格一格看
+ * 「暗不暗」分不出描邊與花紋。所以一次找一對路徑：每往上一列左右各最多偏一格、
+ * 兩條之間的寬度在手掌的 SLEEVE_MIN_W–SLEEVE_MAX_W 倍，取兩條加起來最暗的那一對，
+ * 偏一格罰 SLEEVE_BEND。透明格算最亮：算暗的話路徑直接滑到身體外面去。
+ * 描邊沒有比中間的布料明顯暗（黑衣服上的黑袖子之類）就當找不到，回傳 null。
+ * 回傳 { top, cols }：cols[i] 是第 top + i 列的 [左描邊, 右描邊]，到手腕上一列為止。
+ */
+function traceSleeve(g, wrist, handTop, shoulder) {
+  const W = g.width;
+  const [ha, hb] = wrist;
+  const handW = hb - ha + 1;
+  const minW = Math.max(2, Math.floor(handW * SLEEVE_MIN_W));
+  const maxW = Math.ceil(handW * SLEEVE_MAX_W) + 1;
+  const cost = (c, r) => (c < 0 || c >= W || !solidCell(g, c, r) ? 255 : luma(...cellColor(g, c, r)));
+  const rowsUp = [];
+  for (let r = handTop - 1; r >= shoulder; r--) rowsUp.push(r);
+  if (rowsUp.length < 3) return null;
+
+  // 動態規劃：狀態是（左描邊, 右描邊），中間至少 minW 格布料
+  const key = (a, b) => (a + 1) * (W + 2) + (b + 1);
+  let prev = new Map();
+  // 起點：手腕兩側附近。袖口可能比手掌窄，描邊落在手掌的範圍裡
+  for (let a = ha - 3; a <= ha + 2; a++) {
+    for (let b = hb - 2; b <= hb + 3; b++) {
+      const w = b - a - 1;
+      if (w < minW || w > maxW) continue;
+      prev.set(key(a, b), { a, b, cost: cost(a, rowsUp[0]) + cost(b, rowsUp[0]), back: null });
+    }
+  }
+  const layers = [prev];
+  for (let i = 1; i < rowsUp.length; i++) {
+    const r = rowsUp[i];
+    const next = new Map();
+    for (const s of prev.values()) {
+      for (let da = -1; da <= 1; da++) {
+        for (let db = -1; db <= 1; db++) {
+          const a = s.a + da, b = s.b + db;
+          const w = b - a - 1;
+          if (w < minW || w > maxW || a < -1 || b > W) continue;
+          const k = key(a, b);
+          const c = s.cost + cost(a, r) + cost(b, r) + (da ? SLEEVE_BEND : 0) + (db ? SLEEVE_BEND : 0);
+          const e = next.get(k);
+          if (!e || c < e.cost) next.set(k, { a, b, cost: c, back: s });
+        }
+      }
+    }
+    if (!next.size) return null;
+    layers.push(next);
+    prev = next;
+  }
+  let best = null;
+  for (const s of prev.values()) if (!best || s.cost < best.cost) best = s;
+  const path = [];
+  for (let s = best; s; s = s.back) path.push([s.a, s.b]);   // 肩膀 → 手腕
+  // 袖子是一條大致直的帶子：肩膀到手腕的中心橫移超過一個手掌寬，是沿著別的線走掉了
+  // （實測沿著背後的頭髮、外套前緣）
+  const mid = ([a, b]) => (a + b) / 2;
+  if (Math.abs(mid(path[0]) - mid(path[path.length - 1])) > handW) return null;
+
+  // 描邊要比袖子裡面暗：兩條路徑的平均亮度 vs 中間布料的平均亮度
+  let edge = 0, inner = 0, nIn = 0;
+  path.forEach(([a, b], i) => {
+    const r = shoulder + i;
+    edge += cost(a, r) + cost(b, r);
+    for (let c = a + 1; c < b; c++) if (solidCell(g, c, r)) { inner += luma(...cellColor(g, c, r)); nIn++; }
+  });
+  edge /= path.length * 2;
+  if (!nIn || edge > (inner / nIn) * SLEEVE_EDGE_DARKER) return null;
+  return { top: shoulder, cols: path.map(([a, b]) => [Math.max(0, a), Math.min(W - 1, b)]) };
+}
+
+// ── 生成角色的手臂模板 ─────────────────────────────────────────────
+//
+// 生成的角色都照同一張姿勢參考圖畫，手臂大約在同一個位置（實測手掌差 ±3 格）。
+// 模板是參考圖上的手臂範圍（shared/armTemplate.js，scripts/arm_template.py 產生），
+// 以脖子、腳底對齊高度，胸口那一列的中線（正面背面）或前緣（側面）對齊左右，再在
+// 附近 TEMPLATE_SHIFT 格內找最貼合的位置。
+const TEMPLATE_SHIFT = 3;
+// 模板的格子落在人身上的比例要到這麼多才算對上（手臂在輪廓邊緣，偏出去就是位置錯了）
+const TEMPLATE_MIN_INSIDE = 0.9;
+// 手掌那幾列至少要有這麼多格膚色：只看「落在人身上」的話，沒畫手的地方（裙子、
+// 身體）也對得上，套上去整塊衣服跟著擺
+const TEMPLATE_MIN_HAND = 3;
+const ARM_NAMES_OF = { front: ['armL', 'armR'], back: ['armL', 'armR'], side: ['arm'] };
+
+/**
+ * 對齊模板用的基準（格子座標）：脖子列、腳底列、胸口那一列的中線（正面背面）或前緣（側面）。
+ * 胸口取脖子到腳底的 15%：再低就碰到手臂往外張、包包，前緣也會被手掌往前推。
+ */
+export function bodyAnchors(g, view) {
+  const neck = findNeckRow(g);
+  let bottom = g.height - 1;
+  while (bottom > 0 && !rowExtent(g, bottom)) bottom--;
+  const chest = Math.round(neck + (bottom - neck) * 0.15);
+  const ext = rowExtent(g, chest) ?? [0, g.width - 1];
+  return { neck, bottom, ax: view === 'side' ? ext[1] : (ext[0] + ext[1]) / 2 };
+}
+
+/** 模板的一隻手對齊到這張圖 → [[列, 起欄, 迄欄], …]（還沒微調） */
+function placeTemplate(g, view, arm) {
+  const T = ARM_TEMPLATE[view];
+  const A = bodyAnchors(g, view);
+  const k = (A.bottom - A.neck) / Math.max(1, T.bottom - T.neck);
+  const byRow = new Map();
+  for (const [r, a, b] of arm.cells) byRow.set(r, [...(byRow.get(r) ?? []), [a, b]]);
+  const rs = [...byRow.keys()];
+  const r0 = Math.round(A.neck + (Math.min(...rs) - T.neck) * k);
+  const r1 = Math.round(A.neck + (Math.max(...rs) - T.neck) * k);
+  const out = [];
+  for (let r = r0; r <= r1; r++) {
+    // 逆著對回模板的列：模板放大時不會漏列
+    const src = byRow.get(Math.round(T.neck + (r - A.neck) / k));
+    if (!src) continue;
+    for (const [a, b] of src) out.push([r, Math.round(A.ax + (a - T.ax) * k), Math.round(A.ax + (b - T.ax) * k)]);
+  }
+  return out;
+}
+
+/** 在 ±TEMPLATE_SHIFT 格內找最貼合的位置：格子落在人身上越多越好，手掌那幾列有膚色加分。
+ *  對不上（偏出輪廓、手掌那裡沒有膚色）回傳 null */
+function fitTemplate(g, cells, skin) {
+  if (!skin) return null;
+  const handFrom = Math.max(...cells.map((c) => c[0])) - 3;
+  let best = null;
+  for (let dy = -TEMPLATE_SHIFT; dy <= TEMPLATE_SHIFT; dy++) {
+    for (let dx = -TEMPLATE_SHIFT; dx <= TEMPLATE_SHIFT; dx++) {
+      let inside = 0, total = 0, hand = 0;
+      for (const [r, a, b] of cells) {
+        for (let c = a; c <= b; c++) {
+          total++;
+          if (!solidCell(g, c + dx, r + dy)) continue;
+          inside++;
+          if (r >= handFrom && near(cellColor(g, c + dx, r + dy), skin, SKIN_TOL)) hand++;
+        }
+      }
+      const score = inside - 2 * (total - inside) + 2 * hand;
+      if (!best || score > best.score) best = { score, dx, dy, inside: inside / Math.max(1, total), hand };
+    }
+  }
+  if (!best || best.inside < TEMPLATE_MIN_INSIDE || best.hand < TEMPLATE_MIN_HAND) return null;
+  return cells.map(([r, a, b]) => [r + best.dy, a + best.dx, b + best.dx]);
+}
+
+/** 每一列併成一段再往左右長（armGrower） */
+function growRows(cells, grow) {
+  const rows = new Map();
+  for (const [r, a, b] of cells) {
+    const e = rows.get(r);
+    rows.set(r, e ? [Math.min(e[0], a), Math.max(e[1], b)] : [a, b]);
+  }
+  return [...rows].map(([r, ab]) => [r, ...grow(r, ab)]);
+}
+
+/** rig 裡某個區塊佔的格 → [[列, 起欄, 迄欄], …] */
+function regionCells(g, rig, idx) {
+  const out = [];
+  for (let r = 0; r < g.height; r++) {
+    let start = -1;
+    for (let c = 0; c <= g.width; c++) {
+      const on = c < g.width && rig.label[r * g.width + c] === idx;
+      if (on && start < 0) start = c;
+      if (!on && start >= 0) { out.push([r, start, c - 1]); start = -1; }
+    }
+  }
+  return out;
+}
+
+/**
+ * 缺手、或手是沿描邊猜出來的袖子（traceSleeve）時，回傳換上模板手臂的範圍（給
+ * frontRig／sideRig 的 given）；不必換或模板對不上這個角色時回傳 null（照舊）。
+ * 模板比描邊準：拿換裝角色（手臂位置已知）驗證，連帽外套的側面沿描邊只對到 23–28%，
+ * 模板對到 88–89%。套模板的手一律小幅擺：手臂底下的身體不存在，擺開後原地要補顏色。
+ */
+function withTemplateArms(g, view, skin, rig) {
+  if (!ARM_TEMPLATE?.[view]) return null;
+  const given = [];
+  let changed = false;
+  for (const name of ARM_NAMES_OF[view]) {
+    const idx = rig.regions.findIndex((R) => R.name === name);
+    const tArm = ARM_TEMPLATE[view].arms.find((a) => a.name === name);
+    const fitted = tArm && fitTemplate(g, placeTemplate(g, view, tArm), skin);
+    const placed = fitted && growRows(fitted, armGrower(g, skin));
+    if (idx >= 0) {
+      if (rig.regions[idx].traced && placed) {
+        given.push({ name, cells: placed, small: true });
+        changed = true;
+      } else {
+        given.push({ name, cells: regionCells(g, rig, idx), small: rig.regions[idx].traced === true });
+      }
+    } else if (placed) {
+      given.push({ name, cells: placed, small: true });
+      changed = true;
+    }
+  }
+  return changed ? given : null;
+}
+
+/**
+ * 給定的手臂範圍（換裝角色的 arms.json，backend/dressup.arm_cells）→ { top, bottom, rows, small }。
+ * given：[{ name, cells: [[列, 起欄, 迄欄], …], small? }]，座標就是這裡的格子（同樣以不透明
+ * 範圍切 GRID_ROWS 列）。超出格子的部分丟掉（兩邊的外框可能差一欄）。沒有這隻手回傳 null。
+ */
+function givenArm(g, given, name) {
+  const arm = given.find((a) => a?.name === name);
+  if (!arm || !Array.isArray(arm.cells)) return null;
+  const rows = [];
+  for (const cell of arm.cells) {
+    if (!Array.isArray(cell) || cell.length !== 3 || !cell.every(Number.isInteger)) continue;
+    const [r, a, b] = cell;
+    if (r < 0 || r >= g.height || b < 0 || a >= g.width || a > b) continue;
+    rows.push([r, Math.max(0, a), Math.min(g.width - 1, b)]);
+  }
+  if (!rows.length) return null;
+  const top = Math.min(...rows.map((x) => x[0]));
+  const bottom = Math.max(...rows.map((x) => x[0]));
+  return { top, bottom, rows, small: arm.small === true };
+}
+
+/**
+ * 手臂的一列往左右長：先收緊鄰的背光陰影，再收緊鄰的深色描邊。回傳 (列, [起, 迄]) => [起, 迄]。
+ * 從圖上找到的手（sideArm）與套上的模板（withTemplateArms）都用：只差一條描邊，手一擺
+ * 那條描邊就留在身上。
+ */
+function armGrower(g, skin) {
+  // 每一列手的範圍（膚色），左右再吃進緊鄰的深色描邊（最多 ARM_PAD 格）。
+  // 不固定多拿幾格：手臂在側面常貼著衣服的前緣，多拿的那幾格是衣服，
+  // 會跟著手一起被拉走（實測裙子前緣被撕下一塊）。手以上（袖子）沿用最上面
+  // 那一列的寬度
+  // 深色只在 ARM_PAD 格內就結束時才是描邊；再往外還是深色的是黑衣服（手掌
+  // 垂在黑褲子前面），收進來的話整條褲管跟著手走，原地兩側都沒有衣服可補色
+  const dark = (c, r) => solidCell(g, c, r) && luma(...cellColor(g, c, r)) < OUTLINE_LUMA;
+  const outline = (r, from, step) => {
+    let k = 0;
+    while (k <= ARM_PAD && dark(from + step * k, r)) k++;
+    return k <= ARM_PAD ? k : 0;
+  };
+  // 描邊之前先收背光的那一條陰影（最多 ARM_PAD 格）：手臂的帶子是照膚色的中心
+  // 擬的，偏向亮的那一側，陰影與它外面的描邊都在帶子外 —— 手一擺，一條陰影加
+  // 一條描邊黏在身上（2026-10-20 回報「手臂一部分黏在軀幹上」）
+  const shaded = (c, r) => solidCell(g, c, r) && skinShade(cellColor(g, c, r), skin);
+  const shadow = (r, from, step) => {
+    let k = 0;
+    while (k < ARM_PAD && shaded(from + step * k, r)) k++;
+    return k;
+  };
+  return (r, [a, b]) => {
+    a -= shadow(r, a - 1, -1);
+    b += shadow(r, b + 1, 1);
+    return [a - outline(r, a - 1, -1), b + outline(r, b + 1, 1)];
+  };
+}
+
 /**
  * 分析一張圖。view：'front' | 'back' | 'side'（側面朝右）。
  * 側面需要膚色（opts.skin，從正面的 rig.skin 取）與手掌高度（opts.body =
  * { handRow }，從正面的 rig 取；沒有就用固定比例）。圖是空的回傳 null；
  * 分析不出任何會動的部位時 regions 是空的，walkFrame 會原樣照畫。
+ * opts.arms：這一面的手臂範圍（換裝角色才有，見 givenArm）；給了就不從圖上找手。
  */
 export function buildWalkRig(img, view, opts = {}) {
   const g = majorityAlpha(img, sampleGrid(img, GRID_ROWS));
   if (!g) return null;
   // 膚色：正面自己算；背面與側面用正面的（背面看不到臉）
   const skin = view === 'front' ? skinTone(g, findNeckRow(g)) : (opts.skin ?? null);
-  const rig = view === 'side' ? sideRig(g, skin, opts.body) : frontRig(g, skin);
+  const given = Array.isArray(opts.arms) ? opts.arms : null;
+  let rig = view === 'side' ? sideRig(g, skin, opts.body, given) : frontRig(g, skin, given);
+  // 從圖上找不到手（長袖、斜背包擋住縫、手搭在光腿上），或手是沿描邊猜出來的袖子：
+  // 套姿勢參考圖的手臂模板。從膚色找到的手照舊，不動已經正常的角色
+  if (!given) {
+    const fixed = withTemplateArms(g, view, skin, rig);
+    if (fixed) rig = view === 'side' ? sideRig(g, skin, opts.body, fixed) : frontRig(g, skin, fixed);
+  }
   rig.label = growLabels(g, rig.label);
   rig.g = g;
   rig.view = view;
@@ -726,7 +1031,11 @@ function pixelLabels(img, rig, skin) {
   const pix = new Int16Array(width * height).fill(-1);
   const opaque = (i) => data[i * 4 + 3] > ALPHA_SOLID;
   const pl = (i) => luma(data[i * 4], data[i * 4 + 1], data[i * 4 + 2]);
-  const skinPx = (i) => skin && near([data[i * 4], data[i * 4 + 1], data[i * 4 + 2]], skin, SKIN_TOL * 2);
+  const skinPx = (i) => {
+    if (!skin) return false;
+    const rgb = [data[i * 4], data[i * 4 + 1], data[i * 4 + 2]];
+    return near(rgb, skin, SKIN_TOL * 2) || skinShade(rgb, skin);
+  };
 
   for (let y = 0; y < height; y++) {
     const r = Math.floor((y - g.y0) / g.cell);

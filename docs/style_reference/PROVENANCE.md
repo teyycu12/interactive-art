@@ -57,6 +57,8 @@
 | turnaround_04.png | 專案提供的三視圖原圖 `_original/full_body_04.png`（2026-10-15），生成工具待補 |  | 像素 |
 | pose_turnaround.png | Gemini 3.1 Flash Image（經 OpenRouter）依 turnaround_01–04 生成的素體，2026-10-15；原檔 `_original/base_body.png` |  | 像素（姿勢參考） |
 | dressup/raw/*.png（17 張） | Gemini 3.1 Flash Image（OpenRouter）以素體 `pose_turnaround.png` 為底，一次加一個部件（2026-10-18，提示詞見 `dressup/manifest.json`） | 同素體 | 像素（素體換裝） |
+| dressup/base_female.png | Gemini 3.1 Flash Image（OpenRouter）依 `pose_turnaround.png` 改成女生（2026-10-20，提示詞見 `manifest.json` 的 `bases`）；原檔 `dressup/raw/female/_base.png`。對齊到男生素體的位置，臉的格子從 `pose_turnaround.png` 複製（`scripts/dressup_make_base.py`） | 同素體 | 像素（素體換裝） |
+| dressup/raw/female/*.png（17 張） | 同 `dressup/raw/*.png`，改以 `base_female.png` 為底（2026-10-20） | 同素體 | 像素（素體換裝） |
 
 ## 來源
 
