@@ -63,7 +63,7 @@ import { ScoreBoard } from './scores.js';
 import { SnapshotStore, Directory } from './persistence.js';
 import { createHttpLayer } from './httplayer.js';
 import { buildReport } from './report.js';
-import { affinityFrom, arrangeByAffinity, guestSpots } from './photoLayout.js';
+import { affinityFrom, arrangeCrowdByAffinity, guestSpots } from './photoLayout.js';
 import { isBlockedName } from './nameFilter.js';
 import {
   defaultBingoFacts, validateBingoFacts, BINGO_FACTS_ASK,
@@ -2960,12 +2960,15 @@ const requestCompose = (characters, backdrop, { photoBase = localPhotoBase() } =
 /** 合照的站位方式。不認得的值一律當原地拍：預設行為不該因為一個打錯的參數而改變 */
 const PHOTO_ARRANGE = new Set(['stay', 'affinity']);
 
-/** 依互動排位：誰該站到哪裡。不在場的人沒有座標，排不進隊形就不出現 */
+/**
+ * 依互動排位：錯落人群，中間是互動最多的人，熟的人圍在旁邊往外排（photoLayout.js 的
+ * arrangeCrowdByAffinity）。場地塞不下時排不進去的人不出現
+ */
 function affinitySpots(people) {
   // 封鎖雙向濾掉（同紀念卡）：封鎖過的兩人不能因為之前互動過就被排在隔壁
   const hidden = (a) => (b) => messages.isBlocked(a, b) || messages.isBlocked(b, a);
   const strength = affinityFrom((id) => encounters.peersOf(id, { hidden: hidden(id) }));
-  return arrangeByAffinity(people, strength, { stage: STAGE, obstacles: OBSTACLES, obstacleDistance });
+  return arrangeCrowdByAffinity(people, strength, { stage: STAGE, obstacles: OBSTACLES, obstacleDistance });
 }
 
 const takeGroupPhoto = async (ws, { arrange = 'stay' } = {}) => {

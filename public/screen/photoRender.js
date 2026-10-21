@@ -71,6 +71,10 @@ export async function renderGroupPhoto(scene, people, { heightScale, worldHeight
   for (const p of list) {
     const agent = { id: p.id, x: p.x, y: p.y, vx: 0, vy: 0, heading: FACING_CAMERA, state: 'IDLE', facing: 1 };
     drawCharacter(c, agent, p.pos, p.sprite, { time: 0, maxSpeed: MAX_SPEED, height });
+  }
+  // 名牌全部畫在最上層（大螢幕是跟著角色一起畫、會被前面的人擋住）：合照是紀念品，
+  // 每個人的名字都要看得到 —— 30 人排成四排時，後排的名牌原本會被前排的頭蓋掉（2026-10-19 實拍）
+  for (const p of list) {
     if (p.name) drawNameplate(c, p.pos, p.name, { fontSize, offset: target.get(p.id) });
   }
   return out.toDataURL('image/png');

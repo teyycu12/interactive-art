@@ -289,16 +289,20 @@ export const VISION_PORT = Number(process.env.VISION_PORT || 5055);
  *
  * Node 不載入 .env（API 金鑰沒有理由進到這個行程），所以只從檔案裡挑出
  * 這一個值。預設 40 與 backend/config.py 相同（2026-10-19 依 40 人壓測決定，見 FIELD-OPS）。
+ *
+ * 讀檔順序跟 backend/config.py 一樣：根目錄 .env 先、backend/.env 後，先找到的算數。
+ * 只讀根目錄的話，照 doctor 的建議把 .env 搬進 backend/ 之後，這邊會默默退回預設值。
  */
 export const GEN_MAX_CONCURRENT = readGenMaxConcurrent();
 
 function readGenMaxConcurrent() {
   let raw = process.env.GEN_MAX_CONCURRENT;
-  if (!raw) {
+  for (const file of ['../.env', '../backend/.env']) {
+    if (raw) break;
     try {
-      const envFile = fs.readFileSync(new URL('../.env', import.meta.url), 'utf8');
+      const envFile = fs.readFileSync(new URL(file, import.meta.url), 'utf8');
       raw = envFile.match(/^\s*GEN_MAX_CONCURRENT\s*=\s*["']?(\d+)/m)?.[1];
-    } catch { /* 沒有 .env：用預設值 */ }
+    } catch { /* 沒有這個檔：看下一個，都沒有就用預設值 */ }
   }
   const n = Number.parseInt(raw ?? '', 10);
   return Number.isFinite(n) && n >= 1 ? n : 40;

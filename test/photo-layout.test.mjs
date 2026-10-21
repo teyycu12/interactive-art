@@ -7,7 +7,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { affinityFrom, orderByAffinity, formationSlots, arrangeByAffinity, guestSpots } from '../server/photoLayout.js';
+import { affinityFrom, orderByAffinity, formationSlots, arrangeByAffinity, guestSpots, crowdSpots, CROWD, orderCrowdByAffinity, arrangeCrowdByAffinity } from '../server/photoLayout.js';
 import { Stage } from '../server/state.js';
 import { STAGE } from '../shared/protocol.js';
 import { OBSTACLES, obstacleDistance } from '../shared/scene.js';
@@ -200,5 +200,77 @@ describe('合照的臨時人物站位（guestSpots，2026-10-19）', () => {
     const out = arrangeByAffinity([{ id: 'a', x: 100, y: 100 }, { id: 'ghost' }], () => 0, { ...tiny, perRow: 1, dx: 1000 });
     assert.ok(out.has('a'));
     for (const [, p] of out) assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y));
+  });
+});
+
+describe('錯落人群（crowdSpots，2026-10-19）', () => {
+  const field = { stage: STAGE, obstacles: OBSTACLES, obstacleDistance };
+  const seeded = (s) => () => ((s = (s * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const NAMES = ['康', 'sincos', '濕濕魚', '17', 'Arron', '噴火龍', '雲梯', 'EGG', '德不牢内', '恰比', 'eee', '溱', '怎', 'syy', 'Epstein',
+    '盧楷鈞', 'DoRuaiaiai', '許福瑞', '思源皓', '90', 'iPhone50使用者', '李永彬', '芝麻食蟻獸', '鴨', '秋吟', '山今', 'Diddy', '小友善', '亞雨', '庭'];
+  const people = NAMES.map((name, i) => ({ id: `p${i}`, name }));
+
+  test('30 人都排得進去，不站進家具、不出場地', () => {
+    const spots = crowdSpots(people, { ...field, rng: seeded(7) });
+    assert.equal(spots.size, 30);
+    for (const s of spots.values()) {
+      assert.ok(s.x > 0 && s.x < STAGE.width && s.y > 0 && s.y < STAGE.height);
+      assert.ok(OBSTACLES.every((o) => obstacleDistance(o, s.x, s.y) >= o.r + 40), `${s.x},${s.y} 在家具裡`);
+    }
+  });
+
+  test('前面的人不蓋到後面那人的臉', () => {
+    const spots = [...crowdSpots(people, { ...field, rng: seeded(11) }).values()];
+    const H = CROWD.height;
+    for (const a of spots) {
+      for (const b of spots) {
+        if (a === b || b.y <= a.y) continue;   // b 在 a 前面
+        const overlapX = Math.abs(a.x - b.x) < CROWD.halfBody + 30;
+        const overlapY = b.y - H < a.y - H * 0.55;
+        assert.ok(!(overlapX && overlapY), `${JSON.stringify(b)} 擋住 ${JSON.stringify(a)} 的臉`);
+      }
+    }
+  });
+
+  test('間距不固定：最近鄰距離有明顯差異', () => {
+    const spots = [...crowdSpots(people, { ...field, rng: seeded(7) }).values()];
+    const nearest = spots.map((a) => Math.min(...spots.filter((b) => b !== a).map((b) => Math.hypot(a.x - b.x, a.y - b.y))));
+    assert.ok(Math.max(...nearest) - Math.min(...nearest) > 40, nearest.map(Math.round).join(','));
+  });
+
+  test('同一個亂數來源得到同一組站位；換一組就不同', () => {
+    const a = crowdSpots(people, { ...field, rng: seeded(7) });
+    const b = crowdSpots(people, { ...field, rng: seeded(7) });
+    const c = crowdSpots(people, { ...field, rng: seeded(8) });
+    assert.deepEqual([...a], [...b]);
+    assert.notDeepEqual([...a], [...c]);
+  });
+});
+
+describe('依互動排位：中間是互動最多的人，熟的人往外排（2026-10-19）', () => {
+  const field = { stage: STAGE, obstacles: OBSTACLES, obstacleDistance };
+  const seeded = (s) => () => ((s = (s * 1103515245 + 12345) % 2147483648) / 2147483648);
+  // hub 跟 a、b、c 都很熟；a 跟 d 熟；e、f 誰都不認識
+  const PAIRS = { 'a hub': 3, 'b hub': 2, 'c hub': 2, 'a d': 2, 'b c': 1 };
+  const strength = (x, y) => PAIRS[[x, y].sort().join(' ')] ?? 0;
+  const ids = ['e', 'd', 'c', 'b', 'a', 'hub', 'f'];
+
+  test('順序：互動分數最高的先，再依跟已排的人的熟悉度往外，沒互動的最後', () => {
+    const order = orderCrowdByAffinity(ids, strength);
+    assert.equal(order[0], 'hub');
+    assert.equal(order[1], 'a');
+    assert.deepEqual(order.slice(-2).sort(), ['e', 'f']);
+    assert.ok(order.indexOf('d') > order.indexOf('a'), 'd 是透過 a 才認識的，排在 a 後面');
+  });
+
+  test('站位：互動最多的人最靠近人群中心，沒互動的人在外圈', () => {
+    const people = ids.map((id) => ({ id, name: id }));
+    const spots = arrangeCrowdByAffinity(people, strength, { ...field, rng: seeded(3) });
+    assert.equal(spots.size, ids.length);
+    const cx = STAGE.width / 2;
+    const cy = STAGE.height * 0.6;
+    const r = (id) => Math.hypot((spots.get(id).x - cx) / CROWD.aspect, spots.get(id).y - cy);
+    assert.ok(r('hub') < r('e') && r('hub') < r('f'), `hub ${r('hub')} e ${r('e')} f ${r('f')}`);
+    assert.ok(r('a') < r('e') && r('a') < r('f'));
   });
 });

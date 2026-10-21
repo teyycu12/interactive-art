@@ -324,3 +324,130 @@ export function guestSpots(n, occupied, { stage, obstacles, obstacleDistance, ga
   }
   return out;
 }
+
+/**
+ * 大合照的「錯落人群」站位（2026-10-19，依互動排位用，見 arrangeCrowdByAffinity）：
+ * 大家散開站成一團，像一般團體插畫的人群構圖，不排成一排一排。主持人看過幾版後定下的：
+ *
+ * - **輪廓圓、不凌亂**：候選點是橢圓區裡的隨機點，越靠中心越先選（房間是橫的，橢圓也橫長）。
+ *   半徑加一點雜訊、從最內圈的幾個可行點裡隨機挑一個 —— 不會一圈一圈剛好貼著。
+ * - **間距不固定**：每個人有自己的「個人空間」，是基準（左右 135、前後 95）乘上 0.75～1.35 的
+ *   隨機倍率；兩人之間用兩人的平均。只用固定間距時看起來像在排隊。
+ * - **不擋人**：前面的人身體不蓋到後面那人的臉與名牌、兩個名牌不疊在一起。能斜斜站在別人後方
+ *   （錯落感就是這樣來的），但每張臉、每個名字都看得到。
+ * - 避開道具與牆；場地塞不下時，排不進去的人不出現（不疊在別人身上）。
+ *
+ * 角色大小、名牌大小與大螢幕／合照的畫法耦合（public/screen/photoRender.js：身高 2.1 × 64 × 1.12、
+ * 名牌字級為身高的 0.12）。那邊改了這裡要跟著改，否則名牌會蓋到人、而且不會報錯。
+ *
+ * @param {{id: string, name?: string}[]} people
+ * @param {{stage: {width: number, height: number}, obstacles: object[], obstacleDistance: Function,
+ *   rng?: () => number, ordered?: boolean}} field rng 預設 Math.random；測試傳固定的。
+ *   ordered：照 people 的順序由內往外放（依互動排位用）；沒給就隨機
+ * @returns {Map<string, {x: number, y: number}>}
+ */
+export function crowdSpots(people, { stage, obstacles, obstacleDistance, rng = Math.random, ordered = false }) {
+  const H = CROWD.height;
+  const font = Math.max(10, H * 0.12);
+  const plateW = (name = '') => [...name].reduce((w, ch) => w + (/[\x00-\x7f]/.test(ch) ? font * 0.6 : font), 0) + 16;
+  const hit = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+  const body = (p) => ({ x0: p.x - CROWD.halfBody, x1: p.x + CROWD.halfBody, y0: p.y - H, y1: p.y });
+  const face = (p) => ({ x0: p.x - 30, x1: p.x + 30, y0: p.y - H, y1: p.y - H * 0.55 });
+  const plate = (p) => ({ x0: p.x - p.w / 2, x1: p.x + p.w / 2, y0: p.y + 4, y1: p.y + 30 });
+  const fits = (a, b) => {
+    const s = (a.s + b.s) / 2;
+    if (Math.hypot((a.x - b.x) / (CROWD.spaceX * s), (a.y - b.y) / (CROWD.spaceY * s)) < 1) return false;
+    const [back, front] = a.y <= b.y ? [a, b] : [b, a];
+    return !hit(body(front), face(back)) && !hit(body(front), plate(back)) && !hit(plate(back), plate(front));
+  };
+
+  const cx = stage.width / 2;
+  const cy = stage.height * 0.6;
+  const cand = [];
+  for (let tries = 0; cand.length < CROWD.candidates && tries < CROWD.candidates * 4; tries++) {
+    const x = stage.width * (0.08 + rng() * 0.84);
+    const y = stage.height * (0.24 + rng() * 0.69);
+    if (obstacles.some((o) => obstacleDistance(o, x, y) < o.r + 45)) continue;
+    cand.push({ x, y, r: Math.hypot((x - cx) / CROWD.aspect, y - cy) + rng() * 55 });
+  }
+  cand.sort((a, b) => a.r - b.r);
+
+  // 先放的人站內圈。ordered 時照給的順序（依互動排位：最熟的在中間）；否則隨機
+  const order = ordered ? people : people.map((p) => [rng(), p]).sort((a, b) => a[0] - b[0]).map(([, p]) => p);
+  const placed = [];
+  const out = new Map();
+  for (const p of order) {
+    const me = { w: plateW(p.name), s: CROWD.minScale + rng() * (CROWD.maxScale - CROWD.minScale) };
+    const options = [];
+    for (const c of cand) {
+      if (placed.every((q) => fits({ ...me, x: c.x, y: c.y }, q))) {
+        options.push(c);
+        if (options.length >= CROWD.choices) break;
+      }
+    }
+    if (!options.length) continue;
+    const c = options[Math.floor(rng() * options.length)];
+    const spot = { ...me, x: Math.round(c.x), y: Math.round(c.y) };
+    placed.push(spot);
+    out.set(p.id, { x: spot.x, y: spot.y });
+  }
+  return out;
+}
+
+/**
+ * 依互動排位的順序：由內到外（2026-10-19 主持人決定）。
+ *
+ * 正中間是互動分數最高的人（跟全場所有人的熟悉度加總）。之後每次挑「跟已經排好的人
+ * 互動最多」的人接著往外放 —— 所以他的朋友圍在他旁邊、朋友的朋友再往外一圈。
+ * 同分時互動分數高的先。完全沒有互動的人排在最後（最外圈）。
+ *
+ * @param {string[]} ids
+ * @param {(a: string, b: string) => number} strength
+ * @returns {string[]}
+ */
+export function orderCrowdByAffinity(ids, strength) {
+  const total = new Map(ids.map((a) => [a, ids.reduce((t, b) => t + strength(a, b), 0)]));
+  const left = new Set([...ids].sort());
+  const out = [];
+  const tie = (a, b) => total.get(b) - total.get(a) || (a < b ? -1 : 1);
+  while (left.size) {
+    let best = null;
+    let bestS = -1;
+    for (const id of [...left].sort(tie)) {
+      const s = out.reduce((t, o) => t + strength(id, o), 0);
+      if (s > bestS) { best = id; bestS = s; }
+    }
+    // 還沒排任何人、或剩下的人跟已排的人都沒互動：取互動分數最高的（全場都沒互動時就是名單順序）
+    if (bestS <= 0) best = [...left].sort(tie)[0];
+    out.push(best);
+    left.delete(best);
+  }
+  return out;
+}
+
+/**
+ * 依互動排位（2026-10-19 起）：錯落人群的站法，中間是互動最多的人，熟的人圍在旁邊往外排。
+ * 取代原本「排成一排一排的隊形」（formationSlots，留著但合照不再用）。
+ *
+ * @param {{id: string, name?: string}[]} people
+ * @param {(a: string, b: string) => number} strength
+ * @param {Parameters<typeof crowdSpots>[1]} field
+ */
+export function arrangeCrowdByAffinity(people, strength, field) {
+  const byId = new Map(people.map((p) => [p.id, p]));
+  const order = orderCrowdByAffinity(people.map((p) => p.id), strength).map((id) => byId.get(id));
+  return crowdSpots(order, { ...field, ordered: true });
+}
+
+/** 錯落人群的參數（見 crowdSpots）。身高與 photoRender.js 的畫法耦合 */
+export const CROWD = {
+  height: 2.1 * 64 * 1.12,   // 角色在合照底圖上的身高
+  halfBody: 38,              // 身體半寬
+  spaceX: 135,               // 個人空間基準：左右
+  spaceY: 95,                //                前後
+  minScale: 0.75,            // 每個人的個人空間倍率範圍（間距不固定）
+  maxScale: 1.35,
+  aspect: 2.5,               // 人群的橢圓：橫向是縱向的幾倍
+  candidates: 30000,
+  choices: 14,               // 從最內圈幾個可行點裡隨機挑
+};
