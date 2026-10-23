@@ -48,7 +48,9 @@ export class PixelScene {
     this.zoom = Math.min(vp.width / W, vp.height / H);
     this.ox = vp.x + (vp.width - W * this.zoom) / 2;
     this.oy = vp.y + (vp.height - H * this.zoom) / 2;
-    this.dpr = Math.min(devicePixelRatio || 1, 2);
+    // 主控台的預覽小窗（screen.js 的 ?preview=1）只有幾百 px 寬，用密度 1 省下四分之三的填色
+    const maxDpr = document.documentElement.classList.contains('is-preview') ? 1 : 2;
+    this.dpr = Math.min(devicePixelRatio || 1, maxDpr);
     this.canvas.width = Math.ceil(innerWidth * this.dpr);
     this.canvas.height = Math.ceil(innerHeight * this.dpr);
   }

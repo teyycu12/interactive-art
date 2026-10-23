@@ -34,6 +34,7 @@ import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
   PERSISTENCE, VISION_HOST, VISION_PORT, GREET, EVENTS,
+  CLIENT_SYNC_MAX_BUFFERED, STAGE_SYNC_MAX_BUFFERED,
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
 import { RateLimiter } from './ratelimit.js';
@@ -2492,6 +2493,9 @@ const loop = startTicker({
       lastClientSyncAt = now;
       for (const [id, sock] of controllers) {
         if (sock.readyState !== sock.OPEN) continue;
+        // 收不完就跳過這一格。座標只有最新的一則有用，Wi-Fi 訊號差的手機若照樣每格塞，
+        // 舊座標會在 socket 緩衝裡排隊，手機上看到的永遠是好幾秒前的場面（2026-10 實測「很卡」）
+        if (sock.bufferedAmount > CLIENT_SYNC_MAX_BUFFERED) continue;
         const view = stage.personalSnapshot(id, CLIENT_SYNC_RADIUS);
         // 角色可能已被 TTL 回收，但連線還在（下一次 CLIENT_JOIN 會重建）
         if (view) send(sock, EV.CLIENT_SYNC, view);
@@ -2516,7 +2520,10 @@ const loop = startTicker({
     const sync = JSON.stringify({
       type: EV.STAGE_SYNC, agents: stage.snapshot(), t: Date.now(),
     });
-    for (const ws of screens) if (ws.readyState === ws.OPEN) ws.send(sync);
+    // 大螢幕同理：主控台預覽小窗所在的筆電忙不過來時，不讓座標排隊
+    for (const ws of screens) {
+      if (ws.readyState === ws.OPEN && ws.bufferedAmount <= STAGE_SYNC_MAX_BUFFERED) ws.send(sync);
+    }
   },
 });
 

@@ -96,8 +96,19 @@ let offsetX = 0;
 let offsetY = 0;
 let dpr = 1;
 
+/**
+ * 畫格率與像素密度的上限。
+ *
+ * 2026-10 校內實測筆電燙到不行：MacBook 的 ProMotion 螢幕上 requestAnimationFrame 是
+ * 每秒 120 次，Retina 的 devicePixelRatio 是 2 —— 一個全螢幕的大螢幕分頁就是每秒重畫
+ * 120 張 3840×2160，而主控台側欄的預覽小窗（iframe 以 1920×1080 排版再縮小）又是一整份。
+ * 大螢幕上限 60 fps、密度 2（與 PixelScene 一致）；預覽小窗只有幾百 px 寬，15 fps、密度 1 就夠。
+ */
+const MAX_FPS = PREVIEW ? 15 : 60;
+const MAX_DPR = PREVIEW ? 1 : 2;
+
 function resize() {
-  dpr = devicePixelRatio || 1;
+  dpr = Math.min(devicePixelRatio || 1, MAX_DPR);
   canvas.width = Math.ceil(innerWidth * dpr);
   canvas.height = Math.ceil(innerHeight * dpr);
   canvas.style.width = `${innerWidth}px`;
@@ -742,9 +753,13 @@ if (new URLSearchParams(location.search).get('voxel') === '1') {
 let lastFrameAt = 0;
 
 /** 每一幀：畫完再排下一幀。截圖要的是「畫一幀」，不能多排一條動畫迴圈（見 captureStageFrame） */
+let lastPaintAt = 0;
 function render(now) {
-  drawFrame(now);
   requestAnimationFrame(render);
+  // 留 2ms 容差：rAF 的時間戳會抖，嚴格比較在 60Hz 螢幕上會隔幀跳過、實際掉到 30 fps
+  if (now - lastPaintAt < 1000 / MAX_FPS - 2) return;
+  lastPaintAt = now;
+  drawFrame(now);
 }
 
 function drawFrame(now) {
