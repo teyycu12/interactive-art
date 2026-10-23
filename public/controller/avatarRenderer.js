@@ -262,6 +262,12 @@ export class AvatarRenderer {
 
   _tick(now) {
     if (!this.running) return;
+    // 高更新率的 Android（90／120Hz）上 rAF 跟著螢幕跑，畫面看不出差別，耗電與發熱卻多一倍。
+    // 上限 60 fps，與大螢幕一致（screen.js 的 MAX_FPS）；2ms 容差免得 60Hz 螢幕被隔幀跳過
+    if (now - this.lastAt < 1000 / 60 - 2) {
+      this._frame = requestAnimationFrame(this._tick);
+      return;
+    }
     // 分頁切回來時 dt 可能是好幾秒，夾住上限避免網格瞬間飛走
     const dt = Math.min((now - this.lastAt) / 1000, 0.05);
     this.lastAt = now;
