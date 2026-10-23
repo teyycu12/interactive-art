@@ -365,5 +365,10 @@ OpenRouter 對「輸出圖片」的請求要求**餘額至少 1 美元**，不�
 - **訊號差的手機座標排隊**：伺服器原本每格照送，Wi-Fi 差的手機收不完，舊座標在 socket 緩衝裡排隊，
   畫面落後好幾秒。現在送出緩衝超過上限就跳過那一格（`CLIENT_SYNC_MAX_BUFFERED`、`STAGE_SYNC_MAX_BUFFERED`）。
 
+- **取景預覽每張都跑完整的服裝分析**：每支取景中的手機每秒送 4 張到生成服務，每張原本都算完顏色格柵、
+  kmeans、stencil 再丟掉（引導只用得到骨架與入鏡判定），一張 54 ms。`/preview` 改走
+  `get_clothing_features(guidance_only=True)`，一張 18 ms，引導判定逐欄位相同（`test_cv_module.py` 的
+  `TestGuidanceOnly`）。十個人同時取景，約從 2 顆核心降到 0.7 顆。
+
 現場仍要注意：筆電接電源、不要放在布面上；主控台不需要看預覽時可以收起側欄或改用另一台裝置；
 學校 Wi-Fi 人多時延遲會飆高，自備路由器（見上方「現場連線」）同時也能解決卡頓。
