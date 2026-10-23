@@ -13,6 +13,7 @@
 import http from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
+import zlib from 'node:zlib';
 import { performance } from 'node:perf_hooks';
 import { randomBytes } from 'node:crypto';
 
@@ -56,6 +57,50 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.glb': 'model/gltf-binary',
 };
+
+/** 值得壓縮的文字類型。圖片本來就壓過，再 gzip 只是白燒 CPU */
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.svg', '.json']);
+
+/**
+ * 壓好的靜態檔：路徑 → { etag, gz }。etag 換了（檔案改過）就重壓。
+ *
+ * 2026-10 實測手機頁面每次載入約 700 KB、41 個請求，全部沒壓縮、也沒有 ETag ——
+ * `no-cache` 要求每次重新驗證，但沒有驗證依據，於是每次重新整理都整包重下。
+ * 幾十支手機擠在同一個 Wi-Fi 上同時開頁面時，這就是「進場很卡」。
+ */
+const gzipCache = new Map();
+
+/**
+ * 送出靜態檔：有 ETag（大小＋修改時間）就能回 304，手機支援就送 gzip。
+ * 保留 no-cache：git pull 之後手機一定拿到新版，只是沒變的檔案不用重下。
+ */
+function sendStatic(req, res, filePath, stat, data) {
+  const ext = path.extname(filePath);
+  const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+  const headers = {
+    'Content-Type': MIME[ext] ?? 'application/octet-stream',
+    'Cache-Control': 'no-cache',
+    ETag: etag,
+  };
+  if (COMPRESSIBLE.has(ext)) headers.Vary = 'Accept-Encoding';
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, headers).end();
+    return;
+  }
+  let body = data;
+  if (COMPRESSIBLE.has(ext) && /\bgzip\b/.test(req.headers['accept-encoding'] ?? '') && data.length > 1024) {
+    let hit = gzipCache.get(filePath);
+    if (hit?.etag !== etag) {
+      hit = { etag, gz: zlib.gzipSync(data) };
+      gzipCache.set(filePath, hit);
+    }
+    body = hit.gz;
+    headers['Content-Encoding'] = 'gzip';
+  }
+  headers['Content-Length'] = body.length;
+  res.writeHead(200, headers);
+  res.end(req.method === 'HEAD' ? undefined : body);
+}
 
 /**
  * 把 URL 路徑解析成實體檔案路徑。
@@ -885,21 +930,21 @@ function handleRequest(req, res) {
     return;
   }
 
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      // 目錄請求少了尾斜線時，補上再試一次（/controller → /controller/）
-      if (err.code === 'EISDIR' || (err.code === 'ENOENT' && !path.extname(filePath))) {
-        res.writeHead(302, { Location: encodeURI(`${urlPath.replace(/\/$/, '')}/`) }).end();
-        return;
-      }
-      res.writeHead(404).end('Not Found');
+  const notFound = (err) => {
+    // 目錄請求少了尾斜線時，補上再試一次（/controller → /controller/）
+    if (err.code === 'EISDIR' || (err.code === 'ENOENT' && !path.extname(filePath))) {
+      res.writeHead(302, { Location: encodeURI(`${urlPath.replace(/\/$/, '')}/`) }).end();
       return;
     }
-    res.writeHead(200, {
-      'Content-Type': MIME[path.extname(filePath)] ?? 'application/octet-stream',
-      'Cache-Control': 'no-cache',
+    res.writeHead(404).end('Not Found');
+  };
+  fs.stat(filePath, (statErr, stat) => {
+    if (statErr) { notFound(statErr); return; }
+    if (stat.isDirectory()) { notFound({ code: 'EISDIR' }); return; }
+    fs.readFile(filePath, (err, data) => {
+      if (err) { notFound(err); return; }
+      sendStatic(req, res, filePath, stat, data);
     });
-    res.end(data);
   });
 }
 
