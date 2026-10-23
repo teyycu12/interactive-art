@@ -83,3 +83,6 @@ ngrok.log
 # 素體換裝的總覽圖：scripts/dressup_build.py 每次重產，只給人目視檢查
 docs/style_reference/2026q3_pixel_curated/dressup/_overview*.png
 docs/style_reference/2026q3_pixel_curated/dressup/_arms_preview.png
+
+# Node 套件（2026-10-24 曾誤把 worktree 的 node_modules 捷徑提交上去，覆蓋掉大家的套件資料夾）
+node_modules
