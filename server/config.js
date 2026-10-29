@@ -12,6 +12,12 @@ import fs from 'node:fs';
 export const TICK_HZ = 30;                    // 伺服器模擬與廣播頻率（技術文件 §3：30 FPS）
 export const TICK_MS = 1000 / TICK_HZ;
 
+// 座標同步的送出緩衝上限（bytes）。超過就跳過這一格，等那條連線把舊的送完：
+// 座標只有最新一則有用，排隊只會讓畫面越來越落後。手機一則約 1–2 KB、大螢幕約 6 KB，
+// 上限約是「積了好幾格沒送出去」的量，正常連線碰不到
+export const CLIENT_SYNC_MAX_BUFFERED = 8 * 1024;
+export const STAGE_SYNC_MAX_BUFFERED = 32 * 1024;
+
 // ── 主動控制權重 α 的時間常數（技術文件 M2）────────────────────
 export const ALPHA_RAMP_UP_MS = 300;          // 偵測到搖桿輸入 → 0.3 秒內線性升至 1.0
 export const ALPHA_DECAY_MS = 1200;           // 餘弦衰減回 0.0 所需時間

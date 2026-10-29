@@ -112,3 +112,31 @@ class TestSampleGridWithMask(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGuidanceOnly(unittest.TestCase):
+    """取景預覽走的 guidance_only 捷徑：省掉格柵取樣，但引導判定必須跟完整版一模一樣。
+
+    兩邊算的若有一點不同，手機上「可以拍了」的燈號就會跟拍下去之後的判定對不上。
+    需要真實人像與 Pose 模型；模型檔不在（CI 上沒下載）時略過。
+    """
+
+    def test_matches_full_analysis(self):
+        import os
+        import cv2
+        from backend.cv_module import get_clothing_features
+        path = os.path.join(os.path.dirname(__file__), "..", "..", "samples", "photos", "test_photo_1.jpg")
+        img = cv2.imread(path)
+        if img is None:
+            self.skipTest("沒有樣本照片")
+        try:
+            full = get_clothing_features(img, max_width=360, allow_download=False)
+            fast = get_clothing_features(img, max_width=360, allow_download=False, guidance_only=True)
+        except Exception as e:  # 模型檔不在、MediaPipe 起不來
+            self.skipTest(f"Pose 模型不可用：{e!r}")
+        self.assertTrue(full["ok"])
+        for key, value in fast.items():
+            self.assertEqual(value, full[key], key)
+        self.assertIn("capture_quality", fast)
+        self.assertIn("height_measurement_valid", fast)
+        self.assertNotIn("cloth_grid", fast)

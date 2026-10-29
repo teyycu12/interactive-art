@@ -526,7 +526,8 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   text-align: center; font-size: 17px; font-weight: 800; color: #FFF4E6; min-height: 1.4em;
 }
 
-/* 話題卡會出現在畫面最下方，右邊讓出表情鍵的寬度，按鈕才不會被蓋住 */
+/* 話題卡會出現在畫面最下方，右邊讓出表情鍵的寬度，按鈕才不會被蓋住。
+   卡片本身不能寫 width: 100%：加上這個 margin 會整張被推出右邊，讓位等於沒讓（2026-10-29 實機） */
 #controller > .topic-card, #controller > .topic-chip { margin-right: 76px; }
 
 /* 「某某在跟你揮手」。用大螢幕「1號桌」那種黃牌（ink 字 8.7:1）——
@@ -1851,11 +1852,12 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .code-timer { font-size: 12px; font-weight: 700; opacity: .8; white-space: nowrap; }
 .mycode-timer { display: block; margin-top: 4px; font-size: 13px; font-weight: 700; opacity: .85; }
 
-/* 話題桌的題目卡：跟揮手提示同一個位置，但用紙色底 —— 這是要念出來聊的題目，不是待辦 */
+/* 話題桌的題目卡：跟揮手提示同一個位置，但用紙色底 —— 這是要念出來聊的題目，不是待辦。
+   一次只有一排選項、做完的步驟縮成一行：卡片在搖桿下方，高一點就擠掉場景（2026-10-29 實機） */
 .topic-card {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
   flex-shrink: 0;
-  width: 100%;
+  align-self: stretch;
   padding: 8px 12px;
   background: #FFFCF5;
   color: var(--ink);
@@ -1881,13 +1883,33 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .topic-chip[hidden] { display: none; }
 .topic-card .tc-head { font-size: 11px; font-weight: 700; color: var(--ok-ink); letter-spacing: .06em; }
 .topic-card .tc-q { font-size: 15px; font-weight: 800; line-height: 1.35; }
-.topic-card .tc-with { font-size: 12px; color: var(--ink-soft); }
+.topic-card .tc-done { font-size: 12px; color: var(--ink-soft); }
+.topic-card .tc-target { font-size: 12px; font-weight: 700; color: var(--ok-ink); }
+/* 卡片右邊讓了表情鍵，只剩約 250px：四個選項排 2×2、三個排一排（app.js 設 --cols）。
+   自動換行會排成 3＋1，最後一顆孤零零的 */
+.topic-card .tc-opts { display: grid; grid-template-columns: repeat(var(--cols, 2), 1fr); gap: 6px; width: 100%; }
+.topic-card .tc-opt {
+  min-height: 36px; padding: 4px 6px; position: relative;
+  font: inherit; font-size: 12px; font-weight: 700; line-height: 1.2; color: var(--ink);
+  background: #fff; border: 2px solid var(--ink); border-radius: 10px;
+}
+/* 視覺 36px，可觸範圍撐到 44px（UI-STYLING 的 .swatch 同一招） */
+.topic-card .tc-opt::after { content: ''; position: absolute; left: 0; right: 0; top: -4px; bottom: -4px; }
+.topic-card .tc-opt:disabled { opacity: .5; }
+.topic-card .tc-note { font-size: 12px; color: var(--ink-soft); }
+.topic-card .tc-note.win { font-size: 14px; font-weight: 800; color: var(--ok-ink); }
+.topic-card .tc-note.miss { font-size: 13px; font-weight: 700; color: var(--ink); }
+.topic-card .tc-about { font-size: 12px; font-weight: 700; color: var(--ink); }
+.topic-card .tc-opts:empty, .topic-card .tc-note:empty,
+.topic-card [hidden] { display: none; }
 
 /* 今天認識的人 */
 .links-list { list-style: none; margin: 8px 0 14px; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .links-list li { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 13px; font-weight: 700; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
-.links-list .lf { width: 56px; height: 64px; display: grid; place-items: center; }
-.links-list .lf canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+/* 人物圖用固定框＋object-fit 縮進去。原本只寫 max-width/max-height: 100%，
+   iOS Safari 在 grid 裡不認這個百分比，人物照原尺寸長出框外、名字壓在腳上（2026-10-29 實機） */
+.links-list .lf { width: 60px; height: 80px; overflow: hidden; }
+.links-list .lf canvas { display: block; width: 100%; height: 100%; object-fit: contain; object-position: center bottom; image-rendering: pixelated; }
 .links-list .lw { display: flex; flex-direction: column; gap: 2px; }
 .links-list .lw small { font-size: 11px; font-weight: 600; color: var(--ink-soft); }
 

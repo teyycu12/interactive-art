@@ -301,16 +301,20 @@
     <!-- 搖桿區不放說明文字：手機上那行字會被切掉又擋住場景。操作說明在上方的 #agency -->
     <div id="joystick-zone"></div>
 
-    <!-- 話題桌：跟同一桌的人拿到同一題。不擋搖桿。
-         原本整張卡是按鈕、點一下就收起 —— 試玩時大家一碰到就不見、也叫不回來（2026-10-17）。
-         現在只有「收起」鍵會收，25 秒後自動收；收起後留一顆小鈕可以再打開 -->
+    <!-- 話題桌：同一題，每人猜同桌的一個人（server/topicGuess.js）。不擋搖桿。
+         一次只顯示一步、一排選項：先選自己的，再猜對方；做完的步驟縮成一行（2026-10-29）。
+         只有「收起」鍵會收；還沒猜完不會自己收，猜完 25 秒後才收。收起後留一顆小鈕可以再打開 -->
     <div class="topic-card" id="topic-card" hidden role="status" aria-live="polite">
       <span class="tc-top">
-        <span class="tc-head" id="topic-head">💬 話題</span>
+        <span class="tc-head" id="topic-head">💬 話題桌</span>
         <button class="tc-close" id="btn-topic-close" type="button">收起</button>
       </span>
       <span class="tc-q" id="topic-q"></span>
-      <span class="tc-with" id="topic-with"></span>
+      <span class="tc-done" id="topic-done" hidden></span>
+      <span class="tc-target" id="topic-target" hidden></span>
+      <span class="tc-opts" id="topic-opts"></span>
+      <span class="tc-note" id="topic-note"></span>
+      <span class="tc-about" id="topic-about" hidden></span>
     </div>
     <button class="topic-chip" id="topic-chip" type="button" hidden>💬 再看一次話題</button>
 

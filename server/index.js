@@ -34,6 +34,7 @@ import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
   BINGO_COUNTDOWN_MS, PERSISTENCE, VISION_HOST, VISION_PORT, GREET, EVENTS,
+  CLIENT_SYNC_MAX_BUFFERED, STAGE_SYNC_MAX_BUFFERED,
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
 import { RateLimiter } from './ratelimit.js';
@@ -49,7 +50,8 @@ import { PairingSession } from './pairing.js';
 import { Greetings } from './greetings.js';
 import { BingoRound, BINGO_ERRORS, STRANGER } from './bingo.js';
 import { TopicTables } from './topics.js';
-import { TOPIC_QUESTIONS, TOPIC_TABLES } from '../shared/topics.js';
+import { TopicGuess } from './topicGuess.js';
+import { TOPIC_QUESTIONS, TOPIC_TABLES, TOPIC_ROUND_MS, askFor } from '../shared/topics.js';
 import { PROPS, OBSTACLES, obstacleDistance, setSceneTheme } from '../shared/scene.js';
 import { QuizSession } from './quiz.js';
 import { TraitStore } from './traits.js';
@@ -84,6 +86,7 @@ const stage = new Stage();
 const missions = new MissionBoard();
 const bingo = new BingoRound();
 const topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
+const topicGuess = new TopicGuess({ roundMs: TOPIC_ROUND_MS });
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
 /** 今天遇見的人（手機名單與紀念卡）。比圖譜寬：揮手、乾杯、同桌也算，見 encounters.js */
@@ -979,22 +982,85 @@ let lastTopicCheck = 0;
 function stepTopics(now) {
   if (now - lastTopicCheck < 500) return;   // 半秒看一次就夠：停留門檻是 2 秒
   lastTopicCheck = now;
+  // 過期要在暫停之前收：問答進行中也該把作廢的卡片收掉
+  for (const { round, ids } of topicGuess.expire(now)) {
+    for (const id of ids) sendToAgent(id, EV.TOPIC_EXPIRED, { round });
+  }
   if (topicsPaused()) return;
   // 只有標了 topicTables 的場景有話題桌（shared/themes.js）
   if (!THEME_MAP[stageTheme]?.topicTables) return;
-  for (const deal of topics.update(topicSpots(), stage.agents.values(), now)) {
-    for (const id of deal.ids) {
-      sendToAgent(id, EV.TOPIC_CARD, {
-        question: deal.question,
-        spot: deal.label,
-        withNames: deal.ids.filter((x) => x !== id).map(nameOf).filter(Boolean),
-      });
-    }
-    blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: deal.question });
-    events.log('topic_card', { spot: deal.spotId, agents: deal.ids, question: deal.question });
-    console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${deal.question}」`);
+  const busy = (id) => topicGuess.isBusy(id, now);
+  for (const deal of topics.update(topicSpots(), stage.agents.values(), now, busy)) {
+    const q = deal.question;
+    const { round, assignments } = topicGuess.start(deal.ids, q, now, deal.label);
+    for (const { id, target } of assignments) sendToAgent(id, EV.TOPIC_CARD, topicCard(round, deal.label, deal.ids, q, id, target));
+    const shown = askFor(q, '對方');
+    blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: `猜猜看：${shown}` });
+    events.log('topic_card', { spot: deal.spotId, agents: deal.ids, question: q.ask, round });
+    console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${shown}」`);
   }
   for (const [a, b] of topics.seatedPairs(now)) meetUp(a, b, VIA.TOPIC);
+}
+
+/** 一個人的題目卡。發題與重連補送共用 */
+function topicCard(round, spot, ids, q, id, target) {
+  return {
+    round,
+    spot,
+    selfAsk: askFor(q, '你'),
+    guessAsk: askFor(q, nameOf(target) || '對方'),
+    options: q.options,
+    target: { id: target, name: nameOf(target) },
+    withNames: ids.filter((x) => x !== id).map(nameOf).filter(Boolean),
+  };
+}
+
+/** 揭曉送給猜的人與被猜的人。作答當下與重連補送共用 */
+function sendTopicReveal(v, q, only = null) {
+  const payload = { round: v.round, guess: q.options[v.guess], answer: q.options[v.answer], correct: v.correct };
+  if (!only || only === v.guesser) sendToAgent(v.guesser, EV.TOPIC_REVEAL, { ...payload, role: 'guesser', otherName: nameOf(v.target) });
+  if (!only || only === v.target) sendToAgent(v.target, EV.TOPIC_REVEAL, { ...payload, role: 'target', otherName: nameOf(v.guesser) });
+}
+
+/**
+ * 重連時補回話題桌的卡片與已經選過、揭曉過的部分。手機重整（或從 LINE 切回來被重載）
+ * 卡片就不見了，而伺服器還當他在作答，那張桌子會卡到回合過期都不發新題。
+ */
+function sendTopicCatchUp(agentId) {
+  const st = topicGuess.stateFor(agentId);
+  if (!st) return;
+  sendToAgent(agentId, EV.TOPIC_CARD, {
+    ...topicCard(st.round, st.spot, st.ids, st.question, agentId, st.target),
+    mine: { self: st.self ?? null, guess: st.guess ?? null },
+  });
+  for (const v of st.reveals) sendTopicReveal(v, st.question, agentId);
+}
+
+/**
+ * 話題桌作答：自己的答案（self）或猜對方（guess）。兩邊都到齊就揭曉，
+ * 猜的人與被猜的人都收到結果 —— 被猜的人知道「有人猜我西式，猜對了」，
+ * 那也是一句可以接下去的話。
+ */
+function handleTopicAnswer(ws, msg) {
+  const me = ws.agentId;
+  const kind = msg.kind === 'self' ? 'self' : msg.kind === 'guess' ? 'guess' : null;
+  const round = Number(msg.round);
+  if (!kind) return send(ws, EV.TOPIC_ACK, { round, kind: msg.kind, ok: false, reason: 'BAD_KIND' });
+  const r = kind === 'self'
+    ? topicGuess.answerSelf(me, round, msg.choice)
+    : topicGuess.guess(me, round, msg.choice);
+  send(ws, EV.TOPIC_ACK, { round, kind, ok: r.ok, reason: r.reason });
+  for (const v of r.reveals) {
+    sendTopicReveal(v, topicGuess.rounds.get(v.round).question);
+    // 不記選了什麼，只記對錯：答案是聊天用的，不是研究資料
+    events.log('topic_guess', { round: v.round, agent: v.guesser, peer: v.target, correct: v.correct });
+    console.log(`[topic] ${nameOf(v.guesser)} 猜 ${nameOf(v.target)}：${v.correct ? '猜對' : '猜錯'}`);
+    if (v.correct) {
+      // 猜對多半是真的去問過 —— 兩個人都做了動作（一個問、一個答），記進今天遇見的人
+      blast(screens, EV.STAGE_GREET, { kind: 'TOPIC', a: v.guesser, b: v.target });
+      meetUp(v.guesser, v.target, VIA.TOPIC);
+    }
+  }
 }
 
 function handleJoin(ws, msg) {
@@ -1029,6 +1095,7 @@ function handleJoin(ws, msg) {
       // 封鎖名單只在伺服器：手機重整後要靠這則才知道點到的人是不是被自己封鎖了
       send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(existing.id) });
       sendBingoCatchUp(existing.id);
+      sendTopicCatchUp(existing.id);
       return;
     }
     ws.agentId = null; // 角色已被回收，往下走正常入場流程
@@ -1112,6 +1179,7 @@ function handleJoin(ws, msg) {
   sendWordCloudCatchUp(ws, agent.id);
   send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(agent.id) });
   sendBingoCatchUp(agent.id);
+  sendTopicCatchUp(agent.id);
   send(ws, EV.SCORE_SELF, {
     score: scores.totalOf(agent.id),
     delta: 0,
@@ -1216,6 +1284,8 @@ function detachAgent(agentId, { forget = false } = {}) {
   pairing.release(agentId);
   greetings.drop(agentId);
   if (forget) {
+    const dropped = topicGuess.forget(agentId);
+    for (const id of dropped?.ids ?? []) sendToAgent(id, EV.TOPIC_EXPIRED, { round: dropped.round, reason: 'LEFT' });
     directory.forget(agentId);
     // 標籤是「這個人是誰」，主動離場或被請出場時要一起忘掉；
     // 單純斷線則保留 —— 那個人多半還會用原憑證接回同一個角色。
@@ -2482,6 +2552,11 @@ wss.on('connection', (ws, req) => {
         handleBingoAccept(ws);
         break;
 
+      case EV.TOPIC_ANSWER:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleTopicAnswer(ws, msg);
+        break;
+
       case EV.HOST_AUTH: {
         // 與 SCREEN_HELLO 同一個理由：已綁定角色的連線改註冊為主辦端後，
         // 關閉時只會走 hosts 的清理分支，agent 的 disconnectedAt 永遠是 null，
@@ -2752,6 +2827,9 @@ const loop = startTicker({
       lastClientSyncAt = now;
       for (const [id, sock] of controllers) {
         if (sock.readyState !== sock.OPEN) continue;
+        // 收不完就跳過這一格。座標只有最新的一則有用，Wi-Fi 訊號差的手機若照樣每格塞，
+        // 舊座標會在 socket 緩衝裡排隊，手機上看到的永遠是好幾秒前的場面（2026-10 實測「很卡」）
+        if (sock.bufferedAmount > CLIENT_SYNC_MAX_BUFFERED) continue;
         const view = stage.personalSnapshot(id, CLIENT_SYNC_RADIUS);
         // 角色可能已被 TTL 回收，但連線還在（下一次 CLIENT_JOIN 會重建）
         if (view) send(sock, EV.CLIENT_SYNC, view);
@@ -2776,7 +2854,10 @@ const loop = startTicker({
     const sync = JSON.stringify({
       type: EV.STAGE_SYNC, agents: stage.snapshot(), t: Date.now(),
     });
-    for (const ws of screens) if (ws.readyState === ws.OPEN) ws.send(sync);
+    // 大螢幕同理：主控台預覽小窗所在的筆電忙不過來時，不讓座標排隊
+    for (const ws of screens) {
+      if (ws.readyState === ws.OPEN && ws.bufferedAmount <= STAGE_SYNC_MAX_BUFFERED) ws.send(sync);
+    }
   },
 });
 

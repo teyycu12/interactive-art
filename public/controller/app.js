@@ -2808,6 +2808,21 @@ function handleMissionMessage(msg) {
       showTopic(msg);
       return;
 
+    case EV.TOPIC_ACK:
+      onTopicAck(msg);
+      return;
+
+    case EV.TOPIC_REVEAL:
+      onTopicReveal(msg);
+      return;
+
+    case EV.TOPIC_EXPIRED:
+      if (topic?.round !== msg.round) return;
+      // 猜完的人卡片早就收了，不必再吵他；還在作答的才說明卡片為什麼不見
+      if (!topicDone()) showToast(msg.reason === 'LEFT' ? '同桌有人離開了，這題先收起來' : '這題時間到了，先收起來');
+      endTopic();
+      return;
+
     case EV.GREET_INVITE:
       showGreetInvite(msg.fromId, msg.fromName);
       return;
@@ -3251,16 +3266,82 @@ function initJoystick() {
     if (first) sendInput();
   });
 
-  joystick.on('end', () => {
-    joyEngaged = false;
-    joyVec = { x: 0, y: 0 };
-    joyIntensity = 0;
-    renderer?.setInput(joyVec, 0);
-    // 補送一則歸零封包，讓伺服器立即停止施加手動速度，
-    // 而不必等 3 秒閒置逾時才發現使用者已放手
-    sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: 0 });
-  });
+  joystick.on('end', stopJoystick);
 }
+
+function stopJoystick() {
+  joyEngaged = false;
+  joyVec = { x: 0, y: 0 };
+  joyIntensity = 0;
+  renderer?.setInput(joyVec, 0);
+  // 補送一則歸零封包，讓伺服器立即停止施加手動速度，
+  // 而不必等 3 秒閒置逾時才發現使用者已放手
+  sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: 0 });
+}
+
+/**
+ * 搖桿卡住的保險：手指已經放開，nipplejs 卻沒收到結束事件，角色一直往那個方向走。
+ *
+ * 實機上手指推到螢幕邊緣時會發生（2026-10-29）：iOS 把那一下觸控交給系統手勢
+ * （底部橫條、Safari 的工具列、側邊返回），網頁收不到 pointerup，有時連 pointercancel
+ * 也沒有。nipplejs 只認自己綁的那幾個事件，漏掉就一直停在「推著」。
+ *
+ * 所以另外從 window 盯著，任何一條線索說「沒有手指在搖桿上了」就強制放開：
+ * - 搖桿那根手指的 pointerup / pointercancel（nipplejs 漏接時）
+ * - touchend / touchcancel 之後螢幕上一根手指都不剩
+ * - 下一次碰螢幕時，搖桿那根手指已經不在 touches 裡 —— 系統手勢吞掉事件時唯一抓得到的時機
+ * - 切出頁面（LINE 通知、切 App、鎖螢幕）
+ * 強制放開時順便重建 nipplejs：它內部還記著那根手指，搖桿圖也停在推出去的位置。
+ */
+let joyPointerId = null;
+let joyTouchId = null;
+
+function forceReleaseJoystick() {
+  joyPointerId = null;
+  joyTouchId = null;
+  if (!joyEngaged) return;
+  stopJoystick();
+  if (joystick) {
+    joystick.destroy();
+    joystick = null;
+    initJoystick();
+  }
+}
+
+const inJoystickZone = (t) => t?.closest?.('#joystick-zone') && !t.closest('button');
+
+window.addEventListener('pointerdown', (e) => {
+  if (inJoystickZone(e.target) && joyPointerId === null) joyPointerId = e.pointerId;
+}, { capture: true });
+for (const type of ['pointerup', 'pointercancel']) {
+  window.addEventListener(type, (e) => {
+    if (e.pointerId !== joyPointerId) return;
+    joyPointerId = null;
+    // 讓 nipplejs 先處理；它正常收尾的話 joyEngaged 已經是 false，這裡什麼都不做
+    setTimeout(() => { if (joyPointerId === null) forceReleaseJoystick(); }, 0);
+  }, { capture: true });
+}
+
+window.addEventListener('touchstart', (e) => {
+  const ids = [...e.touches].map((t) => t.identifier);
+  if (joyTouchId !== null && !ids.includes(joyTouchId)) forceReleaseJoystick();
+  if (joyTouchId === null) {
+    const t = [...e.changedTouches].find((x) => inJoystickZone(x.target));
+    if (t) joyTouchId = t.identifier;
+  }
+}, { capture: true, passive: true });
+for (const type of ['touchend', 'touchcancel']) {
+  window.addEventListener(type, (e) => {
+    if (joyTouchId === null) return;
+    if ([...e.touches].some((t) => t.identifier === joyTouchId)) return;
+    joyTouchId = null;
+    setTimeout(() => { if (joyTouchId === null) forceReleaseJoystick(); }, 0);
+  }, { capture: true, passive: true });
+}
+
+document.addEventListener('visibilitychange', () => { if (document.hidden) forceReleaseJoystick(); });
+window.addEventListener('blur', forceReleaseJoystick);
+window.addEventListener('pagehide', forceReleaseJoystick);
 
 function sendInput() {
   sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: joyIntensity });
@@ -3278,38 +3359,137 @@ setInterval(() => {
   sendInput();
 }, INPUT_THROTTLE_MS);
 
-// ── 話題桌（server/topics.js）──────────────────────────────
-// 跟同一桌的人拿到同一題。題目是要念出來跟旁邊的人聊的，不是作答 ——
-// 所以不給輸入框，只給一句「和誰同桌」，提醒他抬頭找人。
+// ── 話題桌（server/topics.js、server/topicGuess.js）────────
+// 同一題，兩步：先選自己的答案（別人會來問你），再去問被分到的那個人、幫他選。
+// 只能猜一次 —— 選項才三四個，能重猜就不必去問了。
+// 原本只有一句聊天題，看一眼就收起來，沒有人因此轉頭（2026-10-29 改）。
 let topicTimer = null;
 let topicChipTimer = null;
 /** 收起後那顆「再看一次」留多久：聊完換桌就用不到了 */
 const TOPIC_CHIP_MS = 3 * 60_000;
+/** 目前這一回合：{round, options, targetName, selfAsk, guessAsk, self?, guess?, selfOk?, guessOk?, revealed, result?} */
+let topic = null;
 
 function showTopic(msg) {
-  $('#topic-head').textContent = `💬 ${msg.spot ?? '話題桌'}的話題`;
-  $('#topic-q').textContent = msg.question;
-  $('#topic-with').textContent = msg.withNames?.length ? `和 ${msg.withNames.join('、')} 同桌，聊聊看` : '';
+  topic = {
+    round: msg.round, options: msg.options ?? [], targetName: msg.target?.name || '對方',
+    selfAsk: msg.selfAsk, guessAsk: msg.guessAsk, revealed: false,
+  };
+  // 重連補送的卡片帶著已經選過的（server 的 sendTopicCatchUp）
+  if (Number.isInteger(msg.mine?.self)) Object.assign(topic, { self: msg.mine.self, selfOk: true });
+  if (Number.isInteger(msg.mine?.guess)) Object.assign(topic, { guess: msg.mine.guess, guessOk: true });
+  $('#topic-head').textContent = `💬 ${msg.spot ?? '話題桌'}・猜猜看`;
+  $('#topic-about').textContent = '';
+  $('#topic-about').hidden = true;
+  renderTopic();
   openTopic();
-  vibrate([20, 40, 20]);
+  if (!msg.mine) vibrate([20, 40, 20]);
 }
+
+/**
+ * 一次只畫一步：題目一行、選項一排。做完的步驟縮成「你自己 ✓ …」一行。
+ * 原本兩步同時攤開、題目寫兩次，卡片吃掉半個手機畫面（2026-10-29 實機）。
+ */
+function renderTopic() {
+  const t = topic;
+  const pick = (k) => t.options[t[k]] ?? '';
+  const selfDone = t.selfOk === true;
+  const guessSent = t.guessOk === true;
+  $('#topic-q').textContent = selfDone ? t.guessAsk : t.selfAsk;
+  $('#topic-done').hidden = !selfDone;
+  $('#topic-done').textContent = `你自己 ✓ ${pick('self')}`;
+  $('#topic-target').hidden = !selfDone || guessSent;
+  $('#topic-target').textContent = `👉 去找「${t.targetName}」當面問，只能選一次`;
+  const kind = !selfDone ? 'self' : !guessSent ? 'guess' : null;
+  $('#topic-opts').style.setProperty('--cols', t.options.length === 3 ? 3 : 2);
+  $('#topic-opts').replaceChildren(...(kind ? t.options.map((text, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tc-opt';
+    b.textContent = text;
+    b.disabled = t[kind] !== undefined;   // 送出後等 ACK，連點不會送兩次
+    b.addEventListener('click', () => answerTopic(kind, i));
+    return b;
+  }) : []));
+  const note = $('#topic-note');
+  note.className = 'tc-note';
+  if (!selfDone) note.textContent = '先選你自己的，等一下會有人來問你';
+  else if (!guessSent) note.textContent = '';
+  else if (!t.revealed) note.textContent = `你猜「${pick('guess')}」，等「${t.targetName}」選好就揭曉`;
+  else {
+    note.className = t.result.correct ? 'tc-note win' : 'tc-note miss';
+    note.textContent = t.result.correct
+      ? `🎉 答對了！「${t.targetName}」真的是「${t.result.answer}」`
+      : `差一點！「${t.targetName}」是「${t.result.answer}」（你猜${t.result.guess}）問問為什麼？`;
+  }
+}
+
+function answerTopic(kind, choice) {
+  if (!topic || topic[kind] !== undefined) return;
+  topic[kind] = choice;
+  renderTopic();
+  sendMsg(EV.TOPIC_ANSWER, { round: topic.round, kind, choice });
+}
+
+function onTopicAck(msg) {
+  if (!topic || msg.round !== topic.round) return;
+  const kind = msg.kind === 'self' ? 'self' : 'guess';
+  if (!msg.ok && msg.reason === 'GONE') { endTopic(); return; }
+  if (!msg.ok && msg.reason !== 'ALREADY') topic[kind] = undefined;   // 放開重選
+  else topic[`${kind}Ok`] = true;
+  renderTopic();
+  maybeCollapseTopicLater();
+}
+
+function onTopicReveal(msg) {
+  if (!topic || msg.round !== topic.round) return;
+  if (msg.role === 'guesser') {
+    topic.revealed = true;
+    topic.result = msg;
+    renderTopic();
+    vibrate(msg.correct ? [30, 50, 30, 50, 60] : [40]);
+  } else {
+    const about = $('#topic-about');
+    about.textContent = `👀「${msg.otherName}」猜你「${msg.guess}」—— ${msg.correct ? '猜對了！' : '猜錯了，跟對方說說看'}`;
+    about.hidden = false;
+  }
+  openTopic();
+}
+
+/** 自己的答案選了、猜的也揭曉了，這一題才算做完 */
+const topicDone = () => topic && topic.selfOk && topic.revealed;
 
 function openTopic() {
   clearTimeout(topicChipTimer);
   $('#topic-chip').hidden = true;
   $('#topic-card').hidden = false;
-  clearTimeout(topicTimer);
-  topicTimer = setTimeout(collapseTopic, 25_000);
+  maybeCollapseTopicLater();
 }
 
-/** 收成一顆小鈕而不是直接消失：題目要念給同桌的人聽，收起來之後常常還要再看一次 */
+/** 還沒做完不自動收：要拿著手機去找人、問完回來選，25 秒太短 */
+function maybeCollapseTopicLater() {
+  clearTimeout(topicTimer);
+  if (topicDone()) topicTimer = setTimeout(collapseTopic, 25_000);
+}
+
+/** 收成一顆小鈕而不是直接消失：還沒猜完的話要能叫回來 */
 function collapseTopic() {
   clearTimeout(topicTimer);
   if ($('#topic-card').hidden) return;
   $('#topic-card').hidden = true;
+  $('#topic-chip').textContent = topicDone() ? '💬 再看一次話題' : '💬 話題桌：還沒猜完';
   $('#topic-chip').hidden = false;
   clearTimeout(topicChipTimer);
   topicChipTimer = setTimeout(() => { $('#topic-chip').hidden = true; }, TOPIC_CHIP_MS);
+}
+
+/** 回合過期：卡片與小鈕一起收掉 */
+function endTopic() {
+  topic = null;
+  clearTimeout(topicTimer);
+  clearTimeout(topicChipTimer);
+  $('#topic-card').hidden = true;
+  $('#topic-chip').hidden = true;
 }
 
 $('#btn-topic-close').addEventListener('click', collapseTopic);

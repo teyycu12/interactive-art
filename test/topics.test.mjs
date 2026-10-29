@@ -126,3 +126,16 @@ test('沒給 sitMs 就永遠不算同桌（既有呼叫端不受影響）', () =
   t.update(SPOT, [at('a'), at('b')], 0);
   assert.deepEqual(t.seatedPairs(10_000_000), []);
 });
+
+test('同桌有人還沒猜完時不換題，猜完才發給新的組合', () => {
+  const t = new TopicTables(OPTS);
+  const two = [at('a', 1050), at('b', 960)];
+  t.update(SPOT, two, 0);
+  assert.equal(t.update(SPOT, two, 2000).length, 1);
+  const three = [...two, at('c', 1000, 560)];
+  let busy = true;
+  t.update(SPOT, three, 20_000, () => busy);
+  assert.deepEqual(t.update(SPOT, three, 22_000, () => busy), [], 'a、b 還在猜，不蓋掉');
+  busy = false;
+  assert.deepEqual(t.update(SPOT, three, 23_000, () => busy)[0].ids, ['a', 'b', 'c']);
+});

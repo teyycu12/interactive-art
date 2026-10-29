@@ -478,7 +478,7 @@ def preview():
                             "sessionId": session_id})
 
         features = get_clothing_features(
-            frame, max_width=360, previous_landmarks=live.get("landmarks")
+            frame, max_width=360, previous_landmarks=live.get("landmarks"), guidance_only=True
         )
         if not features.get("ok"):
             _sessions.put(session_id, live)

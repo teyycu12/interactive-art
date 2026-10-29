@@ -347,10 +347,16 @@ def get_clothing_features(
     allow_download: bool = True,
     patch_size: int = 40,
     previous_landmarks: Optional[List[Any]] = None,
+    guidance_only: bool = False,
 ) -> Dict[str, Any]:
     """
     從影像擷取人體骨架，計算使用者上半身與下半身衣著區域的顏色格柵。
     使用輪廓遮罩過濾，確保每格只採計輪廓內像素，避免邊緣背景污染。
+
+    guidance_only=True 只算站位引導要的欄位（骨架、入鏡判定、身高），跳過顏色格柵、
+    款式判斷與 stencil。取景預覽（service.py /preview）每支手機每秒打 4 次，
+    而格柵取樣與 kmeans 佔整幀約四分之三的時間（M 系列筆電量到 56–77 ms → 約 18 ms），
+    引導又完全用不到 —— 2026-10 實測十幾個人同時取景時筆電燙手，主因之一就是它。
     """
 
     if frame is None or frame.size == 0:
@@ -462,6 +468,20 @@ def get_clothing_features(
     rheel = np.array([lm[30].x, lm[30].y])
     lfoot = np.array([lm[31].x, lm[31].y])
     rfoot = np.array([lm[32].x, lm[32].y])
+
+    if guidance_only:
+        capture_quality = assess_capture_quality(lm, person_bbox=person_bbox)
+        foot_y = (max(float(lank[1]), float(lheel[1]), float(lfoot[1]))
+                  + max(float(rank[1]), float(rheel[1]), float(rfoot[1]))) / 2.0
+        return {
+            "ok": True,
+            "landmarks": [{"x": l.x, "y": l.y, "v": getattr(l, "visibility", 1.0)} for l in lm],
+            "person_bbox": person_bbox,
+            "capture_quality": capture_quality,
+            "capture_ready_raw": capture_quality.get("raw_ready", False),
+            "guidance_reason": capture_quality.get("guidance_reason"),
+            **height_metadata(person_bbox, foot_y=foot_y),
+        }
 
     shoulder_dist = abs(lm[11].x - lm[12].x)
     # 動態 patch size（用於 fallback 單色採樣）

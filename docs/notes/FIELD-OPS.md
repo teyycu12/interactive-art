@@ -335,7 +335,8 @@ OpenRouter 對「輸出圖片」的請求要求**餘額至少 1 美元**，不�
 | `persona` | agent、type | 進場人格問卷的分佈 |
 | `greet_invite`、`greet` | kind（WAVE／CHEERS）、agent、peer | 「要對方回應才算數」的互動次數 |
 | `bingo_start` / `_claim` / `_end` | peer、cell、ok、reason、newLines | 賓果找人成功率、連線數 |
-| `topic_card` | spot、agents、question | 話題桌被觸發幾次、誰跟誰坐下 |
+| `topic_card` | spot、agents、question、round | 話題桌被觸發幾次、誰跟誰坐下 |
+| `topic_guess` | round、agent、peer、correct（**不記選了什麼**） | 猜對方的完成率與猜對率（猜對多半代表真的去問了） |
 | `message`、`message_report` | agent、peer、delivered（**不記內容**） | 私訊量、檢舉 |
 | `waitlist_join`；`join.fromWaitlist` | name、position | 人滿時的候補長度、候補後有沒有進場 |
 
@@ -353,3 +354,28 @@ OpenRouter 對「輸出圖片」的請求要求**餘額至少 1 美元**，不�
 - 寫入失敗只警告一次並停用，**不拋錯** —— 為了紀錄讓現場的伺服器當掉是本末倒置。
 - `PIXELAIR_PERSIST=0` 會一併關掉事件紀錄；e2e 用 `PIXELAIR_EVENTS_DIR` 寫到暫存目錄。
 
+
+### 筆電發燙與手機卡頓（2026-10-24）
+
+校內實測筆電很燙、手機很卡。查到的原因與處理：
+
+- **大螢幕在 120Hz 螢幕上每秒畫 120 次**：MacBook 的 ProMotion 讓 `requestAnimationFrame` 跑到 120 Hz，
+  加上 Retina 的密度 2，等於每秒重畫 120 張 4K。`screen.js` 現在上限 60 fps、密度 2。
+- **主控台的預覽小窗是第二份完整的大螢幕**：iframe 以 1920×1080 排版再縮小，原本照樣全速、全密度地畫。
+  `?preview=1` 現在 15 fps、密度 1。主控台與 `/screen/` 開在同一台筆電上時，這兩項省下的最多。
+- **訊號差的手機座標排隊**：伺服器原本每格照送，Wi-Fi 差的手機收不完，舊座標在 socket 緩衝裡排隊，
+  畫面落後好幾秒。現在送出緩衝超過上限就跳過那一格（`CLIENT_SYNC_MAX_BUFFERED`、`STAGE_SYNC_MAX_BUFFERED`）。
+
+- **取景預覽每張都跑完整的服裝分析**：每支取景中的手機每秒送 4 張到生成服務，每張原本都算完顏色格柵、
+  kmeans、stencil 再丟掉（引導只用得到骨架與入鏡判定），一張 54 ms。`/preview` 改走
+  `get_clothing_features(guidance_only=True)`，一張 18 ms，引導判定逐欄位相同（`test_cv_module.py` 的
+  `TestGuidanceOnly`）。十個人同時取景，約從 2 顆核心降到 0.7 顆。
+
+- **網頁檔每次都整包重下、沒有壓縮**：手機頁面約 700 KB、41 個請求。`Cache-Control: no-cache` 要求每次重新驗證，
+  但回應沒有 ETag，等於每次重新整理都重下。現在靜態檔帶 ETag（沒變回 304）、文字檔支援 gzip：
+  第一次載入 706 KB → 280 KB，之後重新整理幾乎不用下載。仍是 no-cache，git pull 後手機一定拿到新版。
+- 互動層本身不是瓶頸：39 隻機器人時 Node 約 7% 時間在工作，CPU profile 沒有明顯熱點；
+  大螢幕頁面 39 人時主執行緒約 8% 在忙，成本主要在 GPU 填色（上面的畫格率與密度上限處理的就是它）。
+
+現場仍要注意：筆電接電源、不要放在布面上；主控台不需要看預覽時可以收起側欄或改用另一台裝置；
+學校 Wi-Fi 人多時延遲會飆高，自備路由器（見上方「現場連線」）同時也能解決卡頓。
