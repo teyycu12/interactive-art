@@ -1733,24 +1733,32 @@ check('引導端點擋下過大的影格',
   await postApi('/api/preview', huge) === 'frame_too_large');
 
 // ── 話題桌 ────────────────────────────────────────────────
-// 兩人走到同一張號碼牌桌旁、停留一下，兩支手機拿到同一題，大螢幕也收到。
+// 兩人走到同一張號碼牌桌旁、停留一下，兩支手機拿到同一題（互猜對方），大螢幕也收到。
+// 接著兩人作答：甲猜對乙、乙猜錯甲，兩邊都要收到揭曉。
 // 前面的段落已經把 screen 關掉了，這裡自己開一條大螢幕連線看座標與題目。
 {
   const tScreen = new WebSocket(URL);
   let tTheme = null;
   let tAgents = [];
   const screenTopics = [];
+  const screenSparks = [];
   tScreen.on('open', () => tScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
   tScreen.on('message', (d) => {
     const m = JSON.parse(d);
     if (m.type === 'STAGE_THEME') tTheme = m.theme;
     if (m.type === 'STAGE_SYNC') tAgents = m.agents;
     if (m.type === 'STAGE_TOPIC') screenTopics.push(m);
+    if (m.type === 'STAGE_GREET' && m.kind === 'TOPIC') screenSparks.push(m);
   });
   const seat = (name) => {
     const box = joinPhone(name);
     box.topics = [];
-    box.ws.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'TOPIC_CARD') box.topics.push(m); });
+    box.reveals = [];
+    box.ws.on('message', (d) => {
+      const m = JSON.parse(d);
+      if (m.type === 'TOPIC_CARD') box.topics.push(m);
+      if (m.type === 'TOPIC_REVEAL') box.reveals.push(m);
+    });
     return box;
   };
   const t1 = seat('話題甲');
@@ -1782,14 +1790,40 @@ check('引導端點擋下過大的影格',
       .map((a) => (a ? Math.round(Math.hypot(a.x - table.x, a.y - table.y)) : '?'));
     console.log(`   [話題] 沒拿到題目；主題 ${tTheme} 桌 ${spotId}，離桌中心 ${pos.join(', ')}（桌半徑 ${table.r}＋90）`);
   }
-  check('同桌兩人拿到同一題聊天題',
-    t1.topics.length > 0 && t2.topics.length > 0 && t1.topics.at(-1).question === t2.topics.at(-1).question,
-    JSON.stringify({ spotId, t1: t1.topics.at(-1)?.question, t2: t2.topics.at(-1)?.question }));
-  check('題目卡寫著和誰同桌', t1.topics.at(-1)?.withNames?.includes('話題乙'), JSON.stringify(t1.topics.at(-1)?.withNames));
+  const c1 = t1.topics.at(-1);
+  const c2 = t2.topics.at(-1);
+  check('同桌兩人拿到同一回合、同一組選項',
+    c1 && c2 && c1.round === c2.round && JSON.stringify(c1.options) === JSON.stringify(c2.options),
+    JSON.stringify({ spotId, c1, c2 }));
+  check('兩人互猜：甲猜乙、乙猜甲',
+    c1?.target?.id === t2.welcome?.userId && c2?.target?.id === t1.welcome?.userId,
+    JSON.stringify({ t1: c1?.target, t2: c2?.target }));
+  check('猜的題目寫著對方的名字', c1?.guessAsk?.includes('話題乙'), c1?.guessAsk);
+  check('題目卡寫著和誰同桌', c1?.withNames?.includes('話題乙'), JSON.stringify(c1?.withNames));
   // 桌子可能相鄰（office 的 1、2 號工作桌）：兩人同時在兩張桌的範圍內時，題目發在哪一張都對，
-  // 而同一組人只會拿到一題。所以比對的是「大螢幕顯示的就是手機上那一題」
-  check('大螢幕在桌旁顯示同一題', screenTopics.some((m) => m.question === t1.topics.at(-1)?.question),
+  // 而同一組人只會拿到一題。所以比對的是「大螢幕顯示的就是這一回合的題目」
+  check('大螢幕在桌旁顯示題目', screenTopics.some((m) => m.question?.startsWith('猜猜看')),
     JSON.stringify(screenTopics));
+  if (c1 && c2) {
+    const say = (box, kind, choice) => box.ws.send(JSON.stringify({ type: 'TOPIC_ANSWER', round: c1.round, kind, choice }));
+    // 甲先猜（乙還沒答自己的，要等），乙再答自己 —— 這時才揭曉甲的
+    say(t1, 'guess', 1);
+    await sleep(150);
+    check('被猜的人還沒答就不揭曉', t1.reveals.length === 0, JSON.stringify(t1.reveals));
+    say(t2, 'self', 1);
+    say(t1, 'self', 0);
+    say(t2, 'guess', 2);
+    await sleep(300);
+    const r1 = t1.reveals.find((r) => r.role === 'guesser');
+    const r2 = t2.reveals.find((r) => r.role === 'guesser');
+    check('甲猜對乙', r1?.correct === true && r1?.answer === c1.options[1], JSON.stringify(r1));
+    check('乙猜錯甲，揭曉正確答案', r2?.correct === false && r2?.answer === c1.options[0], JSON.stringify(r2));
+    check('被猜的人也知道對方猜了什麼',
+      t2.reveals.some((r) => r.role === 'target' && r.correct === true)
+      && t1.reveals.some((r) => r.role === 'target' && r.correct === false),
+      JSON.stringify({ t1: t1.reveals, t2: t2.reveals }));
+    check('猜對時大螢幕畫一道光束', screenSparks.length === 1, JSON.stringify(screenSparks));
+  }
   t1.ws.close();
   t2.ws.close();
   tScreen.close();

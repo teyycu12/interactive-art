@@ -50,7 +50,8 @@ import { PairingSession } from './pairing.js';
 import { Greetings } from './greetings.js';
 import { BingoRound, BINGO_ERRORS, STRANGER } from './bingo.js';
 import { TopicTables } from './topics.js';
-import { TOPIC_QUESTIONS, TOPIC_TABLES } from '../shared/topics.js';
+import { TopicGuess } from './topicGuess.js';
+import { TOPIC_QUESTIONS, TOPIC_TABLES, TOPIC_ROUND_MS, askFor } from '../shared/topics.js';
 import { PROPS, OBSTACLES, obstacleDistance } from '../shared/scene.js';
 import { QuizSession } from './quiz.js';
 import { TraitStore } from './traits.js';
@@ -81,6 +82,7 @@ const stage = new Stage();
 const missions = new MissionBoard();
 const bingo = new BingoRound();
 const topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
+const topicGuess = new TopicGuess({ roundMs: TOPIC_ROUND_MS });
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
 /** 今天遇見的人（手機名單與紀念卡）。比圖譜寬：揮手、乾杯、同桌也算，見 encounters.js */
@@ -921,19 +923,60 @@ function stepTopics(now) {
   if (topicsPaused()) return;
   // 只有標了 topicTables 的場景有話題桌（shared/themes.js）
   if (!THEME_MAP[stageTheme]?.topicTables) return;
-  for (const deal of topics.update(topicSpots(), stage.agents.values(), now)) {
-    for (const id of deal.ids) {
+  for (const { round, ids } of topicGuess.expire(now)) {
+    for (const id of ids) sendToAgent(id, EV.TOPIC_EXPIRED, { round });
+  }
+  const busy = (id) => topicGuess.isBusy(id, now);
+  for (const deal of topics.update(topicSpots(), stage.agents.values(), now, busy)) {
+    const q = deal.question;
+    const { round, assignments } = topicGuess.start(deal.ids, q, now);
+    for (const { id, target } of assignments) {
       sendToAgent(id, EV.TOPIC_CARD, {
-        question: deal.question,
+        round,
         spot: deal.label,
+        selfAsk: askFor(q, '你'),
+        guessAsk: askFor(q, nameOf(target) || '對方'),
+        options: q.options,
+        target: { id: target, name: nameOf(target) },
         withNames: deal.ids.filter((x) => x !== id).map(nameOf).filter(Boolean),
       });
     }
-    blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: deal.question });
-    events.log('topic_card', { spot: deal.spotId, agents: deal.ids, question: deal.question });
-    console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${deal.question}」`);
+    const shown = askFor(q, '對方');
+    blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: `猜猜看：${shown}` });
+    events.log('topic_card', { spot: deal.spotId, agents: deal.ids, question: q.ask, round });
+    console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${shown}」`);
   }
   for (const [a, b] of topics.seatedPairs(now)) meetUp(a, b, VIA.TOPIC);
+}
+
+/**
+ * 話題桌作答：自己的答案（self）或猜對方（guess）。兩邊都到齊就揭曉，
+ * 猜的人與被猜的人都收到結果 —— 被猜的人知道「有人猜我西式，猜對了」，
+ * 那也是一句可以接下去的話。
+ */
+function handleTopicAnswer(ws, msg) {
+  const me = ws.agentId;
+  const kind = msg.kind === 'self' ? 'self' : msg.kind === 'guess' ? 'guess' : null;
+  const round = Number(msg.round);
+  if (!kind) return send(ws, EV.TOPIC_ACK, { round, kind: msg.kind, ok: false, reason: 'BAD_KIND' });
+  const r = kind === 'self'
+    ? topicGuess.answerSelf(me, round, msg.choice)
+    : topicGuess.guess(me, round, msg.choice);
+  send(ws, EV.TOPIC_ACK, { round, kind, ok: r.ok, reason: r.reason });
+  for (const v of r.reveals) {
+    const q = topicGuess.rounds.get(v.round)?.question;
+    const payload = { round: v.round, guess: q?.options[v.guess], answer: q?.options[v.answer], correct: v.correct };
+    sendToAgent(v.guesser, EV.TOPIC_REVEAL, { ...payload, role: 'guesser', otherName: nameOf(v.target) });
+    sendToAgent(v.target, EV.TOPIC_REVEAL, { ...payload, role: 'target', otherName: nameOf(v.guesser) });
+    // 不記選了什麼，只記對錯：答案是聊天用的，不是研究資料
+    events.log('topic_guess', { round: v.round, agent: v.guesser, peer: v.target, correct: v.correct });
+    console.log(`[topic] ${nameOf(v.guesser)} 猜 ${nameOf(v.target)}：${v.correct ? '猜對' : '猜錯'}`);
+    if (v.correct) {
+      // 猜對多半是真的去問過 —— 兩個人都做了動作（一個問、一個答），記進今天遇見的人
+      blast(screens, EV.STAGE_GREET, { kind: 'TOPIC', a: v.guesser, b: v.target });
+      meetUp(v.guesser, v.target, VIA.TOPIC);
+    }
+  }
 }
 
 function handleJoin(ws, msg) {
@@ -1154,6 +1197,7 @@ function detachAgent(agentId, { forget = false } = {}) {
   pairing.release(agentId);
   greetings.drop(agentId);
   if (forget) {
+    topicGuess.forget(agentId);
     directory.forget(agentId);
     // 標籤是「這個人是誰」，主動離場或被請出場時要一起忘掉；
     // 單純斷線則保留 —— 那個人多半還會用原憑證接回同一個角色。
@@ -2230,6 +2274,11 @@ wss.on('connection', (ws, req) => {
       case EV.BINGO_ACCEPT:
         if (ws.role !== 'controller' || !ws.agentId) return;
         handleBingoAccept(ws);
+        break;
+
+      case EV.TOPIC_ANSWER:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleTopicAnswer(ws, msg);
         break;
 
       case EV.HOST_AUTH: {

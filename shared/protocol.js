@@ -18,7 +18,10 @@ export const EV = {
   // Server → Phone
   CLIENT_WELCOME: 'CLIENT_WELCOME', // 登入確認，回傳伺服器指派的 userId
   CLIENT_REJECT: 'CLIENT_REJECT',   // 資料驗證失敗
-  TOPIC_CARD: 'TOPIC_CARD',         // 話題桌：坐在同一桌的人拿到同一題 {question, spot, withNames}
+  TOPIC_CARD: 'TOPIC_CARD',         // 話題桌：同一題、各猜同桌的一個人 {round, spot, selfAsk, guessAsk, options, target: {id, name}, withNames}
+  TOPIC_ACK: 'TOPIC_ACK',           // 話題桌：作答收到了 {round, kind, ok, reason?}
+  TOPIC_REVEAL: 'TOPIC_REVEAL',     // 話題桌：揭曉（猜的人與被猜的人都會收到）{round, role: 'guesser'|'target', otherName, guess, answer, correct}
+  TOPIC_EXPIRED: 'TOPIC_EXPIRED',   // 話題桌：這一回合過期作廢 {round}
   AUDIENCE_WAIT: 'AUDIENCE_WAIT',   // 人滿：已排進候補名單 {ahead}，有空位會由伺服器直接讓他進場（送 CLIENT_WELCOME）
   GREET_INVITE: 'GREET_INVITE',     // 有人跟你揮手（帶 fromId，回揮時當 INPUT_ACTION 的 target）
   GREET_RESULT: 'GREET_RESULT',     // 揮手／乾杯的結果，見 GREET_OUTCOME
@@ -28,6 +31,7 @@ export const EV = {
   STAGE_META: 'STAGE_META',         // 場域尺寸等靜態資訊（連線時送一次）
   STAGE_ROSTER: 'STAGE_ROSTER',     // 參與者名冊（僅在有人加入/離開時送）
   STAGE_TOPIC: 'STAGE_TOPIC',       // 話題桌發題：{spotId, question}，大螢幕在那張桌子旁顯示題目
+  // STAGE_GREET 也用在話題桌猜對（kind: 'TOPIC'）：同一道光束
   STAGE_GREET: 'STAGE_GREET',       // 兩人互相揮手或碰杯成功：{ kind, a, b }，大螢幕在兩人之間畫一道連線
   STAGE_SYNC: 'STAGE_SYNC',         // 空間狀態廣播（30 FPS）
   STAGE_LINKS: 'STAGE_LINKS',       // 社交圖譜的邊（僅在有人配對成功時送）
@@ -114,6 +118,7 @@ export const EV = {
   BINGO_ASK: 'BINGO_ASK',                     // Server → Phone：開局先勾自我介紹題 {facts: [{id, text}], remainingMs}
   BINGO_FACTS: 'BINGO_FACTS',                 // Phone → Server：勾了哪幾題 {yes: string[]}
   BINGO_ACCEPT: 'BINGO_ACCEPT',               // Phone → Server：收下「順便填」的邀請（BINGO_TAGGED 的 offer）
+  TOPIC_ANSWER: 'TOPIC_ANSWER',               // Phone → Server：話題桌作答 {round, kind: 'self'|'guess', choice}（server/topicGuess.js）
 
   // ── 場景主題（shared/themes.js）──────────────────────
   HOST_SET_THEME: 'HOST_SET_THEME',           // Host → Server：切換大螢幕的場景主題

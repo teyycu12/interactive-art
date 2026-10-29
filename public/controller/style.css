@@ -1775,7 +1775,25 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .topic-chip[hidden] { display: none; }
 .topic-card .tc-head { font-size: 11px; font-weight: 700; color: var(--ok-ink); letter-spacing: .06em; }
 .topic-card .tc-q { font-size: 15px; font-weight: 800; line-height: 1.35; }
-.topic-card .tc-with { font-size: 12px; color: var(--ink-soft); }
+/* 兩步：先選自己的、再去問對方。第二步上面有一條細線分開 */
+.topic-card .tc-step { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.topic-card .tc-step + .tc-step { margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.topic-card .tc-target { font-size: 12px; font-weight: 700; color: var(--ok-ink); }
+.topic-card .tc-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.topic-card .tc-opts[hidden] { display: none; }
+.topic-card .tc-opt {
+  min-height: 36px; padding: 4px 12px; position: relative;
+  font: inherit; font-size: 13px; font-weight: 700; color: var(--ink);
+  background: #fff; border: 2px solid var(--ink); border-radius: 999px;
+}
+/* 視覺 36px，可觸範圍撐到 44px（UI-STYLING 的 .swatch 同一招） */
+.topic-card .tc-opt::after { content: ''; position: absolute; left: 0; right: 0; top: -4px; bottom: -4px; }
+.topic-card .tc-opt:disabled { opacity: .5; }
+.topic-card .tc-note { font-size: 12px; color: var(--ink-soft); }
+.topic-card .tc-note:empty, .topic-card .tc-about:empty { display: none; }
+.topic-card .tc-note.win { font-size: 14px; font-weight: 800; color: var(--ok-ink); }
+.topic-card .tc-about { font-size: 13px; font-weight: 700; color: var(--ink); }
+.topic-card .tc-about[hidden] { display: none; }
 
 /* 今天認識的人 */
 .links-list { list-style: none; margin: 8px 0 14px; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
