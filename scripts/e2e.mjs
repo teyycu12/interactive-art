@@ -1823,6 +1823,23 @@ check('引導端點擋下過大的影格',
       && t1.reveals.some((r) => r.role === 'target' && r.correct === false),
       JSON.stringify({ t1: t1.reveals, t2: t2.reveals }));
     check('猜對時大螢幕畫一道光束', screenSparks.length === 1, JSON.stringify(screenSparks));
+
+    // 手機重整：同一個憑證接回，卡片、選過的、揭曉都要補回來
+    t1.ws.close();
+    await sleep(200);
+    const again = new WebSocket(URL);
+    const back = [];
+    again.on('open', () => again.send(JSON.stringify({
+      type: 'CLIENT_JOIN', userId: t1.welcome.userId, rejoinToken: t1.welcome.rejoinToken, name: '話題甲', avatar: AVATAR,
+    })));
+    again.on('message', (d) => { const m = JSON.parse(d); if (m.type.startsWith('TOPIC_')) back.push(m); });
+    await sleep(400);
+    const card = back.find((m) => m.type === 'TOPIC_CARD');
+    check('重連後補回題目卡與選過的答案',
+      card?.round === c1.round && card?.mine?.self === 0 && card?.mine?.guess === 1,
+      JSON.stringify(card));
+    check('重連後補回兩則揭曉', back.filter((m) => m.type === 'TOPIC_REVEAL').length === 2, JSON.stringify(back));
+    t1.ws = again;
   }
   t1.ws.close();
   t2.ws.close();

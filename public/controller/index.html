@@ -276,24 +276,18 @@
     <div id="joystick-zone"></div>
 
     <!-- 話題桌：同一題，每人猜同桌的一個人（server/topicGuess.js）。不擋搖桿。
-         只有「收起」鍵會收；還沒猜完不會自己收，猜完 25 秒後才收（2026-10-17、10-29）。
-         收起後留一顆小鈕可以再打開 -->
+         一次只顯示一步、一排選項：先選自己的，再猜對方；做完的步驟縮成一行（2026-10-29）。
+         只有「收起」鍵會收；還沒猜完不會自己收，猜完 25 秒後才收。收起後留一顆小鈕可以再打開 -->
     <div class="topic-card" id="topic-card" hidden role="status" aria-live="polite">
       <span class="tc-top">
         <span class="tc-head" id="topic-head">💬 話題桌</span>
         <button class="tc-close" id="btn-topic-close" type="button">收起</button>
       </span>
-      <span class="tc-step">
-        <span class="tc-q" id="topic-self-q"></span>
-        <span class="tc-opts" id="topic-self-opts"></span>
-        <span class="tc-note" id="topic-self-note"></span>
-      </span>
-      <span class="tc-step">
-        <span class="tc-target" id="topic-target"></span>
-        <span class="tc-q" id="topic-guess-q"></span>
-        <span class="tc-opts" id="topic-guess-opts"></span>
-        <span class="tc-note" id="topic-guess-note"></span>
-      </span>
+      <span class="tc-q" id="topic-q"></span>
+      <span class="tc-done" id="topic-done" hidden></span>
+      <span class="tc-target" id="topic-target" hidden></span>
+      <span class="tc-opts" id="topic-opts"></span>
+      <span class="tc-note" id="topic-note"></span>
       <span class="tc-about" id="topic-about" hidden></span>
     </div>
     <button class="topic-chip" id="topic-chip" type="button" hidden>💬 再看一次話題</button>

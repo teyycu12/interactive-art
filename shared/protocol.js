@@ -18,10 +18,10 @@ export const EV = {
   // Server → Phone
   CLIENT_WELCOME: 'CLIENT_WELCOME', // 登入確認，回傳伺服器指派的 userId
   CLIENT_REJECT: 'CLIENT_REJECT',   // 資料驗證失敗
-  TOPIC_CARD: 'TOPIC_CARD',         // 話題桌：同一題、各猜同桌的一個人 {round, spot, selfAsk, guessAsk, options, target: {id, name}, withNames}
+  TOPIC_CARD: 'TOPIC_CARD',         // 話題桌：同一題、各猜同桌的一個人 {round, spot, selfAsk, guessAsk, options, target: {id, name}, withNames, mine?: {self, guess}}（mine 只在重連補送時有）
   TOPIC_ACK: 'TOPIC_ACK',           // 話題桌：作答收到了 {round, kind, ok, reason?}
   TOPIC_REVEAL: 'TOPIC_REVEAL',     // 話題桌：揭曉（猜的人與被猜的人都會收到）{round, role: 'guesser'|'target', otherName, guess, answer, correct}
-  TOPIC_EXPIRED: 'TOPIC_EXPIRED',   // 話題桌：這一回合過期作廢 {round}
+  TOPIC_EXPIRED: 'TOPIC_EXPIRED',   // 話題桌：這一回合作廢 {round, reason?: 'LEFT'}（過期，或同桌有人主動離場）
   AUDIENCE_WAIT: 'AUDIENCE_WAIT',   // 人滿：已排進候補名單 {ahead}，有空位會由伺服器直接讓他進場（送 CLIENT_WELCOME）
   GREET_INVITE: 'GREET_INVITE',     // 有人跟你揮手（帶 fromId，回揮時當 INPUT_ACTION 的 target）
   GREET_RESULT: 'GREET_RESULT',     // 揮手／乾杯的結果，見 GREET_OUTCOME

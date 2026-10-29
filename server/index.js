@@ -920,33 +920,58 @@ let lastTopicCheck = 0;
 function stepTopics(now) {
   if (now - lastTopicCheck < 500) return;   // 半秒看一次就夠：停留門檻是 2 秒
   lastTopicCheck = now;
-  if (topicsPaused()) return;
-  // 只有標了 topicTables 的場景有話題桌（shared/themes.js）
-  if (!THEME_MAP[stageTheme]?.topicTables) return;
+  // 過期要在暫停之前收：問答進行中也該把作廢的卡片收掉
   for (const { round, ids } of topicGuess.expire(now)) {
     for (const id of ids) sendToAgent(id, EV.TOPIC_EXPIRED, { round });
   }
+  if (topicsPaused()) return;
+  // 只有標了 topicTables 的場景有話題桌（shared/themes.js）
+  if (!THEME_MAP[stageTheme]?.topicTables) return;
   const busy = (id) => topicGuess.isBusy(id, now);
   for (const deal of topics.update(topicSpots(), stage.agents.values(), now, busy)) {
     const q = deal.question;
-    const { round, assignments } = topicGuess.start(deal.ids, q, now);
-    for (const { id, target } of assignments) {
-      sendToAgent(id, EV.TOPIC_CARD, {
-        round,
-        spot: deal.label,
-        selfAsk: askFor(q, '你'),
-        guessAsk: askFor(q, nameOf(target) || '對方'),
-        options: q.options,
-        target: { id: target, name: nameOf(target) },
-        withNames: deal.ids.filter((x) => x !== id).map(nameOf).filter(Boolean),
-      });
-    }
+    const { round, assignments } = topicGuess.start(deal.ids, q, now, deal.label);
+    for (const { id, target } of assignments) sendToAgent(id, EV.TOPIC_CARD, topicCard(round, deal.label, deal.ids, q, id, target));
     const shown = askFor(q, '對方');
     blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: `猜猜看：${shown}` });
     events.log('topic_card', { spot: deal.spotId, agents: deal.ids, question: q.ask, round });
     console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${shown}」`);
   }
   for (const [a, b] of topics.seatedPairs(now)) meetUp(a, b, VIA.TOPIC);
+}
+
+/** 一個人的題目卡。發題與重連補送共用 */
+function topicCard(round, spot, ids, q, id, target) {
+  return {
+    round,
+    spot,
+    selfAsk: askFor(q, '你'),
+    guessAsk: askFor(q, nameOf(target) || '對方'),
+    options: q.options,
+    target: { id: target, name: nameOf(target) },
+    withNames: ids.filter((x) => x !== id).map(nameOf).filter(Boolean),
+  };
+}
+
+/** 揭曉送給猜的人與被猜的人。作答當下與重連補送共用 */
+function sendTopicReveal(v, q, only = null) {
+  const payload = { round: v.round, guess: q.options[v.guess], answer: q.options[v.answer], correct: v.correct };
+  if (!only || only === v.guesser) sendToAgent(v.guesser, EV.TOPIC_REVEAL, { ...payload, role: 'guesser', otherName: nameOf(v.target) });
+  if (!only || only === v.target) sendToAgent(v.target, EV.TOPIC_REVEAL, { ...payload, role: 'target', otherName: nameOf(v.guesser) });
+}
+
+/**
+ * 重連時補回話題桌的卡片與已經選過、揭曉過的部分。手機重整（或從 LINE 切回來被重載）
+ * 卡片就不見了，而伺服器還當他在作答，那張桌子會卡到回合過期都不發新題。
+ */
+function sendTopicCatchUp(agentId) {
+  const st = topicGuess.stateFor(agentId);
+  if (!st) return;
+  sendToAgent(agentId, EV.TOPIC_CARD, {
+    ...topicCard(st.round, st.spot, st.ids, st.question, agentId, st.target),
+    mine: { self: st.self ?? null, guess: st.guess ?? null },
+  });
+  for (const v of st.reveals) sendTopicReveal(v, st.question, agentId);
 }
 
 /**
@@ -964,10 +989,7 @@ function handleTopicAnswer(ws, msg) {
     : topicGuess.guess(me, round, msg.choice);
   send(ws, EV.TOPIC_ACK, { round, kind, ok: r.ok, reason: r.reason });
   for (const v of r.reveals) {
-    const q = topicGuess.rounds.get(v.round)?.question;
-    const payload = { round: v.round, guess: q?.options[v.guess], answer: q?.options[v.answer], correct: v.correct };
-    sendToAgent(v.guesser, EV.TOPIC_REVEAL, { ...payload, role: 'guesser', otherName: nameOf(v.target) });
-    sendToAgent(v.target, EV.TOPIC_REVEAL, { ...payload, role: 'target', otherName: nameOf(v.guesser) });
+    sendTopicReveal(v, topicGuess.rounds.get(v.round).question);
     // 不記選了什麼，只記對錯：答案是聊天用的，不是研究資料
     events.log('topic_guess', { round: v.round, agent: v.guesser, peer: v.target, correct: v.correct });
     console.log(`[topic] ${nameOf(v.guesser)} 猜 ${nameOf(v.target)}：${v.correct ? '猜對' : '猜錯'}`);
@@ -1011,6 +1033,7 @@ function handleJoin(ws, msg) {
       // 封鎖名單只在伺服器：手機重整後要靠這則才知道點到的人是不是被自己封鎖了
       send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(existing.id) });
       sendBingoCatchUp(existing.id);
+      sendTopicCatchUp(existing.id);
       return;
     }
     ws.agentId = null; // 角色已被回收，往下走正常入場流程
@@ -1093,6 +1116,7 @@ function handleJoin(ws, msg) {
   sendWordCloudCatchUp(ws, agent.id);
   send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(agent.id) });
   sendBingoCatchUp(agent.id);
+  sendTopicCatchUp(agent.id);
   send(ws, EV.SCORE_SELF, {
     score: scores.totalOf(agent.id),
     delta: 0,
@@ -1197,7 +1221,8 @@ function detachAgent(agentId, { forget = false } = {}) {
   pairing.release(agentId);
   greetings.drop(agentId);
   if (forget) {
-    topicGuess.forget(agentId);
+    const dropped = topicGuess.forget(agentId);
+    for (const id of dropped?.ids ?? []) sendToAgent(id, EV.TOPIC_EXPIRED, { round: dropped.round, reason: 'LEFT' });
     directory.forget(agentId);
     // 標籤是「這個人是誰」，主動離場或被請出場時要一起忘掉；
     // 單純斷線則保留 —— 那個人多半還會用原憑證接回同一個角色。

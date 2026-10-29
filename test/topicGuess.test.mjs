@@ -82,3 +82,35 @@ test('題庫：每題 {who} 兩種讀法都通、選項 3～4 個且不重複', 
     assert.equal(new Set(q.options).size, q.options.length, q.ask);
   }
 });
+
+test('重連補送：拿得回自己選過的、猜的對象，以及跟自己有關的揭曉', () => {
+  const g = make();
+  const { round } = g.start(['a', 'b', 'c'], Q, 0, '1號桌');
+  g.answerSelf('a', round, 2, 1);
+  g.guess('c', round, 2, 2);   // c 猜 a，a 已答 → 揭曉
+  g.guess('a', round, 0, 3);   // a 猜 b，b 還沒答
+  const st = g.stateFor('a', 4);
+  assert.equal(st.spot, '1號桌');
+  assert.equal(st.target, 'b');
+  assert.equal(st.self, 2);
+  assert.equal(st.guess, 0);
+  assert.deepEqual(st.reveals, [{ round, guesser: 'c', target: 'a', guess: 2, answer: 2, correct: true }]);
+  assert.equal(g.stateFor('a', 180_001), null, '過期就不補');
+  assert.equal(g.stateFor('x', 4), null);
+});
+
+test('主動離場時，還沒做完的回合整回合作廢，同桌的人不必空等', () => {
+  const g = make();
+  const { round } = g.start(['a', 'b', 'c'], Q, 0);
+  assert.deepEqual(g.forget('b'), { round, ids: ['a', 'c'] });
+  assert.equal(g.isBusy('a', 1), false);
+  assert.equal(g.guess('a', round, 0, 1).reason, 'GONE');
+});
+
+test('主動離場時回合已經全部揭曉就不必通知', () => {
+  const g = make();
+  const { round } = g.start(['a', 'b'], Q, 0);
+  g.answerSelf('a', round, 0, 1); g.answerSelf('b', round, 0, 1);
+  g.guess('a', round, 0, 1); g.guess('b', round, 0, 1);
+  assert.equal(g.forget('a'), null);
+});

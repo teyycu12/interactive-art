@@ -42,24 +42,44 @@ export class TopicGuess {
    * 開一回合。
    * @param {string[]} ids 已排序的同桌名單（至少兩人）
    * @param {GuessQuestion} question
+   * @param {string} [spot] 桌名，重連補送卡片時要用
    * @returns {{round: number, assignments: {id: string, target: string}[]}}
    */
-  start(ids, question, now = Date.now()) {
+  start(ids, question, now = Date.now(), spot = '') {
     const id = ++this.seq;
     this.rounds.set(id, {
-      id, ids: [...ids], question, startedAt: now,
+      id, ids: [...ids], question, spot, startedAt: now,
       self: new Map(), guesses: new Map(), revealed: new Set(),
     });
     for (const a of ids) this.current.set(a, id);
     return { round: id, assignments: ids.map((a, i) => ({ id: a, target: ids[(i + 1) % ids.length] })) };
   }
 
-  /** 某人在某回合要猜的人 */
-  targetOf(round, agentId) {
-    const r = this.rounds.get(round);
-    if (!r) return null;
-    const i = r.ids.indexOf(agentId);
-    return i < 0 ? null : r.ids[(i + 1) % r.ids.length];
+  /**
+   * 某人目前那一回合的進度，給重連補送用：手機重整後卡片會不見，
+   * 而 isBusy 還把他當成作答中，那張桌子會卡到回合過期都不發新題。
+   * @returns {null | {round: number, spot: string, ids: string[], question: GuessQuestion, target: string,
+   *   self: number|undefined, guess: number|undefined, reveals: Reveal[]}}
+   */
+  stateFor(agentId, now = Date.now()) {
+    const rd = this.rounds.get(this.current.get(agentId));
+    if (!rd || now - rd.startedAt > this.roundMs) return null;
+    const i = rd.ids.indexOf(agentId);
+    const n = rd.ids.length;
+    const target = rd.ids[(i + 1) % n];
+    const guesser = rd.ids[(i - 1 + n) % n];
+    const reveals = [];
+    for (const g of new Set([agentId, guesser])) {
+      if (!rd.revealed.has(g)) continue;
+      const t = rd.ids[(rd.ids.indexOf(g) + 1) % n];
+      const guess = rd.guesses.get(g);
+      const answer = rd.self.get(t);
+      reveals.push({ round: rd.id, guesser: g, target: t, guess, answer, correct: guess === answer });
+    }
+    return {
+      round: rd.id, spot: rd.spot, ids: rd.ids, question: rd.question, target,
+      self: rd.self.get(agentId), guess: rd.guesses.get(agentId), reveals,
+    };
   }
 
   /**
@@ -112,9 +132,20 @@ export class TopicGuess {
     return out;
   }
 
-  /** 離場的人：他所在的回合裡等他答案的人不會等到了，回合留到過期即可，只把他從索引拿掉 */
+  /**
+   * 主動離場的人。他所在的回合還沒做完的話整回合作廢 —— 等他答案、或該被他猜的人
+   * 不會等到了，與其讓同桌的人空等到過期（期間這張桌子也不發新題），不如直接收掉。
+   * @returns {{round: number, ids: string[]} | null} 要通知收卡的人
+   */
   forget(agentId) {
+    const id = this.current.get(agentId);
     this.current.delete(agentId);
+    const rd = this.rounds.get(id);
+    if (!rd || rd.revealed.size === rd.ids.length) return null;
+    this.rounds.delete(id);
+    const left = rd.ids.filter((a) => this.current.get(a) === id);
+    for (const a of left) this.current.delete(a);
+    return { round: id, ids: left };
   }
 
   #open(agentId, round, choice, now) {

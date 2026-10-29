@@ -2251,7 +2251,10 @@ function handleMissionMessage(msg) {
       return;
 
     case EV.TOPIC_EXPIRED:
-      if (topic?.round === msg.round) endTopic();
+      if (topic?.round !== msg.round) return;
+      // 猜完的人卡片早就收了，不必再吵他；還在作答的才說明卡片為什麼不見
+      if (!topicDone()) showToast(msg.reason === 'LEFT' ? '同桌有人離開了，這題先收起來' : '這題時間到了，先收起來');
+      endTopic();
       return;
 
     case EV.GREET_INVITE:
@@ -2671,63 +2674,77 @@ let topicTimer = null;
 let topicChipTimer = null;
 /** 收起後那顆「再看一次」留多久：聊完換桌就用不到了 */
 const TOPIC_CHIP_MS = 3 * 60_000;
-/** 目前這一回合：{round, options, targetName, self?, guess?, revealed} */
+/** 目前這一回合：{round, options, targetName, selfAsk, guessAsk, self?, guess?, selfOk?, guessOk?, revealed, result?} */
 let topic = null;
 
 function showTopic(msg) {
-  topic = { round: msg.round, options: msg.options ?? [], targetName: msg.target?.name || '對方', revealed: false };
+  topic = {
+    round: msg.round, options: msg.options ?? [], targetName: msg.target?.name || '對方',
+    selfAsk: msg.selfAsk, guessAsk: msg.guessAsk, revealed: false,
+  };
+  // 重連補送的卡片帶著已經選過的（server 的 sendTopicCatchUp）
+  if (Number.isInteger(msg.mine?.self)) Object.assign(topic, { self: msg.mine.self, selfOk: true });
+  if (Number.isInteger(msg.mine?.guess)) Object.assign(topic, { guess: msg.mine.guess, guessOk: true });
   $('#topic-head').textContent = `💬 ${msg.spot ?? '話題桌'}・猜猜看`;
-  $('#topic-self-q').textContent = `① ${msg.selfAsk}`;
-  $('#topic-self-note').textContent = '';
-  $('#topic-target').textContent = `② 你要猜的是「${topic.targetName}」—— 去找本人當面問！`;
-  $('#topic-guess-q').textContent = msg.guessAsk;
-  $('#topic-guess-note').className = 'tc-note';
-  $('#topic-guess-note').textContent = '只能選一次，問清楚再選';
   $('#topic-about').textContent = '';
   $('#topic-about').hidden = true;
-  renderTopicOpts('#topic-self-opts', 'self');
-  renderTopicOpts('#topic-guess-opts', 'guess');
+  renderTopic();
   openTopic();
-  vibrate([20, 40, 20]);
+  if (!msg.mine) vibrate([20, 40, 20]);
 }
 
-function renderTopicOpts(sel, kind) {
-  const box = $(sel);
-  box.hidden = false;
-  box.replaceChildren(...topic.options.map((text, i) => {
+/**
+ * 一次只畫一步：題目一行、選項一排。做完的步驟縮成「你自己 ✓ …」一行。
+ * 原本兩步同時攤開、題目寫兩次，卡片吃掉半個手機畫面（2026-10-29 實機）。
+ */
+function renderTopic() {
+  const t = topic;
+  const pick = (k) => t.options[t[k]] ?? '';
+  const selfDone = t.selfOk === true;
+  const guessSent = t.guessOk === true;
+  $('#topic-q').textContent = selfDone ? t.guessAsk : t.selfAsk;
+  $('#topic-done').hidden = !selfDone;
+  $('#topic-done').textContent = `你自己 ✓ ${pick('self')}`;
+  $('#topic-target').hidden = !selfDone || guessSent;
+  $('#topic-target').textContent = `👉 去找「${t.targetName}」當面問，只能選一次`;
+  const kind = !selfDone ? 'self' : !guessSent ? 'guess' : null;
+  $('#topic-opts').style.setProperty('--cols', t.options.length === 3 ? 3 : 2);
+  $('#topic-opts').replaceChildren(...(kind ? t.options.map((text, i) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'tc-opt';
     b.textContent = text;
+    b.disabled = t[kind] !== undefined;   // 送出後等 ACK，連點不會送兩次
     b.addEventListener('click', () => answerTopic(kind, i));
     return b;
-  }));
+  }) : []));
+  const note = $('#topic-note');
+  note.className = 'tc-note';
+  if (!selfDone) note.textContent = '先選你自己的，等一下會有人來問你';
+  else if (!guessSent) note.textContent = '';
+  else if (!t.revealed) note.textContent = `你猜「${pick('guess')}」，等「${t.targetName}」選好就揭曉`;
+  else {
+    note.className = t.result.correct ? 'tc-note win' : 'tc-note miss';
+    note.textContent = t.result.correct
+      ? `🎉 答對了！「${t.targetName}」真的是「${t.result.answer}」`
+      : `差一點！「${t.targetName}」是「${t.result.answer}」（你猜${t.result.guess}）問問為什麼？`;
+  }
 }
 
 function answerTopic(kind, choice) {
   if (!topic || topic[kind] !== undefined) return;
   topic[kind] = choice;
-  // 先鎖住，ACK 失敗再放開：連點兩下不該送兩次
-  for (const b of $(`#topic-${kind}-opts`).children) b.disabled = true;
+  renderTopic();
   sendMsg(EV.TOPIC_ANSWER, { round: topic.round, kind, choice });
 }
 
 function onTopicAck(msg) {
   if (!topic || msg.round !== topic.round) return;
   const kind = msg.kind === 'self' ? 'self' : 'guess';
-  if (!msg.ok && msg.reason !== 'ALREADY') {
-    if (msg.reason === 'GONE') { endTopic(); return; }
-    topic[kind] = undefined;
-    for (const b of $(`#topic-${kind}-opts`).children) b.disabled = false;
-    return;
-  }
-  const picked = topic.options[topic[kind]] ?? '';
-  $(`#topic-${kind}-opts`).hidden = true;
-  if (kind === 'self') {
-    $('#topic-self-note').textContent = `✓ 你選了「${picked}」。等一下會有人來問你，老實說喔`;
-  } else if (!topic.revealed) {
-    $('#topic-guess-note').textContent = `✓ 你選了「${picked}」，等「${topic.targetName}」選好自己的答案就揭曉`;
-  }
+  if (!msg.ok && msg.reason === 'GONE') { endTopic(); return; }
+  if (!msg.ok && msg.reason !== 'ALREADY') topic[kind] = undefined;   // 放開重選
+  else topic[`${kind}Ok`] = true;
+  renderTopic();
   maybeCollapseTopicLater();
 }
 
@@ -2735,24 +2752,19 @@ function onTopicReveal(msg) {
   if (!topic || msg.round !== topic.round) return;
   if (msg.role === 'guesser') {
     topic.revealed = true;
-    const note = $('#topic-guess-note');
-    note.className = msg.correct ? 'tc-note win' : 'tc-note';
-    note.textContent = msg.correct
-      ? `🎉 答對了！「${msg.otherName}」真的是「${msg.answer}」`
-      : `差一點！「${msg.otherName}」其實是「${msg.answer}」（你選了「${msg.guess}」）—— 問問看為什麼？`;
+    topic.result = msg;
+    renderTopic();
     vibrate(msg.correct ? [30, 50, 30, 50, 60] : [40]);
   } else {
     const about = $('#topic-about');
-    about.textContent = msg.correct
-      ? `👀「${msg.otherName}」猜你是「${msg.guess}」—— 猜對了！`
-      : `👀「${msg.otherName}」猜你是「${msg.guess}」—— 猜錯了，跟對方說說看`;
+    about.textContent = `👀「${msg.otherName}」猜你「${msg.guess}」—— ${msg.correct ? '猜對了！' : '猜錯了，跟對方說說看'}`;
     about.hidden = false;
   }
   openTopic();
 }
 
 /** 自己的答案選了、猜的也揭曉了，這一題才算做完 */
-const topicDone = () => topic && topic.self !== undefined && topic.revealed;
+const topicDone = () => topic && topic.selfOk && topic.revealed;
 
 function openTopic() {
   clearTimeout(topicChipTimer);
