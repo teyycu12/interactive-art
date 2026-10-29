@@ -2639,16 +2639,82 @@ function initJoystick() {
     if (first) sendInput();
   });
 
-  joystick.on('end', () => {
-    joyEngaged = false;
-    joyVec = { x: 0, y: 0 };
-    joyIntensity = 0;
-    renderer?.setInput(joyVec, 0);
-    // 補送一則歸零封包，讓伺服器立即停止施加手動速度，
-    // 而不必等 3 秒閒置逾時才發現使用者已放手
-    sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: 0 });
-  });
+  joystick.on('end', stopJoystick);
 }
+
+function stopJoystick() {
+  joyEngaged = false;
+  joyVec = { x: 0, y: 0 };
+  joyIntensity = 0;
+  renderer?.setInput(joyVec, 0);
+  // 補送一則歸零封包，讓伺服器立即停止施加手動速度，
+  // 而不必等 3 秒閒置逾時才發現使用者已放手
+  sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: 0 });
+}
+
+/**
+ * 搖桿卡住的保險：手指已經放開，nipplejs 卻沒收到結束事件，角色一直往那個方向走。
+ *
+ * 實機上手指推到螢幕邊緣時會發生（2026-10-29）：iOS 把那一下觸控交給系統手勢
+ * （底部橫條、Safari 的工具列、側邊返回），網頁收不到 pointerup，有時連 pointercancel
+ * 也沒有。nipplejs 只認自己綁的那幾個事件，漏掉就一直停在「推著」。
+ *
+ * 所以另外從 window 盯著，任何一條線索說「沒有手指在搖桿上了」就強制放開：
+ * - 搖桿那根手指的 pointerup / pointercancel（nipplejs 漏接時）
+ * - touchend / touchcancel 之後螢幕上一根手指都不剩
+ * - 下一次碰螢幕時，搖桿那根手指已經不在 touches 裡 —— 系統手勢吞掉事件時唯一抓得到的時機
+ * - 切出頁面（LINE 通知、切 App、鎖螢幕）
+ * 強制放開時順便重建 nipplejs：它內部還記著那根手指，搖桿圖也停在推出去的位置。
+ */
+let joyPointerId = null;
+let joyTouchId = null;
+
+function forceReleaseJoystick() {
+  joyPointerId = null;
+  joyTouchId = null;
+  if (!joyEngaged) return;
+  stopJoystick();
+  if (joystick) {
+    joystick.destroy();
+    joystick = null;
+    initJoystick();
+  }
+}
+
+const inJoystickZone = (t) => t?.closest?.('#joystick-zone') && !t.closest('button');
+
+window.addEventListener('pointerdown', (e) => {
+  if (inJoystickZone(e.target) && joyPointerId === null) joyPointerId = e.pointerId;
+}, { capture: true });
+for (const type of ['pointerup', 'pointercancel']) {
+  window.addEventListener(type, (e) => {
+    if (e.pointerId !== joyPointerId) return;
+    joyPointerId = null;
+    // 讓 nipplejs 先處理；它正常收尾的話 joyEngaged 已經是 false，這裡什麼都不做
+    setTimeout(() => { if (joyPointerId === null) forceReleaseJoystick(); }, 0);
+  }, { capture: true });
+}
+
+window.addEventListener('touchstart', (e) => {
+  const ids = [...e.touches].map((t) => t.identifier);
+  if (joyTouchId !== null && !ids.includes(joyTouchId)) forceReleaseJoystick();
+  if (joyTouchId === null) {
+    const t = [...e.changedTouches].find((x) => inJoystickZone(x.target));
+    if (t) joyTouchId = t.identifier;
+  }
+}, { capture: true, passive: true });
+for (const type of ['touchend', 'touchcancel']) {
+  window.addEventListener(type, (e) => {
+    if (joyTouchId === null) return;
+    if ([...e.touches].some((t) => t.identifier === joyTouchId)) return;
+    joyTouchId = null;
+    setTimeout(() => { if (joyTouchId === null) forceReleaseJoystick(); }, 0);
+  }, { capture: true, passive: true });
+}
+
+document.addEventListener('visibilitychange', () => { if (document.hidden) forceReleaseJoystick(); });
+window.addEventListener('blur', forceReleaseJoystick);
+window.addEventListener('pagehide', forceReleaseJoystick);
 
 function sendInput() {
   sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: joyIntensity });
