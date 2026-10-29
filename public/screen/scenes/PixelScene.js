@@ -8,6 +8,10 @@ import { stageViewport, onStageViewportChange } from '../stageViewport.js';
 // 與 shared/protocol.js 的 STAGE 必須同進退，見那裡的註解。
 const GX = 0, GY = FLOOR_Y;
 
+// 物件畫出來的範圍（相對碰撞圓心，舞台單位），只拿來粗篩擋不擋得到角色，寬一點沒關係。
+// 最高的是體育館的籃架（往上約 230）；寬度是 1.65r 的桌面再加上旁邊的瓶子、招牌。
+const PROP_BOX = { above: 250, below: 0.4, side: 1.3, pad: 30 };
+
 /**
  * Base for the procedural 2D pixel themes. Subclasses supply static config:
  *   THEME_ID, TITLE, SUBTITLE, ITEMS {propId: [kind, label, line]}, FALLBACK, paintRoom(c, zones), paintProp(c, p, kind, elapsed, reduced)
@@ -98,6 +102,45 @@ export class PixelScene {
       c.fillStyle = this.light === 'night' ? 'rgba(31,49,65,.34)' : 'rgba(221,131,68,.18)';
       c.fillRect(-this.ox / this.zoom, -this.oy / this.zoom, innerWidth / this.zoom, innerHeight / this.zoom);
     }
+  }
+  /**
+   * 擋在角色前面的物件（screen.js 畫角色時用）。
+   *
+   * 房間和物件都畫在這張畫布上，角色畫在上面那張 —— 不處理的話，走到桌子後面的人
+   * 一律蓋在桌子上，看起來就是踩在桌上。前後看腳底：物件的 y（碰撞圓心）比角色的腳
+   * 更靠前（更下面）才算擋得到，再用畫面上的範圍粗篩，真正擋住哪幾格交給 cutOut。
+   *
+   * @param {number} feetY 角色腳底的舞台 y
+   * @param {{x0:number,y0:number,x1:number,y1:number}} box 角色在畫面上的範圍（CSS px）
+   */
+  occludersOf(feetY, box) {
+    const z = this.zoom;
+    return this.props.filter((p) => {
+      if (p.y <= feetY) return false;
+      const ext = p.r * PROP_BOX.side + PROP_BOX.pad;
+      const top = this.oy + (GY + p.y - PROP_BOX.above) * z;
+      const bottom = this.oy + (GY + p.y + p.r * PROP_BOX.below + PROP_BOX.pad) * z;
+      return this.ox + (GX + p.x + ext) * z > box.x0 && this.ox + (GX + p.x - ext) * z < box.x1
+        && bottom > box.y0 && top < box.y1;
+    });
+  }
+  /**
+   * 在 c 上挖掉這些物件蓋住的那一塊，露出底下場景畫布上的物件。
+   * c 必須與場景畫布同尺寸、同密度：挖的形狀用同一支 paintProp、同一個變換畫，
+   * 邊緣才會跟底下畫出來的物件逐像素對齊（差一格就會留一圈角色的毛邊）。
+   * 用挖的而不是把物件再畫一次：夜晚的燈光色、半透明的高光都只在底下那張上，重畫會對不上。
+   */
+  cutOut(c, props, now = performance.now()) {
+    c.save();
+    c.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    c.translate(this.ox, this.oy); c.scale(this.zoom, this.zoom); c.imageSmoothingEnabled = false;
+    c.globalCompositeOperation = 'destination-out';
+    for (const p of props) {
+      const started = this.effects.get(p.id);
+      const elapsed = started === undefined ? -1 : (now - started) / 1000;
+      this.constructor.paintProp(c, p, this.item(p)[0], elapsed, this.reduced.matches);
+    }
+    c.restore();
   }
   /**
    * 畫一張靜止的房間（底圖、道具、桌號、燈光）到另一張畫布，給大合照用（screen/photoRender.js）。
