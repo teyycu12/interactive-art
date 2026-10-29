@@ -264,7 +264,7 @@
     </button>
 
     <div class="agency-row">
-      <div class="agency" id="agency">推動搖桿移動・點別人的角色可以傳訊息</div>
+      <div class="agency" id="agency">按住任何地方拖動來走・點別人的角色傳訊息</div>
       <!-- 震動開關。iOS 不支援 navigator.vibrate，該裝置上此鍵會隱藏。 -->
       <button class="btn-haptics" id="btn-haptics" hidden
               aria-pressed="false" aria-label="腳步震動">震動</button>
@@ -273,7 +273,8 @@
     </div>
 
     <!-- 搖桿區不放說明文字：手機上那行字會被切掉又擋住場景。操作說明在上方的 #agency -->
-    <div id="joystick-zone"></div>
+    <!-- 搖桿是浮動的：手指按哪裡就出現在哪裡。.joy-hint 只是沒在推時左下角的提示圈 -->
+    <div id="joystick-zone"><div class="joy-hint" aria-hidden="true"></div></div>
 
     <!-- 話題桌：跟同一桌的人拿到同一題。不擋搖桿。
          原本整張卡是按鈕、點一下就收起 —— 試玩時大家一碰到就不見、也叫不回來（2026-10-17）。

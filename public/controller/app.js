@@ -2576,35 +2576,23 @@ function initRenderer() {
 }
 
 /**
- * 搖桿擺在哪裡：直式、橫式都在左下角。
- * 原本在搖桿區正中央，而角色也站在那裡 —— 推桿的手指與搖桿底座正好蓋住自己的臉。
- * 直式曾經放在正中間下方，但手機直拿時那仍在畫面正中、擋住角色腳下與前方的路；
- * 左下角則是左手拇指自然的位置，右手留給表情鍵（直式在下方一排、橫式在右側一欄）。
+ * 浮動搖桿：手指在搖桿區哪裡按下，搖桿底座就出現在哪裡，放開就消失。
+ * 原本固定在左下角（static），推之前得先把拇指挪過去；拿手機的姿勢、慣用手每個人不同，
+ * 固定在哪裡都會有人搆不到（2026-10-29）。
+ * 左下角留一個淡淡的圈（.joy-hint）當「這裡可以推」的提示，推的時候藏起來。
  */
-const landscapeQuery = matchMedia('(orientation: landscape)');
-function joystickPosition() {
-  return landscapeQuery.matches
-    ? { left: '96px', top: 'calc(100% - 96px)' }
-    : { left: '84px', top: 'calc(100% - 84px)' };
-}
-// 轉向時重建：nipplejs 的 static 位置在建立時就固定了
-landscapeQuery.addEventListener('change', () => {
-  if (!joystick) return;
-  joystick.destroy();
-  joystick = null;
-  initJoystick();
-});
-
 function initJoystick() {
   if (joystick) return;
+  const zone = $('#joystick-zone');
   joystick = nipplejs.create({
-    zone: $('#joystick-zone'),
-    mode: 'static',
-    position: joystickPosition(),
+    zone,
+    mode: 'dynamic',
     color: '#3A2E27',
     size: 130,
-    restJoystick: true,
+    fadeTime: 120,
   });
+
+  joystick.on('start', () => zone.classList.add('joy-on'));
 
   joystick.on('move', (_evt, data) => {
     if (!data?.vector) return;
@@ -2625,6 +2613,7 @@ function initJoystick() {
   });
 
   joystick.on('end', () => {
+    zone.classList.remove('joy-on');
     joyEngaged = false;
     joyVec = { x: 0, y: 0 };
     joyIntensity = 0;
@@ -2814,7 +2803,7 @@ setInterval(() => {
   if (fresh && serverMode === 'STAGED') {
     el.textContent = '正在拍大合照，請看大螢幕';
   } else {
-    el.textContent = active ? '你正在操控' : '推動搖桿移動・點別人的角色可以傳訊息';
+    el.textContent = active ? '你正在操控' : '按住任何地方拖動來走・點別人的角色傳訊息';
   }
 }, 200);
 
@@ -3077,42 +3066,54 @@ function handleQuizMessage(msg) {
 // ─────────────────────────────────────────────────────────────
 // 私訊：點手機畫面上別人的角色，傳一句話給對方
 // ─────────────────────────────────────────────────────────────
-// 畫布本身是 pointer-events:none 的背景層，蓋在上面的是搖桿區 —— 而搖桿是 static 模式，
-// 搖桿區裡任何一點按下去都會被 nipplejs 接走、角色朝那個方向衝一下。
-// 因此在捕獲階段先攔：點到角色就自己處理並擋下事件，沒點到才放行給搖桿。
-// 三種事件都要擋：nipplejs 依瀏覽器支援挑 pointer / touch / mouse 其中一種來聽，
-// 而觸控裝置上同一下會先後觸發 pointerdown 與 touchstart。
+// 畫布本身是 pointer-events:none 的背景層，蓋在上面的是搖桿區 —— 搖桿區裡任何一點按下去
+// 都會被 nipplejs 接走、在那裡長出搖桿。所以點人不看「按下」，看「放開」：
+// 按下的地方有別人的角色、沒怎麼移動、很快放開，才算點人。手指一拖動就是在走路 ——
+// 浮動搖桿讓拇指隨處落下，常常剛好落在別人身上，按下就跳訊息框的話根本走不了。
+// 只聽 pointer 事件、不擋：nipplejs 也是聽 pointer，兩邊各做各的
+// （點一下時搖桿只出現一瞬間、推力是 0，角色不會動）。
 
-/** 搖桿底座附近不判定點人：想走路的手指落在角色上時，走路優先 */
-const JOYSTICK_GUARD_PX = 85;
-let lastPickAt = 0;
+/** 點一下的容許範圍：移動超過這個距離或按超過這麼久，就是在推搖桿 */
+const TAP_SLOP_PX = 12;
+const TAP_MAX_MS = 350;
+let tap = null;
 
-function pickTarget(e) {
+function pickTarget(x, y) {
   if (!renderer || $('#controller').hidden) return null;
-  // 只攔落在搖桿區（畫布的可點區）上的觸控；按鈕、橫幅等照常運作
-  if (!e.target.closest?.('#joystick-zone') || e.target.closest('button')) return null;
-  const pt = e.touches?.[0] ?? e;
-  const base = document.querySelector('#joystick-zone .back')?.getBoundingClientRect();
-  if (base && Math.hypot(pt.clientX - (base.left + base.width / 2), pt.clientY - (base.top + base.height / 2)) < JOYSTICK_GUARD_PX) {
-    return null;
-  }
-  const ids = renderer.pickAllAt(pt.clientX, pt.clientY);
+  const ids = renderer.pickAllAt(x, y);
   return ids.length ? ids : null;
 }
 
-for (const type of ['pointerdown', 'touchstart', 'mousedown']) {
-  $('#controller').addEventListener(type, (e) => {
-    const ids = pickTarget(e);
-    if (!ids) return;
-    e.stopPropagation();
-    if (e.cancelable && type !== 'pointerdown') e.preventDefault();
-    // 同一下觸控會依序來 pointerdown → touchstart（→ mousedown），只開一次
-    if (Date.now() - lastPickAt < 600) return;
-    lastPickAt = Date.now();
-    // 好幾個人擠在一起：讓他自己選，不替他猜是哪一個
-    if (ids.length > 1) openPicker(ids);
-    else openComposer(ids[0]);
-  }, { capture: true, passive: false });
+$('#controller').addEventListener('pointerdown', (e) => {
+  tap = null;
+  // 只看落在搖桿區（畫布的可點區）上的觸控；按鈕、橫幅等照常運作
+  if (!e.isPrimary || !e.target.closest?.('#joystick-zone') || e.target.closest('button')) return;
+  tap = { id: e.pointerId, x: e.clientX, y: e.clientY, at: Date.now() };
+}, { capture: true });
+
+window.addEventListener('pointermove', (e) => {
+  if (tap?.id === e.pointerId && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > TAP_SLOP_PX) tap = null;
+}, { capture: true });
+
+window.addEventListener('pointercancel', () => { tap = null; }, { capture: true });
+
+window.addEventListener('pointerup', (e) => {
+  const t = tap;
+  tap = null;
+  if (t?.id !== e.pointerId || Date.now() - t.at > TAP_MAX_MS) return;
+  const ids = pickTarget(t.x, t.y);
+  if (!ids) return;
+  // 放開之後瀏覽器還會補一個 click，落在剛打開的面板上（選人面板點背景就會收起）
+  swallowNextClick();
+  // 好幾個人擠在一起：讓他自己選，不替他猜是哪一個
+  if (ids.length > 1) openPicker(ids);
+  else openComposer(ids[0]);
+}, { capture: true });
+
+function swallowNextClick() {
+  const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
+  window.addEventListener('click', swallow, { capture: true, once: true });
+  setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 400);
 }
 
 // ── 點到好幾個人時：選一個 ──
