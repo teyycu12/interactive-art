@@ -33,6 +33,78 @@ function spawnPoint() {
   return { x: STAGE.width / 2, y: STAGE.height / 2 };
 }
 
+/**
+ * 一個角色的完整狀態（真人與 NPC 共用同一個形狀：arbiter.js 的移動、轉向、碰撞都吃它）。
+ * @param {{id: string, name: string, avatar: object, rejoinToken: string|null, x: number, y: number}} p
+ */
+function newAgent({ id, name, avatar, rejoinToken, x, y }) {
+  return {
+    id,
+    name,
+    avatar,
+    rejoinToken,
+    // 位置與實際速度
+    x,
+    y,
+    vx: 0,
+    vy: 0,
+    // 完整朝向角（弧度）。出生時面向觀眾（π/2 = 邏輯平面 +y）：
+    // 像素角色依它選四方向之一，剛進場的人要能在大螢幕上看到自己的臉，
+    // 隨機朝向會讓約四分之三的人一出場是背面或側面。
+    heading: Math.PI / 2,
+    // Boids 影子速度（見 boids.js 的關鍵設計說明）
+    boidsVx: (Math.random() - 0.5) * 60,
+    boidsVy: (Math.random() - 0.5) * 60,
+    wanderAngle: Math.random() * Math.PI * 2,
+    // M2 仲裁狀態
+    alpha: 0,
+    decayStartAt: null,
+    decayFrom: 0,
+    // 靜止模式的煞停狀態（IDLE_MOTION === 'still'，見 arbiter.js）。
+    // null 代表沒有正在進行的煞停。
+    brakeFrom: null,
+    brakeStartAt: 0,
+    // 定位鎖定。targetX 為 null 代表角色自由活動；
+    // 合照等情境由 lockStage() 指派目標，見該方法的說明。
+    targetX: null,
+    targetY: null,
+    targetHeading: null,
+    lockAlpha: 0,
+    arrived: false,
+    inputX: 0,
+    inputY: 0,
+    inputIntensity: 0,
+    // 平滑後的手動速度（見 arbiter.js）。原始輸入是單位向量，
+    // 直接使用會讓回中時的手指抖動變成全速的方向反轉。
+    manualVx: 0,
+    manualVy: 0,
+    lastInputAt: 0, // 0 代表從未輸入過 → 一出生即為漫遊態
+    // 連線狀態
+    disconnectedAt: null,
+    offline: false,
+    // 渲染提示
+    state: AGENT_STATE.IDLE,
+    // 目前所在分區（shared/scene.js 的 ZONES）。null 代表在分區外。
+    zone: null,
+    mode: AGENT_MODE.SWARM,
+    facing: 1,
+    // 翻面防抖：累積中的反向與其持續時間（見 arbiter.js 的 updateFacing）
+    facingPendingDir: null,
+    facingPendingMs: 0,
+    // 正面／背面／側面與其防抖（見 arbiter.js 的 updateView）
+    view: AGENT_VIEW.FRONT,
+    viewPending: null,
+    viewPendingMs: 0,
+    viewIdleMs: 0,
+    emote: null,
+    lastEmoteAt: 0,
+    // 行為 Log（WP-C 數據收集 / M4 活躍度加權的原始資料）
+    joinedAt: Date.now(),
+    activeMs: 0,
+    emoteCount: 0,
+  };
+}
+
 /** 定時安全比較，避免以回應時間差逐字元試出 token */
 export function tokensMatch(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -46,6 +118,14 @@ export class Stage {
   constructor() {
     /** @type {Map<string, object>} */
     this.agents = new Map();
+    /**
+     * NPC（server/npc.js）。跟真人分開放，**不能**併進 agents：
+     * 配對、賓果、揮手、社交圖譜、報表、人數上限都直接走 agents，混在一起只要漏改一處
+     * 就會「跟 NPC 配對完成任務」「報表把 NPC 算成參與者」，而且不會報錯。
+     * 只有物理（tick）、畫面同步（snapshot、roster……）與大合照會把兩份合起來。
+     * @type {Map<string, object>}
+     */
+    this.npcs = new Map();
     this.rosterDirty = true; // 名冊是否需要重新廣播
     this.locked = false;     // 場域是否處於定位鎖定狀態（合照等流程）
   }
@@ -67,75 +147,43 @@ export class Stage {
     if (this.isFull()) return null;
     if (keepId && this.agents.has(keepId)) return null;
     const id = keepId ?? `usr_${randomUUID().slice(0, 8)}`;
-    const agent = {
+    const agent = newAgent({
       id,
       name,
       avatar,
       // 重連憑證：僅存於伺服器，絕不出現在 STAGE_ROSTER / STAGE_SYNC 等任何廣播中。
       // 只在 CLIENT_WELCOME 中單獨回傳給該角色本人的連線。
       rejoinToken: keepToken ?? randomBytes(16).toString('hex'),
-      // 位置與實際速度
       ...spawnPoint(),
-      vx: 0,
-      vy: 0,
-      // 完整朝向角（弧度）。出生時面向觀眾（π/2 = 邏輯平面 +y）：
-      // 像素角色依它選四方向之一，剛進場的人要能在大螢幕上看到自己的臉，
-      // 隨機朝向會讓約四分之三的人一出場是背面或側面。
-      heading: Math.PI / 2,
-      // Boids 影子速度（見 boids.js 的關鍵設計說明）
-      boidsVx: (Math.random() - 0.5) * 60,
-      boidsVy: (Math.random() - 0.5) * 60,
-      wanderAngle: Math.random() * Math.PI * 2,
-      // M2 仲裁狀態
-      alpha: 0,
-      decayStartAt: null,
-      decayFrom: 0,
-      // 靜止模式的煞停狀態（IDLE_MOTION === 'still'，見 arbiter.js）。
-      // null 代表沒有正在進行的煞停。
-      brakeFrom: null,
-      brakeStartAt: 0,
-      // 定位鎖定。targetX 為 null 代表角色自由活動；
-      // 合照等情境由 lockStage() 指派目標，見該方法的說明。
-      targetX: null,
-      targetY: null,
-      targetHeading: null,
-      lockAlpha: 0,
-      arrived: false,
-      inputX: 0,
-      inputY: 0,
-      inputIntensity: 0,
-      // 平滑後的手動速度（見 arbiter.js）。原始輸入是單位向量，
-      // 直接使用會讓回中時的手指抖動變成全速的方向反轉。
-      manualVx: 0,
-      manualVy: 0,
-      lastInputAt: 0, // 0 代表從未輸入過 → 一出生即為漫遊態
-      // 連線狀態
-      disconnectedAt: null,
-      offline: false,
-      // 渲染提示
-      state: AGENT_STATE.IDLE,
-      // 目前所在分區（shared/scene.js 的 ZONES）。null 代表在分區外。
-      zone: null,
-      mode: AGENT_MODE.SWARM,
-      facing: 1,
-      // 翻面防抖：累積中的反向與其持續時間（見 arbiter.js 的 updateFacing）
-      facingPendingDir: null,
-      facingPendingMs: 0,
-      // 正面／背面／側面與其防抖（見 arbiter.js 的 updateView）
-      view: AGENT_VIEW.FRONT,
-      viewPending: null,
-      viewPendingMs: 0,
-      viewIdleMs: 0,
-      emote: null,
-      lastEmoteAt: 0,
-      // 行為 Log（WP-C 數據收集 / M4 活躍度加權的原始資料）
-      joinedAt: Date.now(),
-      activeMs: 0,
-      emoteCount: 0,
-    };
+    });
     this.agents.set(id, agent);
     this.rosterDirty = true;
     return agent;
+  }
+
+  /**
+   * NPC 進場。跟真人同一個角色形狀（移動、轉向、碰撞全部共用 arbiter.js），
+   * 差別只在 npc 欄位：server/npc.js 的行為狀態存在那裡，它替 NPC 推一支虛擬搖桿。
+   * 不佔 MAX_AGENTS。
+   * @param {{name: string, avatar: object, x: number, y: number, npc: object}} p
+   */
+  addNpc({ name, avatar, x, y, npc }) {
+    const id = `npc_${randomUUID().slice(0, 8)}`;
+    const agent = newAgent({ id, name, avatar, rejoinToken: null, x, y });
+    agent.npc = npc;
+    this.npcs.set(id, agent);
+    this.rosterDirty = true;
+    return agent;
+  }
+
+  removeNpc(id) {
+    if (this.npcs.delete(id)) this.rosterDirty = true;
+  }
+
+  /** NPC 的社交動作（揮手）。真人的 applyAction 只找 agents，也有冷卻與計次，NPC 都不需要 */
+  npcEmote(id, action) {
+    const npc = this.npcs.get(id);
+    if (npc) npc.emote = { action, until: Date.now() + EMOTE_DURATION_MS };
   }
 
   get(id) {
@@ -330,14 +378,18 @@ export class Stage {
   tick(dt, graph = null) {
     const now = Date.now();
     const agents = [...this.agents.values()];
+    // NPC 只在物理這裡跟真人合在一起：會互相擋、會被 Boids 的鄰居看見。
+    // 下面的分區、離線回收、活躍時長都只算真人
+    const everyone = this.npcs.size ? [...agents, ...this.npcs.values()] : agents;
     /** @type {{id: string, from: string|null, to: string|null}[]} 本幀的分區進出 */
     const transitions = [];
 
-    for (const agent of agents) {
-      stepAgent(agent, agents, dt, now, graph ? graph.neighbors(agent.id) : null);
+    for (const agent of everyone) {
+      stepAgent(agent, everyone, dt, now, graph && !agent.npc ? graph.neighbors(agent.id) : null);
+      if (agent.npc && agent.emote && now > agent.emote.until) agent.emote = null;
     }
     // 所有人都移動完才處理彼此的碰撞：邊走邊修正的話，先處理的人會用到別人上一幀的位置
-    resolveAgentOverlap(agents);
+    resolveAgentOverlap(everyone);
 
     for (const agent of agents) {
       // 累計主動操控時長，作為 WP-C 行為 Log 與 M4 構圖加權的依據
@@ -372,6 +424,11 @@ export class Stage {
     return out;
   }
 
+  /** 畫面上的所有角色：真人加 NPC。只給畫面同步與大合照用，玩法一律走 agents */
+  everyone() {
+    return this.npcs.size ? [...this.agents.values(), ...this.npcs.values()] : [...this.agents.values()];
+  }
+
   /**
    * 產生 STAGE_SYNC 的精簡快照。
    * 刻意不含捏臉外觀 —— 那是靜態資料，由 STAGE_ROSTER 另行傳送，
@@ -381,7 +438,7 @@ export class Stage {
     const round = (n) => Math.round(n * 10) / 10;
     const round3 = (n) => Math.round(n * 1000) / 1000;
     const now = Date.now();
-    return [...this.agents.values()].map((a) => ({
+    return this.everyone().map((a) => ({
       id: a.id,
       x: round(a.x),
       y: round(a.y),
@@ -407,6 +464,7 @@ export class Stage {
       // 定位鎖定時才有意義，供合照流程判斷是否可以拍
       ...(a.arrived && { arrived: true }),
       ...(a.view !== AGENT_VIEW.FRONT && { view: a.view }),
+      ...(a.npc && { npc: true }),
     }));
   }
 
@@ -433,7 +491,7 @@ export class Stage {
     const r2 = radius * radius;
 
     const neighbors = [];
-    for (const a of this.agents.values()) {
+    for (const a of this.everyone()) {
       if (a.id === id) continue;
       const dx = a.x - me.x;
       const dy = a.y - me.y;
@@ -450,6 +508,7 @@ export class Stage {
         state: a.state,
         // 有社交動作時才帶，與 snapshot() 同一個省頻寬的理由
         ...(a.emote && { emote: a.emote.action }),
+        ...(a.npc && { npc: true }),
       });
     }
 
@@ -486,7 +545,9 @@ export class Stage {
    * 隨 15Hz 的座標重送等於每秒多送十幾 KB 的重複字串。
    */
   nameRoster() {
-    return [...this.agents.values()].map((a) => ({ id: a.id, name: a.name, look: avatarLook(a.avatar) }));
+    return this.everyone().map((a) => ({
+      id: a.id, name: a.name, look: avatarLook(a.avatar), ...(a.npc && { npc: true }),
+    }));
   }
 
   /**
@@ -494,17 +555,19 @@ export class Stage {
    * 外觀也要算進去：同一連線重新捏臉時 id 與名字都沒變，只看這兩樣會漏送。
    */
   clientRosterSignature() {
-    if (!this.agents.size) return '';
-    return `${this.agents.size}:${[...this.agents.values()]
+    const all = this.everyone();
+    if (!all.length) return '';
+    return `${all.length}:${all
       .map((a) => `${a.id}~${a.name}~${JSON.stringify(avatarLook(a.avatar))}`).join('|')}`;
   }
 
   /** 參與者名冊：id、顯示名稱與捏臉設定，僅在成員變動時廣播 */
   roster() {
-    return [...this.agents.values()].map((a) => ({
+    return this.everyone().map((a) => ({
       id: a.id,
       name: a.name,
       avatar: a.avatar,
+      ...(a.npc && { npc: true }),
     }));
   }
 }
