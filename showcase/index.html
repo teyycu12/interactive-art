@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PixelAir｜數位轉譯角色空間互動系統</title>
+<meta name="description" content="PixelAir：把手機變成搖桿、把穿著轉譯成像素角色，用必須開口的任務把注意力拉回身邊的人。專題成果介紹。">
+<meta property="og:title" content="PixelAir｜數位轉譯角色空間互動系統">
+<meta property="og:description" content="A multi-user avatar system for in-person icebreaking.">
+<meta property="og:image" content="img/title.webp">
+<meta name="theme-color" content="#2f3542">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%232b2f3a' d='M2 1h2v1h1v1h1v1h1v1h1v1h1v1h1v1h1v1H9v1h1v2H8v-1H7v-1H6v1H5v1H2z'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Silkscreen:wght@400;700&family=VT323&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <a class="nav__logo" href="#top" aria-label="回到頂端">
+    <span class="nav__mark" aria-hidden="true"></span>PIXEL AIR
+  </a>
+  <button class="nav__toggle" id="navToggle" aria-expanded="false" aria-controls="navLinks">選單</button>
+  <nav class="nav__links" id="navLinks">
+    <a href="#origin">緣起</a>
+    <a href="#system">系統</a>
+    <a href="#play">試玩</a>
+    <a href="#games">玩法</a>
+    <a href="#results">成果</a>
+    <a href="#team">團隊</a>
+  </nav>
+</header>
+
+<main id="top">
+
+<!-- ===================== HERO ===================== -->
+<section class="hero">
+  <div class="hero__bg" aria-hidden="true"></div>
+  <div class="hero__inner">
+    <p class="hero__kicker">數位轉譯角色空間互動系統</p>
+    <h1 class="hero__title">
+      <span>PIXEL</span><span>AIR</span>
+      <svg class="hero__cursor" viewBox="0 0 12 19" aria-hidden="true"><path d="M0 0h1v1h1v1h1v1h1v1h1v1h1v1h1v1h1v1h1v1h1v1h1v1H7v1h1v2h1v2H8v1H6v-1H5v-2H4v-1H3v1H2v1H1v1H0z" fill="#2b2f3a"/><path d="M1 2h1v1h1v1h1v1h1v1h1v1h1v1h1v1h1v1h1v1H6v1h1v2h1v2H7v-2H6v-2H5v-1H4v1H3v1H2v1H1z" fill="#fffaf0"/></svg>
+    </h1>
+    <p class="hero__en">A MULTI-USER AVATAR SYSTEM<br>FOR IN-PERSON ICEBREAKING</p>
+    <p class="hero__lead">不叫你放下手機，而是把手機變成搖桿；<br class="br-sm">再用任務，把注意力拉回身邊的人。</p>
+    <div class="hero__cta">
+      <a class="btn btn--primary" href="#play">▶ 試玩共治引擎</a>
+      <a class="btn" href="#team">認識團隊</a>
+    </div>
+    <p class="hero__school">國立臺灣師範大學 科技應用與人力資源發展學系</p>
+  </div>
+  <canvas class="hero__crowd" id="heroCrowd" aria-hidden="true"></canvas>
+  <a class="hero__scroll" href="#origin" aria-label="往下捲動">▼ SCROLL</a>
+</section>
+
+<!-- ===================== ORIGIN ===================== -->
+<section class="section" id="origin">
+  <div class="wrap">
+    <p class="label">01 · ORIGIN</p>
+    <h2 class="h2">距離很近，<br class="br-sm">但心的距離卻很遠。</h2>
+    <p class="lede reveal">迎新、教育訓練、共識營……人在同一個空間，不代表心理上有連結。常見做法是「禁止」：要大家收起手機。但這違反現代人的習慣，而硬性的破冰活動本身也不受歡迎。我們換一個方向：<strong>轉譯，而非禁止。</strong></p>
+
+    <div class="stats reveal">
+      <div class="stat">
+        <div class="stat__num"><span data-count="86.43" data-dec="2">0</span>%</div>
+        <p>2024 年臺灣民眾行動寬頻普及率<small>台灣網路資訊中心，2024</small></p>
+      </div>
+      <div class="stat">
+        <div class="stat__num"><span data-count="40">0</span>%</div>
+        <p>聽到公司要辦團建時，最常見的反應是「害怕」<small>YouGov，Smith，2022</small></p>
+      </div>
+      <div class="stat stat--accent">
+        <div class="stat__num"><span data-count="3.52" data-dec="2">0</span><em>vs</em><span data-count="2.52" data-dec="2">0</span></div>
+        <p>「我需要與他人認識的契機」vs「開口搭話對我很容易」<small>本組實測前測，n = 25，五點量表</small></p>
+      </div>
+    </div>
+
+    <div class="voices reveal" aria-label="前測中參與者滑手機的原因">
+      <p class="voices__title">為什麼在迎新時滑手機？前測裡參與者這樣說：</p>
+      <span class="chip">有些時間比較尷尬</span>
+      <span class="chip">沒人聊天</span>
+      <span class="chip">空檔很多就會開手機</span>
+      <span class="chip">不喜歡社交</span>
+    </div>
+    <p class="insight reveal">多數人並不排斥認識別人，<mark>缺的是開口的理由。</mark></p>
+
+    <h3 class="h3 reveal">五項設計原則</h3>
+    <ol class="principles reveal">
+      <li><b>通關必須開口</b><span>新增任何玩法前先問：通關路徑上有沒有一步必須跟另一個人說話？沒有的話，再好玩也會讓現場更安靜。</span></li>
+      <li><b>失敗一律降級，不擋人進場</b><span>相機被拒、照片不合格、生成服務掛掉，都還有相簿選照片或自訂角色可以走。</span></li>
+      <li><b>掌控感與畫面生氣並存</b><span>用連續權重 α 混合手動與群體行為，而不是硬切換。</span></li>
+      <li><b>手機私人、大螢幕公共</b><span>賓果格子、配對碼只在本人手機上；排行榜、題目與合照 QR Code 在大螢幕上。</span></li>
+      <li><b>現場優先</b><span>前端相依全部本機提供、不走 CDN；每 5 秒存檔，重開後積分與社交關係仍在。</span></li>
+    </ol>
+  </div>
+</section>
+
+<!-- ===================== SYSTEM ===================== -->
+<section class="section section--dark" id="system">
+  <div class="wrap">
+    <p class="label">02 · SYSTEM</p>
+    <h2 class="h2">三端、兩層，<br class="br-sm">一條指令啟動。</h2>
+    <p class="lede reveal">點一下各個節點，看它負責什麼。生成服務只綁本機位址，由互動層代理轉發，外部無法直接呼叫付費的生成端點。</p>
+
+    <div class="arch reveal" id="arch">
+      <div class="arch__col">
+        <button class="node" data-node="phone"><i>📱</i><b>手機控制器</b><small>拍照・搖桿・任務</small></button>
+        <button class="node" data-node="screen"><i>🖥️</i><b>大螢幕</b><small>場景・角色・排行榜</small></button>
+        <button class="node" data-node="host"><i>🎛️</i><b>主辦端</b><small>節目單・出題・合照</small></button>
+      </div>
+      <div class="arch__wire"><span>WebSocket</span></div>
+      <div class="arch__col arch__col--mid">
+        <button class="node node--core" data-node="core"><i>⚙️</i><b>互動層</b><small>Node.js · :3000</small></button>
+      </div>
+      <div class="arch__wire"><span>HTTP</span></div>
+      <div class="arch__col">
+        <button class="node" data-node="gen"><i>🎨</i><b>生成服務</b><small>Python · 127.0.0.1:5055</small></button>
+        <button class="node node--ext" data-node="api"><i>☁️</i><b>外部生圖 API</b><small>Gemini 影像模型</small></button>
+      </div>
+    </div>
+    <div class="arch__detail" id="archDetail" aria-live="polite"></div>
+
+    <h3 class="h3 reveal">入場流程：從一張照片到一個角色</h3>
+    <div class="flow reveal" id="flow">
+      <ol class="flow__steps" role="tablist"></ol>
+      <div class="flow__panel">
+        <div class="flow__text" id="flowText"></div>
+        <div class="turn" id="turn">
+          <div class="turn__stage" id="turnStage" title="左右拖曳讓角色轉身">
+            <img src="img/character-3view.webp" alt="像素風角色三視圖：正面、側面、背面" draggable="false">
+          </div>
+          <div class="turn__ctrl" role="group" aria-label="角色面向">
+            <button data-view="0" class="is-on">正面</button>
+            <button data-view="1">側面</button>
+            <button data-view="2">背面</button>
+          </div>
+          <p class="turn__hint">← 拖曳轉身 →　模型一次畫出三視圖，角色依移動方向切換面向</p>
+        </div>
+      </div>
+    </div>
+    <p class="note reveal">⚠ 掃描失敗一律降級：相機權限被拒、照片不合格時，停在失敗頁讓你重拍、從相簿選或自訂角色；生成本身掛了，直接帶去自訂角色。</p>
+  </div>
+</section>
+
+<!-- ===================== PLAY ===================== -->
+<section class="section" id="play">
+  <div class="wrap">
+    <p class="label">03 · PLAY</p>
+    <h2 class="h2">半自主共治引擎</h2>
+    <p class="lede reveal">每個角色的速度由手動輸入與 Boids 群體演算法依權重 α 混合。推搖桿時 α 在 0.3 秒內升到 1，你立刻感到回應；放手滿 3 秒後，α 以 1.2 秒的餘弦曲線降回 0，把角色交還給群體。下面就是同一套規則，<b>你控制的是頭上有紅色箭頭的那個角色</b>。</p>
+
+    <div class="demo reveal">
+      <div class="demo__screen">
+        <canvas id="demo" aria-label="共治引擎示範：用 WASD、方向鍵或在畫面上拖曳來操控角色"></canvas>
+        <div class="demo__toast" id="toast" role="status"></div>
+        <div class="demo__help" id="demoHelp">拖曳畫面 / WASD / 方向鍵 操控</div>
+      </div>
+      <aside class="demo__hud">
+        <div class="hud__row">
+          <span class="hud__k">α</span>
+          <div class="meter"><div class="meter__fill" id="alphaFill"></div></div>
+          <span class="hud__v" id="alphaVal">0.00</span>
+        </div>
+        <p class="hud__state" id="alphaState">群體接手中：角色跟著 Boids 漫遊</p>
+        <p class="formula" id="formula">V<sub>final</sub> = (1 − α)·V<sub>Boids</sub> + α·V<sub>Manual</sub></p>
+        <button class="btn btn--primary btn--block" id="pairBtn">♥ 跟最近的人配對 <kbd>E</kbd></button>
+        <p class="hud__small">配對過的鄰居，凝聚權重是 2.5 倍——社交關係因此表現為畫面上的自然群聚。已配對：<b id="pairCount">0</b></p>
+        <details class="hud__params">
+          <summary>Boids 參數（調調看）</summary>
+          <label>分離 <output id="o-sep">2.2</output><input type="range" id="p-sep" min="0" max="5" step="0.1" value="2.2"></label>
+          <label>對齊 <output id="o-ali">0.9</output><input type="range" id="p-ali" min="0" max="3" step="0.05" value="0.9"></label>
+          <label>凝聚 <output id="o-coh">0.75</output><input type="range" id="p-coh" min="0" max="3" step="0.05" value="0.75"></label>
+          <label>漫遊 <output id="o-wan">0.55</output><input type="range" id="p-wan" min="0" max="2" step="0.05" value="0.55"></label>
+          <p class="hud__small">感知半徑 260、分離半徑 95（與實際系統相同）。</p>
+        </details>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== GAMES ===================== -->
+<section class="section section--cream" id="games">
+  <div class="wrap">
+    <p class="label">04 · GAMES</p>
+    <h2 class="h2">多種玩法：<br class="br-sm">創造交流，也增加歸屬</h2>
+    <p class="lede reveal">主辦端從「節目單」依場合套用範本。翻開卡片，看每個玩法「為什麼需要開口」。</p>
+    <div class="cards" id="cards"></div>
+
+    <div class="quiz reveal" id="quiz">
+      <div class="quiz__head">
+        <p class="label label--ink">MINI GAME</p>
+        <h3 class="h3">進場人格問卷：你是哪一型？</h3>
+        <p>生成角色要等十幾秒，系統就用這段時間問你幾題。類型從外表看不出來——想找同類，<b>只能開口問</b>。</p>
+        <div class="badges" aria-label="五種類型徽章">
+          <img src="img/badge-tiger.webp" alt="老虎" title="老虎" width="64" height="64">
+          <img src="img/badge-peacock.webp" alt="孔雀" title="孔雀" width="64" height="64">
+          <img src="img/badge-koala.webp" alt="無尾熊" title="無尾熊" width="64" height="64">
+          <img src="img/badge-owl.webp" alt="貓頭鷹" title="貓頭鷹" width="64" height="64">
+          <img src="img/badge-chameleon.webp" alt="變色龍" title="變色龍" width="64" height="64">
+        </div>
+      </div>
+      <div class="quiz__body" id="quizBody"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== RESULTS ===================== -->
+<section class="section" id="results">
+  <div class="wrap">
+    <p class="label">05 · RESULTS</p>
+    <h2 class="h2">民國 115 年 10 月 19 日，<br class="br-sm">校內場域實測。</h2>
+    <p class="lede reveal">25 位大學部學生簽署同意書並完成前後測問卷。大螢幕使用共享辦公室場景，流程依序為人物賓果、找同類配對、文字雲與集體大合照。</p>
+
+    <div class="kpis reveal">
+      <div class="kpi"><b><span data-count="92">0</span>%</b><span>角色生成成功率</span></div>
+      <div class="kpi"><b><span data-count="16.9" data-dec="1">0</span>s</b><span>生成時間中位數</span></div>
+      <div class="kpi"><b><span data-count="77">0</span>%</b><span>掃碼下載大合照</span></div>
+      <div class="kpi"><b><span data-count="30">0</span>Hz</b><span>40 人壓測仍維持同步</span></div>
+      <div class="kpi"><b><span data-count="11">0</span>s</b><span>找同類任務出現第一組</span></div>
+      <div class="kpi"><b><span data-count="1511">0</span></b><span>項自動化測試全數通過</span></div>
+    </div>
+
+    <div class="grid2">
+      <figure class="panel reveal">
+        <figcaption><b>前後測三項指標</b><small>n = 25・Wilcoxon 符號等級檢定，三項皆 p &lt; .05</small></figcaption>
+        <svg class="slope" id="slope" viewBox="0 0 520 340" role="img" aria-label="前後測比較：群體歸屬感 2.52 升至 3.40；認識程度 2.44 升至 2.88；手機分心頻率 2.32 降至 1.64"></svg>
+        <p class="panel__note">手機使用頻率前測問「過去的迎新活動」、後測問「今天的活動」，情境不同，僅供參考；本實測無對照組。</p>
+      </figure>
+
+      <div class="panel reveal">
+        <p class="panel__title"><b>回饋問卷五構面</b><small>N = 26・五點量表・點一下展開題目</small></p>
+        <div class="bars" id="bars"></div>
+      </div>
+    </div>
+
+    <h3 class="h3 reveal">互動紀錄</h3>
+    <div class="log reveal">
+      <div><b>20 / 25</b><span>找同類任務：在場 25 人中 20 人達標，約 2 分鐘內完成</span></div>
+      <div><b>107</b><span>次人物賓果填格，成功 75 次（70%）</span></div>
+      <div><b>353</b><span>次揮手邀請，89 次對方回揮</span></div>
+      <div><b>32</b><span>則私訊，15 人傳出，零檢舉</span></div>
+      <div><b>21</b><span>次話題桌觸發</span></div>
+      <div><b>38</b><span>人作答人格問卷，無尾熊最多（14）</span></div>
+    </div>
+
+    <h3 class="h3 reveal">現場留下的東西</h3>
+    <div class="gallery reveal">
+      <button class="shot shot--wide" data-zoom="img/group-photo.webp" data-cap="依互動排位的集體大合照：當天互動越多的人站得越近">
+        <img src="img/group-photo.webp" alt="PixelAir 集體記憶：依互動排位的大合照" loading="lazy">
+        <span>集體大合照（依互動排位）</span>
+      </button>
+      <button class="shot" data-zoom="img/wordcloud.webp" data-cap="文字雲「今天的參與心得」，24 人作答">
+        <img src="img/wordcloud.webp" alt="文字雲：今天的參與心得" loading="lazy">
+        <span>文字雲：今天的參與心得</span>
+      </button>
+      <button class="shot" data-zoom="img/scene.webp" data-cap="大螢幕：共享辦公室場景，角色由 α 共治引擎驅動">
+        <img src="img/scene.webp" alt="大螢幕共享辦公室場景與參與者角色" loading="lazy">
+        <span>大螢幕：共享辦公室</span>
+      </button>
+    </div>
+
+    <div class="voices voices--quote reveal">
+      <p class="voices__title">開放題裡，參與者寫道：</p>
+      <span class="chip">可以跟很多人開口講話</span>
+      <span class="chip">一群人開始詢問是什麼動物</span>
+      <span class="chip">連我衣服上的字都印出來了</span>
+      <span class="chip">知道別人咖哩拌不拌</span>
+      <span class="chip chip--warn">還是需要一點勇氣</span>
+    </div>
+
+    <h3 class="h3 reveal">誠實面對的問題</h3>
+    <div class="issues reveal">
+      <article>
+        <h4>連線穩定性是最大的問題</h4>
+        <p>84 次斷線事件、「沒有卡住或斷線」只有 2.77 分。伺服器在 40 人時 CPU 只用約 9%，問題較可能在擁擠的校園 Wi-Fi。下一場改用自備 5 GHz 路由器並壓縮同步訊息。</p>
+      </article>
+      <article>
+        <h4>好玩，不等於認識了人</h4>
+        <p>「很好玩」4.38 分，「任務幫我認識了現場的人」3.23 分。配對與賓果只交換一組號碼，屬於很淺的互賴；自我介紹題交換的是個人資訊，才比較能延伸成對話。</p>
+      </article>
+      <article>
+        <h4>不擅長開口的人受益較少</h4>
+        <p>自評不擅長開口的 13 人，社交效果題平均低約 1 分。未來設計「先在手機上回應、再當面確認」的漸進式任務，讓互動從被評價風險較低的媒介開始。</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== TEAM ===================== -->
+<section class="section section--dark" id="team">
+  <div class="wrap">
+    <p class="label">06 · TEAM</p>
+    <h2 class="h2">製作團隊</h2>
+    <p class="school reveal">國立臺灣師範大學　科技應用與人力資源發展學系</p>
+    <p class="lede reveal">點一下角色打個招呼。</p>
+
+    <div class="advisor reveal">
+      <img class="avatar" src="img/team-lin.webp" alt="林坤誼老師的像素角色" width="299" height="602">
+      <div>
+        <p class="advisor__role">指導老師</p>
+        <p class="advisor__name">林坤誼</p>
+      </div>
+    </div>
+
+    <div class="team reveal" id="teamGrid">
+      <div class="member" tabindex="0"><img class="avatar" src="img/team-wu.webp" alt="巫冠儀的像素角色" width="316" height="587"><b>巫冠儀</b><a class="member__mail" href="mailto:gwenwu2004@gmail.com">gwenwu2004<wbr>@gmail.com</a></div>
+      <div class="member" tabindex="0"><img class="avatar" src="img/team-chou.webp" alt="周庭伊的像素角色" width="327" height="546"><b>周庭伊</b><a class="member__mail" href="mailto:cch.hazell9@gmail.com">cch.hazell9<wbr>@gmail.com</a></div>
+      <div class="member" tabindex="0"><img class="avatar" src="img/team-liao.webp" alt="廖振廷的像素角色" width="336" height="606"><b>廖振廷</b><a class="member__mail" href="mailto:twice930905@gmail.com">twice930905<wbr>@gmail.com</a></div>
+      <div class="member" tabindex="0"><img class="avatar" src="img/team-liu.webp" alt="劉澤文的像素角色" width="311" height="561"><b>劉澤文</b><a class="member__mail" href="mailto:weareblank004@gmail.com">weareblank004<wbr>@gmail.com</a></div>
+      <div class="member" tabindex="0"><img class="avatar" src="img/team-kang.webp" alt="康恩瑋的像素角色" width="304" height="517"><b>康恩瑋</b><a class="member__mail" href="mailto:willkang111014@gmail.com">willkang111014<wbr>@gmail.com</a></div>
+    </div>
+
+    <figure class="teamphoto reveal">
+      <button class="shot" data-zoom="img/team-photo.webp" data-cap="製作團隊，攝於師大科技與工程學院前">
+        <img src="img/team-photo.webp" alt="五位組員穿著畢業袍，在科技與工程學院前合照" loading="lazy" width="1100" height="1208">
+      </button>
+      <figcaption>
+        <p class="label">TEAM PHOTO</p>
+        <p class="teamphoto__title">本人 vs. 像素版</p>
+        <p>由左至右：廖振廷、周庭伊、巫冠儀、康恩瑋、劉澤文。上面的像素角色，就是我們自己的系統從這樣的照片轉譯出來的樣子。</p>
+      </figcaption>
+    </figure>
+
+    <div class="stack reveal">
+      <p class="label">BUILT WITH</p>
+      <span class="chip chip--dark">Node.js + ws</span>
+      <span class="chip chip--dark">Python + Flask</span>
+      <span class="chip chip--dark">MediaPipe</span>
+      <span class="chip chip--dark">OpenCV</span>
+      <span class="chip chip--dark">Gemini 影像模型</span>
+      <span class="chip chip--dark">Canvas2D</span>
+      <span class="chip chip--dark">Three.js</span>
+      <span class="chip chip--dark">Pillow</span>
+      <span class="chip chip--dark">SQLite</span>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p class="footer__logo">PIXEL AIR</p>
+    <p>數位轉譯角色空間互動系統・專題成果介紹<br>國立臺灣師範大學 科技應用與人力資源發展學系・指導老師 林坤誼</p>
+    <p class="footer__small">本頁數據取自專題成果報告（民國 115 年 10 月 19 日場域實測，n = 25）。實測僅一場、屬初探性質，結果不宜推論到其他族群。角色圖與大合照之使用已取得參與者同意。</p>
+  </div>
+</footer>
+
+<div class="lightbox" id="lightbox" hidden>
+  <button class="lightbox__close" aria-label="關閉">×</button>
+  <img alt="">
+  <p></p>
+</div>
+
+<script src="main.js"></script>
+</body>
+</html>

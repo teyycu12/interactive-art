@@ -1,0 +1,8 @@
+# Netlify：把 Base directory 設成 showcase（或直接把 showcase 資料夾拖進 Netlify Drop）
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/img/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800"
