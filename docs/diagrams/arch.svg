@@ -1,0 +1,218 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="2960" viewBox="0 0 1800 2960" font-family="'Noto Sans TC','Microsoft JhengHei',sans-serif">
+<defs>
+<marker id="ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3a3f47"/></marker>
+<marker id="mr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c2410c"/></marker>
+<marker id="mg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2e8b3e"/></marker>
+<marker id="mk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7a8088"/></marker>
+</defs>
+<rect width="1800" height="2960" fill="#ffffff"/>
+<rect x="40" y="40" width="1630" height="390" rx="20" fill="#f4f6f8" stroke="#dde1e6" stroke-width="2.5"/>
+<text x="75" y="98" font-size="36" fill="#24364b" font-weight="700" text-anchor="start">A</text>
+<text x="135" y="98" font-size="36" fill="#24364b" font-weight="700" text-anchor="start">輸入與路由</text>
+<rect x="72" y="185" width="275" height="110" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="209.5" y="234.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">參與者手機</text>
+<text x="209.5" y="272.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">拍照・選角色風格</text>
+<polygon points="445,240 600,150 755,240 600,330" fill="#fff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="600" y="250" font-size="30" fill="#1d2229" font-weight="700" text-anchor="middle">進場路由</text>
+<polyline points="347,240 443,240" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<rect x="1020" y="95" width="545" height="105" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1292.5" y="141.5" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">捏臉（備援）</text>
+<text x="1292.5" y="179.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">不呼叫生成服務，像素角色四方向 × 三格步態</text>
+<rect x="1322.0" y="78" width="216" height="34" rx="17" fill="#ffffff" stroke="#5b2bb5" stroke-width="2.4"/>
+<text x="1430" y="102" font-size="19" fill="#5b2bb5" font-weight="700" text-anchor="middle">不可移除的備援路徑</text>
+<rect x="1020" y="280" width="545" height="105" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1292.5" y="326.5" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">站位引導</text>
+<text x="1292.5" y="364.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">/preview 跨影格判定，站穩了才按快門</text>
+<polyline points="707,212 765,147 1018,147" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="890" y="130" font-size="21" fill="#333" font-weight="400" text-anchor="middle">相機被拒／服務未啟動</text>
+<polyline points="707,268 765,332 1018,332" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="890" y="315" font-size="21" fill="#333" font-weight="400" text-anchor="middle">相機可用</text>
+<polyline points="1505,280 1505,203" fill="none" stroke="#c2410c" stroke-width="2.6" stroke-dasharray="8 6" marker-end="url(#mr)"/>
+<text x="1490" y="250" font-size="22" fill="#c2410c" font-weight="700" text-anchor="end">生成失敗 → 帶取樣色退回捏臉</text>
+<polyline points="1565,147 1745,147 1745,1660 1603,1660" fill="none" stroke="#2e8b3e" stroke-width="3" marker-end="url(#mg)"/>
+<text x="1580" y="132" font-size="23" fill="#2e8b3e" font-weight="700" text-anchor="start">直接進場</text>
+<rect x="40" y="460" width="1630" height="540" rx="20" fill="#f4f6f8" stroke="#dde1e6" stroke-width="2.5"/>
+<text x="75" y="518" font-size="36" fill="#24364b" font-weight="700" text-anchor="start">B</text>
+<text x="135" y="518" font-size="36" fill="#24364b" font-weight="700" text-anchor="start">角色資產生成（backend/service.py）</text>
+<polyline points="1292,385 1292,555" fill="none" stroke="#3a3f47" stroke-width="2.6"/>
+<polyline points="315,555 1395,555" fill="none" stroke="#3a3f47" stroke-width="2.6"/>
+<polyline points="315,555 315,588" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<polyline points="855,555 855,588" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<polyline points="1395,555 1395,588" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="1120" y="545" font-size="21" fill="#333" font-weight="400" text-anchor="middle">平行執行</text>
+<rect x="100" y="590" width="430" height="145" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="315.0" y="639.5" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">CV 特徵擷取</text>
+<text x="315.0" y="677.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">MediaPipe 骨架、臉部與服裝取樣色</text>
+<text x="315.0" y="710.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">身高分級・部位區域</text>
+<rect x="640" y="590" width="430" height="145" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6" stroke-dasharray="9 6"/>
+<text x="855.0" y="639.5" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">VLM 語意辨識</text>
+<text x="855.0" y="677.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">Gemini 判讀服裝款式與髮型</text>
+<text x="855.0" y="710.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">生圖已看過原圖，預設關閉</text>
+<rect x="882.0" y="573" width="176" height="34" rx="17" fill="#ffffff" stroke="#5b2bb5" stroke-width="2.4"/>
+<text x="970" y="597" font-size="19" fill="#5b2bb5" font-weight="700" text-anchor="middle">模型名不可寫死</text>
+<rect x="1180" y="590" width="430" height="145" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1395.0" y="639.5" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">風格註冊表</text>
+<text x="1395.0" y="677.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">prompt・negative・姿勢參考・策展圖集</text>
+<text x="1395.0" y="710.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">選單由 /health 提供，不寫死</text>
+<rect x="1362.0" y="573" width="216" height="34" rx="17" fill="#ffffff" stroke="#5b2bb5" stroke-width="2.4"/>
+<text x="1470" y="597" font-size="19" fill="#5b2bb5" font-weight="700" text-anchor="middle">四件不可跨風格共用</text>
+<polyline points="315,735 315,828" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="329" y="790" font-size="21" fill="#333" font-weight="400" text-anchor="start">部位區域與取樣色</text>
+<polyline points="855,735 855,828" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="869" y="790" font-size="21" fill="#333" font-weight="400" text-anchor="start">語意欄位</text>
+<polyline points="1395,735 1395,828" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="1409" y="790" font-size="21" fill="#333" font-weight="400" text-anchor="start">風格四件套</text>
+<rect x="100" y="830" width="1510" height="100" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="855.0" y="874.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">Prompt 組裝</text>
+<text x="855.0" y="912.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">原始照片＋部位裁切＋屬性文字＋風格參考圖</text>
+<rect x="1274.0" y="813" width="292" height="34" rx="17" fill="#ffffff" stroke="#5b2bb5" stroke-width="2.4"/>
+<text x="1420" y="837" font-size="19" fill="#5b2bb5" font-weight="700" text-anchor="middle">像素格數三方一致（90 格）</text>
+<text x="75" y="975" font-size="21" fill="#555" font-weight="400" text-anchor="start">CV 失敗不擋人：抓不到骨架退回中央預設框，抓不到顏色退回預設色</text>
+<rect x="40" y="1030" width="1630" height="530" rx="20" fill="#f4f6f8" stroke="#dde1e6" stroke-width="2.5"/>
+<text x="75" y="1088" font-size="36" fill="#24364b" font-weight="700" text-anchor="start">C</text>
+<text x="135" y="1088" font-size="36" fill="#24364b" font-weight="700" text-anchor="start">生圖、驗證與切片</text>
+<polyline points="855,930 855,1120 207,1120 207,1158" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<rect x="72" y="1160" width="270" height="110" rx="12" fill="#e3f2ee" stroke="#2f7d65" stroke-width="2.6"/>
+<text x="207.0" y="1209.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">去背人偶生圖</text>
+<text x="207.0" y="1247.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">生圖 API・熔斷器保護</text>
+<polyline points="342,1215 394,1215" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<rect x="396" y="1160" width="270" height="110" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="531.0" y="1209.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">去背與補白</text>
+<text x="531.0" y="1247.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">去白底、刪離散雜點</text>
+<polyline points="666,1215 718,1215" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<rect x="720" y="1160" width="270" height="110" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="855.0" y="1209.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">結構驗證</text>
+<text x="855.0" y="1247.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">缺腿、出框、顏色偏離</text>
+<polyline points="990,1215 1042,1215" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<rect x="1044" y="1160" width="270" height="110" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1179.0" y="1209.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">切片</text>
+<text x="1179.0" y="1247.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">head・torso・legs＋full</text>
+<polyline points="1314,1215 1366,1215" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<rect x="1368" y="1160" width="270" height="110" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1503.0" y="1209.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">貼圖落地</text>
+<text x="1503.0" y="1247.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">public/assets/gen</text>
+<rect x="1073.0" y="1143" width="212" height="34" rx="17" fill="#ffffff" stroke="#5b2bb5" stroke-width="2.4"/>
+<text x="1179" y="1167" font-size="19" fill="#5b2bb5" font-weight="700" text-anchor="middle">CUTS ≡ CV_CUTS</text>
+<rect x="1379.0" y="1143" width="248" height="34" rx="17" fill="#ffffff" stroke="#5b2bb5" stroke-width="2.4"/>
+<text x="1503" y="1167" font-size="19" fill="#5b2bb5" font-weight="700" text-anchor="middle">走 URL，不走 base64</text>
+<polyline points="855,1270 855,1368" fill="none" stroke="#c2410c" stroke-width="2.6" stroke-dasharray="8 6" marker-end="url(#mr)"/>
+<text x="872" y="1330" font-size="22" fill="#c2410c" font-weight="700" text-anchor="start">未通過</text>
+<rect x="605" y="1370" width="500" height="100" rx="12" fill="#fdf1e6" stroke="#c2410c" stroke-width="2.6" stroke-dasharray="9 6"/>
+<text x="855.0" y="1414.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">帶修正指令重生</text>
+<text x="855.0" y="1452.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">缺腿 → 要求雙腿完整；出框 → 置中留白</text>
+<polyline points="605,1420 207,1420 207,1273" fill="none" stroke="#c2410c" stroke-width="2.6" stroke-dasharray="8 6" marker-end="url(#mr)"/>
+<text x="405" y="1407" font-size="22" fill="#c2410c" font-weight="700" text-anchor="middle">下一次</text>
+<polyline points="1105,1420 1250,1420 1250,1598" fill="none" stroke="#7a8088" stroke-width="2.6" stroke-dasharray="6 6" marker-end="url(#mk)"/>
+<text x="1266" y="1462" font-size="21" fill="#555" font-weight="400" text-anchor="start">仍未通過：</text>
+<text x="1266" y="1490" font-size="21" fill="#555" font-weight="400" text-anchor="start">帶取樣色退回捏臉</text>
+<polyline points="1503,1270 1503,1598" fill="none" stroke="#2e8b3e" stroke-width="3" marker-end="url(#mg)"/>
+<text x="1520" y="1360" font-size="23" fill="#2e8b3e" font-weight="700" text-anchor="start">通過</text>
+<text x="75" y="1530" font-size="21" fill="#555" font-weight="400" text-anchor="start">重生上限 0–1 次（預設 0）：生圖是全系統唯一花錢的呼叫。每次嘗試都寫入 SQLite 生成帳本</text>
+<rect x="72" y="1608" width="52" height="30" rx="7" fill="#e3f2ee" stroke="#2f7d65" stroke-width="2.4"/>
+<text x="138" y="1631" font-size="22" fill="#2f5d50" font-weight="700" text-anchor="start">青底＝核心機制</text>
+<rect x="72" y="1672" width="52" height="30" rx="15" fill="#fff" stroke="#5b2bb5" stroke-width="2.4"/>
+<text x="138" y="1695" font-size="22" fill="#5b2bb5" font-weight="700" text-anchor="start">紫框＝關鍵約束（違反時不報錯）</text>
+<polyline points="500,1623 556,1623" fill="none" stroke="#c2410c" stroke-width="3" stroke-dasharray="8 6"/>
+<text x="570" y="1631" font-size="22" fill="#c2410c" font-weight="700" text-anchor="start">紅虛線＝失敗與重生</text>
+<polyline points="500,1687 556,1687" fill="none" stroke="#2e8b3e" stroke-width="3"/>
+<text x="570" y="1695" font-size="22" fill="#2e8b3e" font-weight="700" text-anchor="start">綠線＝通過／直接進場</text>
+<rect x="905" y="1600" width="695" height="120" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1252.5" y="1637.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">角色進場</text>
+<text x="1252.5" y="1675.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">CLIENT_JOIN 驗證外觀・名冊廣播</text>
+<text x="1252.5" y="1708.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">同場上限 30 人</text>
+<rect x="40" y="1760" width="1630" height="640" rx="20" fill="#f4f6f8" stroke="#dde1e6" stroke-width="2.5"/>
+<text x="75" y="1818" font-size="36" fill="#24364b" font-weight="700" text-anchor="start">D</text>
+<text x="135" y="1818" font-size="36" fill="#24364b" font-weight="700" text-anchor="start">互動層（server/・Node.js + ws）</text>
+<polyline points="1252,1720 1252,1848" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="1266" y="1800" font-size="21" fill="#333" font-weight="400" text-anchor="start">名冊</text>
+<rect x="72" y="1850" width="320" height="120" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="232.0" y="1887.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">手機搖桿</text>
+<text x="232.0" y="1925.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">首幀立即送出</text>
+<text x="232.0" y="1958.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">之後 20 Hz 節流</text>
+<rect x="470" y="1850" width="580" height="120" rx="12" fill="#e3f2ee" stroke="#2f7d65" stroke-width="2.6"/>
+<text x="760.0" y="1887.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">α 仲裁共治</text>
+<text x="760.0" y="1925.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">V = (1−α)·V_Boids + α·V_Manual</text>
+<text x="760.0" y="1958.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">接手 0.3 s 線性・放手 1.2 s 餘弦</text>
+<rect x="1128" y="1850" width="482" height="120" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1369.0" y="1887.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">場域狀態與主迴圈</text>
+<text x="1369.0" y="1925.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">30 Hz tick，STAGE_SYNC 只送座標</text>
+<text x="1369.0" y="1958.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">名冊只在成員變動時廣播</text>
+<polyline points="392,1910 468,1910" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="431" y="1898" font-size="19" fill="#333" font-weight="400" text-anchor="middle">20 Hz</text>
+<polyline points="1050,1910 1126,1910" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="1089" y="1898" font-size="19" fill="#333" font-weight="400" text-anchor="middle">V_final</text>
+<rect x="72" y="2030" width="368" height="120" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="256.0" y="2067.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">社交圖譜</text>
+<text x="256.0" y="2105.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">每條邊＝雙方確認的</text>
+<text x="256.0" y="2138.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">實體接觸</text>
+<rect x="560" y="2030" width="400" height="120" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="760.0" y="2084.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">Boids 群聚</text>
+<text x="760.0" y="2122.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">分離・對齊・凝聚・避障</text>
+<rect x="1128" y="2030" width="482" height="120" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1369.0" y="2084.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">積分帳本</text>
+<text x="1369.0" y="2122.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">跨玩法累計，單一寫入點</text>
+<polyline points="760,2030 760,1972" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="775" y="2010" font-size="19" fill="#333" font-weight="400" text-anchor="start">V_Boids</text>
+<polyline points="440,2090 558,2090" fill="none" stroke="#3a3f47" stroke-width="2.6" stroke-dasharray="7 5" marker-end="url(#ma)"/>
+<text x="499" y="2078" font-size="19" fill="#333" font-weight="400" text-anchor="middle">凝聚偏置</text>
+<rect x="72" y="2215" width="369" height="110" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="256.5" y="2264.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">配對／COLOR_HUNT</text>
+<text x="256.5" y="2302.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">口頭索取 4 位碼，對方確認</text>
+<rect x="461" y="2215" width="369" height="110" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="645.5" y="2264.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">即時問答</text>
+<text x="645.5" y="2302.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">正解不離開伺服器</text>
+<rect x="850" y="2215" width="369" height="110" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1034.5" y="2264.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">尋寶（先知模式）</text>
+<text x="1034.5" y="2302.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">只有先知看得到冷熱</text>
+<rect x="1239" y="2215" width="369" height="110" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1423.5" y="2264.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">轉場問卷</text>
+<text x="1423.5" y="2302.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">沒有正解，答案留成標籤</text>
+<polyline points="256,2215 256,2152" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<polyline points="380,2215 380,2182 1369,2182 1369,2152" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<polyline points="645,2215 645,2182" fill="none" stroke="#3a3f47" stroke-width="2.6"/>
+<polyline points="1034,2215 1034,2182" fill="none" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1200" y="2176" font-size="19" fill="#333" font-weight="400" text-anchor="middle">得分</text>
+<text x="75" y="2372" font-size="21" fill="#555" font-weight="400" text-anchor="start">新玩法先問：通關路徑上有沒有一步必須跟另一個人講話？沒有的話會讓現場更安靜</text>
+<rect x="40" y="2430" width="1630" height="500" rx="20" fill="#f4f6f8" stroke="#dde1e6" stroke-width="2.5"/>
+<text x="75" y="2488" font-size="36" fill="#24364b" font-weight="700" text-anchor="start">E</text>
+<text x="135" y="2488" font-size="36" fill="#24364b" font-weight="700" text-anchor="start">三端呈現與大合照（public/）</text>
+<polyline points="1610,1910 1645,1910 1645,2505 317,2505" fill="none" stroke="#3a3f47" stroke-width="2.6"/>
+<polyline points="317,2505 317,2538" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="329" y="2530" font-size="19" fill="#333" font-weight="400" text-anchor="start">STAGE_SYNC 30 Hz</text>
+<polyline points="841,2505 841,2538" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="853" y="2530" font-size="19" fill="#333" font-weight="400" text-anchor="start">CLIENT_SYNC 15 Hz</text>
+<polyline points="1365,2505 1365,2538" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="1377" y="2530" font-size="19" fill="#333" font-weight="400" text-anchor="start">主辦端狀態</text>
+<rect x="72" y="2540" width="490" height="120" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="317.0" y="2577.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">大螢幕</text>
+<text x="317.0" y="2615.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">Three.js 3D 房間＋2D 像素主題</text>
+<text x="317.0" y="2648.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">新進場者頭頂箭頭 6 秒</text>
+<rect x="596" y="2540" width="490" height="120" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="841.0" y="2577.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">手機個人視角</text>
+<text x="841.0" y="2615.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">自己與鄰居的相對座標</text>
+<text x="841.0" y="2648.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">不自行模擬，以伺服器 α 為準</text>
+<rect x="1120" y="2540" width="490" height="120" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="1365.0" y="2577.0" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">主辦端控制台</text>
+<text x="1365.0" y="2615.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">出題、發任務、觸發合照</text>
+<text x="1365.0" y="2648.0" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">生成歷史、token 與花費</text>
+<polyline points="1365,2660 1365,2697 232,2697 232,2733" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<text x="1250" y="2689" font-size="19" fill="#333" font-weight="400" text-anchor="middle">觸發合照</text>
+<rect x="72" y="2735" width="320" height="125" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="232.0" y="2791.5" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">鎖場定位</text>
+<text x="232.0" y="2829.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">STAGED：定住、面向鏡頭</text>
+<polyline points="392,2797 450,2797" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<rect x="452" y="2735" width="320" height="125" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="612.0" y="2791.5" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">截取底圖</text>
+<text x="612.0" y="2829.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">大螢幕當下畫面</text>
+<polyline points="772,2797 830,2797" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<rect x="832" y="2735" width="320" height="125" rx="12" fill="#ffffff" stroke="#3a3f47" stroke-width="2.6"/>
+<text x="992.0" y="2791.5" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">大合照合成</text>
+<text x="992.0" y="2829.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">依場上實際座標排版</text>
+<polyline points="1152,2797 1210,2797" fill="none" stroke="#3a3f47" stroke-width="2.6" marker-end="url(#ma)"/>
+<rect x="124.0" y="2843" width="216" height="34" rx="17" fill="#ffffff" stroke="#5b2bb5" stroke-width="2.4"/>
+<text x="232" y="2867" font-size="19" fill="#5b2bb5" font-weight="700" text-anchor="middle">成敗都必須解鎖場域</text>
+<rect x="1212" y="2735" width="398" height="125" rx="12" fill="#e7f5e9" stroke="#2e8b3e" stroke-width="3"/>
+<text x="1411.0" y="2791.5" font-size="29" fill="#1d2229" font-weight="700" text-anchor="middle">輸出大合照</text>
+<text x="1411.0" y="2829.5" font-size="21" fill="#4a4f57" font-weight="400" text-anchor="middle">合照 PNG ＋ QR Code 下載</text>
+<text x="75" y="2912" font-size="21" fill="#555" font-weight="400" text-anchor="start">截圖拿不到則由 Python 自繪舞台；捏臉角色沒有生成圖，由 photo_composer 程式化繪製</text>
+</svg>
