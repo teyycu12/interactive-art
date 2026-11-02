@@ -289,6 +289,16 @@
   }
   .photo-qr-close:hover, .photo-qr-close:focus-visible { opacity: 1; }
 
+  /* 活動暫停中：蓋在所有東西上面（包括問答、文字雲面板） */
+  .paused-cover {
+    position: fixed; inset: 0; z-index: 40;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    background: rgba(250, 248, 245, .94);
+  }
+  .paused-cover[hidden] { display: none; }
+  .paused-title { margin: 0; font-size: clamp(48px, 7vw, 120px); font-weight: 900; color: var(--ink); }
+  .paused-sub { margin: 0; font-size: clamp(20px, 2.2vw, 36px); font-weight: 700; color: var(--soft); }
+
   /* 音效被瀏覽器擋住時的提示（public/screen/sfx.js）。給操作者看的，不是給觀眾：
      刻意小、低對比、放在不擋角色的右下角（見 docs/notes/UI-STYLING.md「刻意壓低對比的地方」）。
      點一下畫面解鎖後就消失。 */
@@ -359,6 +369,12 @@
 <div class="ranks" id="ranks" hidden>
   <h2>積分排行</h2>
   <ol id="ranks-list"></ol>
+</div>
+
+<!-- 活動暫停中（主辦端「活動列表」暫停）：蓋住整個畫面，資料都還在，重新開始就收起 -->
+<div class="paused-cover" id="paused-cover" hidden>
+  <p class="paused-title">⏸ 活動暫停中</p>
+  <p class="paused-sub">請稍候，主持人重新開始後就能進場</p>
 </div>
 
 <!-- 大合照下載 QR：拍完後顯示幾分鐘（SCREEN_PHOTO_QR）。要放在 #ranks 後面，CSS 靠兄弟選擇器避開排行榜 -->

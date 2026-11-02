@@ -675,8 +675,10 @@ def _generate():
     # 層級的 CHARACTER_STYLE。這裡刻意不因為風格字串有問題而讓請求失敗 ——
     # 現場的原則是掃描失敗一律降級，不擋人進場。
     style_id = resolve_style_id(payload.get("styleId"))
+    # 拍照還是從圖庫選的：手機會帶 source；沒帶的舊版手機當成拍照
+    source_type = "upload" if payload.get("source") == "upload" else "camera"
     _history_call(start_run, request_id, mode="full_character", style_id=style_id,
-                  source_type="camera", experiment_id=session_name())
+                  source_type=source_type, experiment_id=session_name())
     _history_call(save_input_photo, request_id, img_str)
 
     body_poly: Optional[np.ndarray] = None

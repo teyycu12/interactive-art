@@ -23,6 +23,31 @@
   </div>
 </section>
 
+<!-- ── 活動列表（起始畫面）──────────────────────────────── -->
+<!-- 主持人可以事先建好好幾場活動，每場的參與者、積分、節目單各自分開（server/sessions.js）。
+     一次開啟一場：大螢幕與手機連的是開啟中的那場。登入後先停在這裡選要進哪一場。 -->
+<section id="events" hidden>
+  <div class="events-card">
+    <div class="events-head">
+      <div>
+        <h1>活動列表</h1>
+        <p class="lede">每場活動的參與者、積分、節目單與題庫各自分開。一次只開啟一場，大螢幕與手機連的都是「開啟中」的那場。</p>
+        <!-- 使用方法與規範（2026-10-29）：主持人第一次用、或交接給別人時，看這幾行就知道怎麼操作 -->
+        <ul class="events-rules">
+          <li><b>事前準備</b>：按「＋ 創建活動」建好場次，進控制台排節目單、題庫、配分。建議在活動開始前、場上沒人時準備。</li>
+          <li><b>開始活動</b>：在要用的那場按「切換到這場」，再請參與者用手機掃 QR Code 進場。</li>
+          <li><b>中場休息</b>：按「暫停」，手機會回到進場畫面、暫時進不來，大螢幕顯示「活動暫停中」；按「重新開始」恢復，參與者再進場資料都還在。</li>
+          <li><b>切換場次會請出場上的人</b>：手機回到進場畫面，資料保留在原本那場；切回來後再進場就接得回來。活動進行中請不要切換。</li>
+          <li><b>刪除無法復原</b>：參與者、積分與紀錄會一起刪掉。開啟中的那場不能刪，要刪請先切到別場。</li>
+        </ul>
+      </div>
+      <button class="btn-primary" id="btn-new-event">＋ 創建活動</button>
+    </div>
+    <ul class="events-list" id="events-list"></ul>
+    <p class="err" id="events-err" hidden role="alert" aria-live="assertive"></p>
+  </div>
+</section>
+
 <!-- ── 活動設定 ─────────────────────────────────────────── -->
 <!-- 進入活動編排前必經的一步：一場活動只用一個場景，名稱會取代大螢幕左上角的場景名。
      伺服器記得設定（落地進快照），之後重整或重開都直接進控制台，不會再被擋在這裡。 -->
@@ -63,7 +88,9 @@
       <h1 id="event-title">主辦端控制台</h1>
       <p class="event-meta">
         <span id="event-scene"></span>
+        <span class="paused-tag" id="event-paused" hidden>⏸ 暫停中</span>
         <button class="btn-link" id="btn-edit-event">修改活動設定</button>
+        <button class="btn-link" id="btn-events">活動列表</button>
       </p>
       <p class="sub" id="conn-status">已連線</p>
     </div>
@@ -476,25 +503,56 @@
       <button class="btn-ghost" id="btn-screen-debug" aria-pressed="false">除錯視圖：關</button>
       <p class="err" id="debug-err" hidden></p>
     </div>
+    <!-- 角色：「參與過的角色」與「角色生成紀錄」放同一框，用頁籤切換（2026-10-29）。
+         參與過的角色是這場活動真的進過場的人（含已經離開的）；生成紀錄是每一次生成（含重拍、沒用到的），
+         全伺服器共用、不分活動，所以兩邊的數字本來就不一樣 -->
     <div class="panel">
       <div class="panel-head">
-        <h2>角色生成紀錄 <span class="count" id="history-count">0</span></h2>
-        <button class="btn-link" id="btn-history-refresh">重新整理</button>
+        <div class="sys-tabs" role="tablist" aria-label="角色">
+          <button class="sys-tab" role="tab" id="sys-tab-people" aria-selected="true" aria-controls="sys-pane-people">
+            參與過的角色 <span class="count" id="people-all-count">0</span></button>
+          <button class="sys-tab" role="tab" id="sys-tab-history" aria-selected="false" aria-controls="sys-pane-history">
+            角色生成紀錄 <span class="count" id="history-count">0</span></button>
+        </div>
+        <button class="btn-link" id="btn-sys-refresh">重新整理</button>
       </div>
-      <p class="hint">給技術人員排查用：掃描照片、生成結果、模型與花費。只在這一頁開著時更新。</p>
-      <p class="hint tiny" id="history-summary">讀取中…</p>
-      <div class="table-wrap" id="history-wrap">
-        <table id="history-table">
-          <thead>
-            <tr><th></th><th></th><th>時間</th><th>狀態</th><th>模型</th><th>Tokens</th><th>花費</th><th>耗時</th><th>匯出</th></tr>
-          </thead>
-          <tbody id="history-body"></tbody>
-        </table>
+
+      <div id="sys-pane-people" role="tabpanel" aria-labelledby="sys-tab-people">
+        <p class="hint">這場活動進過場的每一個角色，含已經離開的。點表頭可以排序，再點一次反過來。</p>
+        <div class="table-wrap">
+          <table id="people-all-table">
+            <thead>
+              <tr><th></th>
+                <th><button class="sort-btn" data-sort="name">名字</button></th>
+                <th><button class="sort-btn" data-sort="entry">角色來源</button></th>
+                <th><button class="sort-btn" data-sort="firstAt">第一次進場</button></th>
+                <th><button class="sort-btn" data-sort="lastAt">最後出現</button></th>
+                <th><button class="sort-btn" data-sort="score">積分</button></th>
+                <th>狀態</th></tr>
+            </thead>
+            <tbody id="people-all-body"></tbody>
+          </table>
+        </div>
+        <p class="hint" id="people-all-empty" hidden>這場活動還沒有人進場。</p>
       </div>
-      <p class="hint tiny">匯出：「圖檔」是去背的角色 PNG；「角色檔」是 .persona.json，內含貼圖與外觀設定，
-        換一台電腦可用 <code>python scripts/import_character.py 檔名</code> 還原，再到人物匯入台放上場。</p>
-      <p class="err" id="history-err" hidden></p>
-      <p class="hint" id="history-empty" hidden>還沒有生成紀錄。</p>
+
+      <div id="sys-pane-history" role="tabpanel" aria-labelledby="sys-tab-history" hidden>
+        <p class="hint">給技術人員排查用：掃描照片、生成結果、模型與花費。每一次生成都算一筆（含重拍、生成後沒用到的），
+          全伺服器共用、不分活動。只列最近 30 筆。</p>
+        <p class="hint tiny" id="history-summary">讀取中…</p>
+        <div class="table-wrap" id="history-wrap">
+          <table id="history-table">
+            <thead>
+              <tr><th></th><th></th><th>時間</th><th>狀態</th><th>模型</th><th>Tokens</th><th>花費</th><th>耗時</th><th>匯出</th></tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+          </table>
+        </div>
+        <p class="hint tiny">匯出：「圖檔」是去背的角色 PNG；「角色檔」是 .persona.json，內含貼圖與外觀設定，
+          換一台電腦可用 <code>python scripts/import_character.py 檔名</code> 還原，再到人物匯入台放上場。</p>
+        <p class="err" id="history-err" hidden></p>
+        <p class="hint" id="history-empty" hidden>還沒有生成紀錄。</p>
+      </div>
     </div>
     </div>
 

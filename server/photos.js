@@ -75,7 +75,9 @@ export function rankLanAddresses(interfaces) {
   for (const [name, list] of Object.entries(interfaces ?? {})) {
     for (const i of list ?? []) {
       if (!i || i.internal || !(i.family === 'IPv4' || i.family === 4)) continue;
-      const rank = VIRTUAL_NAME.test(name) || VIRTUAL_ADDR.test(i.address) ? 2 : WIFI_NAME.test(name) ? 0 : 1;
+      // 名稱是 Wi-Fi 的一律排第一：學校 Wi-Fi 常發 172.16–31.x（2026-10-29 實測 172.19.x），
+      // 只看位址會把真正的 Wi-Fi 跟虛擬網卡一起排到最後
+      const rank = WIFI_NAME.test(name) ? 0 : VIRTUAL_NAME.test(name) || VIRTUAL_ADDR.test(i.address) ? 2 : 1;
       rows.push({ address: i.address, rank, order: rows.length });
     }
   }

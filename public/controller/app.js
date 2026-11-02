@@ -164,11 +164,14 @@ document.addEventListener('visibilitychange', async () => {
 // ─────────────────────────────────────────────────────────────
 // 本地狀態
 // ─────────────────────────────────────────────────────────────
+/** 貼圖角色的入場路徑（伺服器 server/index.js 的 CV_ENTRY_ROUTES 要一致） */
+const ENTRY_ROUTES_CV = new Set(['camera', 'upload', 'dressup']);
 const LS = {
   userId: 'pixelair.userId',
   rejoinToken: 'pixelair.rejoinToken',
   name: 'pixelair.name',
   avatar: 'pixelair.avatar',
+  entry: 'pixelair.entry',
 };
 
 /** 角色外觀：拍照生成或換裝組出來的 {source:'CV', textures}；之前進過場的人可能是舊的 token 外觀 */
@@ -176,6 +179,13 @@ let config = null;
 let displayName = '';
 /** 伺服器指派的角色 id */
 let myId = null;
+/**
+ * 入場路徑，隨 CLIENT_JOIN 回報給伺服器的事件紀錄。拍照、圖庫上傳與換裝的角色都是貼圖，
+ * 伺服器分不出來 —— 只有手機知道走過哪一條。null = 不知道（伺服器記成 photo）。
+ * 跟外觀一起存在 localStorage（LS.entry）。
+ * @type {'camera'|'upload'|'dressup'|null}
+ */
+let entryRoute = null;
 
 // 還原上次的設定，讓現場使用者重整頁面後不必重捏
 try {
@@ -185,6 +195,8 @@ try {
     config = parsed && typeof parsed === 'object' ? parsed : null;
   }
   displayName = localStorage.getItem(LS.name) ?? '';
+  // 角色怎麼來的（拍照／圖庫／換裝）跟外觀一起留著：「回到場上」再進場時才報得對
+  entryRoute = ENTRY_ROUTES_CV.has(localStorage.getItem(LS.entry)) ? localStorage.getItem(LS.entry) : null;
 } catch { /* 隱私模式下 localStorage 可能拋錯，忽略即可 */ }
 
 /**
@@ -286,6 +298,8 @@ function showToast(text, durationMs = 3200) {
 let scanStream = null;
 /** 生成成功但尚未被本人確認的外觀。按下「進場」才會寫入 config */
 let pendingScanConfig = null;
+/** 這張待確認的外觀是拍的還是從圖庫選的（'camera'|'upload'），按下「進場」時變成 entryRoute */
+let pendingScanSource = 'camera';
 
 /**
  * 切換掃描畫面的階段。
@@ -459,12 +473,6 @@ function stopScanStream() {
   scanStream = null;
 }
 
-/**
- * 入場路徑，隨 CLIENT_JOIN 回報給伺服器的事件紀錄。拍照與換裝的角色都是貼圖，
- * 伺服器分不出來 —— 只有手機知道走過哪一條。null = 拍照（伺服器記成 photo）。
- * @type {'dressup'|null}
- */
-let entryRoute = null;
 
 
 // ── 素體換裝 ──────────────────────────────────────────────
@@ -798,7 +806,10 @@ $('#btn-du-done').addEventListener('click', async () => {
     if (!body?.ok) throw new Error(body?.error || 'dressup_failed');
     config = { source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors };
     entryRoute = 'dressup';
-    try { localStorage.setItem(LS.avatar, JSON.stringify(config)); } catch { /* 略 */ }
+    try {
+      localStorage.setItem(LS.avatar, JSON.stringify(config));
+      localStorage.setItem(LS.entry, entryRoute);
+    } catch { /* 略 */ }
     askPersonaThen(enterStage);
   } catch {
     // 留在換裝頁：選好的都還在，再按一次通常就好
@@ -1052,7 +1063,7 @@ $('#upload-input')?.addEventListener('change', async (e) => {
   // 讓串流繼續跑只是白耗電。
   stopScanStream();
   const image = cropToPortraitJpeg(img, img.naturalWidth, img.naturalHeight);
-  await submitScanImage(image);
+  await submitScanImage(image, 'upload');
 });
 
 /** 讀取本機圖片檔成 <img>。用完必須釋放 objectURL，否則整張原檔會留在記憶體裡。 */
@@ -1125,7 +1136,7 @@ $('#btn-capture').addEventListener('click', async () => {
   const image = cropToPortraitJpeg(video, video.videoWidth, video.videoHeight, undefined, undefined, digitalZoom);
 
   stopScanStream();
-  await submitScanImage(image);
+  await submitScanImage(image, 'camera');
 });
 
 /**
@@ -1230,7 +1241,8 @@ async function recoverScanResult(ticket, onQueue) {
 }
 
 /** 送出照片並走完生成流程。相機與上傳共用。 */
-async function submitScanImage(image) {
+/** @param {'camera'|'upload'} source 拍的還是從圖庫選的：主辦端「角色來源」與生成紀錄要分開算 */
+async function submitScanImage(image, source) {
   // 凍結送出的那張照片留在取景框裡 —— 等待的 25 秒有東西可看，
   // 也讓人知道系統正在處理的是哪一張。
   $('#scan-video').hidden = true;
@@ -1265,7 +1277,7 @@ async function submitScanImage(image) {
         // sessionId：取景期間跨影格量到的身高比快門那一瞬間的單張估計可信，
         // 後端會優先採用它。相簿上傳沒有取景階段，因此是 null。
         // styleId：選單沒載入時是 null，後端會退回活動層級的預設風格。
-        body: JSON.stringify({ image, sessionId: previewSessionId, styleId: selectedStyleId }),
+        body: JSON.stringify({ image, sessionId: previewSessionId, styleId: selectedStyleId, source }),
         signal: aborter.signal,
       }).then((res) => res.json()),
       takeOver,
@@ -1305,6 +1317,7 @@ async function submitScanImage(image) {
 
   // 生成完成不直接進場：讓本人看過再決定。
   // 「數位轉譯成什麼樣子」正是這件作品的核心體驗，跳過等於白等 25 秒。
+  pendingScanSource = source;
   pendingScanConfig = {
     source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors,
     ...(body.pixelParts && { pixelParts: body.pixelParts }),
@@ -1486,9 +1499,13 @@ $('#btn-accept').addEventListener('click', () => {
   if (!pendingScanConfig) return;
   config = pendingScanConfig;
   pendingScanConfig = null;
+  entryRoute = pendingScanSource;
   // 與換裝路徑一致：存下外觀後由 enterStage 統一處理進場
   // （縮圖、搖桿初始化、舊 socket 清理都在那裡）
-  try { localStorage.setItem(LS.avatar, JSON.stringify(config)); } catch { /* 略 */ }
+  try {
+    localStorage.setItem(LS.avatar, JSON.stringify(config));
+    localStorage.setItem(LS.entry, entryRoute);
+  } catch { /* 略 */ }
   enterStage();
 });
 $('#btn-retake').addEventListener('click', () => openCamera());
@@ -1772,8 +1789,10 @@ function connect() {
       showAudienceWait(msg.ahead);
     } else if (msg.type === EV.CLIENT_REJECT) {
       closeAudienceWait();
-      setStatus('資料有誤', 'warn');
-      showToast(`登入失敗：${msg.reason}`);
+      // 主持人切換到另一場活動：不是登入失敗，照實說明，回進場畫面重新進場（2026-10-29）
+      const switched = msg.kind === 'event_switched' || msg.kind === 'event_paused';
+      setStatus(msg.kind === 'event_paused' ? '活動暫停中' : switched ? '活動已切換' : '資料有誤', 'warn');
+      showToast(switched ? msg.reason : `登入失敗：${msg.reason}`, switched ? 6000 : undefined);
       showScreen('entry');
     } else {
       handleMissionMessage(msg);

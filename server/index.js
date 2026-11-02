@@ -64,6 +64,7 @@ import {
 } from '../shared/persona.js';
 import { ScoreBoard } from './scores.js';
 import { SnapshotStore, Directory } from './persistence.js';
+import { EventCatalog, sessionsDirFor, isEventId } from './sessions.js';
 import { createHttpLayer } from './httplayer.js';
 import { buildReport } from './report.js';
 import { affinityFrom, arrangeCrowdByAffinity, guestSpots } from './photoLayout.js';
@@ -83,27 +84,33 @@ const ROOT = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const PORT = Number(process.env.PORT) || 3000;
 
-const stage = new Stage();
-const missions = new MissionBoard();
-const bingo = new BingoRound();
-const topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
-const topicGuess = new TopicGuess({ roundMs: TOPIC_ROUND_MS });
-const graph = new SocialGraph();
-const pairing = new PairingSession(graph);
+// ── 每場活動各自一份的狀態 ──
+// 用 let 而不是 const：主持人切換活動時整組換成另一場的（switchEvent）。
+// 其他地方一律透過這些名字取用（閉包讀的是綁定、不是當下的物件），換掉之後自然讀到新的；
+// 新增「每場一份」的東西時，要加進 freshEventState 與 applyEventSnapshot。
+let stage = new Stage();
+let missions = new MissionBoard();
+let bingo = new BingoRound();
+let topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
+let topicGuess = new TopicGuess({ roundMs: TOPIC_ROUND_MS });
+let graph = new SocialGraph();
+let pairing = new PairingSession(graph);
 /** 今天遇見的人（手機名單與紀念卡）。比圖譜寬：揮手、乾杯、同桌也算，見 encounters.js */
-const encounters = new Encounters();
-// 今天來過、有參與的人：大合照連不在場的也要放進去（server/attendance.js）
-const attendance = new Attendance({ ttlMs: PERSISTENCE.directoryTtlMs });
+let encounters = new Encounters();
+// 今天來過、有參與的人：大合照連不在場的也要放進去（server/attendance.js）。
+// 不過期（2026-10-29）：活動已經分場存（server/sessions.js），這一份就是「這場參與過的人」，
+// 主辦端「所有參與過的角色」也讀它；原本的 12 小時是分場之前避免名單越積越長
+let attendance = new Attendance({ ttlMs: Infinity, limit: 5000 });
 // 揮手要尊重私訊的封鎖：封鎖了卻還能讓對方手機一直跳出「某某在跟你揮手」，封鎖就沒有意義
-const greetings = new Greetings({ ...GREET, isBlocked: (by, target) => messages.isBlocked(by, target) });
-const quiz = new QuizSession();
+let greetings = new Greetings({ ...GREET, isBlocked: (by, target) => messages.isBlocked(by, target) });
+let quiz = new QuizSession();
 /** 參與者身上的標籤（進場人格問卷的類型；人物賓果的條件也讀它） */
-const traits = new TraitStore();
+let traits = new TraitStore();
 /** 文字雲：主持人提問，參與者用手機輸入，大螢幕即時呈現 */
-const wordcloud = new WordCloudSession();
-const scores = new ScoreBoard();
+let wordcloud = new WordCloudSession();
+let scores = new ScoreBoard();
 /** 私訊：點手機畫面上的角色傳文字。只在記憶體，不寫快照（見 messages.js） */
-const messages = new MessageRelay();
+let messages = new MessageRelay();
 
 // ─────────────────────────────────────────────────────────────
 // 狀態還原
@@ -121,29 +128,33 @@ const BUILD_COMMIT = (() => {
 // 大合照存在這裡，Gateway 以 /photos/<id>.png 送給掃 QR 的手機（server/photos.js）
 const PHOTOS_DIR = path.join(ROOT, 'data', 'photos');
 
-const store = new SnapshotStore(
-  path.isAbsolute(PERSISTENCE.file) ? PERSISTENCE.file : path.join(ROOT, PERSISTENCE.file),
-  { enabled: PERSISTENCE.enabled },
-);
-const directory = new Directory({
+// 活動目錄（server/sessions.js）：每場活動一個快照檔，主持人可以事先建好好幾場、
+// 在主辦端的「活動列表」切換。原本的單一快照（data/state.json）第一次啟動時轉成第一場。
+const STATE_FILE = path.isAbsolute(PERSISTENCE.file) ? PERSISTENCE.file : path.join(ROOT, PERSISTENCE.file);
+const catalog = new EventCatalog({
+  dir: sessionsDirFor(STATE_FILE),
+  legacyFile: STATE_FILE,
+  enabled: PERSISTENCE.enabled,
+});
+/** 目前開啟的活動 */
+let activeEventId = catalog.init();
+let store = new SnapshotStore(catalog.fileOf(activeEventId), { enabled: PERSISTENCE.enabled });
+const newDirectory = () => new Directory({
   limit: PERSISTENCE.directoryLimit,
   ttlMs: PERSISTENCE.directoryTtlMs,
 });
+let directory = newDirectory();
 
-const snapshot = store.load();
-if (snapshot) {
-  scores.hydrate(snapshot.scores);
-  graph.hydrate(snapshot.graph);
-  if (Array.isArray(snapshot.encounters)) encounters.hydrate(snapshot.encounters);
-  else encounters.seedFromGraph(snapshot.graph);
-  missions.hydrate(snapshot.missions);
-  quiz.hydrate(snapshot.quiz);
-  // 標籤原本存在轉場問卷的快照裡（snapshot.survey.traits），舊存檔照樣讀得回來
-  traits.hydrate(snapshot.traits ?? snapshot.survey?.traits);
-  wordcloud.hydrate(snapshot.wordcloud);
-  directory.hydrate(snapshot.directory);
-  attendance.hydrate(snapshot.attendance);
-}
+const snapshot = catalog.load(activeEventId);
+/** 這場活動建立的時間（列表排序與顯示用；舊快照沒有就用第一次存檔的時間） */
+let eventCreatedAt = Number(snapshot?.createdAt) || Number(snapshot?.savedAt) || Date.now();
+/**
+ * 活動暫停中（主辦端「活動列表」的暫停／重新開始，2026-10-29）：手機進不來、大螢幕顯示
+ * 「活動暫停中」，資料全部保留。落地進快照 —— 暫停時重開伺服器，不能自己恢復開放。
+ */
+let eventPaused = false;
+/** 這場是不是分場之前的那一場（事件紀錄裡沒標活動的舊紀錄都屬於它，見 participantsView） */
+let eventLegacy = false;
 
 /**
  * 配分。預設值在 config.js；主持人在主辦端「節目單」頁改過的話落地進快照。
@@ -160,8 +171,9 @@ const LEGACY_SCORING_DEFAULTS = {
 };
 const isLegacyDefault = (s) => Object.keys(LEGACY_SCORING_DEFAULTS).every((k) => s?.[k] === LEGACY_SCORING_DEFAULTS[k])
   && Object.keys(s).every((k) => k in LEGACY_SCORING_DEFAULTS);
-{
-  const raw = snapshot?.scoring;
+/** 套用快照裡的配分：先回到預設，再套主持人改過的（切換活動時，上一場改的配分不能留著） */
+function applyScoring(raw) {
+  Object.assign(SCORING, SCORING_DEFAULTS);
   const saved = raw && !isLegacyDefault(raw) ? normalizeScoring(raw, SCORING_DEFAULTS) : null;
   if (saved?.ok) Object.assign(SCORING, saved.value);
 }
@@ -175,11 +187,15 @@ const scoringView = () => {
  * 投影畫面不能自己跳回預設主題，主辦端也不會記得要再選一次。
  */
 // 快照裡若是已停用的場景（例如 3D 客廳），重開後退回預設，不再沿用
-let stageTheme = isSelectableTheme(snapshot?.theme) ? snapshot.theme : DEFAULT_THEME;
-// 道具與避障跟著主題（體育館拿掉盆栽）：boids 讀的是 shared/scene.js 的活綁定
+let stageTheme = DEFAULT_THEME;
+// 道具與避障跟著主題（體育館拿掉盆栽）：boids 讀的是 shared/scene.js 的活綁定。
+// 實際主題在 applyEventSnapshot 裡依快照設定（那裡也會呼叫 setSceneTheme）
 setSceneTheme(stageTheme);
 
-/** NPC（server/npc.js）。名牌上的身分跟著目前的場景 */
+/**
+ * NPC（server/npc.js）。名牌上的身分跟著目前的場景。
+ * 設定與外型庫是整台機器的，不分場：切換活動時沿用同一個，只把 stage 換成新那場的（freshEventState）
+ */
 const npcs = new NpcDirector(stage, { theme: () => stageTheme });
 
 /**
@@ -187,7 +203,7 @@ const npcs = new NpcDirector(stage, { theme: () => stageTheme });
  * 主辦端此時只看得到「活動設定」那一頁，要先選場景、命名才進得了活動編排。
  * 落地進快照：活動中途重開伺服器時，不能把主辦端趕回設定頁、大螢幕也不能跳回場景名。
  */
-let eventInfo = parseEventInfo(snapshot?.event);
+let eventInfo = null;
 
 /**
  * 大螢幕的持續性設定。原本投影畫面右上角的按鈕已收進主辦端 ——
@@ -204,19 +220,51 @@ const screenSettings = { debug: false, sound: true, ranks: true };
  * 活動中途重開伺服器，不能悄悄換回預設題目（已經答過的人與之後答的人會是兩套標準）。
  * 快照裡的題目一樣要驗：檔案可能被手動改過。
  */
-let personaQuiz = (snapshot?.personaQuiz && validatePersonaQuiz(snapshot.personaQuiz).ok)
-  ? validatePersonaQuiz(snapshot.personaQuiz).value
-  : DEFAULT_PERSONA_QUIZ;
+let personaQuiz = DEFAULT_PERSONA_QUIZ;
 /**
  * 賓果的自我介紹題。null 代表用目前場景的預設題（換場景會跟著換）。
  * 落地進快照，理由同進場問卷：活動中途重開，主持人改過的題目不能悄悄變回預設。
  */
-let bingoFactsCustom = (() => {
-  const v = snapshot?.bingoFacts;
-  if (!Array.isArray(v)) return null;
-  const r = validateBingoFacts(v, isBlockedName);
-  return r.ok ? r.value : null;
-})();
+let bingoFactsCustom = null;
+/**
+ * 把一場活動的快照套進目前的狀態。啟動時與切換活動時都走這裡。
+ * 呼叫前這些物件要是全新的（freshEventState）：hydrate 只會加進去，不會清掉上一場的。
+ * 快照裡的東西一律要驗：檔案可能被手動改過，壞掉的欄位就當沒有（照預設）。
+ */
+function applyEventSnapshot(snap) {
+  if (snap) {
+    scores.hydrate(snap.scores);
+    graph.hydrate(snap.graph);
+    if (Array.isArray(snap.encounters)) encounters.hydrate(snap.encounters);
+    else encounters.seedFromGraph(snap.graph);
+    missions.hydrate(snap.missions);
+    quiz.hydrate(snap.quiz);
+    // 標籤原本存在轉場問卷的快照裡（snapshot.survey.traits），舊存檔照樣讀得回來
+    traits.hydrate(snap.traits ?? snap.survey?.traits);
+    wordcloud.hydrate(snap.wordcloud);
+    directory.hydrate(snap.directory);
+    attendance.hydrate(snap.attendance);
+  }
+  applyScoring(snap?.scoring);
+  // 快照裡若是已停用的場景（例如 3D 客廳），退回預設，不再沿用
+  stageTheme = isSelectableTheme(snap?.theme) ? snap.theme : DEFAULT_THEME;
+  setSceneTheme(stageTheme);
+  eventInfo = parseEventInfo(snap?.event);
+  personaQuiz = (snap?.personaQuiz && validatePersonaQuiz(snap.personaQuiz).ok)
+    ? validatePersonaQuiz(snap.personaQuiz).value
+    : DEFAULT_PERSONA_QUIZ;
+  bingoFactsCustom = (() => {
+    const v = snap?.bingoFacts;
+    if (!Array.isArray(v)) return null;
+    const r = validateBingoFacts(v, isBlockedName);
+    return r.ok ? r.value : null;
+  })();
+  eventCreatedAt = Number(snap?.createdAt) || Number(snap?.savedAt) || Date.now();
+  eventPaused = snap?.paused === true;
+  eventLegacy = snap?.legacy === true;
+}
+applyEventSnapshot(snapshot);
+
 const bingoFactsView = () => ({
   facts: bingoFactsCustom ?? defaultBingoFacts(stageTheme),
   isDefault: bingoFactsCustom === null,
@@ -238,14 +286,20 @@ const events = new EventLog({
 });
 /** agentId → 上次記下的仲裁模式。只在模式改變時記一筆，不是每幀 */
 const loggedMode = new Map();
+events.event = activeEventId;
 
 /** 手機自報的入場路徑白名單。CV 角色一律是 photo，不採信手機 */
 const ENTRY_ROUTES = new Set(['builder', 'scan_fallback']);
+/** 貼圖角色的入場路徑（手機 public/controller/app.js 的 ENTRY_ROUTES_CV）。沒報的舊手機記成 photo */
+const CV_ENTRY_ROUTES = new Set(['camera', 'upload', 'dressup']);
 
 /** 快照內容。集中在一處，新增要落地的東西時只改這裡與還原段。 */
 const snapshotData = () => ({
   version: 1,
   savedAt: Date.now(),
+  createdAt: eventCreatedAt,
+  paused: eventPaused,
+  legacy: eventLegacy || undefined,
   hostKey: HOST_KEY,
   scores: scores.export(),
   graph: graph.export(),
@@ -504,6 +558,7 @@ function hostState() {
     personaSpread: personaSpread(),
     // 主控端重新整理後也要能切換：帶 QR 圖
     photoQr: photoQr ? { visible: photoQr.visible, qr: photoQr.qr } : null,
+    paused: eventPaused,
     wordcloudResultShown,
   };
 }
@@ -1067,7 +1122,13 @@ function handleTopicAnswer(ws, msg) {
   }
 }
 
+const PAUSED_REASON = '活動暫停中，請等主持人重新開始';
+
 function handleJoin(ws, msg) {
+  if (eventPaused) {
+    send(ws, EV.CLIENT_REJECT, { reason: PAUSED_REASON, kind: 'event_paused' });
+    return;
+  }
   // 一條連線只能綁定一個角色。
   // 初版未設此限，重複送出 CLIENT_JOIN 會不斷新建角色並覆寫 ws.agentId，
   // 舊角色因為沒有任何連線指向它，disconnectedAt 永遠是 null，
@@ -1195,8 +1256,9 @@ function handleJoin(ws, msg) {
   events.log('join', {
     agent: agent.id,
     name: agent.name,
-    // 換裝的角色也是貼圖（isCV），但要分得出來：實測要知道 API 掛掉時有多少人走這條
-    entry: isCV ? (msg.entry === 'dressup' ? 'dressup' : 'photo') : (ENTRY_ROUTES.has(msg.entry) ? msg.entry : 'builder'),
+    // 換裝的角色也是貼圖（isCV），但要分得出來：實測要知道 API 掛掉時有多少人走這條。
+    // 拍照（camera）與圖庫上傳（upload）也分開（2026-10-29）；之前的紀錄只有 photo，分不出來
+    entry: isCV ? (CV_ENTRY_ROUTES.has(msg.entry) ? msg.entry : 'photo') : (ENTRY_ROUTES.has(msg.entry) ? msg.entry : 'builder'),
     genReq: isCV ? generationIdOf(agent.avatar) : undefined,
     rejoin,
     fromWaitlist: ws.fromWaitlist || undefined,
@@ -2143,6 +2205,53 @@ function handleHostMessage(ws, msg) {
       dismissWordCloudResult();
       break;
 
+    // ── 活動列表（server/sessions.js）──
+    case EV.HOST_LIST_EVENTS:
+      send(ws, EV.HOST_EVENTS, eventsView());
+      break;
+
+    case EV.HOST_CREATE_EVENT: {
+      // 建立就切過去：主持人建立一場新活動，接著就是要編排它
+      if (!isSelectableTheme(msg.theme)) { send(ws, EV.HOST_REJECT, { reason: '請先選擇一個場景' }); return; }
+      const info = parseEventInfo({ name: msg.name, subtitle: msg.subtitle });
+      if (!info) { send(ws, EV.HOST_REJECT, { reason: '請填寫活動名稱' }); return; }
+      if (isBlockedName(info.name) || (info.subtitle && isBlockedName(info.subtitle))) {
+        send(ws, EV.HOST_REJECT, { reason: '活動名稱含有不適合投影的字詞' });
+        return;
+      }
+      const id = catalog.create({ event: info, theme: msg.theme, extra: { hostKey: HOST_KEY } });
+      console.log(`[event] 建立活動「${info.name}」　${id}`);
+      const r = switchEvent(id);
+      if (!r.ok) { send(ws, EV.HOST_REJECT, { reason: r.reason }); pushEvents(); }
+      break;
+    }
+
+    case EV.HOST_OPEN_EVENT: {
+      if (!isEventId(msg.id)) { send(ws, EV.HOST_REJECT, { reason: '找不到這場活動' }); return; }
+      const r = switchEvent(msg.id);
+      if (!r.ok) send(ws, EV.HOST_REJECT, { reason: r.reason });
+      // 同一場（id 沒變）：沒有重連，直接回列表讓主辦端進控制台
+      else if (msg.id === activeEventId) send(ws, EV.HOST_EVENTS, eventsView());
+      break;
+    }
+
+    case EV.HOST_LIST_PARTICIPANTS:
+      send(ws, EV.HOST_PARTICIPANTS, { eventName: eventInfo?.name ?? '', people: participantsView() });
+      break;
+
+    case EV.HOST_PAUSE_EVENT:
+      setEventPaused(msg.paused === true);
+      break;
+
+    case EV.HOST_DELETE_EVENT: {
+      if (msg.id === activeEventId) { send(ws, EV.HOST_REJECT, { reason: '目前開啟中的活動不能刪除，請先切換到別場' }); return; }
+      if (!catalog.remove(msg.id)) { send(ws, EV.HOST_REJECT, { reason: '找不到這場活動' }); return; }
+      console.log(`[event] 刪除活動　${msg.id}`);
+      events.log('event_delete', { event: msg.id });
+      pushEvents();
+      break;
+    }
+
     // 大螢幕右下角的合照下載 QR：主持人切換顯示／隱藏
     case EV.HOST_PHOTO_QR:
       if (!photoQr) return;
@@ -2370,6 +2479,8 @@ wss.on('connection', (ws, req) => {
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
         send(ws, EV.STAGE_EVENT, { event: eventInfo });
         send(ws, EV.SCREEN_SETTINGS, { settings: screenSettings });
+        // 一律送：重連前若是暫停中，畫面上還蓋著提示，要靠這則收起
+        send(ws, EV.STAGE_PAUSED, { paused: eventPaused });
         send(ws, EV.STAGE_ROSTER, { agents: stage.roster() });
         // 進行中的文字雲：投影機中途重開時要接回目前的題目與雲
         if (wordcloud.isActive) {
@@ -2583,6 +2694,8 @@ wss.on('connection', (ws, req) => {
           missionTypes: Object.values(MISSION_TYPES),
           scoring: SCORING,
         });
+        // 活動列表排在最前面：主辦端據此決定先進「活動列表」還是直接進控制台
+        send(ws, EV.HOST_EVENTS, eventsView());
         send(ws, EV.HOST_STATE, hostState());
         for (const m of missions.actives) {
           const dv = decodePublic(m);
@@ -2631,6 +2744,12 @@ wss.on('connection', (ws, req) => {
       case EV.HOST_START_WORDCLOUD:
       case EV.HOST_CLOSE_WORDCLOUD:
       case EV.HOST_DISMISS_WORDCLOUD:
+      case EV.HOST_LIST_EVENTS:
+      case EV.HOST_CREATE_EVENT:
+      case EV.HOST_OPEN_EVENT:
+      case EV.HOST_PAUSE_EVENT:
+      case EV.HOST_LIST_PARTICIPANTS:
+      case EV.HOST_DELETE_EVENT:
       case EV.HOST_PHOTO_QR:
       case EV.HOST_HIDE_WORD:
       case EV.HOST_SET_BINGO_FACTS:
@@ -3210,6 +3329,218 @@ const takeGroupPhoto = async (ws, { arrange = 'stay' } = {}) => {
     photoInFlight = false;
   }
 };
+
+// ─────────────────────────────────────────────────────────────
+// 活動列表與切換（server/sessions.js）
+//
+// 一次只開啟一場：切換時先把目前這場完整存檔，再把每場各自的狀態整組換成另一場的。
+// 場上的手機與候補收到 CLIENT_REJECT 回到進場畫面 —— 不自動進新的那場，
+// 否則前一場的人會出現在下一場的名單上，資料就混在一起了。
+// 大螢幕與主辦端的連線直接關掉，它們會自己重連、拿到新活動的完整狀態（補送邏輯只有一套）。
+// ─────────────────────────────────────────────────────────────
+/** 每場活動各自的狀態，換成全新的（之後再 applyEventSnapshot） */
+function freshEventState() {
+  stage = new Stage();
+  missions = new MissionBoard();
+  bingo = new BingoRound();
+  topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
+  topicGuess = new TopicGuess({ roundMs: TOPIC_ROUND_MS });
+  graph = new SocialGraph();
+  pairing = new PairingSession(graph);
+  encounters = new Encounters();
+  attendance = new Attendance({ ttlMs: Infinity, limit: 5000 });
+  greetings = new Greetings({ ...GREET, isBlocked: (by, target) => messages.isBlocked(by, target) });
+  quiz = new QuizSession();
+  traits = new TraitStore();
+  wordcloud = new WordCloudSession();
+  scores = new ScoreBoard();
+  messages = new MessageRelay();
+  directory = newDirectory();
+  // NPC 跟著新場地走：舊場地的 NPC 隨舊 stage 一起丟掉，下一幀依設定在新場地補人
+  npcs.stage = stage;
+  // 只屬於上一場、跟著活動走的暫存
+  photoQr = null;
+  clearTimeout(wordcloudResultTimer);
+  wordcloudResultShown = false;
+  gatherTrackers.clear();
+  loggedMode.clear();
+  scoresDirty = true;
+  linksDirty = true;
+  clientRosterDirty = true;
+  quizTallyDirty = false;
+  wordcloudDirty = false;
+}
+
+/**
+ * 主辦端「系統」分頁的「所有參與過的角色」：這場活動進過場的每一個角色（跟生成紀錄分開 ——
+ * 生成紀錄是每一次生成，含重拍、沒用到的；這裡是真的進過場的人）。
+ *
+ * 來源合在一起：事件紀錄的 join（最完整，名字與用的角色都在；沒標活動的舊紀錄屬於分場前那一場）、
+ * 參與名單與身分目錄（外觀最新）、場上（在不在場）、積分。
+ */
+const ENTRY_LABEL = {
+  camera: '拍照生成', upload: '圖庫上傳', photo: '拍照／圖庫（舊紀錄）', dressup: '自訂角色', builder: '捏臉', scan_fallback: '捏臉（掃描失敗）' };
+function participantsView() {
+  const rows = new Map();
+  const row = (id) => {
+    let r = rows.get(id);
+    if (!r) {
+      r = { id, name: '', avatar: null, entry: null, firstAt: null, lastAt: null, joins: 0, left: null };
+      rows.set(id, r);
+    }
+    return r;
+  };
+  const seen = (r, t) => {
+    if (!Number.isFinite(t)) return;
+    if (r.firstAt === null || t < r.firstAt) r.firstAt = t;
+    if (r.lastAt === null || t > r.lastAt) r.lastAt = t;
+  };
+  if (events.enabled) {
+    let text = '';
+    try { text = fs.readFileSync(events.file, 'utf8'); } catch { /* 還沒有紀錄 */ }
+    for (const line of text.split('\n')) {
+      if (!line.includes('"agent"')) continue;
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (e.event ? e.event !== activeEventId : !eventLegacy) continue;
+      if (typeof e.agent !== 'string') continue;
+      if (e.ev === 'join') {
+        const r = row(e.agent);
+        r.joins += 1;
+        if (e.name) r.name = e.name;
+        if (e.entry) r.entry = e.entry;
+        if (e.genReq && !r.avatar) r.gen = e.genReq;
+        r.left = null;
+        seen(r, e.t);
+      } else if (rows.has(e.agent)) {
+        if (e.ev === 'leave') rows.get(e.agent).left = e.reason ?? 'self';
+        seen(rows.get(e.agent), e.t);
+      }
+    }
+  }
+  for (const e of attendance.export()) {
+    const r = row(e.id);
+    r.name = e.name || r.name;
+    r.avatar = e.avatar ?? r.avatar;
+    seen(r, e.firstSeenAt); seen(r, e.lastSeenAt);
+  }
+  for (const e of directory.export()) {
+    const r = row(e.id);
+    r.name = e.name || r.name;
+    r.avatar = e.avatar ?? r.avatar;
+    seen(r, e.lastSeenAt);
+  }
+  for (const a of stage.agents.values()) {
+    const r = row(a.id);
+    r.name = a.name || r.name;
+    r.avatar = a.avatar ?? r.avatar;
+  }
+  const out = [];
+  for (const r of rows.values()) {
+    // 名字與外觀都找不到的（只出現在積分裡的機器人之類）就不列
+    const agent = stage.get(r.id);
+    if (!r.avatar && r.gen && fs.existsSync(path.join(PUBLIC_DIR, 'assets', 'gen', r.gen, 'full.webp'))) {
+      r.avatar = { source: 'CV', textures: { full: `/assets/gen/${r.gen}/full.webp` } };
+    }
+    out.push({
+      id: r.id,
+      name: r.name,
+      avatar: r.avatar,
+      entry: ENTRY_LABEL[r.entry] ?? (r.entry || ''),
+      firstAt: r.firstAt,
+      lastAt: r.lastAt,
+      joins: r.joins,
+      score: scores.totalOf(r.id) ?? 0,
+      status: agent ? (agent.offline ? '離線' : '在場') : (r.left === 'kick' ? '被請出場' : '已離開'),
+    });
+  }
+  return out.sort((a, b) => (a.firstAt ?? Infinity) - (b.firstAt ?? Infinity));
+}
+
+/** 主辦端的活動列表。目前這場用記憶體裡的最新狀態（硬碟上的可能是 5 秒前的） */
+function eventsView() {
+  const people = new Set([
+    ...directory.export().map((e) => e.id),
+    ...attendance.export().map((e) => e.id),
+    ...scores.standings().map((s) => s.id),
+  ]).size;
+  return {
+    activeId: activeEventId,
+    // 開啟中的那場排最上面，其餘照最近存過的先
+    events: catalog.list().map((e) => (e.id === activeEventId
+      ? { ...e, name: eventInfo?.name ?? '', subtitle: eventInfo?.subtitle ?? '', theme: stageTheme, people, onStage: stage.agents.size, paused: eventPaused }
+      : e)).sort((a, b) => (b.id === activeEventId) - (a.id === activeEventId)),
+  };
+}
+const pushEvents = () => blast(hosts, EV.HOST_EVENTS, eventsView());
+
+/**
+ * 暫停／重新開始目前這場。暫停時場上的手機與候補回進場畫面（資料都保留在這場，
+ * 重新開始後用原憑證進場就接得回來），之後的進場一律擋下；大螢幕蓋上「活動暫停中」。
+ */
+function setEventPaused(paused) {
+  if (eventPaused === paused) return;
+  eventPaused = paused;
+  if (paused) {
+    for (const [agentId, sock] of controllers) {
+      send(sock, EV.CLIENT_REJECT, { reason: PAUSED_REASON, kind: 'event_paused' });
+      sock.agentId = null;
+      controllers.delete(agentId);
+      stage.markDisconnected(agentId);
+    }
+    for (const sock of audienceQueue.splice(0)) {
+      send(sock, EV.CLIENT_REJECT, { reason: PAUSED_REASON, kind: 'event_paused' });
+      sock.role = null;
+    }
+  }
+  events.log(paused ? 'event_pause' : 'event_resume', { event: activeEventId });
+  console.log(`[event] ${paused ? '暫停' : '重新開始'}活動「${eventInfo?.name || activeEventId}」`);
+  store.save(snapshotData(), { force: true });
+  blast(screens, EV.STAGE_PAUSED, { paused });
+  pushEvents();
+  pushHostState();
+}
+
+/** 切到另一場活動。成功回傳 {ok: true}；失敗帶原因 */
+function switchEvent(id) {
+  if (id === activeEventId) return { ok: true };
+  if (!catalog.has(id)) return { ok: false, reason: '找不到這場活動' };
+  if (photoInFlight) return { ok: false, reason: '大合照合成中，請等它完成再切換' };
+  const target = catalog.load(id);
+  if (!target) return { ok: false, reason: '這場活動的資料讀不到' };
+
+  // 1. 目前這場完整存起來（含最後幾秒的變動）
+  catalog.save(activeEventId, snapshotData());
+  events.log('event_close', { event: activeEventId, present: stage.agents.size });
+  const from = eventInfo?.name || activeEventId;
+
+  // 2. 場上的手機與候補回到進場畫面（連線不關：要再進場時直接用同一條）
+  for (const [agentId, sock] of controllers) {
+    send(sock, EV.CLIENT_REJECT, { reason: '主持人切換到另一場活動了，請重新進場', kind: 'event_switched' });
+    sock.agentId = null;
+    controllers.delete(agentId);
+  }
+  for (const sock of audienceQueue.splice(0)) {
+    send(sock, EV.CLIENT_REJECT, { reason: '主持人切換到另一場活動了，請重新進場', kind: 'event_switched' });
+    sock.role = null;
+  }
+
+  // 3. 換成那一場
+  freshEventState();
+  applyEventSnapshot(target);
+  // 切過去就是要開始這場：之前暫停過的一併恢復開放
+  eventPaused = false;
+  activeEventId = id;
+  events.event = id;
+  catalog.setActive(id);
+  store = new SnapshotStore(catalog.fileOf(id), { enabled: PERSISTENCE.enabled });
+  events.log('event_open', { event: id, name: eventInfo?.name ?? null, theme: stageTheme });
+  console.log(`[event] 切換活動　${from} → ${eventInfo?.name || id}`);
+
+  // 4. 大螢幕與主辦端重連，拿新活動的完整狀態
+  for (const sock of [...screens, ...hosts]) sock.close(4001, 'event switched');
+  return { ok: true };
+}
 
 const shutdown = () => {
   loop.stop();

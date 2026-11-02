@@ -475,6 +475,10 @@ function connect() {
         renderRanks(msg.leaderboard ?? []);
         break;
 
+      case EV.STAGE_PAUSED:
+        document.getElementById('paused-cover').hidden = !msg.paused;
+        break;
+
       case EV.SCREEN_PHOTO_QR:
         showPhotoQr(msg);
         break;
