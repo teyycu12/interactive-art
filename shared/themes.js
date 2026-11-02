@@ -12,6 +12,9 @@
  * 大螢幕會把它畫成號碼牌；之後以資料驅動的集合任務
  * （例：「今天穿白色的人到 1號桌集合」）也從這裡取道具座標，
  * 畫面上寫的和伺服器判定的才會是同一張桌子。
+ *
+ * npcRoles：這個場景的 NPC 身分（server/npc.js），名牌顯示「身分・名字」。
+ * 寫在這裡而不寫在伺服器：身分是場景的語彙，換到辦公室還叫「主廚」就不對了。
  */
 export const THEMES = [
   {
@@ -20,6 +23,7 @@ export const THEMES = [
     occasion: '交誼・破冰',
     brief: '溫暖的像素廚房，適合輕鬆的聚會與交流活動。',
     spots: { k_dining: '1號桌', ctbl_1: '2號桌' },
+    npcRoles: ['主廚', '店員', '送貨員'],
     // 解碼任務的符號（shared/decode.js）：要一眼叫得出名字，念出來才不會對錯
     decodeSymbols: [
       { glyph: '🍎', name: '蘋果' }, { glyph: '🍌', name: '香蕉' }, { glyph: '🍇', name: '葡萄' },
@@ -37,6 +41,7 @@ export const THEMES = [
     // 話題桌只在辦公室開（2026-10-17 試玩回饋）：其他場景的號碼牌是集合點與器材站，
     // 走過去是為了任務，跳出聊天題只會打斷人。spots 照樣給集合任務用
     topicTables: true,
+    npcRoles: ['櫃台', '主管', '工程師'],
     decodeSymbols: [
       { glyph: '📎', name: '迴紋針' }, { glyph: '✏️', name: '鉛筆' }, { glyph: '📌', name: '圖釘' },
       { glyph: '📁', name: '資料夾' }, { glyph: '💡', name: '燈泡' }, { glyph: '☕', name: '咖啡' },
@@ -51,6 +56,7 @@ export const THEMES = [
     brief: '木地板球場、暖身區與看台，室外有跑道，適合動態的團體活動。',
     // 號碼牌給集合任務用：暖身區三台器材當「站」，頒獎台與飲料桶各一個集合點
     spots: { tbl_1: '1號站', tbl_2: '2號站', tbl_3: '3號站', k_dining: '集合點', ctbl_1: '補給站' },
+    npcRoles: ['教練', '裁判', '隊長'],
     // 體育館不擺盆栽（2026-10-21）：球場上擺盆栽很怪，也擋住傳球的路線。
     // 拿掉的道具不畫也不擋人（shared/scene.js 的 propsForTheme）
     removedProps: ['plt_1', 'plt_2', 'plt_3', 'plt_4', 'plt_5'],
@@ -70,6 +76,7 @@ export const THEMES = [
     occasion: '展演備援',
     brief: '最初的 3D 客廳場景。需要 WebGL，較吃投影電腦效能。',
     spots: {},
+    npcRoles: ['店員'],
     // 不是正式場景：主辦端選不到、伺服器也不接受。程式碼保留給 ?scene=room 開發預覽，
     // 以及 registry.js 的載入失敗備援 —— 所以不能直接從 THEMES 刪掉。
     selectable: false,

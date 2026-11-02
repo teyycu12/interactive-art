@@ -37,6 +37,7 @@ import {
   CLIENT_SYNC_MAX_BUFFERED, STAGE_SYNC_MAX_BUFFERED,
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
+import { NpcDirector } from './npc.js';
 import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
 import { photoUrlBase, savePhoto, requestOrigin, rankLanAddresses } from './photos.js';
@@ -177,6 +178,9 @@ const scoringView = () => {
 let stageTheme = isSelectableTheme(snapshot?.theme) ? snapshot.theme : DEFAULT_THEME;
 // 道具與避障跟著主題（體育館拿掉盆栽）：boids 讀的是 shared/scene.js 的活綁定
 setSceneTheme(stageTheme);
+
+/** NPC（server/npc.js）。名牌上的身分跟著目前的場景 */
+const npcs = new NpcDirector(stage, { theme: () => stageTheme });
 
 /**
  * 活動名稱，取代大螢幕左上角的場景名。null 代表還沒設定 ——
@@ -1968,6 +1972,7 @@ function messageReports() {
 function setStageTheme(theme) {
   if (theme === stageTheme) return;
   stageTheme = theme;
+  npcs.retitle();
   setSceneTheme(stageTheme);
   resetHoops();
   console.log(`[theme] 切換為「${THEME_MAP[stageTheme].label}」`);
@@ -2685,6 +2690,8 @@ let lastClientRosterSig = '';
 const loop = startTicker({
   intervalMs: TICK_MS,
   onTick(dt) {
+    // NPC 的虛擬搖桿要在 tick 之前設好；問答進行中停在原地（大家在看題目）
+    npcs.tick(Date.now(), { frozen: quiz.isActive });
     // 傳入社交圖譜：配對過的角色之間凝聚力較強，關係會表現為畫面上的群聚
     const zoneMoves = stage.tick(dt, graph);
     if (audienceQueue.length) promoteAudience();

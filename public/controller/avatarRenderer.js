@@ -523,14 +523,19 @@ export class AvatarRenderer {
       const walkers = [...this.neighbors.values()];
       if (this.selfPos && this.serverSelf?.mode !== 'STAGED') walkers.push({ id: 'self', x: cam.x, y: cam.y });
       this.props.update(walkers, now);
+      this.props.begin({ x0: -ox / zoom, y0: -oy / zoom, x1: (w - ox) / zoom, y1: (h - oy) / zoom },
+        now, this.reducedMotion.matches);
+    }
+    // 道具跟角色依前後穿插著畫：腳底在道具後面的人，會被道具擋住（ScenePainter.begin）
+    const drawPropsUntil = (y) => {
+      if (!this.props) return;
       ctx.save();
       ctx.translate(ox, oy);
       ctx.scale(zoom, zoom);
       ctx.imageSmoothingEnabled = false;
-      this.props.draw(ctx, { x0: -ox / zoom, y0: -oy / zoom, x1: (w - ox) / zoom, y1: (h - oy) / zoom },
-        now, this.reducedMotion.matches);
+      this.props.drawUntil(ctx, y);
       ctx.restore();
-    }
+    };
 
     const height = BODY_UNITS * zoom;
     const toScreen = (x, y) => ({ x: ox + (ORIGIN_X + x) * zoom, y: oy + (ORIGIN_Y + y) * zoom });
@@ -559,7 +564,9 @@ export class AvatarRenderer {
     }
     const target = layoutNameplates(plates, { bottom: h });
 
+    const hidden = [];
     for (const p of people) {
+      drawPropsUntil(p.y);
       if (p.self) {
         drawCharacter(ctx, {
           state: speed * MAX_SPEED > WALK_THRESHOLD ? 'WALK' : 'IDLE',
@@ -592,18 +599,25 @@ export class AvatarRenderer {
         pos, this.looks.get(n.id)?.sprite ?? null,
         { time: this.time, maxSpeed: MAX_SPEED, height, travel: n.travel });
       this._hit(n.id, pos, height);
-      if (p.name) {
-        const t = target.get(n.id);
-        let cur = this.plateOffset.get(n.id);
-        if (!cur) { cur = { dx: t.dx, dy: t.dy }; this.plateOffset.set(n.id, cur); }
-        cur.dx += (t.dx - cur.dx) * 0.2;
-        cur.dy += (t.dy - cur.dy) * 0.2;
-        drawNameplate(ctx, pos, p.name, { fontSize: p.fontSize, offset: cur });
-      }
-      if (n.emote && !emoteIsPosed(this.looks.get(n.id)?.sprite, n.emote)) {
-        drawEmote(ctx, pos, EMOTE_GLYPH[n.emote], { height });
-      }
+      const tags = () => {
+        if (p.name) {
+          const t = target.get(n.id);
+          let cur = this.plateOffset.get(n.id);
+          if (!cur) { cur = { dx: t.dx, dy: t.dy }; this.plateOffset.set(n.id, cur); }
+          cur.dx += (t.dx - cur.dx) * 0.2;
+          cur.dy += (t.dy - cur.dy) * 0.2;
+          drawNameplate(ctx, pos, p.name, { fontSize: p.fontSize, offset: cur });
+        }
+        if (n.emote && !emoteIsPosed(this.looks.get(n.id)?.sprite, n.emote)) {
+          drawEmote(ctx, pos, EMOTE_GLYPH[n.emote], { height });
+        }
+      };
+      // 等一下會被道具擋住的人，名牌與表情留到道具畫完（同大螢幕：名字不被物件擋）
+      if (this.props?.covers(n.x, n.y)) hidden.push(tags);
+      else tags();
     }
+    drawPropsUntil(Infinity);
+    for (const tags of hidden) tags();
   }
 
   /**

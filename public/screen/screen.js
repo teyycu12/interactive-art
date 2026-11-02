@@ -30,6 +30,9 @@ let activeScene = null;
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
+/** 被物件擋住的角色先畫在這裡、挖掉物件那一塊再貼回去（drawBehindProps）。尺寸與密度跟 canvas 一致 */
+const behind = document.createElement('canvas');
+const bctx = behind.getContext('2d');
 const metaEl = document.getElementById('meta');
 const listEl = document.getElementById('list');
 
@@ -114,6 +117,9 @@ function resize() {
   canvas.height = Math.ceil(innerHeight * dpr);
   canvas.style.width = `${innerWidth}px`;
   canvas.style.height = `${innerHeight}px`;
+  behind.width = canvas.width;
+  behind.height = canvas.height;
+  bctx.imageSmoothingQuality = 'high';
 
   // 畫布鋪滿視窗，但角色只落在可用區裡 —— 與場景背景用同一份 stageViewport()。
   // 兩邊各自算的話，題目出現時角色會浮在房間外面，而畫面上只是「位置怪怪的」。
@@ -649,6 +655,33 @@ function characterHeightAt(v) {
   return (px > 1 ? px : CHARACTER_HEIGHT * scale) * CHARACTER_SCALE;
 }
 
+/**
+ * 畫一個角色，被擋在物件後面的部分挖掉。
+ *
+ * 場景（房間與物件）在底下那張畫布，角色在這張 —— 平面的場景裡，走到桌子後面的人
+ * 原本一律蓋在桌子上，看起來就是踩過去（2026-10-29）。物件擋得到這個角色時，
+ * 先把角色畫在 behind 上，交給場景挖掉物件的形狀（PixelScene.cutOut），再只把角色那一塊
+ * 貼回來；挖空的地方露出底下的物件。擋不到的角色（絕大多數）照舊直接畫，不多花一張畫布。
+ * 沒有 occludersOf 的場景（3D 客廳）也照舊。
+ */
+function drawBehindProps(v, pos, height, now, draw) {
+  const box = { x0: pos.x - height * 0.6, x1: pos.x + height * 0.6, y0: pos.y - height * 1.2, y1: pos.y + height * 0.15 };
+  const props = activeScene?.occludersOf?.(v.y, box);
+  if (!props?.length) { draw(ctx); return; }
+  const x = Math.max(0, Math.floor(box.x0 * dpr)), y = Math.max(0, Math.floor(box.y0 * dpr));
+  const w = Math.min(behind.width, Math.ceil(box.x1 * dpr)) - x, h = Math.min(behind.height, Math.ceil(box.y1 * dpr)) - y;
+  if (w <= 0 || h <= 0) return;
+  bctx.setTransform(1, 0, 0, 1, 0, 0);
+  bctx.clearRect(x, y, w, h);
+  bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw(bctx);
+  activeScene.cutOut(bctx, props, now);
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(behind, x, y, w, h, x, y, w, h);
+  ctx.restore();
+}
+
 /** 新建立的邊會亮著這麼久，之後淡成常駐細線 */
 const LINK_FRESH_MS = 6000;
 
@@ -903,7 +936,7 @@ function drawFrame(now) {
     const name = entry?.name ?? a.id;
     const fontSize = Math.max(10, height * 0.12);
     const { w, h } = measureNameplate(ctx, name, { fontSize });
-    frames.set(a.id, { pos, height, entry, name, fontSize });
+    frames.set(a.id, { v, pos, height, entry, name, fontSize });
     plates.push({ id: a.id, x: pos.x, y: pos.y + NAMEPLATE_DROP, w, h });
   }
   const plateTarget = layoutNameplates(plates, { bottom: innerHeight });
@@ -919,7 +952,7 @@ function drawFrame(now) {
   }
 
   for (const a of sorted) {
-    const { pos, height, entry, name, fontSize } = frames.get(a.id);
+    const { v, pos, height, entry, name, fontSize } = frames.get(a.id);
 
     // 剛完成配對：向外擴散的環，讓觀眾把螢幕上的事件與
     // 現場剛剛有兩個人在講話連起來
@@ -974,8 +1007,9 @@ function drawFrame(now) {
 
     if (debug) drawDebugOverlay(a, pos);
 
-    drawCharacter(ctx, a, pos, entry?.img,
-      { time, maxSpeed: MAX_SPEED, height, voxel: voxels?.tile(a.id) });
+    drawBehindProps(v, pos, height, now, (c) => drawCharacter(c, a, pos, entry?.img,
+      { time, maxSpeed: MAX_SPEED, height, voxel: voxels?.tile(a.id) }));
+    // 名牌、表情、離線標記不挖：站在冰箱後面的人，名字還是要看得到
     drawPlate(a.id, pos, name, fontSize, plateTarget.get(a.id));
     if (a.emote && !emoteIsPosed(entry?.img, a.emote)) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote], { height });
     if (a.offline) drawOffline(ctx, pos, { height });

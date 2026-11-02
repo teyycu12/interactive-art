@@ -470,6 +470,22 @@ canvas.portrait { image-rendering: pixelated; display: block; }
 /* 畫布現在是場景畫面，搖桿區的虛線框只剩「這一塊可以推」的提示，壓淡 */
 #controller #joystick-zone { border-color: rgba(247, 241, 227, .35); }
 
+/* 浮動搖桿的提示圈：搖桿是手指按哪裡就出現在哪裡（app.js initJoystick），
+   沒在推的時候在左下角留一個淡淡的圈，告訴第一次拿到的人這裡可以推。
+   pointer-events:none —— 按在圈上也是交給搖桿區，搖桿就長在那裡 */
+.joy-hint {
+  position: absolute;
+  left: 19px; bottom: 19px;
+  width: 130px; height: 130px;
+  border-radius: 50%;
+  border: 2px solid rgba(247, 241, 227, .45);
+  background: radial-gradient(circle, rgba(58, 46, 39, .35) 0 32%, rgba(58, 46, 39, .12) 33%);
+  pointer-events: none;
+  transition: opacity .15s;
+}
+#joystick-zone.joy-on .joy-hint { opacity: 0; }
+@media (orientation: landscape) { .joy-hint { left: 31px; bottom: 31px; } }
+
 /* 疊在場景上的狀態列要有底板：名字與編號是深色字，廚房的牆面也是深色 */
 #controller .bar {
   background: var(--paper);
@@ -1457,9 +1473,8 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 /* ── 橫式：16:9 的畫框，所有控制都收在虛線框內 ─────────────
    畫面固定成 16:9、置中，外面留深色邊（與大螢幕像素場景的邊框同色）。
    搖桿區撐滿整個畫框、當作外框；其餘元件疊在它上面：
-   狀態列與提示在上、表情鍵在右側一欄、搖桿在左下角（左手拇指），
-   角色站在畫框正中 —— 兩隻手都不會蓋到自己的臉。
-   條件與 app.js 的 landscapeQuery 必須一致：搖桿的位置由它決定。 */
+   狀態列與提示在上、表情鍵在右側一欄、搖桿的提示圈在左下角（左手拇指），
+   角色站在畫框正中 —— 兩隻手都不會蓋到自己的臉。 */
 @media (orientation: landscape) {
   body:has(#controller:not([hidden])) { background: #383c43; }
 

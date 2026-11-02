@@ -99,21 +99,55 @@ export class ScenePainter {
   }
 
   /**
-   * 在底圖座標系（呼叫端已 translate/scale 好）畫出 view 範圍內的道具與桌號。
+   * 開始畫一幀：挑出 view 範圍內的道具，之後由 drawUntil 跟角色依前後穿插著畫。
+   *
+   * 道具原本在角色之前一次畫完，角色一律蓋在道具上 —— 走到桌子後面的人看起來
+   * 就是踩在桌上（2026-10-29）。改成跟角色同一個前後順序：y（碰撞圓心）比角色腳底
+   * 更後面的道具先畫，更前面的等角色畫完再畫，蓋住角色的腳。與大螢幕同一條規則
+   * （PixelScene.occludersOf：道具 y 大於腳底才擋得到）。
    * @param {{x0: number, y0: number, x1: number, y1: number}} view 底圖座標
    */
-  draw(c, view, now, reduced) {
-    const { Scene } = this;
-    for (const p of this.propsByDepth) {
-      // 道具往上畫得比較高（電話亭約 120），左右約 1.65 倍半徑；多留一點邊免得邊緣被切掉
+  begin(view, now, reduced) {
+    this.frame = { now, reduced };
+    // 這個主題實際擺出來的道具（體育館沒有盆栽）
+    this.queue = this.propsByDepth.filter((p) => {
+      // 道具往上畫得比較高（籃架約 230），左右約 1.65 倍半徑；多留一點邊免得邊緣被切掉
       const x = ORIGIN_X + p.x, y = ORIGIN_Y + p.y, half = p.r * 1.65 + 60;
-      if (x + half < view.x0 || x - half > view.x1 || y + 90 < view.y0 || y - 220 > view.y1) continue;
+      return !(x + half < view.x0 || x - half > view.x1 || y + 90 < view.y0 || y - 250 > view.y1);
+    });
+    this.next = 0;
+  }
+
+  /**
+   * 在底圖座標系（呼叫端已 translate/scale 好）畫出 y 不超過 maxY 的道具與它的桌號；
+   * 畫過的不會再畫。一幀的最後傳 Infinity 把剩下的畫完。
+   */
+  drawUntil(c, maxY) {
+    const { Scene, queue, frame } = this;
+    if (!queue) return;
+    while (this.next < queue.length && queue[this.next].y <= maxY) {
+      const p = queue[this.next++];
       const started = this.effects.get(p.id);
-      const elapsed = started === undefined ? -1 : (now - started) / 1000;
+      const elapsed = started === undefined ? -1 : (frame.now - started) / 1000;
       if (elapsed > EFFECT_S) this.effects.delete(p.id);
-      Scene.paintProp(c, p, (Scene.ITEMS[p.id] ?? Scene.FALLBACK)[0], elapsed, reduced);
+      Scene.paintProp(c, p, (Scene.ITEMS[p.id] ?? Scene.FALLBACK)[0], elapsed, frame.reduced);
+      if (this.spots[p.id]) spotBadge(c, ORIGIN_X + p.x, ORIGIN_Y + p.y + 46, this.spots[p.id]);
     }
-    for (const p of this.props) if (this.spots[p.id]) spotBadge(c, ORIGIN_X + p.x, ORIGIN_Y + p.y + 46, this.spots[p.id]);
+  }
+
+  /**
+   * 還沒畫的道具裡，有沒有擋得到站在 (x, y)（舞台座標）的人。
+   * 名牌與表情要留到道具畫完再畫：站在冰箱後面的人，名字還是要看得到。
+   */
+  covers(x, y) {
+    const { queue } = this;
+    if (!queue) return false;
+    for (let i = this.next; i < queue.length; i++) {
+      const p = queue[i];
+      // 道具最高往上畫約 250（籃架），名牌在腳底下約 40：前後差超過 290 就蓋不到
+      if (p.y > y && Math.abs(p.x - x) < p.r * 1.65 + 90 && p.y - y < 290) return true;
+    }
+    return false;
   }
 }
 
