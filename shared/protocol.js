@@ -118,6 +118,16 @@ export const EV = {
   HOST_START_BINGO: 'HOST_START_BINGO',       // Host → Server：開一輪 {durationMs?}
   HOST_END_BINGO: 'HOST_END_BINGO',           // Host → Server：結束本輪
   HOST_BINGO_DEAL: 'HOST_BINGO_DEAL',         // Host → Server：自我介紹不等了，直接發卡
+  // 活動列表（server/sessions.js）：可以事先建好好幾場，一次開啟一場
+  HOST_LIST_EVENTS: 'HOST_LIST_EVENTS',       // Host → Server：要活動列表
+  HOST_EVENTS: 'HOST_EVENTS',                 // Server → Host：{activeId, events: [{id, name, subtitle, theme, createdAt, savedAt, people, onStage?}]}
+  HOST_CREATE_EVENT: 'HOST_CREATE_EVENT',     // Host → Server：建立並切換到新活動 {name, subtitle, theme}
+  HOST_OPEN_EVENT: 'HOST_OPEN_EVENT',         // Host → Server：切換到這場活動 {id}
+  HOST_DELETE_EVENT: 'HOST_DELETE_EVENT',     // Host → Server：刪除一場（不能是開啟中的）{id}
+  HOST_PAUSE_EVENT: 'HOST_PAUSE_EVENT',       // Host → Server：暫停／重新開始目前這場 {paused}
+  HOST_LIST_PARTICIPANTS: 'HOST_LIST_PARTICIPANTS', // Host → Server：這場活動所有參與過的角色
+  HOST_PARTICIPANTS: 'HOST_PARTICIPANTS',     // Server → Host：{eventName, people: [{id, name, avatar, entry, firstAt, lastAt, joins, score, status}]}
+  STAGE_PAUSED: 'STAGE_PAUSED',               // Server → Screen：活動暫停中 {paused}（大螢幕蓋上提示）
   BINGO_CARD: 'BINGO_CARD',                   // Server → Phone：自己的卡 {card, remainingMs}
   BINGO_CLAIM: 'BINGO_CLAIM',                 // Phone → Server：填格 {cell, code}（code 是對方的配對碼）
   BINGO_RESULT: 'BINGO_RESULT',               // Server → Phone：填格結果 {ok, reason?, name?, newLines?, full?}

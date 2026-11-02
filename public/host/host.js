@@ -22,6 +22,16 @@ import { recipesForTheme } from '/shared/recipes.js';
 const $ = (s) => document.querySelector(s);
 const SS_KEY = 'pixelair.hostKey';
 
+// ── 每場活動各自的本機資料（節目單、題庫、現場動態）──
+// 存在 localStorage 時鍵後面加上活動 id，切換活動就換一份，不會把上一場的節目單帶過來。
+// 這一頁載入時讀的是哪一場，記在 sessionStorage；伺服器說開啟中的是別場時重新載入頁面。
+const SCOPE_KEY = 'pixelair.hostEventScope';
+const ENTER_KEY = 'pixelair.hostEventEnter';
+const EVENT_SCOPE = (() => { try { return sessionStorage.getItem(SCOPE_KEY); } catch { return null; } })();
+const scoped = (k) => (EVENT_SCOPE ? `${k}.${EVENT_SCOPE}` : k);
+/** 舊版沒有分場的鍵：第一次分場時搬給開啟中的那一場（原本就是那一場的資料） */
+const SCOPED_KEYS = ['pixelair.runSheet', 'pixelair.quizBank', 'pixelair.quizRun', 'pixelair.feed'];
+
 let ws = null;
 let authed = false;
 /** 通行密鑰的明文，生成歷史走 REST（不是 WS），得自己帶著它做存取控制 */
@@ -58,6 +68,14 @@ function connect(key) {
 
 function handle(msg, key) {
   switch (msg.type) {
+    case EV.HOST_EVENTS:
+      receiveEvents(msg);
+      break;
+
+    case EV.HOST_PARTICIPANTS:
+      renderParticipantsAll(msg.people ?? []);
+      break;
+
     case EV.HOST_WELCOME:
       authed = true;
       try { sessionStorage.setItem(SS_KEY, key); } catch { /* 略 */ }
@@ -71,13 +89,15 @@ function handle(msg, key) {
       $('#auth').hidden = true;
       setConn('已連線', false);
       // 生成歷史不在這裡載入：它收在「系統」分頁，切過去才開始輪詢
-      if (activeTab === 'system') startHistoryPolling();
+      if (activeTab === 'system') { startHistoryPolling(); requestParticipantsAll(); }
       break;
 
     case EV.HOST_REJECT:
       // 認證前的拒絕代表密鑰錯誤；認證後的拒絕來自任務或問答的發布失敗
       if (!authed) { showAuthError(msg.reason ?? '通行密鑰錯誤'); ws.close(); }
       else {
+        // 建立或切換活動被擋下：不要留著「重連後直接進控制台」的記號
+        if (lastAction === 'events' || setupCreating) { try { sessionStorage.removeItem(ENTER_KEY); } catch { /* 略 */ } }
         undoRunSheetStep();
         if (lastAction === 'persona') personaSaveRejected();
         if (lastAction === 'bingo') bingoFactsSaveRejected();
@@ -296,6 +316,7 @@ function showAuthError(text) {
 const ERR_SLOT = {
   persona: '#persona-err',
   setup: '#setup-err',
+  events: '#events-err',
   screen: '#screen-err',
   wordcloud: '#wordcloud-err',
   quiz: '#quiz-err',
@@ -414,6 +435,8 @@ function renderEvent(info) {
   eventInfo = info;
   $('#event-title').textContent = info?.name ?? '主辦端控制台';
   document.title = info?.name ? `${info.name}｜主辦端` : 'PixelAir 主辦端';
+  // 還停在活動列表（這台還沒選要進哪一場）：只記下名稱，不開控制台也不開設定頁
+  if (!eventChosen) return;
   // 斷線重連時設定頁可能已經開著、名稱打到一半 —— 不要把它清掉重來
   if (!info) { if ($('#setup').hidden) openSetup(false); return; }
   // 剛在設定頁送出 → 進控制台的「節目單」分頁（活動編排：套範本、排流程）。
@@ -426,21 +449,170 @@ function renderEvent(info) {
   }
 }
 
-function openSetup(editing) {
-  $('#event-name').value = eventInfo?.name ?? '';
-  $('#event-subtitle').value = eventInfo?.subtitle ?? '';
+/** 設定頁是在「建立新活動」還是「修改目前這場」 */
+let setupCreating = false;
+
+function openSetup(editing, { creating = false } = {}) {
+  setupCreating = creating;
+  $('#event-name').value = creating ? '' : (eventInfo?.name ?? '');
+  $('#event-subtitle').value = creating ? '' : (eventInfo?.subtitle ?? '');
   setupTheme = null;
   pickSetupTheme(currentTheme);
-  $('#btn-setup-cancel').hidden = !editing;
-  $('#btn-setup').textContent = editing ? '儲存設定' : '進入活動編排';
+  $('#btn-setup-cancel').hidden = !(editing || creating);
+  $('#btn-setup').textContent = creating ? '建立並開啟' : editing ? '儲存設定' : '進入活動編排';
+  $('#events').hidden = true;
   $('#setup-err').hidden = true;
   $('#console').hidden = true;
   $('#setup').hidden = false;
   $('#event-name').focus();
 }
 
+// ── 活動列表（起始畫面）──────────────────────────────────
+/** 伺服器最新的活動列表 {activeId, events} */
+let eventsState = null;
+/** 這台主辦端已經選好要進開啟中的那場（否則停在活動列表） */
+let eventChosen = false;
+
+function receiveEvents(msg) {
+  eventsState = msg;
+  // 這一頁的本機資料（節目單、題庫…）屬於別場：換成開啟中那一場的，重新載入頁面
+  if (EVENT_SCOPE !== msg.activeId) {
+    try {
+      if (!EVENT_SCOPE) {
+        // 第一次分場：舊版沒有分場的資料原本就是開啟中這一場的，搬過去
+        for (const k of SCOPED_KEYS) {
+          const v = localStorage.getItem(k);
+          if (v !== null && localStorage.getItem(`${k}.${msg.activeId}`) === null) localStorage.setItem(`${k}.${msg.activeId}`, v);
+          localStorage.removeItem(k);
+        }
+      }
+      sessionStorage.setItem(SCOPE_KEY, msg.activeId);
+    } catch { /* 私密視窗：照樣重新載入，只是本機資料不分場 */ }
+    location.reload();
+    return;
+  }
+  let enter = false;
+  try {
+    enter = sessionStorage.getItem(ENTER_KEY) === msg.activeId || sessionStorage.getItem(ENTER_KEY) === 'next';
+    if (enter) sessionStorage.setItem(ENTER_KEY, msg.activeId);
+  } catch { /* 略 */ }
+  renderEventsList();
+  if (enter && !eventChosen) enterActiveEvent();
+  else if (!eventChosen) showEvents();
+}
+
+function showEvents() {
+  $('#console').hidden = true;
+  $('#setup').hidden = true;
+  $('#events').hidden = false;
+  renderEventsList();
+}
+
+/** 進開啟中那一場的控制台（還沒命名的話先進設定頁） */
+function enterActiveEvent() {
+  eventChosen = true;
+  try { sessionStorage.setItem(ENTER_KEY, eventsState.activeId); } catch { /* 略 */ }
+  if (eventInfo) { showConsole(); } else if (eventInfo === null) openSetup(false);
+  // eventInfo 還是 undefined：STAGE_EVENT 還沒到，到了 renderEvent 會開
+}
+
+const fmtEventDate = (t) => (t ? new Date(t).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
+
+function renderEventsList() {
+  const list = $('#events-list');
+  if (!eventsState) return;
+  const rows = eventsState.events;
+  if (!rows.length) {
+    list.replaceChildren(Object.assign(document.createElement('li'), { className: 'events-empty', textContent: '還沒有活動，按右上角「＋ 創建活動」開始。' }));
+    return;
+  }
+  list.replaceChildren(...rows.map((e) => {
+    const active = e.id === eventsState.activeId;
+    const li = document.createElement('li');
+    li.className = `event-row${active ? ' active' : ''}`;
+    const main = document.createElement('div');
+    main.className = 'event-main';
+    const name = Object.assign(document.createElement('p'), { className: 'event-name', textContent: e.name || '（未命名活動）' });
+    if (active) {
+      name.append(Object.assign(document.createElement('span'), {
+        className: `badge${e.paused ? ' paused' : ''}`, textContent: e.paused ? '暫停中' : '開啟中',
+      }));
+    }
+    const theme = THEME_MAP[e.theme]?.label ?? '未選場景';
+    const meta = [
+      theme,
+      e.subtitle,
+      `建立 ${fmtEventDate(e.createdAt)}`,
+      `參與過 ${e.people ?? 0} 人`,
+      active && e.onStage ? `場上 ${e.onStage} 人` : null,
+    ].filter(Boolean).join('　·　');
+    main.append(name, Object.assign(document.createElement('p'), { className: 'event-meta-line', textContent: meta }));
+    const actions = document.createElement('div');
+    actions.className = 'event-actions';
+    if (active) {
+      actions.append(btn('btn-primary', '進入控制台', enterActiveEvent));
+      actions.append(e.paused
+        ? btn('btn-primary', '重新開始', () => pauseEvent(false))
+        : btn('btn-ghost', '暫停', () => pauseEvent(true, e)));
+    } else {
+      actions.append(btn('btn-primary', '切換到這場', () => openEvent(e)));
+      actions.append(btn('btn-ghost', '刪除', () => deleteEvent(e)));
+    }
+    li.append(main, actions);
+    return li;
+  }));
+}
+
+function btn(cls, text, onClick) {
+  const b = Object.assign(document.createElement('button'), { className: cls, textContent: text });
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function openEvent(e) {
+  const cur = eventsState.events.find((x) => x.id === eventsState.activeId);
+  const onStage = cur?.onStage ?? 0;
+  const warn = onStage
+    ? `目前開啟中的「${cur?.name || '未命名活動'}」場上還有 ${onStage} 人，切換後他們的手機會回到進場畫面（資料會保留在那一場）。\n\n確定切換到「${e.name || '未命名活動'}」嗎？`
+    : `切換到「${e.name || '未命名活動'}」？大螢幕會換成這場活動。`;
+  if (!confirm(warn)) return;
+  lastAction = 'events';
+  // 伺服器切換後所有連線會重連；重連後直接進這場的控制台
+  try { sessionStorage.setItem(ENTER_KEY, e.id); } catch { /* 略 */ }
+  ws?.send(JSON.stringify({ type: EV.HOST_OPEN_EVENT, id: e.id }));
+}
+
+/** 暫停：場上的手機回進場畫面、新的人進不來，大螢幕顯示「活動暫停中」。資料都保留 */
+function pauseEvent(paused, e) {
+  if (paused && !confirm(e?.onStage
+    ? `暫停「${e.name || '未命名活動'}」？場上 ${e.onStage} 人的手機會回到進場畫面，重新開始後再進場就接得回原本的資料。`
+    : `暫停「${e?.name || '未命名活動'}」？暫停期間手機進不來，大螢幕會顯示「活動暫停中」。`)) return;
+  lastAction = 'events';
+  ws?.send(JSON.stringify({ type: EV.HOST_PAUSE_EVENT, paused }));
+}
+
+function deleteEvent(e) {
+  if (!confirm(`刪除「${e.name || '未命名活動'}」？這場活動的參與者、積分與紀錄都會一起刪掉，無法復原。`)) return;
+  lastAction = 'events';
+  ws?.send(JSON.stringify({ type: EV.HOST_DELETE_EVENT, id: e.id }));
+}
+
+$('#btn-new-event').addEventListener('click', () => {
+  const cur = eventsState?.events.find((x) => x.id === eventsState.activeId);
+  if (cur?.onStage && !confirm(`目前開啟中的「${cur.name || '未命名活動'}」場上還有 ${cur.onStage} 人。建立新活動會直接切換過去，他們的手機會回到進場畫面。\n\n要繼續嗎？`)) return;
+  lastAction = 'setup';
+  openSetup(false, { creating: true });
+});
+$('#btn-events').addEventListener('click', () => {
+  eventChosen = false;
+  try { sessionStorage.removeItem(ENTER_KEY); } catch { /* 略 */ }
+  ws?.send(JSON.stringify({ type: EV.HOST_LIST_EVENTS }));
+  showEvents();
+});
+
 function showConsole() {
   $('#setup').hidden = true;
+  $('#events').hidden = true;
   $('#console').hidden = false;
   initPreview();
 }
@@ -450,6 +622,14 @@ $('#btn-setup').addEventListener('click', () => {
   const name = $('#event-name').value.trim();
   if (!setupTheme) { showError('請先選擇一個場景'); return; }
   if (!name) { showError('請填寫活動名稱'); $('#event-name').focus(); return; }
+  if (setupCreating) {
+    // 伺服器建好就切過去，所有連線會重連；重連後直接進新活動的控制台
+    try { sessionStorage.setItem(ENTER_KEY, 'next'); } catch { /* 略 */ }
+    ws?.send(JSON.stringify({
+      type: EV.HOST_CREATE_EVENT, theme: setupTheme, name, subtitle: $('#event-subtitle').value.trim(),
+    }));
+    return;
+  }
   ws?.send(JSON.stringify({
     type: EV.HOST_SETUP_EVENT,
     theme: setupTheme,
@@ -460,7 +640,9 @@ $('#btn-setup').addEventListener('click', () => {
 for (const id of ['#event-name', '#event-subtitle']) {
   $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#btn-setup').click(); });
 }
-$('#btn-setup-cancel').addEventListener('click', showConsole);
+$('#btn-setup-cancel').addEventListener('click', () => {
+  if (setupCreating) { setupCreating = false; showEvents(); } else showConsole();
+});
 $('#btn-edit-event').addEventListener('click', () => openSetup(true));
 
 // 方向鍵在場景卡之間移動（radiogroup 慣例）
@@ -1121,6 +1303,7 @@ let wordcloudResultShown = false;
 function renderState(state) {
   roster = state.agents ?? [];
   photoQrState = state.photoQr ?? null;
+  $('#event-paused').hidden = state.paused !== true;
   const qrBtn = $('#btn-photo-qr');
   $('#photo-actions').hidden = !photoQrState;
   qrBtn.setAttribute('aria-pressed', String(!!photoQrState?.visible));
@@ -1272,7 +1455,17 @@ async function loadHistory() {
   }
 }
 
+/** 生成紀錄只抓最近 HISTORY_LIMIT 筆；頁籤上的數字寫「最近幾筆／共幾筆」，免得被當成總數 */
+let historyShown = 0;
+let historyTotal = null;
+function showHistoryCount() {
+  $('#history-count').textContent = historyTotal !== null && historyTotal > historyShown
+    ? `最近 ${historyShown}／共 ${historyTotal}` : String(historyShown);
+}
+
 function renderHistorySummary(summary) {
+  historyTotal = typeof summary?.run_count === 'number' ? summary.run_count : null;
+  showHistoryCount();
   const el = $('#history-summary');
   if (!summary || typeof summary.run_count !== 'number') {
     el.textContent = '暫時讀不到生成服務的統計。';
@@ -1311,7 +1504,8 @@ function historyThumb(url, alt) {
 }
 
 function renderHistory(items) {
-  $('#history-count').textContent = items.length;
+  historyShown = items.length;
+  showHistoryCount();
   $('#history-empty').hidden = items.length > 0;
 
   const body = $('#history-body');
@@ -1428,7 +1622,18 @@ const EXPORT_ERRORS = {
   invalid_asset_id: '紀錄編號不正確',
 };
 
-$('#btn-history-refresh').addEventListener('click', loadHistory);
+// 系統分頁的「角色」框：參與過的角色／角色生成紀錄 兩個頁籤，重新整理按目前那一頁
+let sysPane = 'people';
+function selectSysPane(pane) {
+  sysPane = pane;
+  for (const p of ['people', 'history']) {
+    $(`#sys-tab-${p}`).setAttribute('aria-selected', String(p === pane));
+    $(`#sys-pane-${p}`).hidden = p !== pane;
+  }
+}
+$('#sys-tab-people').addEventListener('click', () => selectSysPane('people'));
+$('#sys-tab-history').addEventListener('click', () => selectSysPane('history'));
+$('#btn-sys-refresh').addEventListener('click', () => (sysPane === 'people' ? requestParticipantsAll() : loadHistory()));
 
 // ─────────────────────────────────────────────────────────────
 // 分頁與玩法切換
@@ -1455,8 +1660,71 @@ function selectTab(id, focus = false) {
     $(`#tab-${t}`).hidden = !on;
     if (on && focus) btn.focus();
   }
-  if (id === 'system' && authed) startHistoryPolling();
+  if (id === 'system' && authed) { startHistoryPolling(); requestParticipantsAll(); }
   else stopHistoryPolling();
+}
+
+// ── 所有參與過的角色（系統分頁）──────────────────────────
+const requestParticipantsAll = () => ws?.send(JSON.stringify({ type: EV.HOST_LIST_PARTICIPANTS }));
+
+/** 參與過的角色：伺服器給的整份，排序在這裡做（點表頭切換正序／倒序） */
+let peopleAll = [];
+let peopleSort = { key: 'firstAt', dir: 1 };
+for (const b of document.querySelectorAll('#people-all-table .sort-btn')) {
+  b.addEventListener('click', () => {
+    const key = b.dataset.sort;
+    // 同一欄再點一次反過來；換一欄時，時間與積分預設大的在前（通常想看最近、最高分），文字照筆畫
+    peopleSort = peopleSort.key === key
+      ? { key, dir: -peopleSort.dir }
+      : { key, dir: key === 'name' || key === 'entry' ? 1 : -1 };
+    renderParticipantsAll(peopleAll);
+  });
+}
+function sortedPeople(list) {
+  const { key, dir } = peopleSort;
+  const val = (p) => p[key];
+  return [...list].sort((a, b) => {
+    const x = val(a);
+    const y = val(b);
+    const empty = (v) => v === null || v === undefined || v === '';
+    // 空的（沒有名字、沒有時間）一律排最後，不論正序倒序
+    if (empty(x) || empty(y)) return empty(x) - empty(y);
+    const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y), 'zh-Hant');
+    return c * dir || (a.firstAt ?? 0) - (b.firstAt ?? 0);
+  });
+}
+
+const fmtPeopleTime = (t) => (t ? new Date(t).toLocaleString('zh-TW', {
+  month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+}) : '—');
+
+function renderParticipantsAll(people) {
+  peopleAll = people;
+  for (const b of document.querySelectorAll('#people-all-table .sort-btn')) {
+    const on = b.dataset.sort === peopleSort.key;
+    b.dataset.dir = on ? (peopleSort.dir > 0 ? 'asc' : 'desc') : '';
+    b.closest('th').setAttribute('aria-sort', on ? (peopleSort.dir > 0 ? 'ascending' : 'descending') : 'none');
+  }
+  $('#people-all-count').textContent = people.length;
+  $('#people-all-empty').hidden = people.length > 0;
+  $('#people-all-body').replaceChildren(...sortedPeople(people).map((p) => {
+    const tr = document.createElement('tr');
+    const face = document.createElement('td');
+    face.className = 'face';
+    face.append(avatarThumb(p.avatar));
+    const cell = (text) => Object.assign(document.createElement('td'), { textContent: text });
+    tr.append(
+      face,
+      cell(p.name || '（未命名）'),
+      cell(p.entry || '—'),
+      cell(fmtPeopleTime(p.firstAt)),
+      cell(fmtPeopleTime(p.lastAt)),
+      cell(String(p.score ?? 0)),
+      cell(p.status),
+    );
+    if (p.status === '在場') tr.className = 'present';
+    return tr;
+  }));
 }
 
 for (const t of TABS) {
@@ -1521,7 +1789,7 @@ for (const sel of Object.values(LIVE_VIEW)) {
 // ─────────────────────────────────────────────────────────────
 // 存在這台電腦的瀏覽器裡：原本只在記憶體，主控台一重新整理整串就沒了。
 // 超過 12 小時的丟掉（隔天的活動不該看到昨天的動態）。
-const FEED_KEY = 'pixelair.feed';
+const FEED_KEY = scoped('pixelair.feed');
 const FEED_MAX = 60;
 const FEED_TTL_MS = 12 * 60 * 60 * 1000;
 /** 重連時伺服器會補送進行中的題目等狀態，同一句話在這段時間內只記一次 */
@@ -1567,7 +1835,7 @@ else pushFeed('等待現場活動…', 'ev-empty');
 // ─────────────────────────────────────────────────────────────
 // 即時問答
 // ─────────────────────────────────────────────────────────────
-const BANK_KEY = 'pixelair.quizBank';
+const BANK_KEY = scoped('pixelair.quizBank');
 
 /** @type {object|null} 目前的題目（伺服器視圖，不含正解） */
 let quiz = null;
@@ -1712,7 +1980,7 @@ function startQuiz(draft) {
 // ── 連續問答：題庫一次跑完 ────────────────────────────────
 // 進度存在這台電腦（localStorage）：主控台中途重整，回來仍按得到「下一題」。
 // 伺服器只知道「現在這一題」，題目順序是主辦端的事 —— 跟節目單同一個做法。
-const RUN_KEY = 'pixelair.quizRun';
+const RUN_KEY = scoped('pixelair.quizRun');
 /** @type {{items: object[], index: number}|null} */
 let quizRun = null;
 try { quizRun = JSON.parse(localStorage.getItem(RUN_KEY) ?? 'null'); } catch { quizRun = null; }
@@ -2064,7 +2332,7 @@ renderBank();
 // 現場按「下一項」就是把那則訊息送出去，與直接按該玩法的按鈕完全相同。
 // 存在這台電腦的瀏覽器裡（同題庫），伺服器重開也不會掉。
 // ─────────────────────────────────────────────────────────────
-const RS_KEY = 'pixelair.runSheet';
+const RS_KEY = scoped('pixelair.runSheet');
 const RS_KIND = {
   mission: '任務', wordcloud: '文字雲',
   quiz: '問答', photo: '合照', theme: '場景', bingo: '賓果',

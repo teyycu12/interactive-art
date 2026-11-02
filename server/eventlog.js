@@ -56,6 +56,12 @@ export class EventLog {
    */
   constructor({ dir, session, enabled = true, now = Date.now }) {
     this.session = session;
+    /**
+     * 目前開啟的活動（server/sessions.js）。有設就寫進每一筆，同一個紀錄檔裡好幾場活動才分得開
+     * （主辦端「所有參與過的角色」靠它挑出這一場的進場紀錄）。
+     * @type {string|null}
+     */
+    this.event = null;
     this.file = path.resolve(dir, `${session}.jsonl`);
     this.enabled = enabled;
     this.now = now;
@@ -81,7 +87,7 @@ export class EventLog {
   }
 
   #line(ev, fields) {
-    return `${JSON.stringify({ t: this.now(), session: this.session, ev, ...fields })}\n`;
+    return `${JSON.stringify({ t: this.now(), session: this.session, ...(this.event && { event: this.event }), ev, ...fields })}\n`;
   }
 
   /**

@@ -39,8 +39,11 @@ function check(label, ok, extra = '') {
 // 快照寫到暫存檔並在開始前刪掉，測試之間互不影響；
 // 但持久化本身保持開啟 —— 重開後能否接續正是要驗的事情之一。
 const STATE_FILE = path.join(os.tmpdir(), 'pixelair-e2e-state.json');
+// 每場活動一個快照檔，放在快照檔旁邊（server/sessions.js 的 sessionsDirFor）
+const SESSIONS_DIR = path.join(os.tmpdir(), 'pixelair-e2e-state.sessions');
 const KEY_PATTERN = /主辦端通行密鑰\s+([A-Z0-9]+)/;
 try { fs.rmSync(STATE_FILE, { force: true }); } catch { /* 略 */ }
+try { fs.rmSync(SESSIONS_DIR, { recursive: true, force: true }); } catch { /* 略 */ }
 // 事件紀錄同理：寫到暫存目錄，不能落進專案的 data/events/ 混進真正的場次
 const EVENTS_DIR = path.join(os.tmpdir(), `pixelair-e2e-events-${process.pid}`);
 const EVENTS_FILE = path.join(EVENTS_DIR, 'e2e.jsonl');
@@ -102,6 +105,7 @@ const HOST_KEY = await launch();
 function finish() {
   server?.kill();
   try { fs.rmSync(STATE_FILE, { force: true }); } catch { /* 略 */ }
+  try { fs.rmSync(SESSIONS_DIR, { recursive: true, force: true }); } catch { /* 略 */ }
   try { fs.rmSync(EVENTS_DIR, { recursive: true, force: true }); } catch { /* 略 */ }
   console.log(`\n${pass}/${pass + fail} 通過`);
   process.exit(fail ? 1 : 0);
@@ -1491,6 +1495,127 @@ await sleep(200);
   await sleep(200);
 }
 
+// ── 活動列表：建立、切換、刪除（2026-10-29）──────────────
+// 主持人可以事先建好好幾場活動，參與者與積分各自分開（server/sessions.js）。
+// 切換時主辦端與大螢幕的連線會被關掉重連，所以這裡用自己開的主辦端連線。
+{
+  const openHost = () => new Promise((res) => {
+    const w = new WebSocket(URL);
+    const msgs = [];
+    w.on('message', (d) => msgs.push(JSON.parse(d)));
+    w.on('open', () => {
+      w.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+      setTimeout(() => res({ w, msgs }), 500);
+    });
+  });
+  const last = (h, type) => h.msgs.filter((m) => m.type === type).at(-1);
+  const eventName = '新生交流夜';   // 前面活動設定那段取的名字
+  let h = await openHost();
+  const evA = last(h, 'HOST_EVENTS');
+  const aId = evA?.activeId;
+  check('登入後收到活動列表，標出開啟中的那場',
+    !!aId && evA.events.some((e) => e.id === aId && e.name === eventName), JSON.stringify(evA?.events?.map((e) => e.name)));
+
+  // 甲場的參與者（前面的小美、阿賓已經離線了，另外開一支）
+  const p1 = joinPhone('甲場的人');
+  const p1Rejects = [];
+  p1.ws.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'CLIENT_REJECT') p1Rejects.push(m); });
+  await sleep(500);
+  const p1InA = p1.welcome;
+  let closedWith = null;
+  h.w.on('close', (code) => { closedWith = code; });
+  h.w.send(JSON.stringify({ type: 'HOST_CREATE_EVENT', name: '第二場', theme: 'kitchen' }));
+  await sleep(700);
+  check('建立新活動後，場上的手機回到進場畫面（說明是切換了活動）',
+    p1Rejects.some((m) => m.kind === 'event_switched'), JSON.stringify(p1Rejects));
+  check('建立新活動後主辦端連線被關掉，重連拿新活動的狀態', closedWith === 4001, String(closedWith));
+
+  h = await openHost();
+  const evB = last(h, 'HOST_EVENTS');
+  const bId = evB?.activeId;
+  check('新活動成為開啟中的那場', bId && bId !== aId && evB.events.find((e) => e.id === bId)?.name === '第二場'
+    && evB.events.some((e) => e.id === aId));
+  check('新活動的名稱與場景', last(h, 'STAGE_EVENT')?.event?.name === '第二場' && last(h, 'STAGE_THEME')?.theme === 'kitchen');
+  check('新活動場上沒有人、積分是空的',
+    last(h, 'HOST_STATE')?.agents?.length === 0 && (last(h, 'HOST_STATE')?.leaderboard?.length ?? 0) === 0,
+    JSON.stringify(last(h, 'HOST_STATE')?.leaderboard));
+
+  const other = joinPhone('第二場的人');
+  // 甲場的人帶著甲場的憑證進第二場：第二場不認得，給新的身分（資料不混在一起）
+  const rejoin = (box) => box.ws.send(JSON.stringify({
+    type: 'CLIENT_JOIN', userId: p1InA.userId, rejoinToken: p1InA.rejoinToken, name: '甲場的人', avatar: AVATAR,
+  }));
+  rejoin(p1);
+  await sleep(500);
+  check('甲場的憑證在第二場不算數，拿到新的身分', p1.welcome?.userId && p1.welcome.userId !== p1InA.userId,
+    `${p1InA.userId} → ${p1.welcome?.userId}`);
+  h.w.send(JSON.stringify({ type: 'HOST_DELETE_EVENT', id: bId }));
+  await sleep(300);
+  check('開啟中的活動不能刪', h.msgs.some((m) => m.type === 'HOST_REJECT' && /不能刪除/.test(m.reason)));
+
+  h.w.send(JSON.stringify({ type: 'HOST_OPEN_EVENT', id: aId }));
+  await sleep(700);
+  h = await openHost();
+  check('切回原本那場', last(h, 'HOST_EVENTS')?.activeId === aId && last(h, 'STAGE_EVENT')?.event?.name === eventName);
+  check('切回來後，第二場的人不在這場', !(last(h, 'HOST_STATE')?.agents ?? []).some((a) => a.name === '第二場的人'));
+  // 切回甲場：甲場的人用甲場的憑證進場，認得回原本的身分
+  rejoin(p1);
+  await sleep(500);
+  check('切回來後，原本的人用原憑證進場，拿回原本的身分', p1.welcome?.userId === p1InA.userId,
+    `${p1InA.userId} → ${p1.welcome?.userId}`);
+
+  // 暫停／重新開始：暫停時場上的手機回進場畫面、進不來；重新開始後用原憑證接回來
+  const pausedRejects = () => p1Rejects.filter((m) => m.kind === 'event_paused').length;
+  h.w.send(JSON.stringify({ type: 'HOST_PAUSE_EVENT', paused: true }));
+  await sleep(400);
+  check('暫停：場上的手機回到進場畫面', pausedRejects() === 1, JSON.stringify(p1Rejects.at(-1)));
+  check('暫停：活動列表標出暫停中', last(h, 'HOST_EVENTS')?.events?.find((e) => e.id === aId)?.paused === true);
+  p1.welcome = null;
+  rejoin(p1);
+  await sleep(300);
+  check('暫停中進不來', pausedRejects() === 2 && p1.welcome === null);
+  h.w.send(JSON.stringify({ type: 'HOST_PAUSE_EVENT', paused: false }));
+  await sleep(300);
+  rejoin(p1);
+  await sleep(400);
+  check('重新開始後用原憑證進得來', p1.welcome?.userId === p1InA.userId
+    && last(h, 'HOST_EVENTS')?.events?.find((e) => e.id === aId)?.paused === false);
+
+  // 角色來源分得出拍照與圖庫上傳；沒報來源的舊版手機記成「拍照／圖庫（舊紀錄）」
+  const cvAvatar = (asset) => ({
+    source: 'CV',
+    textures: Object.fromEntries(['head', 'torso', 'legs'].map((k) => [k, `/assets/gen/${asset}/${k}.webp`])),
+    fallbackColors: { skin: '#F4C08A', hair: '#4A2C1A', torso: '#8FA05E', legs: '#B7A98A' },
+  });
+  const cvPhones = [['圖庫來的人', 'upload', 'b'], ['舊版手機的人', undefined, 'c']].map(([name, entry, ch]) => {
+    const ws = new WebSocket(URL);
+    ws.on('open', () => ws.send(JSON.stringify({ type: 'CLIENT_JOIN', name, avatar: cvAvatar(ch.repeat(32)), entry })));
+    return ws;
+  });
+  await sleep(600);
+
+  // 系統分頁「所有參與過的角色」：只列這一場的人（甲場的人在、第二場的人不在）
+  h.w.send(JSON.stringify({ type: 'HOST_LIST_PARTICIPANTS' }));
+  await sleep(300);
+  const everyone = last(h, 'HOST_PARTICIPANTS')?.people ?? [];
+  check('所有參與過的角色只列這一場的人',
+    everyone.some((p) => p.name === '甲場的人' && p.status === '在場') && !everyone.some((p) => p.name === '第二場的人'),
+    JSON.stringify(everyone.map((p) => [p.name, p.status])));
+  const entryOf = (name) => everyone.find((p) => p.name === name)?.entry;
+  check('角色來源分得出圖庫上傳，沒報來源的記成舊紀錄',
+    entryOf('圖庫來的人') === '圖庫上傳' && entryOf('舊版手機的人') === '拍照／圖庫（舊紀錄）',
+    JSON.stringify(everyone.map((p) => [p.name, p.entry])));
+  for (const ws of cvPhones) ws.close();
+
+  h.w.send(JSON.stringify({ type: 'HOST_DELETE_EVENT', id: bId }));
+  await sleep(300);
+  check('可以刪除別場活動', !(last(h, 'HOST_EVENTS')?.events ?? [{ id: bId }]).some((e) => e.id === bId));
+  other.ws.close();
+  p1.ws.close();
+  h.w.close();
+  await sleep(200);
+}
+
 // ── 重開伺服器後的資料保留 ────────────────────────────────
 // 現場最真實的災難情境：主辦筆電當掉，或有人誤觸 Ctrl+C。
 const amyId = amy.welcome.userId;
@@ -1518,7 +1643,8 @@ await stopServer();
     'message', 'persona', 'message_report']
     .filter((k) => !kinds.has(k));
   check('前半段走過的玩法都留下事件', missing.length === 0, `缺 ${missing.join('、')}`);
-  const joins = evs.filter((e) => e.ev === 'join');
+  // 活動段落另外用貼圖角色測過角色來源（圖庫來的人、舊版手機的人），這裡只看捏臉進場的
+  const joins = evs.filter((e) => e.ev === 'join' && !['圖庫來的人', '舊版手機的人'].includes(e.name));
   check('捏臉入場記為 builder 且沒有生成 id',
     joins.length > 0 && joins.every((e) => e.entry === 'builder' && e.genReq === undefined
       && typeof e.name === 'string'),
@@ -1532,9 +1658,12 @@ await stopServer();
 }
 
 const keyAfterRestart = await launch();
+// 事件紀錄是非同步寫入的：終端機印出密鑰時，這次的 session_start 不一定已經落地。
+// 直接讀會偶爾只看到一筆（CI 上這項時好時壞的原因），等它寫進來再判斷
+for (let i = 0; i < 30 && readEvents().filter((e) => e.ev === 'session_start').length < 2; i++) await sleep(100);
 check('同一場次重開後接著寫，不覆蓋前半場',
   readEvents().filter((e) => e.ev === 'session_start').length === 2
-  && readEvents().at(-1)?.resumed === true);
+  && readEvents().filter((e) => e.ev === 'session_start').at(-1)?.resumed === true);
 
 check('重開後通行密鑰不變，主辦端不必重讀新號碼',
   keyAfterRestart === HOST_KEY, `${HOST_KEY} → ${keyAfterRestart}`);

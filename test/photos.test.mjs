@@ -75,6 +75,14 @@ describe('合照網址：主辦端的網址與網卡排序（2026-10-19「QR cod
     };
     assert.deepEqual(rankLanAddresses(ifaces), ['192.168.50.208', '192.168.56.1', '172.20.0.1']);
   });
+
+  test('學校 Wi-Fi 發 172.x 也排第一（不能跟虛擬網卡一起被排到後面）', () => {
+    const ifaces = {
+      乙太網路: [{ family: 'IPv4', internal: false, address: '192.168.56.1' }],
+      'Wi-Fi': [{ family: 'IPv4', internal: false, address: '172.19.13.223' }],
+    };
+    assert.deepEqual(rankLanAddresses(ifaces), ['172.19.13.223', '192.168.56.1']);
+  });
 });
 
 describe('合照存檔與下載', () => {
