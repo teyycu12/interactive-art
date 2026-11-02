@@ -176,7 +176,10 @@ function sendTo(p, type, payload = {}) {
   if (p.ws?.readyState === WebSocket.OPEN) p.ws.send(JSON.stringify({ type, ...payload }));
 }
 
-/** 設定移動方向。applyMove 的語意是「持續到下一次輸入」，因此按一下就會一直走。 */
+/**
+ * 設定移動方向，按一下就會一直走。伺服器超過 INPUT_STALE_MS（0.5 秒）沒收到推桿就當作放手，
+ * 所以方向由下面的轉向迴圈每 STEER_MS 重送一次，跟真的手機一樣。
+ */
 function setDir(p, dx, dy) {
   const stop = dx === 0 && dy === 0;
   p.dir = stop ? null : [dx, dy];
@@ -493,6 +496,12 @@ function updateLiveCount() {
 
 setInterval(() => {
   for (const p of puppets) {
+    // 手動方向鍵：持續重送，否則伺服器 0.5 秒後就當作放手（INPUT_STALE_MS）
+    if (!p.gone && !p.target && p.dir) {
+      const mag = Math.hypot(p.dir[0], p.dir[1]) || 1;
+      sendTo(p, EV.INPUT_MOVE, { vector: { x: p.dir[0] / mag, y: p.dir[1] / mag }, intensity: 1 });
+      continue;
+    }
     if (p.gone || !p.target || !p.pos) continue;
     const prop = PROPS.find((x) => x.id === p.target);
     if (!prop) continue;

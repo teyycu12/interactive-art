@@ -38,6 +38,8 @@ function titleOf(spec, rule) {
     case 'COLOR_HUNT': return `找${rule.label}的人配對`;
     case 'TRAIT_HUNT': return `找「${rule.label}」的人配對`;
     case 'GATHER': return `${rule.teamSize} 人到${rule.label}集合`;
+    // 碼長不進 ruleKey：一個人同時在兩場解碼裡會拿到兩份符號，分不清是哪一組的
+    case 'DECODE': return `${spec.label}（${rule.codeLength} 碼）`;
     case 'DIFF_TRAIT':
     case 'SAME_TRAIT': return `${spec.label}（依${rule.title}）`;
     default: return spec.label;

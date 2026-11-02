@@ -514,7 +514,36 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   font-size: 10px; line-height: 1.1; background: #FFFCF5;
 }
 #controller > #emotes button em { display: block; font-size: 22px; font-style: normal; line-height: 1; }
-/* 話題卡會出現在畫面最下方，右邊讓出表情鍵的寬度，按鈕才不會被蓋住 */
+/* 投籃鍵：只在拿著球、站在籃框區時出現，用球的顏色一眼看得出來 */
+#controller > #emotes .btn-shoot { background: #E07A2F; color: #fff; border-color: var(--ink); }
+#controller > #emotes .btn-shoot[hidden] { display: none; }
+/* 拿著球的狀態：搖桿（左下）與表情鍵（右下）之間 */
+#controller > .hoops-chip {
+  position: absolute; z-index: 3; margin: 0;
+  left: 50%; transform: translateX(-50%);
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  max-width: calc(100% - 260px); min-width: 120px;
+  padding: 6px 12px; border-radius: 14px;
+  background: #FFF4E6; border: 2px solid var(--ink); box-shadow: var(--drop-sm);
+  font-size: 12px; font-weight: 800; line-height: 1.35; text-align: center; color: var(--ink);
+}
+#controller > .hoops-chip[hidden] { display: none; }
+.shoot-overlay {
+  position: fixed; inset: 0; z-index: 9990;
+  background: linear-gradient(#3b4252, #1f232b);
+  display: flex; flex-direction: column;
+  touch-action: none;
+}
+.shoot-overlay[hidden] { display: none; }
+.shoot-overlay canvas { flex: 1; width: 100%; min-height: 0; touch-action: none; }
+.shoot-overlay .sheet-close { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 12px; z-index: 1; }
+.shoot-msg {
+  margin: 0; padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+  text-align: center; font-size: 17px; font-weight: 800; color: #FFF4E6; min-height: 1.4em;
+}
+
+/* 話題卡會出現在畫面最下方，右邊讓出表情鍵的寬度，按鈕才不會被蓋住。
+   卡片本身不能寫 width: 100%：加上這個 margin 會整張被推出右邊，讓位等於沒讓（2026-10-29 實機） */
 #controller > .topic-card, #controller > .topic-chip { margin-right: 76px; }
 
 /* 「某某在跟你揮手」。用大螢幕「1號桌」那種黃牌（ink 字 8.7:1）——
@@ -682,7 +711,7 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .sheet-brief { margin: 0 0 16px; font-size: 13px; color: var(--ink-soft); }
 
 .bingo-mine {
-  margin: 0 0 10px; padding: 8px 12px;
+  margin: 0 0 10px; padding: 8px 12px; white-space: pre-line;
   font-size: 13px; font-weight: 700; line-height: 1.5; color: var(--ink);
   background: var(--wall-tint); border-radius: 10px;
 }
@@ -1385,6 +1414,62 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .wc-msg { margin: 6px 0 0; font-size: 13px; font-weight: 700; color: var(--ink); }
 .wc-mine[hidden], .wc-msg[hidden] { display: none; }
 
+/* ── 解碼任務 ── 頭頂🔑的顏色（--key）就是大螢幕上這一組的顏色，找搭檔時對得上 */
+.dc-box {
+  --key: var(--line);
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--r);
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  box-shadow: inset 6px 0 0 var(--key), var(--drop-sm);
+  padding-left: 18px;
+}
+.dc-box[hidden] { display: none; }
+.dc-head { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 15px; color: var(--ink); }
+.dc-key {
+  flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px;
+  border-radius: 50%; background: var(--key); border: 2px solid var(--ink); font-size: 15px;
+}
+.dc-role { font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: var(--tag); color: var(--ink); }
+.dc-role[hidden] { display: none; }
+/* 顏色那顆膠囊就用這一組的顏色：手機上跟大螢幕頭頂的鎖／鑰匙一眼對得上 */
+.dc-role { background: #FFFDF8; color: var(--ink); border: 2px solid var(--ink); font-size: 13px; }
+/* 底色不直接用組色：白色、黃色那幾組壓白字讀不出來，改成前面一顆色點 */
+.dc-role::before {
+  content: ''; display: inline-block; width: 12px; height: 12px; margin-right: 4px; vertical-align: -1px;
+  border-radius: 50%; background: var(--key); border: 1.5px solid var(--ink);
+}
+.dc-find { margin: 6px 0 0; font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.4; }
+.dc-find[hidden] { display: none; }
+.dc-items { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.dc-items[hidden] { display: none; }
+.dc-item {
+  display: inline-flex; flex-direction: column; align-items: center; min-width: 52px;
+  padding: 4px 6px; border-radius: var(--r-sm); background: #FFFDF8; border: 2px solid var(--line);
+}
+.dc-item b { font-size: 28px; line-height: 1.15; font-weight: 400; }
+.dc-item i { font-style: normal; font-size: 17px; font-weight: 800; color: var(--ink); }
+.dc-item small { font-size: 11px; color: var(--ink-soft); }
+/* 密碼本：符號＝數字橫排，八格排成兩列 */
+.dc-items.is-book { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.dc-items.is-book .dc-item { flex-direction: row; justify-content: center; gap: 4px; min-width: 0; flex-wrap: wrap; }
+.dc-items.is-book .dc-item b { font-size: 22px; }
+.dc-items.is-book .dc-item small { flex-basis: 100%; text-align: center; }
+.dc-hint { margin: 6px 0 0; font-size: 13px; color: var(--ink-soft); line-height: 1.4; }
+.dc-form { display: flex; gap: 8px; margin-top: 8px; }
+.dc-form[hidden] { display: none; }
+#dc-input {
+  flex: 1; min-width: 0; min-height: 44px; padding: 6px 12px; font: inherit; font-size: 22px;
+  letter-spacing: .3em; font-weight: 800; text-align: center;
+  border: 2px solid var(--line); border-radius: 12px; background: #FFFDF8; color: var(--ink);
+}
+#dc-input:focus { outline: none; border-color: var(--ink); }
+#dc-send { width: auto; flex: none; min-height: 44px; padding: 0 18px; }
+.dc-msg { margin: 6px 0 0; font-size: 13px; font-weight: 700; color: var(--accent-ink); }
+.dc-msg.ok { color: var(--ok-ink); }
+.dc-msg[hidden] { display: none; }
+
 /* ── 橫式：16:9 的畫框，所有控制都收在虛線框內 ─────────────
    畫面固定成 16:9、置中，外面留深色邊（與大螢幕像素場景的邊框同色）。
    搖桿區撐滿整個畫框、當作外框；其餘元件疊在它上面：
@@ -1422,10 +1507,33 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
   #controller > .bar { grid-column: 1 / -1; grid-row: 1; margin-bottom: 6px; min-height: 0; }
   #controller > #mission-banner,
   #controller > #wordcloud-box,
+  #controller > #decode-box,
   #controller > #links-strip,
   #controller > .agency-row { grid-column: 1; margin-bottom: 6px; }
   #controller > #mission-banner { grid-row: 2; }
   #controller > #wordcloud-box { grid-row: 4; }
+  #controller > #decode-box {
+    grid-row: 3; padding-block: 6px;
+    /* 橫式高度有限：輸入框放到標題列右邊，少佔一列 */
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: center;
+  }
+  #controller > #decode-box[hidden] { display: none; }
+  #controller > #decode-box .dc-head { grid-column: 1; grid-row: 1; }
+  #controller > #decode-box .dc-form { grid-column: 2; grid-row: 1; margin-top: 0; }
+  #controller > #decode-box #dc-input { width: 7.5em; flex: none; min-height: 38px; font-size: 18px; }
+  #controller > #decode-box #dc-send { min-height: 38px; }
+  #controller > #decode-box .dc-items,
+  #controller > #decode-box .dc-find,
+  #controller > #decode-box .dc-msg { grid-column: 1 / -1; }
+  #controller > #decode-box .dc-find { margin-top: 2px; font-size: 13px; }
+  #controller > #decode-box .dc-items { margin-top: 6px; gap: 4px; }
+  #controller > #decode-box .dc-item { padding: 2px 4px; flex-wrap: nowrap; }
+  #controller > #decode-box .dc-item b { font-size: 20px; }
+  #controller > #decode-box .dc-item i { font-size: 15px; }
+  /* 橫式高度有限：密碼本八格排成一列、說明收掉（搭檔與角色已經寫在標題列） */
+  #controller > #decode-box .dc-items.is-book { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  #controller > #decode-box .dc-item small,
+  #controller > #decode-box .dc-hint { display: none; }
   #controller > #links-strip { grid-row: 5; }
   #controller > .agency-row { grid-row: 6; }
 
@@ -1587,7 +1695,6 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .pq-option:active, .pq-option:hover { border-color: var(--ink); }
 .pq-foot { display: flex; align-items: center; margin-top: 10px; }
 .pq-foot .btn-link { margin-left: 0; }
-.pq-foot .pq-skip.btn-link { margin-left: auto; }
 .pq-result { text-align: center; }
 .pq-emoji { display: block; font-size: 52px; line-height: 1.1; margin-bottom: 4px; }
 .pq-result h2 { margin: 0 0 6px; font-size: 19px; color: var(--ink); }
@@ -1760,11 +1867,12 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .code-timer { font-size: 12px; font-weight: 700; opacity: .8; white-space: nowrap; }
 .mycode-timer { display: block; margin-top: 4px; font-size: 13px; font-weight: 700; opacity: .85; }
 
-/* 話題桌的題目卡：跟揮手提示同一個位置，但用紙色底 —— 這是要念出來聊的題目，不是待辦 */
+/* 話題桌的題目卡：跟揮手提示同一個位置，但用紙色底 —— 這是要念出來聊的題目，不是待辦。
+   一次只有一排選項、做完的步驟縮成一行：卡片在搖桿下方，高一點就擠掉場景（2026-10-29 實機） */
 .topic-card {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
   flex-shrink: 0;
-  width: 100%;
+  align-self: stretch;
   padding: 8px 12px;
   background: #FFFCF5;
   color: var(--ink);
@@ -1790,13 +1898,33 @@ body:has(#msg-notice:not([hidden])) #controller > #greet-invite:not([hidden]) ~ 
 .topic-chip[hidden] { display: none; }
 .topic-card .tc-head { font-size: 11px; font-weight: 700; color: var(--ok-ink); letter-spacing: .06em; }
 .topic-card .tc-q { font-size: 15px; font-weight: 800; line-height: 1.35; }
-.topic-card .tc-with { font-size: 12px; color: var(--ink-soft); }
+.topic-card .tc-done { font-size: 12px; color: var(--ink-soft); }
+.topic-card .tc-target { font-size: 12px; font-weight: 700; color: var(--ok-ink); }
+/* 卡片右邊讓了表情鍵，只剩約 250px：四個選項排 2×2、三個排一排（app.js 設 --cols）。
+   自動換行會排成 3＋1，最後一顆孤零零的 */
+.topic-card .tc-opts { display: grid; grid-template-columns: repeat(var(--cols, 2), 1fr); gap: 6px; width: 100%; }
+.topic-card .tc-opt {
+  min-height: 36px; padding: 4px 6px; position: relative;
+  font: inherit; font-size: 12px; font-weight: 700; line-height: 1.2; color: var(--ink);
+  background: #fff; border: 2px solid var(--ink); border-radius: 10px;
+}
+/* 視覺 36px，可觸範圍撐到 44px（UI-STYLING 的 .swatch 同一招） */
+.topic-card .tc-opt::after { content: ''; position: absolute; left: 0; right: 0; top: -4px; bottom: -4px; }
+.topic-card .tc-opt:disabled { opacity: .5; }
+.topic-card .tc-note { font-size: 12px; color: var(--ink-soft); }
+.topic-card .tc-note.win { font-size: 14px; font-weight: 800; color: var(--ok-ink); }
+.topic-card .tc-note.miss { font-size: 13px; font-weight: 700; color: var(--ink); }
+.topic-card .tc-about { font-size: 12px; font-weight: 700; color: var(--ink); }
+.topic-card .tc-opts:empty, .topic-card .tc-note:empty,
+.topic-card [hidden] { display: none; }
 
 /* 今天認識的人 */
 .links-list { list-style: none; margin: 8px 0 14px; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .links-list li { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 13px; font-weight: 700; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
-.links-list .lf { width: 56px; height: 64px; display: grid; place-items: center; }
-.links-list .lf canvas { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+/* 人物圖用固定框＋object-fit 縮進去。原本只寫 max-width/max-height: 100%，
+   iOS Safari 在 grid 裡不認這個百分比，人物照原尺寸長出框外、名字壓在腳上（2026-10-29 實機） */
+.links-list .lf { width: 60px; height: 80px; overflow: hidden; }
+.links-list .lf canvas { display: block; width: 100%; height: 100%; object-fit: contain; object-position: center bottom; image-rendering: pixelated; }
 .links-list .lw { display: flex; flex-direction: column; gap: 2px; }
 .links-list .lw small { font-size: 11px; font-weight: 600; color: var(--ink-soft); }
 
@@ -1855,3 +1983,81 @@ body:has(#greet-invite:not([hidden])):has(#bingo-offer:not([hidden])) .toast { t
 .pick-row b { overflow-wrap: anywhere; }
 .pick-face { flex: none; width: 40px; height: 44px; display: grid; place-items: center; }
 .pick-face canvas, .pick-face img { max-width: 100%; max-height: 100%; image-rendering: pixelated; }
+
+/* ── 新活動開始的整頁卡片 ─────────────────────────────── */
+.activity-intro { z-index: 140; background: rgba(47, 42, 38, .6); }
+.intro-card { text-align: center; max-width: 360px; padding: 28px 22px 22px; }
+.intro-kind {
+  display: inline-block; margin: 0 0 10px; padding: 4px 14px;
+  font-size: 13px; font-weight: 800; letter-spacing: .08em;
+  color: var(--paper); background: var(--ink); border-radius: 999px;
+}
+.intro-card h2 { margin: 0 0 12px; font-size: 24px; line-height: 1.35; overflow-wrap: anywhere; }
+.intro-rule { margin: 0 0 20px; font-size: 16px; line-height: 1.6; color: var(--ink); white-space: pre-line; }
+.intro-rule[hidden] { display: none; }
+.intro-card .btn-primary { width: 100%; min-height: 52px; font-size: 17px; }
+@media (prefers-reduced-motion: no-preference) {
+  .activity-intro:not([hidden]) .intro-card { animation: intro-pop .28s ease-out; }
+}
+@keyframes intro-pop { from { opacity: 0; transform: translateY(16px) scale(.96); } to { opacity: 1; transform: none; } }
+
+/* 換裝的快速套組：一排可以左右滑的小按鈕，放在分類分頁上面 */
+.du-presets {
+  display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 8px; margin: 0 0 4px;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.du-presets::-webkit-scrollbar { display: none; }
+.du-presets[hidden] { display: none; }
+.du-preset {
+  flex: none; min-height: 40px; padding: 6px 14px;
+  font: inherit; font-size: 14px; font-weight: 700; color: var(--ink);
+  background: #FFFCF5; border: 2px solid var(--ink); border-radius: 999px;
+}
+.du-preset:active { transform: translateY(1px); }
+
+/* 生成完成頁的「改用換裝」：次要動作，放在兩顆主按鈕下面 */
+.du-from-scan { display: block; margin: 10px auto 0; min-height: 44px; font-size: 14px; }
+
+/* ── 表情選單：從「表情」鍵往左上展開的小面板，不是覆蓋層 ── */
+.emote-palette {
+  position: fixed; z-index: 96;
+  right: calc(82px + env(safe-area-inset-right));
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  width: min(300px, calc(100vw - 110px));
+  max-height: calc(100vh - 40px); overflow-y: auto;
+  padding: 10px 12px 12px;
+  background: var(--paper); border: 2.5px solid var(--ink); border-radius: var(--r);
+  box-shadow: var(--drop);
+}
+.emote-palette[hidden] { display: none; }
+.ep-title { margin: 2px 0 6px; font-size: 12px; font-weight: 800; letter-spacing: .06em; color: var(--ink-soft); }
+.ep-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 8px; }
+.ep-grid.ep-motions { grid-template-columns: repeat(3, 1fr); margin-bottom: 0; }
+.ep-item {
+  display: grid; place-items: center; gap: 1px; min-height: 48px; padding: 4px 2px;
+  font: inherit; font-size: 10px; line-height: 1.1; color: var(--ink);
+  background: #FFFCF5; border: 2px solid var(--line); border-radius: 12px;
+}
+.ep-item em { font-style: normal; font-size: 22px; line-height: 1; }
+.ep-item:active { transform: scale(.94); }
+
+/* ── 3、2、1 倒數：全螢幕大數字，不擋操作 ── */
+.countdown-321 {
+  position: fixed; inset: 0; z-index: 150;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  background: rgba(47, 42, 38, .55);
+  pointer-events: none;
+}
+.countdown-321[hidden] { display: none; }
+.c3-label {
+  padding: 6px 18px; border-radius: 999px;
+  background: var(--paper); color: var(--ink); font-size: 16px; font-weight: 800;
+}
+.c3-num {
+  font-size: min(42vw, 38vh); line-height: 1; font-weight: 900; color: var(--paper);
+  text-shadow: 0 6px 0 var(--ink), 0 0 24px rgba(0, 0, 0, .35);
+  animation: c3-pop .9s ease-out;
+}
+.c3-num.final { font-size: min(16vw, 14vh); }
+@keyframes c3-pop { from { transform: scale(1.5); opacity: .2; } 30% { opacity: 1; } to { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .c3-num { animation: none; } }

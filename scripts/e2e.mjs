@@ -214,6 +214,14 @@ phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'CHEERS' }));
 phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'DROP_TABLE' }));
 await sleep(200);
 check('白名單外的動作被丟棄（含已移除的乾杯）', live()[0].emote === 'WAVE');
+await sleep(650);
+phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'LAUGH' }));
+await sleep(200);
+check('表情選單的表情傳得到大螢幕', live()[0].emote === 'LAUGH');
+await sleep(650);
+phone.send(JSON.stringify({ type: 'INPUT_ACTION', action: 'JUMP' }));
+await sleep(200);
+check('角色動作（跳一下）傳得到大螢幕', live()[0].emote === 'JUMP');
 
 // ── M2：閒置交還控制權 ────────────────────────────────────
 await sleep(4600);
@@ -1198,6 +1206,103 @@ host.on('message', (d) => {
   await sleep(300);
 }
 
+// ── 解碼任務（server/decode.js）─────────────────────────────
+// 一人拿符號、一人拿密碼本。手機收到的原始封包裡絕不能有答案，
+// 也不能同時有符號和密碼本 —— 開發者工具一看就解開了（同尋寶的 publicView）。
+{
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
+  await sleep(200);
+  const raw = { amy: [], ben: [], screen: [] };
+  const views = new Map();
+  const results = { amy: [], ben: [] };
+  const screenStates = [];
+  const tap = (who, ws) => {
+    const fn = (d) => {
+      const str = d.toString();
+      raw[who].push(str);
+      const m = JSON.parse(str);
+      if (m.type === 'DECODE_ASSIGN') views.set(who, m.view);
+      if (m.type === 'MISSION_ANNOUNCE' && m.decode) views.set(who, m.decode);
+      if (m.type === 'DECODE_RESULT') results[who].push(m);
+      if (m.type === 'DECODE_STATE') screenStates.push(m);
+    };
+    ws.on('message', fn);
+    return () => ws.off('message', fn);
+  };
+  const untap = [tap('amy', amy.ws), tap('ben', ben.ws), tap('screen', screen)];
+
+  hostRejects = [];
+  host.send(JSON.stringify({ type: 'HOST_PUBLISH_MISSION', missionType: 'DECODE', codeLength: 4, target: 1 }));
+  await sleep(600);
+  check('解碼任務發布成功', !hostRejects.length && amy.mission?.mission?.type === 'DECODE', hostRejects.at(-1)?.reason);
+  const va = views.get('amy');
+  const vb = views.get('ben');
+  check('兩人被分成一組、一人拿符號一人拿密碼本',
+    va?.state === 'playing' && vb?.state === 'playing' && va.group === vb.group
+    && new Set([va.role, vb.role]).size === 2, `${va?.role} / ${vb?.role}`);
+  // 只給顏色不給名字：要開口問「你也是紅色的嗎？」。連搭檔的 id 都不能在封包裡（手機有名冊）
+  check('手機上不寫搭檔是誰，只有同一個顏色',
+    !va?.partnerNames && !va?.partners && va?.colorName && va.colorName === vb?.colorName
+    && !JSON.stringify(va).includes(ben.welcome.userId), JSON.stringify(va));
+  const sym = va?.role === 'symbols' ? va : vb;
+  const book = va?.role === 'book' ? va : vb;
+  const code = sym?.symbols?.map((s) => book.book.find((b) => b.glyph === s.glyph)?.digit).join('') ?? '';
+  check('符號拼密碼本拼得出完整的密碼', /^\d{4}$/.test(code), code);
+  // 任何一支手機、大螢幕的原始封包裡，都不能出現答案，也不能同時有符號與密碼本
+  const leaks = Object.entries(raw).filter(([, list]) => list.some((str) => str.includes(`"code":"${code}"`)));
+  check('答案不在任何一端的原始封包裡', leaks.length === 0, leaks.map(([w]) => w).join(','));
+  const both = ['amy', 'ben'].filter((w) => raw[w].some((str) => str.includes('"symbols":[')) && raw[w].some((str) => str.includes('"book":[')));
+  check('沒有一支手機同時收到符號與密碼本', both.length === 0, both.join(','));
+  check('大螢幕只收到分組與顏色，沒有任何符號',
+    screenStates.length > 0 && !raw.screen.some((str) => str.includes('DECODE') && str.includes('glyph')));
+
+  // 錯一次：雙方都收到「對了幾碼」
+  const wrong = code.split('').map((d, i) => (i === 0 ? String((Number(d) + 1) % 10) : d)).join('');
+  amy.ws.send(JSON.stringify({ type: 'DECODE_GUESS', id: amy.mission.mission.id, code: wrong }));
+  await sleep(300);
+  check('輸入錯誤時雙方都知道對了幾碼',
+    results.amy.at(-1)?.hits === 3 && results.ben.at(-1)?.hits === 3 && results.ben.at(-1)?.byName === null,
+    JSON.stringify(results.ben.at(-1)));
+
+  ben.ws.send(JSON.stringify({ type: 'DECODE_GUESS', id: amy.mission.mission.id, code }));
+  await sleep(400);
+  check('輸入正確就解開', results.amy.at(-1)?.solved === true && results.ben.at(-1)?.solved === true);
+  check('解開記一次任務進度、達標給分',
+    (hostStates.at(-1)?.missions ?? []).some((m) => m.type === 'DECODE' && m.finished === 2)
+    && amy.scores.at(-1)?.source === 'MISSION_DONE', JSON.stringify(amy.scores.at(-1)));
+  check('大螢幕收到哪幾個人剛解開', screenStates.some((st) => st.justSolved?.length === 2 && st.solved === 1));
+  check('一起解碼記進今天遇見的人', amy.social?.peers?.some((p) => p.via?.includes('decode')), JSON.stringify(amy.social?.peers));
+  check('解開後回到等搭檔（場上沒有別人，不會馬上跟同一個人再一組）', views.get('amy')?.state === 'waiting');
+
+  untap.forEach((f) => f());
+  host.send(JSON.stringify({ type: 'HOST_CLOSE_MISSION' }));
+  await sleep(200);
+}
+
+// ── 傳球＋投籃（體育館；server/hoops.js）─────────────────────────
+// 只在主題有 hoops 設定時開；沒球不能傳也不能投；大螢幕收得到球場狀態。
+// 走到球車拿球、傳球距離、助攻計分由 test/hoops.test.mjs 驗（e2e 裡走路太慢）。
+{
+  const selfA = []; const resA = []; const scr = []; let theme = null;
+  const fa = (d) => { const m = JSON.parse(d); if (m.type === 'HOOPS_SELF') selfA.push(m); if (m.type === 'HOOPS_RESULT') resA.push(m); if (m.type === 'STAGE_THEME') theme = m.theme; };
+  const fs2 = (d) => { const m = JSON.parse(d); if (m.type === 'HOOPS_STATE') scr.push(m); };
+  amy.ws.on('message', fa); screen.on('message', fs2);
+  // 前面的測試把場景留在辦公室（話題桌、重開後保留都依賴它），最後要換回去
+  host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'gym' }));
+  await sleep(300);
+  check('換到體育館：手機收到投籃開啟', selfA.at(-1)?.active === true && selfA.at(-1)?.view?.hasBall === false, JSON.stringify(selfA.at(-1)));
+  check('換到體育館：大螢幕收到球場狀態', scr.at(-1)?.active === true && Array.isArray(scr.at(-1)?.holders));
+  amy.ws.send(JSON.stringify({ type: 'HOOPS_PASS', to: ben.welcome.userId }));
+  amy.ws.send(JSON.stringify({ type: 'HOOPS_SHOOT', angle: 0, power: 0.5 }));
+  await sleep(300);
+  check('沒拿球不能傳也不能投', resA.length >= 2 && resA.every((r) => r.ok === false && r.reason === 'NO_BALL'), JSON.stringify(resA));
+  host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'office' }));
+  await sleep(300);
+  check('換到沒有球場的場景：投籃關閉', selfA.at(-1)?.active === false && scr.at(-1)?.active === false);
+  check('換回辦公室', theme === 'office', theme);
+  amy.ws.off('message', fa); screen.off('message', fs2);
+}
+
 // ── 主辦端踢人 ────────────────────────────────────────────
 const benId = ben.welcome.userId;
 host.send(JSON.stringify({ type: 'HOST_KICK', agentId: benId }));
@@ -1733,24 +1838,32 @@ check('引導端點擋下過大的影格',
   await postApi('/api/preview', huge) === 'frame_too_large');
 
 // ── 話題桌 ────────────────────────────────────────────────
-// 兩人走到同一張號碼牌桌旁、停留一下，兩支手機拿到同一題，大螢幕也收到。
+// 兩人走到同一張號碼牌桌旁、停留一下，兩支手機拿到同一題（互猜對方），大螢幕也收到。
+// 接著兩人作答：甲猜對乙、乙猜錯甲，兩邊都要收到揭曉。
 // 前面的段落已經把 screen 關掉了，這裡自己開一條大螢幕連線看座標與題目。
 {
   const tScreen = new WebSocket(URL);
   let tTheme = null;
   let tAgents = [];
   const screenTopics = [];
+  const screenSparks = [];
   tScreen.on('open', () => tScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
   tScreen.on('message', (d) => {
     const m = JSON.parse(d);
     if (m.type === 'STAGE_THEME') tTheme = m.theme;
     if (m.type === 'STAGE_SYNC') tAgents = m.agents;
     if (m.type === 'STAGE_TOPIC') screenTopics.push(m);
+    if (m.type === 'STAGE_GREET' && m.kind === 'TOPIC') screenSparks.push(m);
   });
   const seat = (name) => {
     const box = joinPhone(name);
     box.topics = [];
-    box.ws.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'TOPIC_CARD') box.topics.push(m); });
+    box.reveals = [];
+    box.ws.on('message', (d) => {
+      const m = JSON.parse(d);
+      if (m.type === 'TOPIC_CARD') box.topics.push(m);
+      if (m.type === 'TOPIC_REVEAL') box.reveals.push(m);
+    });
     return box;
   };
   const t1 = seat('話題甲');
@@ -1782,14 +1895,57 @@ check('引導端點擋下過大的影格',
       .map((a) => (a ? Math.round(Math.hypot(a.x - table.x, a.y - table.y)) : '?'));
     console.log(`   [話題] 沒拿到題目；主題 ${tTheme} 桌 ${spotId}，離桌中心 ${pos.join(', ')}（桌半徑 ${table.r}＋90）`);
   }
-  check('同桌兩人拿到同一題聊天題',
-    t1.topics.length > 0 && t2.topics.length > 0 && t1.topics.at(-1).question === t2.topics.at(-1).question,
-    JSON.stringify({ spotId, t1: t1.topics.at(-1)?.question, t2: t2.topics.at(-1)?.question }));
-  check('題目卡寫著和誰同桌', t1.topics.at(-1)?.withNames?.includes('話題乙'), JSON.stringify(t1.topics.at(-1)?.withNames));
+  const c1 = t1.topics.at(-1);
+  const c2 = t2.topics.at(-1);
+  check('同桌兩人拿到同一回合、同一組選項',
+    c1 && c2 && c1.round === c2.round && JSON.stringify(c1.options) === JSON.stringify(c2.options),
+    JSON.stringify({ spotId, c1, c2 }));
+  check('兩人互猜：甲猜乙、乙猜甲',
+    c1?.target?.id === t2.welcome?.userId && c2?.target?.id === t1.welcome?.userId,
+    JSON.stringify({ t1: c1?.target, t2: c2?.target }));
+  check('猜的題目寫著對方的名字', c1?.guessAsk?.includes('話題乙'), c1?.guessAsk);
+  check('題目卡寫著和誰同桌', c1?.withNames?.includes('話題乙'), JSON.stringify(c1?.withNames));
   // 桌子可能相鄰（office 的 1、2 號工作桌）：兩人同時在兩張桌的範圍內時，題目發在哪一張都對，
-  // 而同一組人只會拿到一題。所以比對的是「大螢幕顯示的就是手機上那一題」
-  check('大螢幕在桌旁顯示同一題', screenTopics.some((m) => m.question === t1.topics.at(-1)?.question),
+  // 而同一組人只會拿到一題。所以比對的是「大螢幕顯示的就是這一回合的題目」
+  check('大螢幕在桌旁顯示題目', screenTopics.some((m) => m.question?.startsWith('猜猜看')),
     JSON.stringify(screenTopics));
+  if (c1 && c2) {
+    const say = (box, kind, choice) => box.ws.send(JSON.stringify({ type: 'TOPIC_ANSWER', round: c1.round, kind, choice }));
+    // 甲先猜（乙還沒答自己的，要等），乙再答自己 —— 這時才揭曉甲的
+    say(t1, 'guess', 1);
+    await sleep(150);
+    check('被猜的人還沒答就不揭曉', t1.reveals.length === 0, JSON.stringify(t1.reveals));
+    say(t2, 'self', 1);
+    say(t1, 'self', 0);
+    say(t2, 'guess', 2);
+    await sleep(300);
+    const r1 = t1.reveals.find((r) => r.role === 'guesser');
+    const r2 = t2.reveals.find((r) => r.role === 'guesser');
+    check('甲猜對乙', r1?.correct === true && r1?.answer === c1.options[1], JSON.stringify(r1));
+    check('乙猜錯甲，揭曉正確答案', r2?.correct === false && r2?.answer === c1.options[0], JSON.stringify(r2));
+    check('被猜的人也知道對方猜了什麼',
+      t2.reveals.some((r) => r.role === 'target' && r.correct === true)
+      && t1.reveals.some((r) => r.role === 'target' && r.correct === false),
+      JSON.stringify({ t1: t1.reveals, t2: t2.reveals }));
+    check('猜對時大螢幕畫一道光束', screenSparks.length === 1, JSON.stringify(screenSparks));
+
+    // 手機重整：同一個憑證接回，卡片、選過的、揭曉都要補回來
+    t1.ws.close();
+    await sleep(200);
+    const again = new WebSocket(URL);
+    const back = [];
+    again.on('open', () => again.send(JSON.stringify({
+      type: 'CLIENT_JOIN', userId: t1.welcome.userId, rejoinToken: t1.welcome.rejoinToken, name: '話題甲', avatar: AVATAR,
+    })));
+    again.on('message', (d) => { const m = JSON.parse(d); if (m.type.startsWith('TOPIC_')) back.push(m); });
+    await sleep(400);
+    const card = back.find((m) => m.type === 'TOPIC_CARD');
+    check('重連後補回題目卡與選過的答案',
+      card?.round === c1.round && card?.mine?.self === 0 && card?.mine?.guess === 1,
+      JSON.stringify(card));
+    check('重連後補回兩則揭曉', back.filter((m) => m.type === 'TOPIC_REVEAL').length === 2, JSON.stringify(back));
+    t1.ws = again;
+  }
   t1.ws.close();
   t2.ws.close();
   tScreen.close();
@@ -1799,14 +1955,15 @@ check('引導端點擋下過大的影格',
 // ── 人物賓果 ──────────────────────────────────────────────
 {
   const capture = (box) => {
-    box.bingo = { ask: null, card: null, results: [], tagged: [], ended: null };
+    box.bingo = { ask: null, card: null, results: [], tagged: [], ended: null, countdowns: [] };
     box.ws.on('message', (d) => {
       const m = JSON.parse(d);
       if (m.type === 'BINGO_ASK') box.bingo.ask = m;
-      if (m.type === 'BINGO_CARD') { box.bingo.card = m.card; box.bingo.myFacts = m.myFacts; }
+      if (m.type === 'BINGO_CARD') { box.bingo.card = m.card; box.bingo.myFacts = m.myFacts; box.bingo.myColors = m.myColors; }
       if (m.type === 'BINGO_RESULT') box.bingo.results.push(m);
       if (m.type === 'BINGO_TAGGED') box.bingo.tagged.push(m);
       if (m.type === 'BINGO_ENDED') box.bingo.ended = m;
+      if (m.type === 'BINGO_COUNTDOWN') box.bingo.countdowns.push(m);
     });
     return box;
   };
@@ -1842,6 +1999,9 @@ check('引導端點擋下過大的影格',
   pA.ws.send(JSON.stringify({ type: 'BINGO_FACTS', yes: [] }));
   pB.ws.send(JSON.stringify({ type: 'BINGO_FACTS', yes: [facts[0].id, 'bogus'] }));
   await sleep(600);
+  check('答完先倒數 3、2、1，倒數完才發卡', pA.bingo.countdowns.at(-1)?.kind === 'start' && pA.bingo.card === null,
+    JSON.stringify(pA.bingo.countdowns));
+  await sleep(3000);
   check('大家都答完就發卡，每人一張 9 格的卡', pA.bingo.card?.cells?.length === 9 && pB.bingo.card?.cells?.length === 9);
   const factLabel = `${facts[0]?.text}的人`;
   check('甲的卡上有乙勾的那一題', pA.bingo.card?.cells?.some((c) => c.label === factLabel),
@@ -1850,6 +2010,11 @@ check('引導端點擋下過大的影格',
   check('手機上看得到自己開局勾了什麼（不認得的題號略過）',
     JSON.stringify(pB.bingo.myFacts) === JSON.stringify([facts[0]?.text]) && Array.isArray(pA.bingo.myFacts) && pA.bingo.myFacts.length === 0,
     JSON.stringify([pA.bingo.myFacts, pB.bingo.myFacts]));
+  // 甲的衣服是紅色（e2e 的 AVATAR）：手機要寫出系統判定的顏色，顏色格子要標出來
+  check('手機上看得到系統判定自己的衣服顏色', pA.bingo.myColors?.some((c) => c.includes('紅色')), JSON.stringify(pA.bingo.myColors));
+  check('顏色格子有標記（點了會提示看大螢幕上的角色）',
+    pB.bingo.card?.cells?.filter((c) => c.label.startsWith('衣服有')).every((c) => c.color === true),
+    JSON.stringify(pB.bingo.card?.cells));
   const pickOf = (name) => bingoRound?.picks?.find((p) => p.name === name);
   check('主辦端看得到每個人勾了哪幾題', JSON.stringify(pickOf('賓果乙')?.facts) === JSON.stringify([facts[0]?.text])
     && pickOf('賓果甲')?.facts?.length === 0, JSON.stringify(bingoRound?.picks));
@@ -1893,6 +2058,11 @@ check('引導端點擋下過大的影格',
 
   bHost.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
   await sleep(300);
+  check('按結束先倒數 3、2、1，還沒公布結果', pA.bingo.countdowns.at(-1)?.kind === 'end' && pA.bingo.ended === null,
+    JSON.stringify(pA.bingo.countdowns.at(-1)));
+  bHost.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
+  await sleep(3100);
+  check('倒數中再按一次結束不會重新倒數', pA.bingo.countdowns.filter((c) => c.kind === 'end').length === 1);
   bHost.close();
   check('結束時全場收到結果', pA.bingo.ended !== null && Array.isArray(pB.bingo.ended?.winners), JSON.stringify(pA.bingo.ended));
 
@@ -1904,7 +2074,7 @@ check('引導端點擋下過大的影格',
   h2.send(JSON.stringify({ type: 'HOST_START_BINGO' }));
   await sleep(300);
   h2.send(JSON.stringify({ type: 'HOST_END_BINGO' }));
-  await sleep(300);
+  await sleep(3300);
   check('沒人填任何一格就沒有贏家', pA.bingo.ended?.winners?.length === 0, JSON.stringify(pA.bingo.ended));
   h2.close();
   pA.ws.close();

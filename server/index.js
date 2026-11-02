@@ -29,11 +29,11 @@ import {
   SCORE_SOURCES, EVENT_INFO, GREET_OUTCOME,
 } from '../shared/protocol.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
-import { avatarMatchesFamily, COLOR_FAMILIES } from '../shared/colorFamily.js';
+import { avatarMatchesFamily, COLOR_FAMILIES, COLOR_FAMILY_MAP, familiesOfAvatar } from '../shared/colorFamily.js';
 import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js';
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
-  PERSISTENCE, VISION_HOST, VISION_PORT, GREET, EVENTS,
+  BINGO_COUNTDOWN_MS, PERSISTENCE, VISION_HOST, VISION_PORT, GREET, EVENTS,
   CLIENT_SYNC_MAX_BUFFERED, STAGE_SYNC_MAX_BUFFERED,
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
@@ -51,8 +51,9 @@ import { PairingSession } from './pairing.js';
 import { Greetings } from './greetings.js';
 import { BingoRound, BINGO_ERRORS, STRANGER } from './bingo.js';
 import { TopicTables } from './topics.js';
-import { TOPIC_QUESTIONS, TOPIC_TABLES } from '../shared/topics.js';
-import { PROPS, OBSTACLES, obstacleDistance } from '../shared/scene.js';
+import { TopicGuess } from './topicGuess.js';
+import { TOPIC_QUESTIONS, TOPIC_TABLES, TOPIC_ROUND_MS, askFor } from '../shared/topics.js';
+import { PROPS, OBSTACLES, obstacleDistance, setSceneTheme } from '../shared/scene.js';
 import { QuizSession } from './quiz.js';
 import { TraitStore } from './traits.js';
 import { WordCloudSession } from './wordcloud.js';
@@ -72,6 +73,10 @@ import {
 } from '../shared/bingoFacts.js';
 import { EventLog, sessionName, sessionKind, generationIdOf } from './eventlog.js';
 import { pairRule, traitCatalog, buildRule, feasibility, GatherTracker } from './missionRules.js';
+import { DecodeRound } from './decode.js';
+import { HoopCourt } from './hoops.js';
+import { hoopsFor } from '../shared/hoops.js';
+import { decodeSymbolsFor } from '../shared/decode.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -82,6 +87,7 @@ const stage = new Stage();
 const missions = new MissionBoard();
 const bingo = new BingoRound();
 const topics = new TopicTables({ questions: TOPIC_QUESTIONS, ...TOPIC_TABLES });
+const topicGuess = new TopicGuess({ roundMs: TOPIC_ROUND_MS });
 const graph = new SocialGraph();
 const pairing = new PairingSession(graph);
 /** 今天遇見的人（手機名單與紀念卡）。比圖譜寬：揮手、乾杯、同桌也算，見 encounters.js */
@@ -170,6 +176,8 @@ const scoringView = () => {
  */
 // 快照裡若是已停用的場景（例如 3D 客廳），重開後退回預設，不再沿用
 let stageTheme = isSelectableTheme(snapshot?.theme) ? snapshot.theme : DEFAULT_THEME;
+// 道具與避障跟著主題（體育館拿掉盆栽）：boids 讀的是 shared/scene.js 的活綁定
+setSceneTheme(stageTheme);
 
 /** NPC（server/npc.js）。名牌上的身分跟著目前的場景 */
 const npcs = new NpcDirector(stage, { theme: () => stageTheme });
@@ -694,17 +702,32 @@ function bingoFactsOf(agentId) {
   return r.facts.filter((f) => bingo.hasFact(agentId, f.id)).map((f) => f.text);
 }
 
+/**
+ * 系統認定這個人的衣服是哪幾種顏色（「🔵 藍色」）。
+ * 看的是大螢幕上那個角色的上身與褲子各取一色，不是真人的衣服 —— 像素圖的顏色常跟本人不一樣，
+ * 而玩家原本完全看不到系統判成什麼（2026-10-19 試玩回饋「衣服顏色不知道怎麼判定」）。
+ */
+function colorLabelsOf(agentId) {
+  return familiesOfAvatar(stage.get(agentId)?.avatar)
+    .map((id) => COLOR_FAMILY_MAP[id]).filter(Boolean).map((f) => `${f.glyph} ${f.label}`);
+}
+
 function sendBingoCard(agentId) {
   const card = bingo.cardOf(agentId);
   if (!card) return;
   const r = bingo.round;
   sendToAgent(agentId, EV.BINGO_CARD, {
     card: {
-      cells: card.cells.map((c) => ({ label: c.cond.label, filled: !!c.by, name: c.by ? nameOf(c.by) : null })),
+      cells: card.cells.map((c) => ({
+        label: c.cond.label, filled: !!c.by, name: c.by ? nameOf(c.by) : null,
+        color: c.cond.id.startsWith('color:') || undefined,
+      })),
       lines: card.lines,
     },
     // 自己開局勾了什麼（2026-10-17 試玩回饋）：別人是照這個來找你的，勾完就忘的話會被問倒
     myFacts: bingoFactsOf(agentId),
+    // 別人卡上「衣服有藍色的人」是照這個判的，自己也要知道
+    myColors: colorLabelsOf(agentId),
     remainingMs: r.endsAt ? Math.max(0, r.endsAt - Date.now()) : null,
   });
 }
@@ -764,14 +787,45 @@ function startBingo(ws, msg) {
   if (bingo.phase === 'ask') {
     for (const id of ids) sendToAgent(id, EV.BINGO_ASK, bingoAsk());
   } else {
-    for (const id of ids) sendBingoCard(id);
+    dealAfterCountdown();
   }
   events.log('bingo_start', { players: ids.length, durationMs: durationMs ?? undefined });
   pushBingoState();
   console.log(`[bingo] 開始　${ids.length} 人${durationMs ? `　限時 ${durationMs / 60000} 分鐘` : ''}`);
 }
 
+/**
+ * 3、2、1 倒數（BINGO_COUNTDOWN_MS）。手機與大螢幕各自畫數字，伺服器只負責「什麼時候真的開始／結束」。
+ * @type {{kind: 'start'|'end', timer: NodeJS.Timeout}|null}
+ */
+let bingoCountdown = null;
+
+function bingoCountdownThen(kind, then) {
+  clearTimeout(bingoCountdown?.timer);
+  blastAll(EV.BINGO_COUNTDOWN, { kind, ms: BINGO_COUNTDOWN_MS });
+  bingoCountdown = {
+    kind,
+    timer: setTimeout(() => { bingoCountdown = null; then(); }, BINGO_COUNTDOWN_MS),
+  };
+}
+
+/** 卡已經發好（beginPlay），倒數完才送到手機，限時也從那一刻才開始算 */
+function dealAfterCountdown() {
+  bingoCountdownThen('start', () => {
+    if (!bingo.isActive) return;
+    if (bingo.round.endsAt) bingo.round.endsAt += BINGO_COUNTDOWN_MS;
+    for (const id of bingo.round.cards.keys()) sendBingoCard(id);
+    pushBingoState();
+  });
+}
+
+/** 結束：先倒數 3、2、1，期間還可以填格；同一輪只倒數一次 */
 function endBingo(by = 'host') {
+  if (!bingo.isActive || bingoCountdown?.kind === 'end') return;
+  bingoCountdownThen('end', () => finishBingo(by));
+}
+
+function finishBingo(by) {
   if (!bingo.isActive) return;
   const top = bingo.standings();
   bingo.end();
@@ -813,7 +867,15 @@ function handleBingoClaim(ws, msg) {
     reason: r.ok ? undefined : r.reason,
     newLines: r.ok ? r.newLines : undefined, full: r.ok ? r.full : undefined,
   });
-  if (!r.ok) { reply({ ok: false, reason: r.reason }); return; }
+  if (!r.ok) {
+    // 顏色格子填不進去：說出系統判定對方是什麼顏色。那是大螢幕上看得到的資訊，不是秘密；
+    // 只說「不符合」的話，玩家會跟眼前的真人衣服比，怎麼看都覺得系統錯了
+    const cond = bingo.cardOf(from)?.cells[msg.cell]?.cond;
+    const peerColors = r.reason === BINGO_ERRORS.MISMATCH && cond?.id.startsWith('color:')
+      ? colorLabelsOf(target) : undefined;
+    reply({ ok: false, reason: r.reason, peerColors });
+    return;
+  }
   bingoFilled(from, target, r, reply);
   // 被填進去的人也要知道：「剛剛那個人原來是在玩賓果」—— 這通常就是下一段對話的開頭。
   // 剛來找他的人若也符合他卡上空著的一格，順便問他要不要填（不必再輸碼：才剛當面拿過）
@@ -875,7 +937,7 @@ const bingoPresent = () => [...stage.agents.values()].filter((a) => !a.offline).
 
 function startBingoPlay() {
   bingo.beginPlay(bingoPresent());
-  for (const id of bingo.round.cards.keys()) sendBingoCard(id);
+  dealAfterCountdown();
   pushBingoState();
   console.log(`[bingo] 發卡　${bingo.round.cards.size} 人`);
 }
@@ -898,6 +960,8 @@ function sendBingoCatchUp(agentId) {
     return;
   }
   bingo.dealCard(agentId, bingoPresent());
+  // 開始的倒數還沒數完：卡已經發好了，倒數結束時會跟大家一起送
+  if (bingoCountdown?.kind === 'start') return;
   sendBingoCard(agentId);
 }
 
@@ -922,22 +986,85 @@ let lastTopicCheck = 0;
 function stepTopics(now) {
   if (now - lastTopicCheck < 500) return;   // 半秒看一次就夠：停留門檻是 2 秒
   lastTopicCheck = now;
+  // 過期要在暫停之前收：問答進行中也該把作廢的卡片收掉
+  for (const { round, ids } of topicGuess.expire(now)) {
+    for (const id of ids) sendToAgent(id, EV.TOPIC_EXPIRED, { round });
+  }
   if (topicsPaused()) return;
   // 只有標了 topicTables 的場景有話題桌（shared/themes.js）
   if (!THEME_MAP[stageTheme]?.topicTables) return;
-  for (const deal of topics.update(topicSpots(), stage.agents.values(), now)) {
-    for (const id of deal.ids) {
-      sendToAgent(id, EV.TOPIC_CARD, {
-        question: deal.question,
-        spot: deal.label,
-        withNames: deal.ids.filter((x) => x !== id).map(nameOf).filter(Boolean),
-      });
-    }
-    blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: deal.question });
-    events.log('topic_card', { spot: deal.spotId, agents: deal.ids, question: deal.question });
-    console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${deal.question}」`);
+  const busy = (id) => topicGuess.isBusy(id, now);
+  for (const deal of topics.update(topicSpots(), stage.agents.values(), now, busy)) {
+    const q = deal.question;
+    const { round, assignments } = topicGuess.start(deal.ids, q, now, deal.label);
+    for (const { id, target } of assignments) sendToAgent(id, EV.TOPIC_CARD, topicCard(round, deal.label, deal.ids, q, id, target));
+    const shown = askFor(q, '對方');
+    blast(screens, EV.STAGE_TOPIC, { spotId: deal.spotId, question: `猜猜看：${shown}` });
+    events.log('topic_card', { spot: deal.spotId, agents: deal.ids, question: q.ask, round });
+    console.log(`[topic] ${deal.label}　${deal.ids.map(nameOf).join('、')}　「${shown}」`);
   }
   for (const [a, b] of topics.seatedPairs(now)) meetUp(a, b, VIA.TOPIC);
+}
+
+/** 一個人的題目卡。發題與重連補送共用 */
+function topicCard(round, spot, ids, q, id, target) {
+  return {
+    round,
+    spot,
+    selfAsk: askFor(q, '你'),
+    guessAsk: askFor(q, nameOf(target) || '對方'),
+    options: q.options,
+    target: { id: target, name: nameOf(target) },
+    withNames: ids.filter((x) => x !== id).map(nameOf).filter(Boolean),
+  };
+}
+
+/** 揭曉送給猜的人與被猜的人。作答當下與重連補送共用 */
+function sendTopicReveal(v, q, only = null) {
+  const payload = { round: v.round, guess: q.options[v.guess], answer: q.options[v.answer], correct: v.correct };
+  if (!only || only === v.guesser) sendToAgent(v.guesser, EV.TOPIC_REVEAL, { ...payload, role: 'guesser', otherName: nameOf(v.target) });
+  if (!only || only === v.target) sendToAgent(v.target, EV.TOPIC_REVEAL, { ...payload, role: 'target', otherName: nameOf(v.guesser) });
+}
+
+/**
+ * 重連時補回話題桌的卡片與已經選過、揭曉過的部分。手機重整（或從 LINE 切回來被重載）
+ * 卡片就不見了，而伺服器還當他在作答，那張桌子會卡到回合過期都不發新題。
+ */
+function sendTopicCatchUp(agentId) {
+  const st = topicGuess.stateFor(agentId);
+  if (!st) return;
+  sendToAgent(agentId, EV.TOPIC_CARD, {
+    ...topicCard(st.round, st.spot, st.ids, st.question, agentId, st.target),
+    mine: { self: st.self ?? null, guess: st.guess ?? null },
+  });
+  for (const v of st.reveals) sendTopicReveal(v, st.question, agentId);
+}
+
+/**
+ * 話題桌作答：自己的答案（self）或猜對方（guess）。兩邊都到齊就揭曉，
+ * 猜的人與被猜的人都收到結果 —— 被猜的人知道「有人猜我西式，猜對了」，
+ * 那也是一句可以接下去的話。
+ */
+function handleTopicAnswer(ws, msg) {
+  const me = ws.agentId;
+  const kind = msg.kind === 'self' ? 'self' : msg.kind === 'guess' ? 'guess' : null;
+  const round = Number(msg.round);
+  if (!kind) return send(ws, EV.TOPIC_ACK, { round, kind: msg.kind, ok: false, reason: 'BAD_KIND' });
+  const r = kind === 'self'
+    ? topicGuess.answerSelf(me, round, msg.choice)
+    : topicGuess.guess(me, round, msg.choice);
+  send(ws, EV.TOPIC_ACK, { round, kind, ok: r.ok, reason: r.reason });
+  for (const v of r.reveals) {
+    sendTopicReveal(v, topicGuess.rounds.get(v.round).question);
+    // 不記選了什麼，只記對錯：答案是聊天用的，不是研究資料
+    events.log('topic_guess', { round: v.round, agent: v.guesser, peer: v.target, correct: v.correct });
+    console.log(`[topic] ${nameOf(v.guesser)} 猜 ${nameOf(v.target)}：${v.correct ? '猜對' : '猜錯'}`);
+    if (v.correct) {
+      // 猜對多半是真的去問過 —— 兩個人都做了動作（一個問、一個答），記進今天遇見的人
+      blast(screens, EV.STAGE_GREET, { kind: 'TOPIC', a: v.guesser, b: v.target });
+      meetUp(v.guesser, v.target, VIA.TOPIC);
+    }
+  }
 }
 
 function handleJoin(ws, msg) {
@@ -972,6 +1099,7 @@ function handleJoin(ws, msg) {
       // 封鎖名單只在伺服器：手機重整後要靠這則才知道點到的人是不是被自己封鎖了
       send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(existing.id) });
       sendBingoCatchUp(existing.id);
+      sendTopicCatchUp(existing.id);
       return;
     }
     ws.agentId = null; // 角色已被回收，往下走正常入場流程
@@ -1047,6 +1175,7 @@ function handleJoin(ws, msg) {
   // 補送目前的任務狀態與配對碼，讓中途進場的人立刻能參與
   send(ws, EV.PAIR_CODE, { code: pairing.register(agent.id), nextInMs: pairing.msUntilRotate() });
   for (const m of missions.actives) send(ws, EV.MISSION_ANNOUNCE, missionAnnounceFor(agent.id, m));
+  if (court) sendHoopsSelf(agent.id);
   // 問答進行中就補送題目。剩餘時間由伺服器算，所以晚到的人拿到的是
   // 真正剩下的秒數，而不是從頭開始的完整倒數。
   if (quiz.isActive) sendQuestion(ws);
@@ -1054,6 +1183,7 @@ function handleJoin(ws, msg) {
   sendWordCloudCatchUp(ws, agent.id);
   send(ws, EV.MSG_BLOCKS, { userIds: messages.blockedBy(agent.id) });
   sendBingoCatchUp(agent.id);
+  sendTopicCatchUp(agent.id);
   send(ws, EV.SCORE_SELF, {
     score: scores.totalOf(agent.id),
     delta: 0,
@@ -1158,11 +1288,14 @@ function detachAgent(agentId, { forget = false } = {}) {
   pairing.release(agentId);
   greetings.drop(agentId);
   if (forget) {
+    const dropped = topicGuess.forget(agentId);
+    for (const id of dropped?.ids ?? []) sendToAgent(id, EV.TOPIC_EXPIRED, { round: dropped.round, reason: 'LEFT' });
     directory.forget(agentId);
     // 標籤是「這個人是誰」，主動離場或被請出場時要一起忘掉；
     // 單純斷線則保留 —— 那個人多半還會用原憑證接回同一個角色。
     traits.forget(agentId);
     bingo.forget(agentId);
+    court?.forget(agentId);
     messages.forget(agentId);
     encounters.forget(agentId);
     markDirty();
@@ -1257,6 +1390,7 @@ function missionAnnounceFor(agentId, m) {
     progress: missions.progressOf(m.id, agentId),
     mine: myTraitLabel(agentId, m),
     gather: gatherView(m),
+    decode: decodeViewFor(agentId, m),
   };
 }
 
@@ -1309,6 +1443,172 @@ function completeGather(m, ids) {
   console.log(`[mission] ${ids.map(nameOf).join('、')} 在「${m.rule.label}」集合完成`);
   markDirty();
   broadcastMissionState();
+}
+
+// ── DECODE：一人拿符號、一人拿密碼本（server/decode.js） ─────────────
+/**
+ * 每個進行中的 DECODE 任務一個分組與出題狀態。同 gatherTrackers，任務結算後於主迴圈清掉。
+ * 答案只在這裡：手機只收到 viewFor() 給的那一半（見 decode.js 開頭）。
+ * @type {Map<string, DecodeRound>}
+ */
+const decodeRounds = new Map();
+
+/** 這個人在這個解碼任務裡的手機畫面（加上搭檔的名字） */
+function decodeViewFor(agentId, m) {
+  const r = m?.type === 'DECODE' ? decodeRounds.get(m.id) : null;
+  if (!r) return null;
+  const view = r.viewFor(agentId);
+  if (view.partners) view.partnerNames = view.partners.map(nameOf);
+  return view;
+}
+
+function sendDecodeView(agentId, m) {
+  sendToAgent(agentId, EV.DECODE_ASSIGN, { id: m.id, view: decodeViewFor(agentId, m) });
+}
+
+/** 大螢幕畫頭頂的🔑、主辦端看進度。justSolved：剛解開的那幾個人（大螢幕放煙火） */
+function decodePublic(m, justSolved = undefined) {
+  const r = decodeRounds.get(m.id);
+  return r ? { id: m.id, ...r.publicView(), justSolved } : null;
+}
+
+function pushDecodeState(m, justSolved) {
+  const view = decodePublic(m, justSolved);
+  if (view) blast([...screens, ...hosts], EV.DECODE_STATE, view);
+}
+
+/** 今天已經認識了（配對過或有過任何互動）：分組時優先排還不認識的人 */
+const alreadyMet = (a, b) => graph.connected(a, b) || encounters.peersOf(a).some((p) => p.id === b);
+
+function stepDecode(now) {
+  const decodes = missions.actives.filter((m) => m.type === 'DECODE');
+  for (const id of decodeRounds.keys()) {
+    if (!decodes.some((m) => m.id === id)) decodeRounds.delete(id);
+  }
+  for (const m of decodes) {
+    let r = decodeRounds.get(m.id);
+    if (!r) {
+      r = new DecodeRound({ codeLength: m.rule.codeLength, symbols: decodeSymbolsFor(stageTheme), met: alreadyMet });
+      decodeRounds.set(m.id, r);
+    }
+    const { changed } = r.sync([...stage.agents.values()].map((a) => ({ id: a.id, offline: !!a.offline })), now);
+    if (!changed.size) continue;
+    for (const id of changed) sendDecodeView(id, m);
+    pushDecodeState(m);
+  }
+}
+
+function handleDecodeGuess(ws, msg) {
+  const m = missions.get(msg.id) ?? missions.actives.find((x) => x.type === 'DECODE');
+  const r = m?.type === 'DECODE' ? decodeRounds.get(m.id) : null;
+  if (!r) { send(ws, EV.DECODE_RESULT, { id: msg.id ?? null, ok: false, reason: 'NO_MISSION' }); return; }
+  const res = r.guess(ws.agentId, msg.code);
+  if (!res.ok) {
+    send(ws, EV.DECODE_RESULT, { id: m.id, ok: false, reason: res.reason, cooldownMs: res.cooldownMs });
+    return;
+  }
+  const g = res.group;
+  events.log('decode_guess', { mission: m.id, agent: ws.agentId, group: g.members, solved: res.solved, hits: res.hits });
+  // 結果送給整組：搭檔要知道「他剛輸入了，對了 2 碼」，不然兩邊會同時亂按
+  for (const id of g.members) {
+    sendToAgent(id, EV.DECODE_RESULT, {
+      id: m.id, ok: true, solved: res.solved, hits: res.hits, codeLength: r.codeLength,
+      // 還沒到提示時間就不講是誰輸入的：名字一講，「你也是綠色鑰匙嗎」那一步就省掉了
+      cooldownMs: res.cooldownMs, byName: g.revealed || res.solved ? nameOf(ws.agentId) : null, mine: id === ws.agentId,
+      partnerNames: g.members.filter((x) => x !== id).map(nameOf),
+    });
+  }
+  if (!res.solved) return;
+
+  for (const id of g.members) {
+    const credit = missions.credit(m.id, id, { with: g.members.filter((x) => x !== id) });
+    if (!credit) continue;
+    events.log('mission_progress', { mission: m.id, agent: id, count: credit.count, target: m.target, team: g.members });
+    if (credit.count === m.target) {
+      events.log('mission_complete', { mission: m.id, agent: id });
+      award(id, SCORING.missionFinish, { source: SCORE_SOURCES.MISSION_DONE, ref: m.id });
+    }
+  }
+  // 一起解開是雙方都出了力的互動：記進「今天遇見的人」，大合照依互動排位也算得到。
+  // 不寫進配對的社交圖譜 —— 寫了之後這兩人就不能再用配對碼配對（ALREADY_PAIRED）
+  for (let i = 0; i < g.members.length; i++) {
+    for (let j = i + 1; j < g.members.length; j++) meetUp(g.members[i], g.members[j], VIA.DECODE);
+  }
+  console.log(`[decode] ${g.members.map(nameOf).join('、')} 解開了（第 ${r.solved} 組）`);
+  // 解開的人先回等待畫面，下一拍 sync 湊新的組
+  for (const id of g.members) sendDecodeView(id, m);
+  pushDecodeState(m, g.members);
+  markDirty();
+  broadcastMissionState();
+}
+
+// ── 傳球＋投籃（server/hoops.js；只在主題有 hoops 設定時開，目前是體育館）──────────
+/** 目前主題的球場；沒有投籃的主題為 null。開機時依快照裡的主題建好，換主題時 resetHoops() 重建 */
+let court = hoopsFor(stageTheme) ? new HoopCourt(hoopsFor(stageTheme)) : null;
+
+function hoopsPublic(event) {
+  if (!court) return { active: false };
+  const v = court.publicView();
+  return { active: true, ...v, top: v.top.map((t) => ({ ...t, name: nameOf(t.id) })), event };
+}
+
+function pushHoopsState(event) {
+  blast([...screens, ...hosts], EV.HOOPS_STATE, hoopsPublic(event));
+}
+
+function sendHoopsSelf(agentId) {
+  const view = court?.viewFor(agentId) ?? null;
+  if (view?.from) view.fromName = nameOf(view.from);
+  sendToAgent(agentId, EV.HOOPS_SELF, { active: !!court, view });
+}
+
+/** 換主題時重建（球場的位置跟著主題走）；換到沒有投籃的主題就整個收掉 */
+function resetHoops() {
+  const cfg = hoopsFor(stageTheme);
+  court = cfg ? new HoopCourt(cfg) : null;
+  for (const id of controllers.keys()) sendHoopsSelf(id);
+  pushHoopsState();
+}
+
+function stepHoops() {
+  if (!court) return;
+  const { changed } = court.step(stage.agents.values());
+  if (!changed.size) return;
+  for (const id of changed) sendHoopsSelf(id);
+  pushHoopsState();
+}
+
+const posOf = (id) => { const a = stage.get(id); return a ? { x: a.x, y: a.y } : null; };
+
+function handleHoopsPass(ws, msg) {
+  if (!court) return;
+  const to = typeof msg.to === 'string' ? msg.to : '';
+  const r = court.pass(ws.agentId, to, posOf);
+  send(ws, EV.HOOPS_RESULT, { kind: 'pass', ok: r.ok, reason: r.reason, name: r.ok ? nameOf(to) : undefined });
+  if (!r.ok) return;
+  sendToAgent(to, EV.HOOPS_RESULT, { kind: 'caught', ok: true, name: nameOf(ws.agentId) });
+  sendHoopsSelf(ws.agentId);
+  sendHoopsSelf(to);
+  events.log('hoops_pass', { agent: ws.agentId, peer: to });
+  pushHoopsState({ kind: 'pass', from: ws.agentId, to });
+}
+
+function handleHoopsShoot(ws, msg) {
+  if (!court) return;
+  const r = court.shoot(ws.agentId, posOf(ws.agentId), { angle: msg.angle, power: msg.power });
+  if (!r.ok) { send(ws, EV.HOOPS_RESULT, { kind: 'shot', ok: false, reason: r.reason }); return; }
+  send(ws, EV.HOOPS_RESULT, {
+    kind: 'shot', ok: true, made: r.made, name: r.assist ? nameOf(r.assist) : undefined,
+  });
+  sendHoopsSelf(ws.agentId);
+  if (r.assist) {
+    sendToAgent(r.assist, EV.HOOPS_RESULT, { kind: 'assisted', ok: true, name: nameOf(ws.agentId) });
+    sendHoopsSelf(r.assist);
+    // 傳球、投進是兩個人一起完成的：記進今天遇見的人（大合照依互動排位也算得到）
+    meetUp(r.assist, ws.agentId, VIA.ASSIST);
+  }
+  events.log('hoops_shot', { agent: ws.agentId, made: r.made, assist: r.assist ?? undefined, chance: r.chance });
+  pushHoopsState({ kind: 'shot', shooter: ws.agentId, assist: r.assist, made: r.made });
 }
 
 function handlePairClaim(ws, msg) {
@@ -1673,6 +1973,8 @@ function setStageTheme(theme) {
   if (theme === stageTheme) return;
   stageTheme = theme;
   npcs.retitle();
+  setSceneTheme(stageTheme);
+  resetHoops();
   console.log(`[theme] 切換為「${THEME_MAP[stageTheme].label}」`);
   events.log('theme_change', { theme: stageTheme });
   markDirty();
@@ -2080,11 +2382,14 @@ wss.on('connection', (ws, req) => {
         for (const m of missions.actives) {
           send(ws, EV.MISSION_ANNOUNCE, { mission: missions.announcement(m.id), gather: gatherView(m) });
           send(ws, EV.MISSION_STATE, { mission: missions.state(m.id, stage.agents.size) });
+          const dv = decodePublic(m);
+          if (dv) send(ws, EV.DECODE_STATE, dv);
         }
         for (const st of missions.states(stage.agents.size)) send(ws, EV.MISSION_STATE, { mission: st });
         // 連線圖是累積了整場的資料，投影機中途重開必須補送，
         // 否則大螢幕會停在「一條線都沒有」的狀態直到下一次配對
         send(ws, EV.STAGE_LINKS, { edges: graphEdges() });
+        if (court) send(ws, EV.HOOPS_STATE, hoopsPublic());
         if (photoQr?.visible) send(ws, EV.SCREEN_PHOTO_QR, photoQrPayload());
         // 投影機在活動中途被重開是常態，補送當下的問答與排行榜，
         // 大螢幕才不會停在空白畫面等下一題
@@ -2181,6 +2486,21 @@ wss.on('connection', (ws, req) => {
         handlePairConfirm(ws, msg);
         break;
 
+      case EV.DECODE_GUESS:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleDecodeGuess(ws, msg);
+        break;
+
+      case EV.HOOPS_PASS:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleHoopsPass(ws, msg);
+        break;
+
+      case EV.HOOPS_SHOOT:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleHoopsShoot(ws, msg);
+        break;
+
       case EV.QUIZ_ANSWER:
         if (ws.role !== 'controller' || !ws.agentId) return;
         handleQuizAnswer(ws, msg);
@@ -2237,6 +2557,11 @@ wss.on('connection', (ws, req) => {
         handleBingoAccept(ws);
         break;
 
+      case EV.TOPIC_ANSWER:
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        handleTopicAnswer(ws, msg);
+        break;
+
       case EV.HOST_AUTH: {
         // 與 SCREEN_HELLO 同一個理由：已綁定角色的連線改註冊為主辦端後，
         // 關閉時只會走 hosts 的清理分支，agent 的 disconnectedAt 永遠是 null，
@@ -2259,6 +2584,11 @@ wss.on('connection', (ws, req) => {
           scoring: SCORING,
         });
         send(ws, EV.HOST_STATE, hostState());
+        for (const m of missions.actives) {
+          const dv = decodePublic(m);
+          if (dv) send(ws, EV.DECODE_STATE, dv);
+        }
+        if (court) send(ws, EV.HOOPS_STATE, hoopsPublic());
         send(ws, EV.HOST_SCORING, scoringView());
         // 主題選單只由 STAGE_THEME 驅動，重整後的主辦端要靠這則才知道目前選的是哪個
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
@@ -2432,7 +2762,9 @@ const loop = startTicker({
       pushHostState();
     }
     if (bingo.phase === 'ask' && bingo.readyToPlay(bingoAskers(), now)) startBingoPlay();
-    if (bingo.shouldAutoEnd(now)) endBingo('time');
+    // 時間到前 3 秒開始倒數，數完剛好是時間到
+    if (bingo.phase === 'play' && bingo.round.endsAt && !bingoCountdown
+      && now >= bingo.round.endsAt - BINGO_COUNTDOWN_MS) endBingo('time');
     stepTopics(now);
     if (quiz.shouldAutoReveal(now)) revealQuiz(now);
     else if (quiz.shouldAutoEnd(now)) endQuiz();
@@ -2441,6 +2773,8 @@ const loop = startTicker({
     // 被拖慢時會延後觸發，而這裡的時間到必須與大螢幕上的倒數一致。
     for (const id of missions.expired(now)) closeMission('time', id);
     stepGather(now);
+    stepDecode(now);
+    stepHoops();
 
     // 文字雲：有新答案時才廣播，最快每 300ms 一次。三十個人同時送出時
     // 逐則廣播等於每秒上百份整片雲，而大螢幕的動畫本來就跟不上那麼快。

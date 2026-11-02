@@ -151,6 +151,13 @@ function handle(msg, key) {
       updateMission(msg.mission);
       break;
 
+    case EV.DECODE_STATE:
+      // 解碼任務的分組現況：幾組在解、幾人在等、解開幾組（不含任何符號，見 server/decode.js）
+      if (msg.id) decodeStats.set(msg.id, msg);
+      if (msg.justSolved?.length) pushFeed(`${msg.justSolved.length} 人一起解開密碼（第 ${msg.solved} 組）`, 'ev-pair');
+      renderMissions();
+      break;
+
     case EV.MISSION_COMPLETE:
       pushFeed(`${msg.a.name} × ${msg.b.name} 完成配對`, 'ev-pair');
       break;
@@ -701,6 +708,12 @@ function syncBrief() {
   $('#mission-trait-field').hidden = t?.param !== 'trait' && t?.param !== 'traitKey';
   $('#mission-trait-value').hidden = t?.param !== 'trait';
   $('#mission-spot-field').hidden = t?.param !== 'spot';
+  $('#mission-code-field').hidden = t?.param !== 'codeLength';
+  if (t?.codeLength) {
+    const len = $('#mission-code-len');
+    len.min = t.codeLength.min; len.max = t.codeLength.max;
+    if (!len.value) len.value = t.codeLength.default;
+  }
   // 集合任務每人只完成一次，目標次數沒有意義
   $('#mission-target-field').hidden = t?.verify === 'gather';
   if (t?.teamSize) {
@@ -786,7 +799,7 @@ function renderMissionCheck(msg) {
   }
 }
 
-for (const id of ['#mission-target', '#mission-team']) $(id).addEventListener('input', () => requestMissionCheck());
+for (const id of ['#mission-target', '#mission-team', '#mission-code-len']) $(id).addEventListener('input', () => requestMissionCheck());
 for (const id of ['#mission-trait-value', '#mission-spot', '#mission-duration']) {
   $(id).addEventListener('change', () => requestMissionCheck());
 }
@@ -816,12 +829,14 @@ function missionStep() {
   const spot = $('#mission-spot').value;
   const spotLabel = missionOpts.spots.find((sp) => sp.id === spot)?.label;
   const teamSize = Number($('#mission-team').value);
+  const codeLength = Number($('#mission-code-len').value);
   // 節目單上的那一行要看得出條件：「找某一類的人・🦉 貓頭鷹」
   const detail = {
     colorFamily: color?.label,
     trait: valueLabel,
     traitKey: keyInfo?.title,
     spot: spotLabel && `${spotLabel}・${teamSize} 人一組`,
+    codeLength: `${codeLength} 碼`,
   }[t?.param];
   return {
     kind: 'mission',
@@ -837,6 +852,7 @@ function missionStep() {
       traitKey: t?.param === 'traitKey' && key ? key : null,
       spot: t?.param === 'spot' ? spot : null,
       teamSize: t?.param === 'spot' ? teamSize : null,
+      codeLength: t?.param === 'codeLength' ? codeLength : null,
       durationMs,
     },
   };
@@ -859,6 +875,8 @@ $('#btn-publish').addEventListener('click', () => {
  * @type {Map<string, object>}
  */
 const missionStates = new Map();
+/** @type {Map<string, {groups: object[], solved: number, waiting: number}>} 解碼任務 id → 分組現況 */
+const decodeStats = new Map();
 
 /** 收到一個任務的最新狀態。倒數以收到的當下 + remainingMs 換算（同問答），每次更新都重新對齊 */
 function updateMission(m) {
@@ -913,8 +931,12 @@ function renderMissions() {
     bar.append(fill);
     row.append(bar, Object.assign(document.createElement('span'), { className: 'mono', textContent: `${m.finished} / ${m.totalAgents}` }));
 
+    const dc = decodeStats.get(m.id);
     const detail = Object.assign(document.createElement('p'), {
-      className: 'hint', textContent: `${m.participating} 人已開始，累計完成 ${m.totalCompletions} 次`,
+      className: 'hint',
+      textContent: dc
+        ? `解開 ${dc.solved} 組・${dc.groups.length} 組正在解・${dc.waiting} 人等搭檔`
+        : `${m.participating} 人已開始，累計完成 ${m.totalCompletions} 次`,
     });
     const close = Object.assign(document.createElement('button'), { className: 'btn-danger', textContent: '結算並關閉' });
     close.addEventListener('click', () => closeMissionAsk(m.id));

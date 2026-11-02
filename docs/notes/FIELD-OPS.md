@@ -335,7 +335,8 @@ OpenRouter 對「輸出圖片」的請求要求**餘額至少 1 美元**，不�
 | `persona` | agent、type | 進場人格問卷的分佈 |
 | `greet_invite`、`greet` | kind（WAVE／CHEERS）、agent、peer | 「要對方回應才算數」的互動次數 |
 | `bingo_start` / `_claim` / `_end` | peer、cell、ok、reason、newLines | 賓果找人成功率、連線數 |
-| `topic_card` | spot、agents、question | 話題桌被觸發幾次、誰跟誰坐下 |
+| `topic_card` | spot、agents、question、round | 話題桌被觸發幾次、誰跟誰坐下 |
+| `topic_guess` | round、agent、peer、correct（**不記選了什麼**） | 猜對方的完成率與猜對率（猜對多半代表真的去問了） |
 | `message`、`message_report` | agent、peer、delivered（**不記內容**） | 私訊量、檢舉 |
 | `waitlist_join`；`join.fromWaitlist` | name、position | 人滿時的候補長度、候補後有沒有進場 |
 

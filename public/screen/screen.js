@@ -12,7 +12,8 @@
 
 import { EV, STAGE, MAX_SPEED, QUIZ_CHOICES, QUIZ_PHASE, EMOTE_GLYPH, MISSION_TYPES } from '/shared/protocol.js';
 import { avatarImage as buildAvatarImage } from '/shared/avatarSprite.js';
-import { OBSTACLES, PROPS } from '/shared/scene.js';
+import { OBSTACLES, PROPS, setSceneTheme } from '/shared/scene.js';
+import { hoopsFor } from '/shared/hoops.js';
 import { WORDCLOUD } from '/shared/wordcloud.js';
 import { createScene, pinnedSceneId } from './scenes/registry.js';
 import { DEFAULT_THEME, isThemeId, THEME_MAP } from '/shared/themes.js';
@@ -152,6 +153,8 @@ async function switchScene(id) {
   const prev = activeScene;
   activeScene = null;
   if (prev?.dispose) prev.dispose(); else if (prev) sceneHost.replaceChildren();
+  // 道具跟著主題（體育館沒有盆栽）。PROPS 是 shared/scene.js 的活綁定，換完再傳
+  setSceneTheme(id);
   const next = await createScene(sceneHost, PROPS, id);
   // 載入期間又切了一次：丟掉這個過期的場景，不然兩張畫布會疊在一起
   if (token !== sceneToken) { next.dispose?.(); return; }
@@ -260,6 +263,7 @@ function connect() {
     screenReconnectDelay = 1000;
     setOffline(false);
     ws.send(JSON.stringify({ type: EV.SCREEN_HELLO, preview: PREVIEW }));
+    helloAt = Date.now();
   });
 
   ws.addEventListener('message', (e) => {
@@ -346,6 +350,7 @@ function connect() {
       case EV.MISSION_ANNOUNCE:
         if (msg.gather && msg.mission?.id) gatherStates.set(msg.mission.id, msg.gather);
         showMission(msg.mission);
+        headline('新任務', msg.mission?.title, msg.mission?.brief);
         break;
 
       case EV.MISSION_GATHER: {
@@ -365,6 +370,27 @@ function connect() {
         showMissionProgress(msg.mission);
         break;
 
+      case EV.HOOPS_STATE:
+        onHoopsState(msg);
+        break;
+
+      case EV.DECODE_STATE: {
+        if (!msg.id) break;
+        decodeStates.set(msg.id, msg);
+        rebuildDecodeKeys();
+        if (msg.justSolved?.length) {
+          const names = msg.justSolved.map((id) => roster.get(id)?.name ?? '').filter(Boolean);
+          toast(`${names.join('、')} 解開密碼了！（第 ${msg.solved} 組）`);
+          sfx.play('pair');
+          const t = performance.now();
+          for (const id of msg.justSolved) pulse.set(id, t);
+          for (let i = 1; i < msg.justSolved.length; i++) {
+            sparks.push({ a: msg.justSolved[0], b: msg.justSolved[i], at: t });
+          }
+        }
+        break;
+      }
+
       case EV.MISSION_COMPLETE:
         // 規格 v3.0 §3.1 第 05 步：每一次完成都必須在共享畫布上被看見，
         // 否則任務會退化成手機小遊戲
@@ -379,6 +405,8 @@ function connect() {
 
       case EV.MISSION_CLOSED:
         if (msg.id) gatherStates.delete(msg.id); else gatherStates.clear();
+        if (msg.id) decodeStates.delete(msg.id); else decodeStates.clear();
+        rebuildDecodeKeys();
         closeMissionShown(msg.id);
         toast(`任務結束　共 ${msg.totalCompletions} 次配對`);
         break;
@@ -408,12 +436,18 @@ function connect() {
         break;
 
       case EV.BINGO_STATE: {
+        if (msg.round && !bingoShown) headline('新活動', '人物賓果開始了', '打開手機，找符合格子條件的人，問他的配對碼');
         // 有人新連成一線：響一聲（BINGO_STATE 每填一格都會來，只有線數變多才響）
         const prevTop = bingoShown?.top?.[0]?.lines ?? 0;
         showBingo(msg.round);
         if ((msg.round?.top?.[0]?.lines ?? 0) > prevTop) sfx.play('pair');
         break;
       }
+
+      case EV.BINGO_COUNTDOWN:
+        countdown321(msg.kind === 'end' ? '人物賓果　即將結束' : '人物賓果　準備開始',
+          msg.kind === 'end' ? '時間到！' : '開始！', msg.ms);
+        break;
 
       case EV.BINGO_ENDED:
         showBingo(null);
@@ -524,6 +558,56 @@ function renderMissionsBar() {
     return item;
   }));
   syncBanners();
+}
+
+/** 賓果開始／結束前的 3、2、1。大螢幕跟手機各自數，起點都是收到 BINGO_COUNTDOWN 的那一刻 */
+let c3Timer = null;
+function countdown321(label, finalText, ms = 3000) {
+  const el = document.getElementById('countdown-321');
+  const num = document.getElementById('c3-num');
+  document.getElementById('c3-label').textContent = label;
+  clearInterval(c3Timer);
+  const endAt = Date.now() + ms;
+  const tick = () => {
+    const left = endAt - Date.now();
+    if (left <= 0) {
+      num.textContent = finalText;
+      num.classList.add('final');
+      clearInterval(c3Timer);
+      sfx.play('fanfare');
+      setTimeout(() => { el.hidden = true; num.classList.remove('final'); }, 1100);
+      return;
+    }
+    const n = String(Math.ceil(left / 1000));
+    if (num.textContent !== n) {
+      num.textContent = n;
+      num.classList.remove('final');
+      num.style.animation = 'none';
+      void num.offsetWidth;
+      num.style.animation = '';
+      sfx.play('go');   // 每個數字一聲短嗶
+    }
+  };
+  num.textContent = '';
+  el.hidden = false;
+  tick();
+  c3Timer = setInterval(tick, 100);
+}
+
+/** 連上（或重連）的時刻。之後一小段時間收到的公告是伺服器補送的進行中活動，不是剛開始的 */
+let helloAt = 0;
+let headlineTimer = null;
+
+/** 新活動開始：中央大字標題幾秒。重連補送的不跳 —— 那不是「剛開始」，而且一次會來好幾個 */
+function headline(kind, title, sub) {
+  if (!title || Date.now() - helloAt < 2000) return;
+  document.getElementById('hl-kind').textContent = kind;
+  document.getElementById('hl-title').textContent = title;   // 主持人輸入的文字，一律 textContent
+  document.getElementById('hl-sub').textContent = sub ?? '';
+  const el = document.getElementById('headline');
+  el.hidden = false;
+  clearTimeout(headlineTimer);
+  headlineTimer = setTimeout(() => { el.hidden = true; }, 4500);
 }
 
 function toast(text) {
@@ -927,11 +1011,16 @@ function drawFrame(now) {
       { time, maxSpeed: MAX_SPEED, height, voxel: voxels?.tile(a.id) }));
     // 名牌、表情、離線標記不挖：站在冰箱後面的人，名字還是要看得到
     drawPlate(a.id, pos, name, fontSize, plateTarget.get(a.id));
-    if (a.emote && !emoteIsPosed(entry?.img, a.emote)) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote] ?? '·', { height });
+    if (a.emote && !emoteIsPosed(entry?.img, a.emote)) drawEmote(ctx, pos, EMOTE_GLYPH[a.emote], { height });
     if (a.offline) drawOffline(ctx, pos, { height });
+    const key = decodeKeys.get(a.id);
+    if (key) drawDecodeKey(pos, height, key);
+    if (hoops.holders.has(a.id) && !ballInFlightFrom(a.id, now)) drawHeldBall(pos, height);
   }
 
   drawGatherLabels();
+  drawHoopsLabel();
+  drawBallFlights(now, frames);
   drawTopicBubbles(now);
 
   if (debug) updateHud();
@@ -1154,6 +1243,200 @@ function renderQuizOptions(revealed = null, counts = null) {
     }
     wrap.append(row);
   });
+}
+
+// ── 傳球＋投籃（體育館；server/hoops.js）──────────────────────────
+/** 伺服器的球場狀態：誰拿著球、全場進球與助攻。這個場景沒有投籃時 active 為 false */
+let hoops = { active: false, holders: new Set(), totals: null, top: [] };
+/** 正在飛的球：傳球（人到人）或投籃（人到籃框） */
+const ballFlights = [];
+const FLIGHT_MS = 650;
+
+function onHoopsState(msg) {
+  hoops = { active: !!msg.active, holders: new Set(msg.holders ?? []), totals: msg.totals ?? null, top: msg.top ?? [] };
+  const ev = msg.event;
+  if (!ev) return;
+  const name = (id) => roster.get(id)?.name ?? '';
+  const t = performance.now();
+  if (ev.kind === 'pass') {
+    ballFlights.push({ from: ev.from, to: ev.to, at: t });
+  } else if (ev.kind === 'shot') {
+    ballFlights.push({ from: ev.shooter, hoop: true, made: ev.made, at: t });
+    if (ev.made) {
+      // 助攻要講出來：被看見的是兩個人一起完成的那一球
+      toast(ev.assist ? `🏀 ${name(ev.assist)} 助攻 ${name(ev.shooter)} 進球！` : `🏀 ${name(ev.shooter)} 投進了！`);
+      // 球進框的那一刻才響、才發光（動畫的時間軸不能從未來開始，所以用計時器延後）
+      setTimeout(() => {
+        const at = performance.now();
+        sfx.play(ev.assist ? 'fanfare' : 'pair');
+        pulse.set(ev.shooter, at);
+        if (ev.assist) {
+          pulse.set(ev.assist, at);
+          sparks.push({ a: ev.assist, b: ev.shooter, at });
+        }
+      }, FLIGHT_MS);
+    }
+  }
+}
+
+const ballInFlightFrom = (id, now) => ballFlights.some((f) => f.from === id && now - f.at < FLIGHT_MS);
+
+function paintBall(x, y, r) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = '#E07A2F';
+  ctx.fill();
+  ctx.lineWidth = Math.max(1.5, r * 0.18);
+  ctx.strokeStyle = 'rgba(47,42,38,.9)';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - r, y); ctx.lineTo(x + r, y);
+  ctx.moveTo(x, y - r); ctx.lineTo(x, y + r);
+  ctx.lineWidth = Math.max(1, r * 0.12);
+  ctx.stroke();
+}
+
+/** 拿著球的人：球畫在手邊 —— 「球在誰手上」是要大家喊「傳給我」的那個公開資訊 */
+function drawHeldBall(pos, height) {
+  ctx.save();
+  paintBall(pos.x + height * 0.24, pos.y - height * 0.42, Math.max(6, height * 0.09));
+  ctx.restore();
+}
+
+/** 籃框的畫面座標（籃框掛在道具上方，大約一個半角色高） */
+function hoopScreenPos() {
+  const court = hoopsFor(sceneId);
+  if (!court) return null;
+  const p = toScreen(court.hoop);
+  return { x: p.x, y: p.y - characterHeightAt(court.hoop) * 1.45 };
+}
+
+function drawBallFlights(now, frames) {
+  for (let i = ballFlights.length - 1; i >= 0; i--) {
+    const f = ballFlights[i];
+    const t = (now - f.at) / FLIGHT_MS;
+    if (t >= 1.6) { ballFlights.splice(i, 1); continue; }
+    const a = frames.get(f.from);
+    const end = f.hoop ? hoopScreenPos() : frames.get(f.to)?.pos;
+    if (!a || !end) continue;
+    const h = a.height;
+    const sx = a.pos.x + h * 0.24;
+    const sy = a.pos.y - h * 0.42;
+    const ex = end.x + (f.hoop && !f.made ? h * 0.35 : 0);
+    const ey = f.hoop ? end.y : end.y - h * 0.42;
+    let x, y;
+    if (t <= 1) {
+      x = sx + (ex - sx) * t;
+      y = sy + (ey - sy) * t - Math.sin(Math.PI * t) * h * (f.hoop ? 1.1 : 0.5);
+    } else if (f.hoop) {
+      // 落地：進了從網子掉下去，沒進從籃框彈開
+      const u = t - 1;
+      x = ex + (f.made ? 0 : u * h * 1.2);
+      y = ey + u * h * (f.made ? 1.4 : 0.6) - (f.made ? 0 : Math.sin(Math.PI * u / 0.6) * h * 0.3);
+    } else continue;
+    ctx.save();
+    if (t > 1) ctx.globalAlpha = Math.max(0, 1 - (t - 1) / 0.6);
+    paintBall(x, y, Math.max(6, h * 0.09));
+    ctx.restore();
+    // 進球的那一刻：籃框閃一圈
+    if (f.hoop && f.made && t > 1 && t < 1.5) {
+      ctx.save();
+      ctx.globalAlpha = 1 - (t - 1) / 0.5;
+      ctx.strokeStyle = '#FFD166';
+      ctx.lineWidth = 4 * scale;
+      ctx.beginPath();
+      ctx.arc(ex, ey, h * (0.25 + (t - 1) * 0.8), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
+/** 籃框上方的牌子：全場進球、助攻，還有目前分數最高的人 */
+function drawHoopsLabel() {
+  if (!hoops.active || !hoops.totals) return;
+  const court = hoopsFor(sceneId);
+  if (!court) return;
+  // 掛在籃框區上方的牆上（左半邊，避開籃板）：沒有人站得到那裡。
+  // 放在球車旁會蓋住正在拿球的人，放在籃框區上緣會壓住分區名牌
+  const pos = toScreen({ x: court.zone.x + court.zone.w * 0.27, y: court.zone.y });
+  const h = characterHeightAt(court.cart);
+  const font = Math.max(12, h * 0.24);
+  const lead = hoops.top[0];
+  const text = `🏀 進球 ${hoops.totals.made}・助攻 ${hoops.totals.assists}`
+    + (lead ? `　最佳 ${lead.name} ${lead.points} 分` : '　走到球車拿球');
+  ctx.save();
+  ctx.font = `800 ${font}px system-ui, "Noto Sans TC", sans-serif`;
+  const pad = font * 0.6;
+  const w = ctx.measureText(text).width + pad * 2;
+  const boxH = font + pad * 1.2;
+  const x = Math.max(8, pos.x - w / 2);
+  const y = pos.y - h * 0.95 - boxH / 2;
+  ctx.fillStyle = '#E07A2F';
+  ctx.strokeStyle = 'rgba(47,42,38,.85)';
+  ctx.lineWidth = Math.max(1.5, h * 0.025);
+  roundRect(ctx, x, y, w, boxH, boxH / 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#2F2A26';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x + pad, y + boxH / 2);
+  ctx.restore();
+}
+
+// ── DECODE 任務：同一組的人頭上掛同一個顏色的🔑 ─────────────────
+/**
+ * 任務 id → DECODE_STATE（各組成員與顏色、解開幾組）。**不含任何符號或數字** ——
+ * 大螢幕是公開畫面，這個玩法的資訊落差全在手機上（server/decode.js）。
+ * @type {Map<string, {groups: {id: string, members: string[], color: string}[], solved: number}>}
+ */
+const decodeStates = new Map();
+/** @type {Map<string, {color: string, mark: number, lock: boolean}>} 角色 id → 他這一組的顏色、號碼、哪一隊 */
+const decodeKeys = new Map();
+
+function rebuildDecodeKeys() {
+  decodeKeys.clear();
+  for (const st of decodeStates.values()) {
+    for (const g of st.groups ?? []) {
+      for (const id of g.members) decodeKeys.set(id, { color: g.color, mark: g.mark ?? 1, lock: id === g.holder });
+    }
+  }
+}
+
+/**
+ * 頭頂右上的小圓牌：組別顏色底＋符號隊🔒／密碼本隊🔑。手機上只寫顏色不寫名字，
+ * 找搭檔靠的就是這個：「頭上是紅色鑰匙的那個人」。顏色用完重複時右下角加號碼
+ */
+function drawDecodeKey(pos, height, { color, mark, lock }) {
+  // 投影在遠處也要看得出顏色：比表情圖示小一點，但不能小到只剩一個點
+  const r = Math.max(12, height * 0.17);
+  const x = pos.x + height * 0.34;
+  const y = pos.y - height * 1.0;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.lineWidth = Math.max(1.5, r * 0.18);
+  ctx.strokeStyle = 'rgba(47,42,38,.9)';
+  ctx.stroke();
+  ctx.font = `${r * 1.2}px system-ui, "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(lock ? '🔒' : '🔑', x, y + r * 0.05);
+  if (mark > 1) {
+    const rr = r * 0.48;
+    ctx.beginPath();
+    ctx.arc(x + r * 0.8, y + r * 0.8, rr, 0, Math.PI * 2);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, rr * 0.2);
+    ctx.stroke();
+    ctx.fillStyle = '#2F2A26';
+    ctx.font = `800 ${rr * 1.3}px system-ui, sans-serif`;
+    ctx.fillText(String(mark), x + r * 0.8, y + r * 0.82);
+  }
+  ctx.restore();
 }
 
 // ── GATHER 任務的集合點 ─────────────────────────────────────

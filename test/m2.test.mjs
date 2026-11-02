@@ -152,8 +152,9 @@ describe('M2 速度合成公式 V_final = (1-α)·V_Boids + α·V_Manual', () =>
     // 推進足夠時間讓它收斂，驗的是「α=1 時速度完全由手動決定」，
     // 而不是「第一幀就滿速」。平滑的理由見 arbiter.js：輸入方向是單位
     // 向量，沒有平滑的話回中時的手指抖動會變成全速的方向反轉。
+    // 推桿中的手機每秒送 20 次：每一步都刷新 lastInputAt，否則會被當成封包斷了（INPUT_STALE_MS）
     let now = t0;
-    for (let i = 0; i < 60; i++) { now += 16; stepAgent(agent, [agent], 0.016, now); }
+    for (let i = 0; i < 60; i++) { now += 16; agent.lastInputAt = now; stepAgent(agent, [agent], 0.016, now); }
     assert.ok(Math.abs(agent.vx - MAX_SPEED) < 0.5, `vx 應收斂到 MAX_SPEED，實得 ${agent.vx}`);
     assert.ok(Math.abs(agent.vy) < 0.5, `vy 應為 0，實得 ${agent.vy}`);
   });
@@ -167,8 +168,23 @@ describe('M2 速度合成公式 V_final = (1-α)·V_Boids + α·V_Manual', () =>
       inputX: 1, inputY: 0, inputIntensity: 0.5,
     });
     let now = t0;
-    for (let i = 0; i < 60; i++) { now += 16; stepAgent(agent, [agent], 0.016, now); }
+    for (let i = 0; i < 60; i++) { now += 16; agent.lastInputAt = now; stepAgent(agent, [agent], 0.016, now); }
     assert.ok(Math.abs(agent.vx - MAX_SPEED * 0.5) < 0.5, `半推應收斂到半速，實得 ${agent.vx}`);
+  });
+
+  test('放手的封包掉了：推桿封包斷超過 INPUT_STALE_MS 就停下，不會照原方向一直走', () => {
+    const stage = new Stage();
+    const t0 = 1_000_000;
+    const agent = makeAgent(stage, {
+      x: 900, y: 750, alpha: 1, lastInputAt: t0,
+      inputX: 1, inputY: 0, inputIntensity: 1,
+    });
+    let now = t0;
+    for (let i = 0; i < 30; i++) { now += 16; agent.lastInputAt = now; stepAgent(agent, [agent], 0.016, now); }
+    assert.ok(agent.vx > MAX_SPEED * 0.8, '推桿中應在走');
+    // 之後完全收不到封包（含放手那一則），inputIntensity 仍停在 1
+    for (let i = 0; i < 150; i++) { now += 16; stepAgent(agent, [agent], 0.016, now); }
+    assert.ok(Math.abs(agent.vx) < 1, `2.4 秒沒收到操作仍在走：vx=${agent.vx.toFixed(1)}`);
   });
 
   test('α = 0 時完全採用 Boids 速度，手動輸入不生效', () => {

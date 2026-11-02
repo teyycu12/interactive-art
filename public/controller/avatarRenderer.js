@@ -587,7 +587,7 @@ export class AvatarRenderer {
         // 按了揮手的人在自己手機上什麼都看不到（同下面鄰居的 drawEmote）
         const myEmote = this.serverSelf?.emote;
         if (myEmote && !emoteIsPosed(this.sprite, myEmote)) {
-          drawEmote(ctx, { x: ax, y: ay }, EMOTE_GLYPH[myEmote] ?? '·', { height });
+          drawEmote(ctx, { x: ax, y: ay }, EMOTE_GLYPH[myEmote], { height });
         }
         continue;
       }
@@ -609,7 +609,7 @@ export class AvatarRenderer {
           drawNameplate(ctx, pos, p.name, { fontSize: p.fontSize, offset: cur });
         }
         if (n.emote && !emoteIsPosed(this.looks.get(n.id)?.sprite, n.emote)) {
-          drawEmote(ctx, pos, EMOTE_GLYPH[n.emote] ?? '·', { height });
+          drawEmote(ctx, pos, EMOTE_GLYPH[n.emote], { height });
         }
       };
       // 等一下會被道具擋住的人，名牌與表情留到道具畫完（同大螢幕：名字不被物件擋）
@@ -685,12 +685,12 @@ export class AvatarRenderer {
         ctx.restore();
       }
 
-      if (n.emote) {
+      if (n.emote && EMOTE_GLYPH[n.emote]) {
         ctx.save();
         ctx.globalAlpha = 0.6 + fade * 0.4;
         ctx.font = `${Math.round(CHARACTER_HEIGHT * 0.2)}px system-ui, sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillText(EMOTE_GLYPH[n.emote] ?? '·', x,
+        ctx.fillText(EMOTE_GLYPH[n.emote], x,
           y - CHARACTER_HEIGHT * NEIGHBOR_SCALE - 6);
         ctx.restore();
       }

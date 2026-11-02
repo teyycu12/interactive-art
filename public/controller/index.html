@@ -153,6 +153,9 @@
             <button class="btn-primary" id="btn-accept">就是他，進場</button>
             <button class="btn-ghost" id="btn-retake">重拍一次</button>
           </div>
+          <!-- 生成的角色不能改（2026-10-19 回饋「可以自訂衣服或是臉部」）：
+               不像的話改用換裝，照片量到的髮色、膚色、衣褲顏色會先幫他套上 -->
+          <button class="btn-link du-from-scan" id="btn-scan-to-dressup" type="button">不像？改用換裝自己調</button>
         </div>
 
         <!-- 階段 4：失敗。只有照片本身的問題、相機開不起來會停在這裡；
@@ -194,6 +197,9 @@
     <div class="preview stage-frame du-preview">
       <img id="du-preview" alt="換裝後的角色">
     </div>
+    <!-- 快速套組：一鍵套上整套再細調。素體只有一個、預設是短髮長褲，
+         長髮、裙子、洋裝都藏在分類裡，試玩時有人以為沒有女生角色（2026-10-19 回饋） -->
+    <div class="du-presets" id="du-presets" role="group" aria-label="快速套組"></div>
     <div class="du-tabs" id="du-tabs" role="tablist" aria-label="換裝分類"></div>
     <div class="du-body">
       <div class="du-options" id="du-options"></div>
@@ -245,6 +251,26 @@
       <span class="mb-code" id="mb-code-row">你的配對碼 <b id="mb-code">----</b> <span class="code-timer" data-code-timer></span>　·　點此輸入對方的碼</span>
     </button>
 
+    <!-- 解碼任務（server/decode.js）：搭檔、自己那一半（符號或密碼本）、輸入密碼。
+         只有自己那一半，答案不在這支手機上。不擋搖桿，邊走去找搭檔邊看也可以 -->
+    <div class="dc-box" id="decode-box" hidden>
+      <p class="dc-head">
+        <span class="dc-key" id="dc-icon" aria-hidden="true">🔑</span>
+        <b id="dc-partner">—</b>
+        <span class="dc-role" id="dc-role" hidden></span>
+      </p>
+      <!-- 找誰：只寫顏色，不寫名字（要開口問）；過一陣子還沒解開才提示是誰 -->
+      <p class="dc-find" id="dc-find" hidden></p>
+      <div class="dc-items" id="dc-items" hidden></div>
+      <p class="dc-hint" id="dc-hint"></p>
+      <form class="dc-form" id="dc-form" autocomplete="off" hidden>
+        <input id="dc-input" inputmode="numeric" pattern="[0-9]*" enterkeyhint="send"
+               maxlength="4" placeholder="0000" aria-label="輸入密碼">
+        <button class="btn-primary" id="dc-send" type="submit" disabled>解碼</button>
+      </form>
+      <p class="dc-msg" id="dc-msg" hidden role="status" aria-live="polite"></p>
+    </div>
+
     <!-- 文字雲：主持人出題時出現，輸入短答送到大螢幕。不擋搖桿，邊走邊答也可以 -->
     <div class="wc-box" id="wordcloud-box" hidden>
       <p class="wc-q"><span class="wc-tag">文字雲</span><b id="wc-question">—</b></p>
@@ -276,16 +302,20 @@
     <!-- 搖桿是浮動的：手指按哪裡就出現在哪裡。.joy-hint 只是沒在推時左下角的提示圈 -->
     <div id="joystick-zone"><div class="joy-hint" aria-hidden="true"></div></div>
 
-    <!-- 話題桌：跟同一桌的人拿到同一題。不擋搖桿。
-         原本整張卡是按鈕、點一下就收起 —— 試玩時大家一碰到就不見、也叫不回來（2026-10-17）。
-         現在只有「收起」鍵會收，25 秒後自動收；收起後留一顆小鈕可以再打開 -->
+    <!-- 話題桌：同一題，每人猜同桌的一個人（server/topicGuess.js）。不擋搖桿。
+         一次只顯示一步、一排選項：先選自己的，再猜對方；做完的步驟縮成一行（2026-10-29）。
+         只有「收起」鍵會收；還沒猜完不會自己收，猜完 25 秒後才收。收起後留一顆小鈕可以再打開 -->
     <div class="topic-card" id="topic-card" hidden role="status" aria-live="polite">
       <span class="tc-top">
-        <span class="tc-head" id="topic-head">💬 話題</span>
+        <span class="tc-head" id="topic-head">💬 話題桌</span>
         <button class="tc-close" id="btn-topic-close" type="button">收起</button>
       </span>
       <span class="tc-q" id="topic-q"></span>
-      <span class="tc-with" id="topic-with"></span>
+      <span class="tc-done" id="topic-done" hidden></span>
+      <span class="tc-target" id="topic-target" hidden></span>
+      <span class="tc-opts" id="topic-opts"></span>
+      <span class="tc-note" id="topic-note"></span>
+      <span class="tc-about" id="topic-about" hidden></span>
     </div>
     <button class="topic-chip" id="topic-chip" type="button" hidden>💬 再看一次話題</button>
 
@@ -300,8 +330,11 @@
       <span id="bingo-offer-text"></span>
       <button id="btn-bingo-accept">幫我填上</button>
     </div>
+    <!-- 傳球＋投籃（體育館）：拿著球時的狀態。在搖桿與表情鍵之間，不擋操作 -->
+    <p class="hoops-chip" id="hoops-chip" hidden role="status" aria-live="polite"></p>
     <div id="emotes">
-      <button data-action="HEART"><em>💗</em>愛心</button>
+      <button id="btn-shoot" class="btn-shoot" hidden><em>🏀</em>投籃</button>
+      <button id="btn-emote-menu" aria-expanded="false" aria-controls="emote-palette"><em>😀</em>表情</button>
       <button data-action="WAVE"><em>👋</em>揮手</button>
     </div>
   </section>
@@ -383,7 +416,7 @@
     <button class="sheet-close" id="btn-bingo-close" aria-label="關閉">✕</button>
     <!-- 倒數寫在標題旁邊（2026-10-19）：原本在九宮格下面，要捲下去才看得到還剩多久 -->
     <h2 id="bingo-title" class="bingo-title">人物賓果 <span class="bingo-timer" id="bingo-timer"></span></h2>
-    <p class="sheet-brief">點一格，找符合的人問他的配對碼。<b>每格盡量找不同的人</b>，連成一線有加分。</p>
+    <p class="sheet-brief">點一格，找符合的人問他的配對碼。<b>每格盡量找不同的人</b>，連成一線有加分。衣服顏色看的是大螢幕上的角色。</p>
     <!-- 自己的碼縮成一行放最上面（2026-10-19）：原本是一大塊，把九宮格和輸入框擠到要往下捲才看得到 -->
     <div class="bingo-mycode">
       <span>你的碼</span>
@@ -437,6 +470,13 @@
 </div>
 
 <!-- 點到好幾個人擠在一起的地方：列出來讓他選，不替他猜（2026-10-17 試玩回饋） -->
+<!-- 投籃畫面：按住球往上滑。進不進由伺服器判定，這裡只送手勢（server/hoops.js） -->
+<div class="shoot-overlay" id="shoot-overlay" hidden role="dialog" aria-modal="true" aria-label="投籃">
+  <button class="sheet-close" id="btn-shoot-close" aria-label="關閉">✕</button>
+  <canvas id="shoot-canvas"></canvas>
+  <p class="shoot-msg" id="shoot-msg" role="status" aria-live="polite"></p>
+</div>
+
 <div class="sheet" id="pick-sheet" hidden>
   <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="pick-title">
     <button class="sheet-close" id="btn-pick-close" aria-label="關閉">✕</button>
@@ -540,6 +580,36 @@
       <button class="btn-danger" id="btn-confirm-exit">確定離開</button>
     </div>
   </div>
+</div>
+
+  <!-- 表情選單：揮手（有「互相揮手」的判定）留在外面，其他表情與角色動作收在「表情」裡
+       （2026-10-19 回饋「角色可以有更多動作」「可以加入自己想表達的表情符號」）。
+       不是覆蓋層：選完就收起，搖桿照常可以推。
+       放在 #controller 外面：控制器裡每個元件都吃 `#controller > *:not(#pov-canvas)` 那條
+       高權重規則（position: relative），選單會被擠成版面裡的一格，橫向時還被左欄蓋住（2026-10-19 實測） -->
+  <div class="emote-palette" id="emote-palette" hidden role="group" aria-label="表情與動作">
+    <p class="ep-title">表情</p>
+    <div class="ep-grid" id="ep-emoji"></div>
+    <p class="ep-title">動作</p>
+    <div class="ep-grid ep-motions" id="ep-motion"></div>
+  </div>
+
+<!-- 新活動開始：整頁卡片（2026-10-19 試玩回饋「新活動出現時可以更清楚，不用一定得聽主持人說」）。
+     任務、文字雲、賓果直接發卡時跳出；問答本身就是全螢幕、賓果自我介紹會直接打開面板，不再疊一張 -->
+<div class="overlay activity-intro" id="activity-intro" hidden>
+  <div class="dialog intro-card" role="dialog" aria-modal="true" aria-labelledby="intro-title" aria-describedby="intro-rule">
+    <p class="intro-kind" id="intro-kind">新活動</p>
+    <h2 id="intro-title">—</h2>
+    <p class="intro-rule" id="intro-rule"></p>
+    <button class="btn-primary" id="btn-intro-ok">我知道了</button>
+  </div>
+</div>
+
+<!-- 賓果開始／結束前的 3、2、1（伺服器的 BINGO_COUNTDOWN）。只是看的，不擋操作：
+     結束倒數時還可以填最後一格 -->
+<div class="countdown-321" id="countdown-321" hidden aria-live="assertive">
+  <span class="c3-label" id="c3-label">人物賓果</span>
+  <b class="c3-num" id="c3-num">3</b>
 </div>
 
 <!-- 非阻斷式通知 Toast -->

@@ -18,7 +18,10 @@ export const EV = {
   // Server → Phone
   CLIENT_WELCOME: 'CLIENT_WELCOME', // 登入確認，回傳伺服器指派的 userId
   CLIENT_REJECT: 'CLIENT_REJECT',   // 資料驗證失敗
-  TOPIC_CARD: 'TOPIC_CARD',         // 話題桌：坐在同一桌的人拿到同一題 {question, spot, withNames}
+  TOPIC_CARD: 'TOPIC_CARD',         // 話題桌：同一題、各猜同桌的一個人 {round, spot, selfAsk, guessAsk, options, target: {id, name}, withNames, mine?: {self, guess}}（mine 只在重連補送時有）
+  TOPIC_ACK: 'TOPIC_ACK',           // 話題桌：作答收到了 {round, kind, ok, reason?}
+  TOPIC_REVEAL: 'TOPIC_REVEAL',     // 話題桌：揭曉（猜的人與被猜的人都會收到）{round, role: 'guesser'|'target', otherName, guess, answer, correct}
+  TOPIC_EXPIRED: 'TOPIC_EXPIRED',   // 話題桌：這一回合作廢 {round, reason?: 'LEFT'}（過期，或同桌有人主動離場）
   AUDIENCE_WAIT: 'AUDIENCE_WAIT',   // 人滿：已排進候補名單 {ahead}，有空位會由伺服器直接讓他進場（送 CLIENT_WELCOME）
   GREET_INVITE: 'GREET_INVITE',     // 有人跟你揮手（帶 fromId，回揮時當 INPUT_ACTION 的 target）
   GREET_RESULT: 'GREET_RESULT',     // 揮手／乾杯的結果，見 GREET_OUTCOME
@@ -28,6 +31,7 @@ export const EV = {
   STAGE_META: 'STAGE_META',         // 場域尺寸等靜態資訊（連線時送一次）
   STAGE_ROSTER: 'STAGE_ROSTER',     // 參與者名冊（僅在有人加入/離開時送）
   STAGE_TOPIC: 'STAGE_TOPIC',       // 話題桌發題：{spotId, question}，大螢幕在那張桌子旁顯示題目
+  // STAGE_GREET 也用在話題桌猜對（kind: 'TOPIC'）：同一道光束
   STAGE_GREET: 'STAGE_GREET',       // 兩人互相揮手或碰杯成功：{ kind, a, b }，大螢幕在兩人之間畫一道連線
   STAGE_SYNC: 'STAGE_SYNC',         // 空間狀態廣播（30 FPS）
   STAGE_LINKS: 'STAGE_LINKS',       // 社交圖譜的邊（僅在有人配對成功時送）
@@ -56,6 +60,15 @@ export const EV = {
   MISSION_COMPLETE: 'MISSION_COMPLETE',       // Server → All：完成事件，觸發大螢幕回饋
   MISSION_CLOSED: 'MISSION_CLOSED',           // Server → All：任務結束
   MISSION_GATHER: 'MISSION_GATHER',           // Server → All：GATHER 任務集合點目前站了幾個還沒完成的人
+  DECODE_ASSIGN: 'DECODE_ASSIGN',             // Server → Phone：解碼任務裡你這一組的狀態 {id, view}（只有自己那一半，不含答案）
+  DECODE_GUESS: 'DECODE_GUESS',               // Phone → Server：輸入密碼 {id, code}
+  DECODE_RESULT: 'DECODE_RESULT',             // Server → Phone：輸入結果 {id, ok, hits, cooldownMs}
+  DECODE_STATE: 'DECODE_STATE',               // Server → Screen/Host：各組與解開的組數 {id, groups, solved}（不含任何符號）
+  HOOPS_SELF: 'HOOPS_SELF',                   // Server → Phone：自己的投籃狀態 {active, view: {hasBall, from, assistMs, made, attempts, assists, points}}
+  HOOPS_PASS: 'HOOPS_PASS',                   // Phone → Server：傳球 {to}
+  HOOPS_SHOOT: 'HOOPS_SHOOT',                 // Phone → Server：投籃手勢 {angle, power}（進不進由伺服器判定）
+  HOOPS_RESULT: 'HOOPS_RESULT',               // Server → Phone：{kind: 'pass'|'caught'|'shot'|'assisted', ok, reason?, made?, name?}
+  HOOPS_STATE: 'HOOPS_STATE',                 // Server → Screen/Host：{active, holders, totals, top, event?}
 
   // ── 配對任務 ──────────────────────────────────────────
   PAIR_CODE: 'PAIR_CODE',                     // Server → Phone：下發本輪配對碼
@@ -111,9 +124,11 @@ export const EV = {
   BINGO_TAGGED: 'BINGO_TAGGED',               // Server → Phone：有人把你填進他的卡 {byName, label, offer: {label}|null}
   BINGO_STATE: 'BINGO_STATE',                 // Server → Screen/Host：進度排行 {round}（null 代表沒有進行中的一輪）
   BINGO_ENDED: 'BINGO_ENDED',                 // Server → All：本輪結束 {winners}
+  BINGO_COUNTDOWN: 'BINGO_COUNTDOWN',         // Server → All：開始／結束前的 3、2、1 {kind: 'start'|'end', ms}
   BINGO_ASK: 'BINGO_ASK',                     // Server → Phone：開局先勾自我介紹題 {facts: [{id, text}], remainingMs}
   BINGO_FACTS: 'BINGO_FACTS',                 // Phone → Server：勾了哪幾題 {yes: string[]}
   BINGO_ACCEPT: 'BINGO_ACCEPT',               // Phone → Server：收下「順便填」的邀請（BINGO_TAGGED 的 offer）
+  TOPIC_ANSWER: 'TOPIC_ANSWER',               // Phone → Server：話題桌作答 {round, kind: 'self'|'guess', choice}（server/topicGuess.js）
 
   // ── 場景主題（shared/themes.js）──────────────────────
   HOST_SET_THEME: 'HOST_SET_THEME',           // Host → Server：切換大螢幕的場景主題
@@ -261,6 +276,21 @@ export const MISSION_TYPES = {
     /** 集合點的範圍：道具半徑再加這麼多（世界座標）。伺服器判定與大螢幕畫的圈共用，兩邊才對得上 */
     reachRadius: 45,
   },
+  /*
+   * 解碼：伺服器把人兩兩分組，一人拿符號、一人拿密碼本，只能用講的對出密碼
+   * （規則與理由見 docs/notes/INTERACTION-DESIGN.md「解碼任務」，判定在 server/decode.js）。
+   * 解開就換搭檔、交換角色再來一組；每解開一組算一次，做滿目標次數才給分。
+   */
+  DECODE: {
+    id: 'DECODE',
+    label: '兩人解碼',
+    brief: '跟系統指定的搭檔一起解碼：一人拿符號、一人拿密碼本，只能用講的',
+    defaultTarget: 2,
+    maxTarget: 10,
+    param: 'codeLength',
+    verify: 'decode',
+    codeLength: { min: 3, max: 6, default: 4 },
+  },
 };
 
 /** 靠交換配對碼完成的任務型別（其餘如 GATHER 由伺服器的座標判定） */
@@ -362,16 +392,51 @@ export const PAIR_ERRORS = {
   NOT_PAIR_MISSION: 'NOT_PAIR_MISSION', // 這個任務不是靠交換配對碼完成的（GATHER）
 };
 
-/** 社交動作白名單（技術文件 M1 §操控輸入發送規格） */
-// 乾杯已移除（2026-10-17）：EMOTE_GLYPH 與像素角色的碰杯姿勢留著，舊快照裡的動作仍畫得出來
-export const ACTIONS = ['HEART', 'WAVE'];
+/**
+ * 表情選單（2026-10-19 試玩回饋「除了揮手跟愛心之外，可以加入自己想表達的表情符號」）。
+ * 刻意是固定的一組、不開放自由輸入：投影在全場面前，自由輸入擋不完不雅的字。
+ * 順序就是手機選單上的順序。
+ */
+export const EMOJI_EMOTES = [
+  { id: 'HEART', glyph: '💗', label: '愛心' },
+  { id: 'LAUGH', glyph: '😂', label: '大笑' },
+  { id: 'CLAP', glyph: '👏', label: '拍手' },
+  { id: 'LOVE', glyph: '😍', label: '喜歡' },
+  { id: 'WOW', glyph: '😮', label: '驚訝' },
+  { id: 'THUMB', glyph: '👍', label: '讚' },
+  { id: 'PARTY', glyph: '🎉', label: '慶祝' },
+  { id: 'THINK', glyph: '🤔', label: '想想' },
+  { id: 'SHY', glyph: '🙈', label: '害羞' },
+  { id: 'FIRE', glyph: '🔥', label: '燃起來' },
+];
 
 /**
- * 社交動作的顯示圖示。
+ * 角色動作（同一次回饋「角色可以有更多動作」）。沒有頭上的圖示，是角色本身在動：
+ * 由 shared/character.js 的 drawCharacter 以位移、旋轉做出來，不需要新的角色圖，
+ * 拍照生成、換裝的角色都能做。
+ */
+export const MOTION_EMOTES = [
+  { id: 'JUMP', glyph: '⤴️', label: '跳一下' },
+  { id: 'SPIN', glyph: '🌀', label: '轉圈' },
+  { id: 'DANCE', glyph: '💃', label: '跳舞' },
+];
+
+/** 社交動作白名單（技術文件 M1 §操控輸入發送規格）。揮手另外有「互相揮手」的判定（server/greetings.js） */
+// 乾杯已移除（2026-10-17）：EMOTE_GLYPH 與像素角色的碰杯姿勢留著，舊快照裡的動作仍畫得出來
+export const ACTIONS = ['WAVE', ...EMOJI_EMOTES.map((e) => e.id), ...MOTION_EMOTES.map((e) => e.id)];
+
+/**
+ * 社交動作的頭上圖示。動作類（MOTION_EMOTES）不在這裡：它們不畫圖示，是角色本身在動。
  * 大螢幕與手機端 POV 都要畫，放在協定層避免兩邊各存一份而漂移
  * （與 QUIZ_CHOICES 的顏色符號是同一個理由）。
  */
-export const EMOTE_GLYPH = { CHEERS: '🍻', HEART: '💗', WAVE: '👋' };
+export const EMOTE_GLYPH = {
+  CHEERS: '🍻', WAVE: '👋',
+  ...Object.fromEntries(EMOJI_EMOTES.map((e) => [e.id, e.glyph])),
+};
+
+/** 是不是角色動作（不畫頭上圖示） */
+export const MOTION_IDS = new Set(MOTION_EMOTES.map((e) => e.id));
 
 /**
  * GREET_RESULT 的 outcome。揮手與乾杯共用（server/greetings.js）。

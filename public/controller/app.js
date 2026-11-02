@@ -12,7 +12,7 @@ import { scorePersona, PERSONA_RESULT_MAP } from '/shared/persona.js';
 import { SKIN_TONES } from '/shared/avatars.js';
 import {
   EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS, DIRECT_MESSAGE, MSG_ERRORS,
-  QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME,
+  QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME, EMOJI_EMOTES, MOTION_EMOTES,
 } from '/shared/protocol.js';
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
@@ -24,6 +24,7 @@ import { makeKeepsake, saveKeepsake } from './keepsake.js';
 import { ChatLog } from './chatlog.js';
 import { encounterLabel } from '/shared/encounters.js';
 import { AvatarRenderer } from './avatarRenderer.js';
+import { HOOPS, hoopsFor, idealPower, inRect } from '/shared/hoops.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -483,6 +484,52 @@ const DU_EYE_COLORS = ['#301810', '#141414', '#7A4A24', '#B07A2E', '#2E6FB5', '#
 const DU_PALETTES = { hair: DU_HAIR_COLORS, cloth: DU_CLOTH_COLORS, eye: DU_EYE_COLORS };
 const DU_SKIN_TAB = { id: 'skin', label: '膚色' };
 
+/**
+ * 快速套組：一鍵換上整套，再到各分類細調。
+ * 只換「款式」與幾個代表色，不動膚色、眼睛 —— 那些是參與者自己的樣子（拍照失敗時還是照片量到的）。
+ * 部件 id 對不到目前的選單（manifest 改過）就略過那一項，不會整組失效。
+ */
+const DU_PRESETS = [
+  { base: 'female', label: '女生 A', selection: { hair: 'hair_long', bottom: 'bottom_skirt', brows: 'brows_thin' }, colors: { bottom: '#2F4C7A', top: '#F4F1EA' } },
+  { base: 'female', label: '女生 B', selection: { hair: 'hair_ponytail', bottom: 'bottom_dress', brows: 'brows_soft' }, colors: { bottom: '#E9A9B8' } },
+  { base: 'female', label: '女生 C', selection: { hair: 'hair_bun', top: 'top_shirt', bottom: 'bottom_shorts', brows: 'brows_thin' }, colors: { top: '#84A98C', bottom: '#2B2B30' } },
+  { base: 'female', label: '女生 D', selection: { hair: 'hair_wavy', outer: 'top_hoodie', bottom: 'bottom_skirt', brows: 'brows_soft' }, colors: { outer: '#E9C46A', bottom: '#6D6875' } },
+  { base: 'male', label: '男生 A', selection: { hair: 'hair_short_curly', outer: 'top_hoodie', brows: 'brows_thick' }, colors: { outer: '#4A6FA5', bottom: '#2B2B30' } },
+  { base: 'male', label: '男生 B', selection: { hair: 'hair_middle_part', top: 'top_shirt', shoes: 'shoes_boots', brows: 'brows_sharp' }, colors: { top: '#F4F1EA', bottom: '#8B5A2B' } },
+];
+
+/** 這個部件在目前的素體上有沒有畫好 */
+function duOnBase(id) {
+  const p = duPart(id);
+  return !!p && (!p.bases || p.bases.includes(duState.base));
+}
+
+function applyDuPreset(preset) {
+  const sel = duState.selection;
+  // 先回到素體（套組之間不留上一套的東西），配件保留：那比較像個人的選擇
+  for (const cat of duCatalog.categories) if (!cat.multi) sel[cat.id] = null;
+  for (const [cat, id] of Object.entries(preset.selection)) {
+    if (duPart(id)?.category === cat && duOnBase(id)) sel[cat] = id;
+  }
+  Object.assign(duState.colors, preset.colors);
+  renderDressup();
+  requestDuPreview();
+}
+
+function renderDuPresets() {
+  const box = $('#du-presets');
+  box.replaceChildren(...DU_PRESETS
+    // 只列目前素體的套組：女生套組的部件畫在女生素體上，套到男生素體會整套不對
+    .filter((p) => (!p.base || p.base === duState.base)
+      && Object.values(p.selection).some((id) => duOnBase(id)))
+    .map((p) => {
+      const b = Object.assign(document.createElement('button'), { type: 'button', className: 'du-preset', textContent: p.label });
+      b.addEventListener('click', () => applyDuPreset(p));
+      return b;
+    }));
+  box.hidden = !box.children.length;
+}
+
 /** @type {{categories: object[], parts: object[], defaults: object}|null} */
 let duCatalog = null;
 let duState = null;
@@ -595,6 +642,7 @@ function showDuEditor() {
   $('#dressup').classList.remove('is-picking');
   $('#du-pick').hidden = true;
   $('#du-sub').textContent = '挑髮型、衣服和顏色';
+  renderDuPresets();
   renderDressup();
   requestDuPreview();
 }
@@ -1444,6 +1492,13 @@ $('#btn-accept').addEventListener('click', () => {
   enterStage();
 });
 $('#btn-retake').addEventListener('click', () => openCamera());
+// 生成的角色不像：改用換裝，照片量到的顏色當起點（openDressup 讀 lastFallbackColors）。
+// 已經答過的進場問卷不會再問（askPersonaThen 看的是作答紀錄，不是走哪條路）
+$('#btn-scan-to-dressup').addEventListener('click', async () => {
+  lastFallbackColors = pendingScanConfig?.fallbackColors ?? lastFallbackColors;
+  stopScanStream();
+  await goDressup({ message: '照片的顏色已經幫你套上了，挑髮型和衣服就好' });
+});
 $('#btn-retry').addEventListener('click', () => openCamera());
 
 /**
@@ -1607,6 +1662,8 @@ function retireOldCharacter(userId, rejoinToken) {
 let ws = null;
 let reconnectDelay = 500;
 let joystick = null;
+/** 自己在場上的位置（CLIENT_SYNC，伺服器為準）。投籃要知道自己在不在籃框區、離籃框多遠 */
+let mySelfPos = null;
 /** 目前的場景主題（EV.STAGE_THEME）。可能比 POV 畫布更早送達，先記下來。 */
 let stageTheme = null;
 /** 最近一次的手機名冊。進場時名冊常比畫布先到，畫布建立後要補套。 */
@@ -1656,7 +1713,7 @@ function connect() {
     } catch { /* 略 */ }
     sendMsg(EV.CLIENT_JOIN, {
       userId, rejoinToken, name: displayName, avatar: config, entry: entryRoute,
-      // 進場問卷的作答（沒答或略過就不帶）。伺服器依目前題目判定類型，見 server/index.js 的 applyPersona
+      // 進場問卷的作答（沒答就不帶，例如讀不到題目）。伺服器依目前題目判定類型，見 server/index.js 的 applyPersona
       ...(personaAnswers && { persona: { version: personaAnswers.version, answers: personaAnswers.answers } }),
     });
   });
@@ -1700,6 +1757,7 @@ function connect() {
       // α 是伺服器仲裁的真實結果，比本地計時器準確（見下方 #agency）
       serverAlpha = msg.self?.alpha ?? null;
       serverMode = msg.self?.mode ?? null;
+      if (msg.self) { mySelfPos = { x: msg.self.x, y: msg.self.y }; renderHoops(); }
       lastSyncSeenAt = Date.now();
     } else if (msg.type === EV.CLIENT_ROSTER) {
       // id → 名字與外觀。只在成員變動時送，供 POV 畫布畫出鄰居、標示是誰。
@@ -1709,6 +1767,7 @@ function connect() {
       // 個人視角畫的是大螢幕同一個場景的局部，主題要跟著主辦端切換
       stageTheme = msg.theme;
       renderer?.setTheme(stageTheme);
+      renderHoops();
     } else if (msg.type === EV.AUDIENCE_WAIT) {
       showAudienceWait(msg.ahead);
     } else if (msg.type === EV.CLIENT_REJECT) {
@@ -1820,7 +1879,7 @@ function showPairMsg(text, ok = false) {
  * 任務條件，寫成一句走動時記得住的話。
  * 同類／不同類一定要先講「你是哪一類」—— 參與者多半不記得自己進場時被分成什麼。
  */
-function missionCondition({ mission, progress, mine, inside }) {
+function missionCondition({ mission, progress, mine, inside, decode }) {
   const r = mission?.rule;
   if (!r) return null;
   switch (r.type) {
@@ -1832,6 +1891,14 @@ function missionCondition({ mission, progress, mine, inside }) {
     case 'SAME_TRAIT': return mine
       ? `你是「${mine}」，去找同樣是的人`
       : `你還沒答過「${r.title}」，這個任務沒辦法參加`;
+    case 'DECODE': {
+      const v = decode;
+      if (v?.state !== 'playing') return '等系統幫你分隊…';
+      const t = decodeTeam(v);
+      return v.partnerNames
+        ? `你是${t.mine}・搭檔是 ${v.partnerNames.join('、')}`
+        : `你是${t.mine}・去找${t.color}${t.theirIcon}的${t.theirs}`;
+    }
     case 'GATHER': return progress >= mission.target
       ? `你已經在「${r.label}」集合完成 ✓`
       : `到「${r.label}」湊滿 ${r.teamSize} 人　現在 ${inside} 人（看大螢幕上的圈）`;
@@ -1851,7 +1918,8 @@ function renderMission() {
   $('#mb-cond').hidden = !conds.length;
   $('#mb-cond').textContent = conds.join('\n');
   // 只有集合任務時不交換配對碼：配對碼那一行與「點此輸入」都收起來，免得有人一直點
-  const onlyGather = list.every((x) => x.mission.rule?.type === 'GATHER');
+  // 解碼也一樣：搭檔由系統指定，在下方的解碼面板裡輸入，不交換配對碼
+  const onlyGather = list.every((x) => x.mission.rule?.type === 'GATHER' || x.mission.rule?.type === 'DECODE');
   $('#mb-code-row').hidden = onlyGather;
   banner.classList.toggle('is-gather', onlyGather);
   $('#mb-code').textContent = myCode;
@@ -1881,6 +1949,390 @@ function renderMission() {
     ? (allDone ? `你已經完成任務了（${fracOf(list[0])}），還可以繼續認識新的人` : `你的進度　${fracOf(list[0])}`)
     : list.map((x) => `${x.mission.title}　${fracOf(x)}`).join('\n');
 }
+
+// ── 解碼任務 ──────────────────────────────────────────────
+// 一人拿符號、一人拿密碼本，只能用講的（server/decode.js）。手機上只有自己那一半，
+// 答案不在這支手機上 —— 對不對由伺服器判定。不是覆蓋層：邊走去找搭檔邊看也可以。
+const dcBox = $('#decode-box');
+const dcInput = $('#dc-input');
+/** {text, ok}：最近一次輸入的結果，換組時清掉 */
+let decodeMsg = null;
+/** 冷卻到什麼時候（本機時鐘）；伺服器送的是剩幾毫秒 */
+let decodeCooldownUntil = 0;
+let decodeCooldownTimer = null;
+
+/**
+ * 兩個陣營：符號隊頭上是🔒、密碼本隊是🔑，同一組同一個顏色。
+ * 手機上只寫顏色不寫名字 —— 要開口問「你也是紅色的嗎？」才找得到搭檔
+ */
+function decodeTeam(v) {
+  const symbols = v.role === 'symbols';
+  return {
+    mine: symbols ? '符號隊' : '密碼本隊',
+    theirs: symbols ? '密碼本隊' : '符號隊',
+    myIcon: symbols ? '🔒' : '🔑',
+    theirIcon: symbols ? '🔑' : '🔒',
+    color: `${v.colorName}色${v.mark > 1 ? ` ${v.mark} 號` : ''}`,
+  };
+}
+/** 提示搭檔名字的時刻（本機時鐘）。伺服器送的是還剩幾毫秒 */
+let decodeRevealAt = 0;
+let decodeRevealTimer = null;
+
+/** 目前的解碼任務（同時只會開一個，見 missions.js 的 ruleKey） */
+const decodeEntry = () => [...missions.values()].find((x) => x.mission.rule?.type === 'DECODE') ?? null;
+
+function renderDecode() {
+  const entry = decodeEntry();
+  dcBox.hidden = !entry;
+  if (!entry) return;
+  const v = entry.decode;
+  const playing = v?.state === 'playing';
+  dcBox.classList.toggle('is-waiting', !playing);
+  dcBox.style.setProperty('--key', playing ? v.color : 'var(--line)');
+  const t = playing ? decodeTeam(v) : null;
+  $('#dc-icon').textContent = t?.myIcon ?? '🔑';
+  $('#dc-partner').textContent = playing ? `你是${t.mine}` : '等系統幫你分隊…';
+  $('#dc-role').hidden = !playing;
+  $('#dc-role').textContent = playing ? t.color : '';
+  // 找誰：先只有顏色；過一陣子還沒解開才提示名字
+  const find = $('#dc-find');
+  find.hidden = !playing;
+  if (playing) {
+    const others = v.teamSize - 1;
+    const left = Math.ceil((decodeRevealAt - Date.now()) / 1000);
+    find.textContent = v.partnerNames
+      ? `提示：你的搭檔是 ${v.partnerNames.join('、')}`
+      : `去找頭上也是${t.color}${t.theirIcon}的${t.theirs}${others > 1 ? `（${others} 個人）` : ''}`
+        + (left > 0 ? `　找不到？${left} 秒後提示是誰` : '');
+  }
+  const items = $('#dc-items');
+  items.replaceChildren();
+  items.classList.toggle('is-book', playing && v.role === 'book');
+  if (playing) {
+    const list = v.role === 'symbols' ? v.symbols : v.book;
+    for (const it of list) {
+      const cell = document.createElement('span');
+      cell.className = 'dc-item';
+      const glyph = Object.assign(document.createElement('b'), { textContent: it.glyph });
+      const name = Object.assign(document.createElement('small'), { textContent: it.name });
+      cell.append(glyph);
+      if (v.role === 'book') cell.append(Object.assign(document.createElement('i'), { textContent: `= ${it.digit}` }));
+      cell.append(name);
+      items.append(cell);
+    }
+  }
+  items.hidden = !playing;
+  $('#dc-hint').textContent = !playing
+    ? '解開的人會換搭檔再來一組，等一下就輪到你'
+    : v.role === 'symbols'
+      ? `找到搭檔後，把這 ${v.codeLength} 個符號依序念給他聽，他查密碼本告訴你數字`
+      : `找到搭檔後，他念符號，你查這張表把數字報給他${v.teamSize > 2 ? '（另一半密碼本在另一位同色🔑的人手上）' : ''}`;
+  $('#dc-form').hidden = !playing;
+  dcInput.maxLength = v?.codeLength ?? 4;
+  dcInput.placeholder = '0'.repeat(v?.codeLength ?? 4);
+  const cooling = Date.now() < decodeCooldownUntil;
+  $('#dc-send').disabled = cooling || dcInput.value.length !== (v?.codeLength ?? 4);
+  const msgEl = $('#dc-msg');
+  msgEl.hidden = !decodeMsg;
+  msgEl.textContent = decodeMsg?.text ?? '';
+  msgEl.classList.toggle('ok', !!decodeMsg?.ok);
+}
+
+dcInput.addEventListener('input', () => {
+  dcInput.value = dcInput.value.replace(/\D/g, '');
+  renderDecode();
+});
+
+$('#dc-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const entry = decodeEntry();
+  if (!entry || $('#dc-send').disabled) return;
+  sendMsg(EV.DECODE_GUESS, { id: entry.mission.id, code: dcInput.value });
+});
+
+/** 「N 秒後提示」的倒數：每秒重畫一次，提示出現（伺服器重送畫面）就停 */
+function syncDecodeReveal(view) {
+  clearInterval(decodeRevealTimer);
+  decodeRevealAt = view?.revealInMs ? Date.now() + view.revealInMs : 0;
+  if (decodeRevealAt) decodeRevealTimer = setInterval(() => {
+    if (Date.now() >= decodeRevealAt) clearInterval(decodeRevealTimer);
+    renderDecode();
+  }, 1000);
+}
+
+function startDecodeCooldown(ms) {
+  decodeCooldownUntil = Date.now() + ms;
+  clearInterval(decodeCooldownTimer);
+  const tick = () => {
+    const left = Math.ceil((decodeCooldownUntil - Date.now()) / 1000);
+    if (left <= 0) {
+      clearInterval(decodeCooldownTimer);
+      decodeMsg = { text: '可以再試了' };
+    } else {
+      decodeMsg = { text: `連錯 3 次，等 ${left} 秒再試` };
+    }
+    renderDecode();
+  };
+  tick();
+  decodeCooldownTimer = setInterval(tick, 500);
+}
+
+function handleDecodeResult(msg) {
+  if (!msg.ok) {
+    if (msg.reason === 'COOLDOWN' && msg.cooldownMs) startDecodeCooldown(msg.cooldownMs);
+    else if (msg.reason === 'BAD_CODE') decodeMsg = { text: '位數不對，再確認一次' };
+    renderDecode();
+    return;
+  }
+  if (msg.solved) {
+    decodeMsg = null;
+    dcInput.value = '';
+    showToast(`解開了！你跟 ${msg.partnerNames.join('、')} 合作成功，等一下換新搭檔`);
+    navigator.vibrate?.([40, 60, 40]);
+    renderDecode();
+    return;
+  }
+  // 搭檔輸入的也讓你知道，不然兩個人會同時亂按
+  const who = msg.mine ? '' : `${msg.byName ?? '搭檔'}輸入了，`;
+  decodeMsg = { text: `${who}不對：對了 ${msg.hits} / ${msg.codeLength} 碼（不告訴你是哪幾碼）` };
+  if (msg.mine) dcInput.select();
+  if (msg.cooldownMs) startDecodeCooldown(msg.cooldownMs);
+  renderDecode();
+}
+
+// ── 傳球＋投籃（體育館；shared/hoops.js、server/hoops.js）──────────────────
+// 走到球車自動拿球 → 點別人傳球／到籃框區按「投籃」往上滑。進不進由伺服器判定，
+// 手機只送手勢。被傳球的人時限內投進算助攻，兩個人都得分 —— 要喊「傳給我」。
+/** 伺服器給的投籃狀態（HOOPS_SELF）；這個場景沒有投籃時為 null */
+let hoopsView = null;
+let hoopsViewAt = 0;
+const hoopsChip = $('#hoops-chip');
+const shootBtn = $('#btn-shoot');
+
+function hoopsCourt() { return hoopsView ? hoopsFor(stageTheme) : null; }
+
+function inShootZone() {
+  const c = hoopsCourt();
+  return !!(c && mySelfPos && inRect(c.zone, mySelfPos.x, mySelfPos.y));
+}
+
+function renderHoops() {
+  const has = !!hoopsView?.hasBall;
+  const zone = has && inShootZone();
+  shootBtn.hidden = !zone;
+  hoopsChip.hidden = !has;
+  if (!has) return;
+  const left = Math.ceil((hoopsViewAt + (hoopsView.assistMs ?? 0) - Date.now()) / 1000);
+  hoopsChip.textContent = hoopsView.fromName && left > 0
+    ? `🏀 ${hoopsView.fromName} 傳給你　${left} 秒內投進算助攻`
+    : zone ? '🏀 按右邊「投籃」，往上滑出去' : '🏀 你拿著球　點別人傳球・到籃框區投籃';
+}
+// 助攻倒數：每秒更新一次就好
+setInterval(() => { if (hoopsView?.hasBall && hoopsView.fromName) renderHoops(); }, 1000);
+
+function passBall(id) {
+  sendMsg(EV.HOOPS_PASS, { to: id });
+}
+
+const HOOP_ERROR_TEXT = {
+  NO_BALL: '你手上沒有球，先到球車拿一顆。',
+  SELF: '那是你自己喔。',
+  NOT_FOUND: '對方已經離開了。',
+  TOO_FAR: '太遠了，走近一點再傳（或喊他過來）。',
+  HAS_BALL: '他手上已經有球了。',
+  OUT_OF_ZONE: '要在籃框區裡才能投。',
+  COOLDOWN: '慢一點，再試一次。',
+  BAD_SHOT: '沒投出去，再滑一次。',
+};
+
+function handleHoopsResult(msg) {
+  if (!msg.ok) {
+    if (msg.kind === 'shot') shootFinish(null);
+    showToast(HOOP_ERROR_TEXT[msg.reason] ?? '沒有成功，再試一次。');
+    return;
+  }
+  if (msg.kind === 'pass') showToast(`🏀 傳給 ${msg.name} 了！`);
+  else if (msg.kind === 'caught') {
+    showToast(`🏀 ${msg.name} 傳球給你！${HOOPS.assistMs / 1000} 秒內到籃框區投進算助攻`);
+    navigator.vibrate?.([30, 40, 30]);
+  } else if (msg.kind === 'assisted') {
+    showToast(`🎉 你助攻 ${msg.name} 進球！+${HOOPS.points.assist}`);
+    navigator.vibrate?.([40, 60, 40]);
+  } else if (msg.kind === 'shot') shootFinish(msg);
+}
+
+// ── 投籃畫面：往上滑出去 ──
+const shootOverlay = $('#shoot-overlay');
+const shootCanvas = $('#shoot-canvas');
+/** @type {{phase: 'aim'|'fly'|'done', start?: object, shot?: object, result?: object|null, t0?: number}|null} */
+let shot = null;
+let shootRaf = 0;
+
+function openShoot() {
+  if (!inShootZone() || !hoopsView?.hasBall) return;
+  shot = { phase: 'aim' };
+  shootOverlay.hidden = false;
+  pushOverlay(shootOverlay, { onEscape: closeShoot });
+  $('#shoot-msg').textContent = '手指按住球，往籃框方向滑出去';
+  cancelAnimationFrame(shootRaf);
+  drawShoot();
+}
+
+function closeShoot() {
+  if (shootOverlay.hidden) return;
+  shootOverlay.hidden = true;
+  cancelAnimationFrame(shootRaf);
+  shot = null;
+  popOverlay(shootOverlay);
+}
+
+/** 離籃框多遠（場上單位） */
+function hoopDistance() {
+  const c = hoopsCourt();
+  return c && mySelfPos ? Math.hypot(mySelfPos.x - c.hoop.x, mySelfPos.y - c.hoop.y) : 200;
+}
+
+function shootGeom() {
+  const r = shootCanvas.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  if (shootCanvas.width !== Math.round(r.width * dpr)) {
+    shootCanvas.width = Math.round(r.width * dpr);
+    shootCanvas.height = Math.round(r.height * dpr);
+  }
+  const W = r.width;
+  const H = r.height;
+  // 愈遠籃框畫得愈小、愈高：看得出「這一球要大力一點」
+  const far = Math.min(1, hoopDistance() / 420);
+  return {
+    W, H, dpr,
+    hoop: { x: W / 2, y: H * (0.2 - far * 0.06), w: Math.min(W, H) * (0.28 - far * 0.08) },
+    ball: { x: W / 2, y: H * 0.8, r: Math.min(W, H) * 0.075 },
+  };
+}
+
+function drawShoot(now = performance.now()) {
+  const g = shootGeom();
+  const c = shootCanvas.getContext('2d');
+  c.setTransform(g.dpr, 0, 0, g.dpr, 0, 0);
+  c.clearRect(0, 0, g.W, g.H);
+  const { hoop } = g;
+  // 籃板與籃框
+  c.fillStyle = '#F7F7F2'; c.strokeStyle = '#2B2B30'; c.lineWidth = 3;
+  c.fillRect(hoop.x - hoop.w * 0.75, hoop.y - hoop.w * 0.9, hoop.w * 1.5, hoop.w * 0.9);
+  c.strokeRect(hoop.x - hoop.w * 0.75, hoop.y - hoop.w * 0.9, hoop.w * 1.5, hoop.w * 0.9);
+  c.strokeStyle = '#E63946';
+  c.strokeRect(hoop.x - hoop.w * 0.3, hoop.y - hoop.w * 0.55, hoop.w * 0.6, hoop.w * 0.45);
+  // 網子
+  c.strokeStyle = 'rgba(255,255,255,.85)'; c.lineWidth = 1.5;
+  for (let i = 0; i <= 4; i++) {
+    const x0 = hoop.x - hoop.w / 2 + (hoop.w / 4) * i;
+    c.beginPath(); c.moveTo(x0, hoop.y); c.lineTo(hoop.x - hoop.w * 0.3 + (hoop.w * 0.15) * i, hoop.y + hoop.w * 0.5); c.stroke();
+  }
+  c.strokeStyle = '#F4A261'; c.lineWidth = 5;
+  c.beginPath(); c.ellipse(hoop.x, hoop.y, hoop.w / 2, hoop.w * 0.12, 0, 0, Math.PI * 2); c.stroke();
+
+  // 球
+  let { x, y } = g.ball;
+  let r = g.ball.r;
+  if (shot?.phase === 'fly' || shot?.phase === 'done') {
+    const t = Math.min(1, (now - shot.t0) / 650);
+    const end = shotEnd(g);
+    x = g.ball.x + (end.x - g.ball.x) * t;
+    y = g.ball.y + (end.y - g.ball.y) * t - Math.sin(Math.PI * t) * g.H * 0.25;
+    r = g.ball.r * (1 - t * 0.45);
+    if (t >= 1 && shot.phase === 'fly' && shot.result !== undefined) landShot();
+  } else if (shot?.drag) {
+    x = shot.drag.x; y = shot.drag.y;
+  }
+  if (shot?.phase !== 'done' || shot.result?.made) {
+    c.fillStyle = '#E07A2F'; c.strokeStyle = '#2B2B30'; c.lineWidth = 2;
+    c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill(); c.stroke();
+    c.beginPath(); c.moveTo(x - r, y); c.lineTo(x + r, y); c.moveTo(x, y - r); c.lineTo(x, y + r); c.stroke();
+  }
+  if (shot && shot.phase !== 'done') shootRaf = requestAnimationFrame(drawShoot);
+}
+
+/** 球飛到哪：偏左偏右照手勢，力道不對就落在籃框前或飛過頭 */
+function shotEnd(g) {
+  const { angle, power } = shot.shot;
+  const dp = power - idealPower(hoopDistance());
+  return {
+    x: g.hoop.x + Math.sin(angle * Math.PI / 180) * g.H * 0.6,
+    y: g.hoop.y - dp * g.H * 0.6,
+  };
+}
+
+/** 給下一球的提示：方向或力道哪個偏得多，就講那個（進不進仍是伺服器說了算） */
+function shotHint({ angle, power }) {
+  const dp = power - idealPower(hoopDistance());
+  if (Math.abs(angle) / HOOPS.angleTol >= Math.abs(dp) / HOOPS.powerTol) {
+    if (Math.abs(angle) <= HOOPS.angleTol) return '';
+    return angle < 0 ? '偏左了' : '偏右了';
+  }
+  if (Math.abs(dp) <= HOOPS.powerTol) return '';
+  return dp < 0 ? '太小力了' : '太大力了';
+}
+
+function landShot() {
+  shot.phase = 'done';
+  const res = shot.result;
+  const hint = shotHint(shot.shot);
+  $('#shoot-msg').textContent = !res
+    ? '沒投出去'
+    : res.made
+      ? (res.name ? `🎉 進球！${res.name} 助攻　+${HOOPS.points.assisted}` : `🎉 進球！+${HOOPS.points.solo}`)
+      : `沒進${hint ? `，${hint}` : '，差一點'}　再去球車拿一顆，或請人傳給你`;
+  if (res?.made) navigator.vibrate?.([40, 60, 40]);
+  drawShoot();
+  setTimeout(closeShoot, res?.made ? 1600 : 2200);
+}
+
+/** 伺服器回來了（可能比動畫早或晚）。ok:false 時 msg 為 null */
+function shootFinish(msg) {
+  if (!shot) {
+    if (msg?.made) showToast(msg.name ? `🎉 進球！${msg.name} 助攻` : '🎉 進球！');
+    return;
+  }
+  shot.result = msg;
+  if (shot.phase === 'aim') { shot.phase = 'fly'; shot.shot = { angle: 0, power: 0 }; shot.t0 = performance.now() - 650; }
+}
+
+shootCanvas.addEventListener('pointerdown', (e) => {
+  if (shot?.phase !== 'aim') return;
+  const g = shootGeom();
+  const r = shootCanvas.getBoundingClientRect();
+  const p = { x: e.clientX - r.left, y: e.clientY - r.top };
+  // 按在球附近才算：整片都能按的話，隨手一碰就投出去了
+  if (Math.hypot(p.x - g.ball.x, p.y - g.ball.y) > g.ball.r * 2.5) return;
+  shootCanvas.setPointerCapture(e.pointerId);
+  shot.start = { ...p, at: performance.now() };
+  shot.drag = p;
+});
+shootCanvas.addEventListener('pointermove', (e) => {
+  if (!shot?.start) return;
+  const r = shootCanvas.getBoundingClientRect();
+  shot.drag = { x: e.clientX - r.left, y: e.clientY - r.top };
+});
+shootCanvas.addEventListener('pointerup', (e) => {
+  if (!shot?.start || shot.phase !== 'aim') return;
+  const g = shootGeom();
+  const r = shootCanvas.getBoundingClientRect();
+  const dx = e.clientX - r.left - shot.start.x;
+  const dy = e.clientY - r.top - shot.start.y;
+  shot.start = null; shot.drag = null;
+  if (dy > -20) return;   // 往下或沒滑：不算投
+  // 方向：偏離正上方幾度；力道：滑多長（畫面高度的 70% 算滿力）
+  const angle = Math.atan2(dx, -dy) * 180 / Math.PI;
+  const power = Math.min(1, Math.hypot(dx, dy) / (g.H * 0.7));
+  shot.shot = { angle, power };
+  shot.phase = 'fly';
+  shot.t0 = performance.now();
+  sendMsg(EV.HOOPS_SHOOT, { angle: Math.round(angle * 10) / 10, power: Math.round(power * 1000) / 1000 });
+});
+shootCanvas.addEventListener('pointercancel', () => { if (shot) { shot.start = null; shot.drag = null; } });
+$('#btn-shoot-close').addEventListener('click', closeShoot);
+shootBtn.addEventListener('click', openShoot);
 
 // ── 文字雲 ────────────────────────────────────────────────
 // 主持人出題時出現在搖桿區上方，輸入短答送到大螢幕。不是覆蓋層：邊走邊答也可以。
@@ -1954,6 +2406,8 @@ function onWordCloudAck(msg) {
 let bingoCard = null;
 /** 自己開局勾的自我介紹題（題目文字）；這一輪沒有自我介紹題時為 null */
 let bingoMyFacts = null;
+/** 系統判定自己的衣服顏色（「🔵 藍色」），別人卡上的顏色格子是照這個判的 */
+let bingoMyColors = [];
 let bingoDeadline = null;
 let bingoPick = null;
 let bingoTimer = null;
@@ -2079,12 +2533,14 @@ function renderBingo() {
   $('#bingo-prog').textContent = `${filled} / 9${bingoCard.lines ? `　連線 ${bingoCard.lines}` : ''}`;
   $('#bingo-mycode').textContent = myCode;
   const mine = $('#bingo-mine');
-  mine.hidden = bingoMyFacts === null;
+  const lines = [];
   if (bingoMyFacts) {
-    mine.textContent = bingoMyFacts.length
-      ? `你開局勾的：${bingoMyFacts.join('、')}`
-      : '你開局沒有勾任何一題自我介紹';
+    lines.push(bingoMyFacts.length ? `你開局勾的：${bingoMyFacts.join('、')}` : '你開局沒有勾任何一題自我介紹');
   }
+  // 顏色看的是大螢幕上的角色，不是本人的衣服：寫出來，別人問「你算不算藍色」時才答得出來
+  if (bingoMyColors.length) lines.push(`系統判定你的衣服：${bingoMyColors.join('、')}（照大螢幕上你的角色）`);
+  mine.hidden = !lines.length;
+  mine.textContent = lines.join('\n');
 
   // 底部輸入列：還沒點格子時只顯示提示，點了才出現輸入框
   $('#bingo-hint').hidden = bingoPick !== null;
@@ -2114,7 +2570,10 @@ function renderBingo() {
 function pickBingoCell(i) {
   bingoPick = i;
   $('#bingo-msg').hidden = true;
-  $('#bingo-entry-label').textContent = `「${bingoCard.cells[i].label}」：輸入他的配對碼`;
+  const cell = bingoCard.cells[i];
+  $('#bingo-entry-label').textContent = cell.color
+    ? `「${cell.label}」：看大螢幕上角色的衣服，不是本人的。輸入他的配對碼`
+    : `「${cell.label}」：輸入他的配對碼`;
   $('#bingo-entry').hidden = false;
   $('#bingo-hint').hidden = true;
   bingoInput.value = '';
@@ -2127,6 +2586,59 @@ function showBingoMsg(text) {
   el.textContent = text;
   el.hidden = !text;
 }
+
+// ── 新活動開始：整頁卡片 ──────────────────────────────────
+// 原本任務只有上方一條橫幅、文字雲只震一下，沒聽到主持人說明的人不知道現在在做什麼
+// （2026-10-19 試玩回饋）。同一個活動只跳一次：重新整理、斷線接回時伺服器會補送公告，
+// 那時不該再跳 —— 看過的記在 sessionStorage（分頁關掉就清，換手機或新角色會再看到）。
+const INTRO_SEEN_KEY = 'pf.introSeen';
+const introSeen = new Set();
+try { for (const k of JSON.parse(sessionStorage.getItem(INTRO_SEEN_KEY) ?? '[]')) introSeen.add(k); } catch { /* 略 */ }
+/** @type {{key: string, kind: string, title: string, rule: string, then?: () => void}[]} */
+const introQueue = [];
+let introShown = null;
+
+/** 宣布一個新活動。key 相同的只會跳一次 */
+function announceActivity(item) {
+  if (!item?.key || introSeen.has(item.key)) return;
+  introSeen.add(item.key);
+  try { sessionStorage.setItem(INTRO_SEEN_KEY, JSON.stringify([...introSeen].slice(-50))); } catch { /* 略 */ }
+  introQueue.push(item);
+  if (!introShown) showNextIntro();
+}
+
+function showNextIntro() {
+  introShown = introQueue.shift() ?? null;
+  if (!introShown) return;
+  const el = $('#activity-intro');
+  $('#intro-kind').textContent = introShown.kind;
+  $('#intro-title').textContent = introShown.title;   // 主持人輸入的文字，一律 textContent
+  $('#intro-rule').textContent = introShown.rule ?? '';
+  $('#intro-rule').hidden = !introShown.rule;
+  el.hidden = false;
+  pushOverlay(el, { onEscape: closeIntro });
+  vibrate([60, 40, 60]);
+  $('#btn-intro-ok').focus({ preventScroll: true });
+}
+
+function closeIntro() {
+  const el = $('#activity-intro');
+  if (el.hidden) return;
+  el.hidden = true;
+  popOverlay(el);
+  const then = introShown?.then;
+  introShown = null;
+  then?.();
+  if (introQueue.length) setTimeout(showNextIntro, 250);
+}
+
+/** 離場、換角色：還沒看的公告不用再跳 */
+function clearIntros() {
+  introQueue.length = 0;
+  closeIntro();
+}
+
+$('#btn-intro-ok').addEventListener('click', closeIntro);
 
 function openBingo() {
   if (!bingoCard) { openBingoAsk(); return; }
@@ -2163,6 +2675,42 @@ $('#btn-bingo-submit').addEventListener('click', () => {
 });
 
 /** @returns {boolean} 是否處理了這則訊息 */
+// ── 3、2、1 倒數 ──
+// 全場同一刻開始找人、同一刻停手。不是覆蓋層：pointer-events: none，倒數中照樣可以點（結束前還能填最後一格）
+let c3Timer = null;
+function showCountdown321(label, finalText, ms = 3000) {
+  const el = $('#countdown-321');
+  const num = $('#c3-num');
+  $('#c3-label').textContent = label;
+  clearInterval(c3Timer);
+  const endAt = Date.now() + ms;
+  const tick = () => {
+    const left = endAt - Date.now();
+    if (left <= 0) {
+      num.textContent = finalText;
+      num.classList.add('final');
+      clearInterval(c3Timer);
+      setTimeout(() => { el.hidden = true; num.classList.remove('final'); }, 900);
+      vibrate(120);
+      return;
+    }
+    const n = String(Math.ceil(left / 1000));
+    if (num.textContent !== n) {
+      num.textContent = n;
+      num.classList.remove('final');
+      // 每換一個數字重播一次放大，數字的節奏才看得出來
+      num.style.animation = 'none';
+      void num.offsetWidth;
+      num.style.animation = '';
+      vibrate(30);
+    }
+  };
+  num.textContent = '';
+  el.hidden = false;
+  tick();
+  c3Timer = setInterval(tick, 100);
+}
+
 function handleBingoMessage(msg) {
   switch (msg.type) {
     case EV.BINGO_ASK:
@@ -2185,8 +2733,19 @@ function handleBingoMessage(msg) {
         clearBingoAsk();
         if (wasOpen || !bingoCard) showToast('賓果卡發下來了！點上方的橫幅打開');
       }
+      // 沒有自我介紹題、直接發卡的那一輪：第一次拿到卡時宣布（有自我介紹題時，開局就直接打開了勾選面板）
+      if (!bingoCard && !bingoAsk) {
+        announceActivity({
+          key: `bingo:${msg.card?.cells?.map((c) => c.label).join('|')}`,
+          kind: '新活動',
+          title: '人物賓果開始了',
+          rule: '每一格找一個符合條件的人，問他的配對碼填進去。連成一線有加分。',
+          then: () => openBingo(),
+        });
+      }
       bingoCard = msg.card;
       bingoMyFacts = Array.isArray(msg.myFacts) ? msg.myFacts : null;
+      bingoMyColors = Array.isArray(msg.myColors) ? msg.myColors : [];
       bingoDeadline = msg.remainingMs == null ? null : Date.now() + msg.remainingMs;
       clearInterval(bingoTimer);
       if (bingoDeadline) bingoTimer = setInterval(tickBingoTimer, 1000);
@@ -2204,7 +2763,9 @@ function handleBingoMessage(msg) {
           : msg.newLines ? `連成一線！和 ${msg.name} 填好了`
           : `填好了：${msg.name}`);
       } else {
-        showBingoMsg(BINGO_ERROR_TEXT[msg.reason] ?? '沒填成功，請再試一次。');
+        showBingoMsg(msg.peerColors
+          ? `系統判定他的衣服是${msg.peerColors.length ? msg.peerColors.join('、') : '（看不出顏色）'}，不符合這一格。顏色是照大螢幕上的角色判定的。`
+          : (BINGO_ERROR_TEXT[msg.reason] ?? '沒填成功，請再試一次。'));
       }
       return true;
 
@@ -2214,6 +2775,11 @@ function handleBingoMessage(msg) {
       vibrate([20, 60, 20]);
       // 他也符合我卡上空著的一格：給一顆按鈕，按下去就填上
       if (msg.offer?.label && bingoCard) showBingoOffer(msg.byName, msg.offer.label);
+      return true;
+
+    case EV.BINGO_COUNTDOWN:
+      showCountdown321(msg.kind === 'end' ? '人物賓果　即將結束' : '人物賓果　準備開始',
+        msg.kind === 'end' ? '時間到！' : '開始！', msg.ms);
       return true;
 
     case EV.BINGO_ENDED:
@@ -2240,6 +2806,21 @@ function handleMissionMessage(msg) {
   switch (msg.type) {
     case EV.TOPIC_CARD:
       showTopic(msg);
+      return;
+
+    case EV.TOPIC_ACK:
+      onTopicAck(msg);
+      return;
+
+    case EV.TOPIC_REVEAL:
+      onTopicReveal(msg);
+      return;
+
+    case EV.TOPIC_EXPIRED:
+      if (topic?.round !== msg.round) return;
+      // 猜完的人卡片早就收了，不必再吵他；還在作答的才說明卡片為什麼不見
+      if (!topicDone()) showToast(msg.reason === 'LEFT' ? '同桌有人離開了，這題先收起來' : '這題時間到了，先收起來');
+      endTopic();
       return;
 
     case EV.GREET_INVITE:
@@ -2271,9 +2852,22 @@ function handleMissionMessage(msg) {
           mission: msg.mission, progress: msg.progress ?? 0,
           // DIFF／SAME：伺服器告訴這支手機「你在那一題是哪一類」；GATHER：集合點現在站了幾個人
           mine: msg.mine ?? null, inside: msg.gather?.inside ?? 0,
+          decode: msg.decode ?? null,
         });
+        if (msg.mission.rule?.type === 'DECODE') syncDecodeReveal(msg.decode);
       }
       renderMission();
+      renderDecode();
+      if (msg.mission?.id) {
+        const entry = missions.get(msg.mission.id);
+        announceActivity({
+          key: `mission:${msg.mission.id}`,
+          kind: '新任務',
+          title: msg.mission.title,
+          // 條件（找哪一類、你是哪一類、到哪集合）比一般說明具體，有的話用條件
+          rule: [missionCondition(entry), msg.mission.brief].filter(Boolean).join('\n'),
+        });
+      }
       break;
 
     case EV.MISSION_GATHER: {
@@ -2289,10 +2883,43 @@ function handleMissionMessage(msg) {
       break;
     }
 
+    case EV.DECODE_ASSIGN: {
+      const entry = missions.get(msg.id);
+      if (!entry) break;
+      const was = entry.decode;
+      entry.decode = msg.view;
+      syncDecodeReveal(msg.view);
+      // 換了一組（新搭檔、新題目）：清掉上一組的訊息與輸入，震一下提醒去找人
+      if (msg.view?.group && msg.view.group !== was?.group) {
+        decodeMsg = null;
+        $('#dc-input').value = '';
+        navigator.vibrate?.([30, 50, 30]);
+      }
+      renderMission();
+      renderDecode();
+      break;
+    }
+
+    case EV.DECODE_RESULT:
+      handleDecodeResult(msg);
+      break;
+
+    case EV.HOOPS_SELF:
+      hoopsView = msg.active ? msg.view : null;
+      hoopsViewAt = Date.now();
+      renderHoops();
+      if (!hoopsView?.hasBall && shot?.phase === 'aim') closeShoot();
+      break;
+
+    case EV.HOOPS_RESULT:
+      handleHoopsResult(msg);
+      break;
+
     case EV.MISSION_CLOSED:
       // 只收掉結算的那一個；其他進行中的任務照常
       if (msg.id) missions.delete(msg.id); else missions.clear();
       renderMission();
+      renderDecode();
       if (!missions.size) closeSheet();
       break;
 
@@ -2318,6 +2945,13 @@ function handleMissionMessage(msg) {
 
     // ── 文字雲 ────────────────────────────────────────────
     case EV.WORDCLOUD_QUESTION:
+      announceActivity({
+        key: `wordcloud:${msg.cloud?.id}`,
+        kind: '文字雲',
+        title: msg.cloud?.question ?? '文字雲',
+        rule: `輸入一個詞送到大螢幕，最多 ${msg.cloud?.maxPerPerson ?? 3} 個。大家寫得越多，那個詞就越大。`,
+        then: () => wcInput.focus(),
+      });
       wcRound = msg.cloud;
       wcMine = [];
       wcSending = false;
@@ -2498,8 +3132,14 @@ $('#btn-confirm-exit').addEventListener('click', () => {
   joyEngaged = false;
 
   // 清掉任務狀態，重新進場時會由伺服器重新公告
+  clearIntros();
+  toggleEmotePalette(false);
   missions.clear();
   renderMission();
+  renderDecode();
+  hoopsView = null;
+  renderHoops();
+  closeShoot();
   closeSheet();
   closeConfirmPair();
   // 賓果卡也要收：漏關任何一層，#app 的 inert 解不開，離場畫面就不能操作（UI-STYLING）
@@ -2596,6 +3236,8 @@ function initJoystick() {
 
   joystick.on('move', (_evt, data) => {
     if (!data?.vector) return;
+    // 按在別的角色上、還不知道是點人還是走路：先不動（見下方「私訊：點手機畫面上別人的角色」）
+    if (pendingTap) return;
     // nipplejs 的 y 軸向上為正，場域座標則向下為正，故取負號對齊
     joyVec = { x: data.vector.x, y: -data.vector.y };
     joyIntensity = Math.min(1, data.force ?? 0);
@@ -2612,17 +3254,84 @@ function initJoystick() {
     if (first) sendInput();
   });
 
-  joystick.on('end', () => {
-    zone.classList.remove('joy-on');
-    joyEngaged = false;
-    joyVec = { x: 0, y: 0 };
-    joyIntensity = 0;
-    renderer?.setInput(joyVec, 0);
-    // 補送一則歸零封包，讓伺服器立即停止施加手動速度，
-    // 而不必等 3 秒閒置逾時才發現使用者已放手
-    sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: 0 });
-  });
+  joystick.on('end', stopJoystick);
 }
+
+function stopJoystick() {
+  // 左下角的提示圈回來（強制放開時 nipplejs 不會送 end，也要在這裡收）
+  $('#joystick-zone').classList.remove('joy-on');
+  joyEngaged = false;
+  joyVec = { x: 0, y: 0 };
+  joyIntensity = 0;
+  renderer?.setInput(joyVec, 0);
+  // 補送一則歸零封包，讓伺服器立即停止施加手動速度，
+  // 而不必等 3 秒閒置逾時才發現使用者已放手
+  sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: 0 });
+}
+
+/**
+ * 搖桿卡住的保險：手指已經放開，nipplejs 卻沒收到結束事件，角色一直往那個方向走。
+ *
+ * 實機上手指推到螢幕邊緣時會發生（2026-10-29）：iOS 把那一下觸控交給系統手勢
+ * （底部橫條、Safari 的工具列、側邊返回），網頁收不到 pointerup，有時連 pointercancel
+ * 也沒有。nipplejs 只認自己綁的那幾個事件，漏掉就一直停在「推著」。
+ *
+ * 所以另外從 window 盯著，任何一條線索說「沒有手指在搖桿上了」就強制放開：
+ * - 搖桿那根手指的 pointerup / pointercancel（nipplejs 漏接時）
+ * - touchend / touchcancel 之後螢幕上一根手指都不剩
+ * - 下一次碰螢幕時，搖桿那根手指已經不在 touches 裡 —— 系統手勢吞掉事件時唯一抓得到的時機
+ * - 切出頁面（LINE 通知、切 App、鎖螢幕）
+ * 強制放開時順便重建 nipplejs：它內部還記著那根手指，搖桿圖也停在推出去的位置。
+ */
+let joyPointerId = null;
+let joyTouchId = null;
+
+function forceReleaseJoystick() {
+  joyPointerId = null;
+  joyTouchId = null;
+  if (!joyEngaged) return;
+  stopJoystick();
+  if (joystick) {
+    joystick.destroy();
+    joystick = null;
+    initJoystick();
+  }
+}
+
+const inJoystickZone = (t) => t?.closest?.('#joystick-zone') && !t.closest('button');
+
+window.addEventListener('pointerdown', (e) => {
+  if (inJoystickZone(e.target) && joyPointerId === null) joyPointerId = e.pointerId;
+}, { capture: true });
+for (const type of ['pointerup', 'pointercancel']) {
+  window.addEventListener(type, (e) => {
+    if (e.pointerId !== joyPointerId) return;
+    joyPointerId = null;
+    // 讓 nipplejs 先處理；它正常收尾的話 joyEngaged 已經是 false，這裡什麼都不做
+    setTimeout(() => { if (joyPointerId === null) forceReleaseJoystick(); }, 0);
+  }, { capture: true });
+}
+
+window.addEventListener('touchstart', (e) => {
+  const ids = [...e.touches].map((t) => t.identifier);
+  if (joyTouchId !== null && !ids.includes(joyTouchId)) forceReleaseJoystick();
+  if (joyTouchId === null) {
+    const t = [...e.changedTouches].find((x) => inJoystickZone(x.target));
+    if (t) joyTouchId = t.identifier;
+  }
+}, { capture: true, passive: true });
+for (const type of ['touchend', 'touchcancel']) {
+  window.addEventListener(type, (e) => {
+    if (joyTouchId === null) return;
+    if ([...e.touches].some((t) => t.identifier === joyTouchId)) return;
+    joyTouchId = null;
+    setTimeout(() => { if (joyTouchId === null) forceReleaseJoystick(); }, 0);
+  }, { capture: true, passive: true });
+}
+
+document.addEventListener('visibilitychange', () => { if (document.hidden) forceReleaseJoystick(); });
+window.addEventListener('blur', forceReleaseJoystick);
+window.addEventListener('pagehide', forceReleaseJoystick);
 
 function sendInput() {
   sendMsg(EV.INPUT_MOVE, { vector: joyVec, intensity: joyIntensity });
@@ -2640,38 +3349,137 @@ setInterval(() => {
   sendInput();
 }, INPUT_THROTTLE_MS);
 
-// ── 話題桌（server/topics.js）──────────────────────────────
-// 跟同一桌的人拿到同一題。題目是要念出來跟旁邊的人聊的，不是作答 ——
-// 所以不給輸入框，只給一句「和誰同桌」，提醒他抬頭找人。
+// ── 話題桌（server/topics.js、server/topicGuess.js）────────
+// 同一題，兩步：先選自己的答案（別人會來問你），再去問被分到的那個人、幫他選。
+// 只能猜一次 —— 選項才三四個，能重猜就不必去問了。
+// 原本只有一句聊天題，看一眼就收起來，沒有人因此轉頭（2026-10-29 改）。
 let topicTimer = null;
 let topicChipTimer = null;
 /** 收起後那顆「再看一次」留多久：聊完換桌就用不到了 */
 const TOPIC_CHIP_MS = 3 * 60_000;
+/** 目前這一回合：{round, options, targetName, selfAsk, guessAsk, self?, guess?, selfOk?, guessOk?, revealed, result?} */
+let topic = null;
 
 function showTopic(msg) {
-  $('#topic-head').textContent = `💬 ${msg.spot ?? '話題桌'}的話題`;
-  $('#topic-q').textContent = msg.question;
-  $('#topic-with').textContent = msg.withNames?.length ? `和 ${msg.withNames.join('、')} 同桌，聊聊看` : '';
+  topic = {
+    round: msg.round, options: msg.options ?? [], targetName: msg.target?.name || '對方',
+    selfAsk: msg.selfAsk, guessAsk: msg.guessAsk, revealed: false,
+  };
+  // 重連補送的卡片帶著已經選過的（server 的 sendTopicCatchUp）
+  if (Number.isInteger(msg.mine?.self)) Object.assign(topic, { self: msg.mine.self, selfOk: true });
+  if (Number.isInteger(msg.mine?.guess)) Object.assign(topic, { guess: msg.mine.guess, guessOk: true });
+  $('#topic-head').textContent = `💬 ${msg.spot ?? '話題桌'}・猜猜看`;
+  $('#topic-about').textContent = '';
+  $('#topic-about').hidden = true;
+  renderTopic();
   openTopic();
-  vibrate([20, 40, 20]);
+  if (!msg.mine) vibrate([20, 40, 20]);
 }
+
+/**
+ * 一次只畫一步：題目一行、選項一排。做完的步驟縮成「你自己 ✓ …」一行。
+ * 原本兩步同時攤開、題目寫兩次，卡片吃掉半個手機畫面（2026-10-29 實機）。
+ */
+function renderTopic() {
+  const t = topic;
+  const pick = (k) => t.options[t[k]] ?? '';
+  const selfDone = t.selfOk === true;
+  const guessSent = t.guessOk === true;
+  $('#topic-q').textContent = selfDone ? t.guessAsk : t.selfAsk;
+  $('#topic-done').hidden = !selfDone;
+  $('#topic-done').textContent = `你自己 ✓ ${pick('self')}`;
+  $('#topic-target').hidden = !selfDone || guessSent;
+  $('#topic-target').textContent = `👉 去找「${t.targetName}」當面問，只能選一次`;
+  const kind = !selfDone ? 'self' : !guessSent ? 'guess' : null;
+  $('#topic-opts').style.setProperty('--cols', t.options.length === 3 ? 3 : 2);
+  $('#topic-opts').replaceChildren(...(kind ? t.options.map((text, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tc-opt';
+    b.textContent = text;
+    b.disabled = t[kind] !== undefined;   // 送出後等 ACK，連點不會送兩次
+    b.addEventListener('click', () => answerTopic(kind, i));
+    return b;
+  }) : []));
+  const note = $('#topic-note');
+  note.className = 'tc-note';
+  if (!selfDone) note.textContent = '先選你自己的，等一下會有人來問你';
+  else if (!guessSent) note.textContent = '';
+  else if (!t.revealed) note.textContent = `你猜「${pick('guess')}」，等「${t.targetName}」選好就揭曉`;
+  else {
+    note.className = t.result.correct ? 'tc-note win' : 'tc-note miss';
+    note.textContent = t.result.correct
+      ? `🎉 答對了！「${t.targetName}」真的是「${t.result.answer}」`
+      : `差一點！「${t.targetName}」是「${t.result.answer}」（你猜${t.result.guess}）問問為什麼？`;
+  }
+}
+
+function answerTopic(kind, choice) {
+  if (!topic || topic[kind] !== undefined) return;
+  topic[kind] = choice;
+  renderTopic();
+  sendMsg(EV.TOPIC_ANSWER, { round: topic.round, kind, choice });
+}
+
+function onTopicAck(msg) {
+  if (!topic || msg.round !== topic.round) return;
+  const kind = msg.kind === 'self' ? 'self' : 'guess';
+  if (!msg.ok && msg.reason === 'GONE') { endTopic(); return; }
+  if (!msg.ok && msg.reason !== 'ALREADY') topic[kind] = undefined;   // 放開重選
+  else topic[`${kind}Ok`] = true;
+  renderTopic();
+  maybeCollapseTopicLater();
+}
+
+function onTopicReveal(msg) {
+  if (!topic || msg.round !== topic.round) return;
+  if (msg.role === 'guesser') {
+    topic.revealed = true;
+    topic.result = msg;
+    renderTopic();
+    vibrate(msg.correct ? [30, 50, 30, 50, 60] : [40]);
+  } else {
+    const about = $('#topic-about');
+    about.textContent = `👀「${msg.otherName}」猜你「${msg.guess}」—— ${msg.correct ? '猜對了！' : '猜錯了，跟對方說說看'}`;
+    about.hidden = false;
+  }
+  openTopic();
+}
+
+/** 自己的答案選了、猜的也揭曉了，這一題才算做完 */
+const topicDone = () => topic && topic.selfOk && topic.revealed;
 
 function openTopic() {
   clearTimeout(topicChipTimer);
   $('#topic-chip').hidden = true;
   $('#topic-card').hidden = false;
-  clearTimeout(topicTimer);
-  topicTimer = setTimeout(collapseTopic, 25_000);
+  maybeCollapseTopicLater();
 }
 
-/** 收成一顆小鈕而不是直接消失：題目要念給同桌的人聽，收起來之後常常還要再看一次 */
+/** 還沒做完不自動收：要拿著手機去找人、問完回來選，25 秒太短 */
+function maybeCollapseTopicLater() {
+  clearTimeout(topicTimer);
+  if (topicDone()) topicTimer = setTimeout(collapseTopic, 25_000);
+}
+
+/** 收成一顆小鈕而不是直接消失：還沒猜完的話要能叫回來 */
 function collapseTopic() {
   clearTimeout(topicTimer);
   if ($('#topic-card').hidden) return;
   $('#topic-card').hidden = true;
+  $('#topic-chip').textContent = topicDone() ? '💬 再看一次話題' : '💬 話題桌：還沒猜完';
   $('#topic-chip').hidden = false;
   clearTimeout(topicChipTimer);
   topicChipTimer = setTimeout(() => { $('#topic-chip').hidden = true; }, TOPIC_CHIP_MS);
+}
+
+/** 回合過期：卡片與小鈕一起收掉 */
+function endTopic() {
+  topic = null;
+  clearTimeout(topicTimer);
+  clearTimeout(topicChipTimer);
+  $('#topic-card').hidden = true;
+  $('#topic-chip').hidden = true;
 }
 
 $('#btn-topic-close').addEventListener('click', collapseTopic);
@@ -2726,16 +3534,54 @@ function showGreetResult(msg) {
   showToast(text(msg.otherName || '對方'), done ? 3200 : 2400);
 }
 
-$('#emotes').addEventListener('click', (e) => {
-  const btn = e.target.closest('button[data-action]');
-  if (!btn) return;
+function sendEmote(btn) {
   sendMsg(EV.INPUT_ACTION, { action: btn.dataset.action });
   vibrate([30, 40, 30]);
   btn.animate(
     [{ transform: 'scale(1)' }, { transform: 'scale(0.9)' }, { transform: 'scale(1)' }],
     { duration: 220 },
   );
+}
+
+$('#emotes').addEventListener('click', (e) => {
+  if (e.target.closest('#btn-emote-menu')) { toggleEmotePalette(); return; }
+  const btn = e.target.closest('button[data-action]');
+  if (btn) sendEmote(btn);
 });
+
+// ── 表情選單 ──
+{
+  const fill = (box, list) => box.replaceChildren(...list.map((e) => {
+    const b = Object.assign(document.createElement('button'), { type: 'button', className: 'ep-item' });
+    b.dataset.action = e.id;
+    b.setAttribute('aria-label', e.label);
+    b.append(Object.assign(document.createElement('em'), { textContent: e.glyph }),
+      Object.assign(document.createElement('span'), { textContent: e.label }));
+    return b;
+  }));
+  fill($('#ep-emoji'), EMOJI_EMOTES);
+  fill($('#ep-motion'), MOTION_EMOTES);
+}
+
+function toggleEmotePalette(open = $('#emote-palette').hidden) {
+  $('#emote-palette').hidden = !open;
+  $('#btn-emote-menu').setAttribute('aria-expanded', String(open));
+}
+
+$('#emote-palette').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  sendEmote(btn);
+  // 選完就收起：選單蓋著搖桿區的一角，留著會擋到走路
+  toggleEmotePalette(false);
+});
+
+// 點選單以外的地方收起（在捕獲階段看，但不攔：那一下照常給搖桿或別的按鈕）
+document.addEventListener('pointerdown', (e) => {
+  if ($('#emote-palette').hidden) return;
+  if (e.target.closest('#emote-palette, #btn-emote-menu')) return;
+  toggleEmotePalette(false);
+}, { capture: true });
 
 // ── 震動開關 ──────────────────────────────────────────────
 {
@@ -3067,48 +3913,77 @@ function handleQuizMessage(msg) {
 // 私訊：點手機畫面上別人的角色，傳一句話給對方
 // ─────────────────────────────────────────────────────────────
 // 畫布本身是 pointer-events:none 的背景層，蓋在上面的是搖桿區 —— 搖桿區裡任何一點按下去
-// 都會被 nipplejs 接走、在那裡長出搖桿。所以點人不看「按下」，看「放開」：
-// 按下的地方有別人的角色、沒怎麼移動、很快放開，才算點人。手指一拖動就是在走路 ——
-// 浮動搖桿讓拇指隨處落下，常常剛好落在別人身上，按下就跳訊息框的話根本走不了。
-// 只聽 pointer 事件、不擋：nipplejs 也是聽 pointer，兩邊各做各的
-// （點一下時搖桿只出現一瞬間、推力是 0，角色不會動）。
+// 都會被 nipplejs 接走、在那裡長出搖桿（浮動搖桿）。
+//
+// 原本在「按下」的當下就判定點人並擋下搖桿：人多的時候，想走路的手指剛好落在別人身上，
+// 就變成打開訊息、搖桿推不動 —— 試玩回饋的「有時候會卡、操控不了」（2026-10-19）。
+// 浮動搖桿讓拇指隨處落下，這件事更常發生。現在改成「放開時」才判定：按在角色上、
+// 幾乎沒移動、很快放開，才算點人；一拖動就是走路。等待判定的那一小段，搖桿的輸入先不送出，
+// 點人時自己的角色才不會被拉動一下。
+// pointer / touch / mouse 三種都聽：nipplejs 依瀏覽器支援挑其中一種，
+// 觸控裝置上同一下會先後觸發 pointerdown 與 touchstart（以 lastPickAt 去重）。
 
-/** 點一下的容許範圍：移動超過這個距離或按超過這麼久，就是在推搖桿 */
-const TAP_SLOP_PX = 12;
-const TAP_MAX_MS = 350;
-let tap = null;
+let lastPickAt = 0;
 
-function pickTarget(x, y) {
+/** 按下的地方有哪些別人的角色（只看搖桿區；按鈕、橫幅等照常運作） */
+function pickTarget(e) {
   if (!renderer || $('#controller').hidden) return null;
-  const ids = renderer.pickAllAt(x, y);
+  if (!e.target.closest?.('#joystick-zone') || e.target.closest('button')) return null;
+  const pt = e.touches?.[0] ?? e;
+  const ids = renderer.pickAllAt(pt.clientX, pt.clientY);
   return ids.length ? ids : null;
 }
 
-$('#controller').addEventListener('pointerdown', (e) => {
-  tap = null;
-  // 只看落在搖桿區（畫布的可點區）上的觸控；按鈕、橫幅等照常運作
-  if (!e.isPrimary || !e.target.closest?.('#joystick-zone') || e.target.closest('button')) return;
-  tap = { id: e.pointerId, x: e.clientX, y: e.clientY, at: Date.now() };
-}, { capture: true });
+/** 移動超過這麼多就是拖動（走路），不是點人 */
+const TAP_SLOP_PX = 12;
+/** 按住超過這麼久就是要走路 */
+const TAP_MAX_MS = 400;
+/** @type {{ids: string[], x: number, y: number, at: number}|null} 按在角色上、還沒決定是點人還是走路 */
+let pendingTap = null;
 
-window.addEventListener('pointermove', (e) => {
-  if (tap?.id === e.pointerId && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > TAP_SLOP_PX) tap = null;
-}, { capture: true });
+const pointOf = (e) => e.changedTouches?.[0] ?? e.touches?.[0] ?? e;
 
-window.addEventListener('pointercancel', () => { tap = null; }, { capture: true });
+for (const type of ['pointerdown', 'touchstart', 'mousedown']) {
+  $('#controller').addEventListener(type, (e) => {
+    // 同一下觸控的後續事件（touchstart 跟在 pointerdown 後面）不要覆蓋掉已記下的起點
+    if (pendingTap && Date.now() - pendingTap.at < 50) return;
+    const ids = pickTarget(e);
+    const pt = pointOf(e);
+    pendingTap = ids ? { ids, x: pt.clientX, y: pt.clientY, at: Date.now() } : null;
+  }, { capture: true, passive: true });
+}
 
-window.addEventListener('pointerup', (e) => {
-  const t = tap;
-  tap = null;
-  if (t?.id !== e.pointerId || Date.now() - t.at > TAP_MAX_MS) return;
-  const ids = pickTarget(t.x, t.y);
-  if (!ids) return;
-  // 放開之後瀏覽器還會補一個 click，落在剛打開的面板上（選人面板點背景就會收起）
-  swallowNextClick();
-  // 好幾個人擠在一起：讓他自己選，不替他猜是哪一個
-  if (ids.length > 1) openPicker(ids);
-  else openComposer(ids[0]);
-}, { capture: true });
+for (const type of ['pointermove', 'touchmove', 'mousemove']) {
+  $('#controller').addEventListener(type, (e) => {
+    if (!pendingTap) return;
+    const pt = pointOf(e);
+    if (Math.hypot(pt.clientX - pendingTap.x, pt.clientY - pendingTap.y) > TAP_SLOP_PX
+      || Date.now() - pendingTap.at > TAP_MAX_MS) {
+      pendingTap = null;   // 是在走路：之後的搖桿輸入照常送出
+    }
+  }, { capture: true, passive: true });
+}
+
+for (const type of ['pointerup', 'touchend', 'mouseup']) {
+  $('#controller').addEventListener(type, () => {
+    const tap = pendingTap;
+    pendingTap = null;
+    if (!tap || Date.now() - tap.at > TAP_MAX_MS) return;
+    if (Date.now() - lastPickAt < 600) return;
+    lastPickAt = Date.now();
+    // 放開之後瀏覽器還會補一個 click，落在剛打開的面板上（選人面板點背景就會收起）
+    swallowNextClick();
+    // 拿著球時點人就是傳球（像真的打球，不跳訊息框）；傳訊息仍可從聊天鍵進去
+    const act = hoopsView?.hasBall ? passBall : openComposer;
+    // 好幾個人擠在一起：讓他自己選，不替他猜是哪一個
+    if (tap.ids.length > 1) openPicker(tap.ids, act);
+    else act(tap.ids[0]);
+  }, { capture: true, passive: true });
+}
+
+for (const type of ['pointercancel', 'touchcancel']) {
+  $('#controller').addEventListener(type, () => { pendingTap = null; }, { capture: true, passive: true });
+}
 
 function swallowNextClick() {
   const swallow = (e) => { e.stopPropagation(); e.preventDefault(); };
@@ -3119,7 +3994,7 @@ function swallowNextClick() {
 // ── 點到好幾個人時：選一個 ──
 const pickSheet = $('#pick-sheet');
 
-function openPicker(ids) {
+function openPicker(ids, onPick = openComposer) {
   const list = $('#pick-list');
   list.replaceChildren(...ids.map((id) => {
     const who = lookOf(id);
@@ -3128,9 +4003,10 @@ function openPicker(ids) {
     face.setAttribute('aria-hidden', 'true');
     showPortrait(face, who?.look ?? null);
     btn.append(face, Object.assign(document.createElement('b'), { textContent: who?.name || '（沒有名字）' }));
-    btn.addEventListener('click', () => { closePicker(); openComposer(id); });
+    btn.addEventListener('click', () => { closePicker(); onPick(id); });
     return btn;
   }));
+  $('#pick-title').textContent = onPick === passBall ? '🏀 要傳給哪一位？' : '你要找哪一位？';
   pickSheet.hidden = false;
   pushOverlay(pickSheet, { onEscape: closePicker });
   list.querySelector('button')?.focus();
@@ -3458,7 +4334,9 @@ $('#btn-msg-report').addEventListener('click', () => {
 // ─────────────────────────────────────────────────────────────
 // 拍照路徑：嵌在「生成中」那一頁，利用二十幾秒的等待作答。
 // 換裝路徑：沒有等待，按「完成，進入現場」後跳出同一份題目。
-// 一律可以略過 —— 掃描失敗都不擋人進場了，一份問卷更不該擋。
+// 不能略過（2026-10-19 試玩回饋）：原本有「略過問卷」，略過的人之後沒有機會再填，
+// 以進場類型為條件的任務、賓果格子、合照分組都把他排除在外。只有 4 題，
+// 拍照路徑又是利用生成的等待時間作答，不額外佔時間。讀不到題目時照樣不問、不擋進場。
 // 一個角色答一次：同一個角色重新整理不再問，建立新角色就重問（resetPersona）。
 
 const PERSONA_LS = 'pf.persona';
@@ -3497,7 +4375,7 @@ const personaAnsweredCurrent = () => !!(personaQuiz && personaAnswers?.version =
  * 在容器裡跑一輪問卷。
  * @param {HTMLElement} box
  * @param {{onFinish: (result: object|null) => void, finishLabel?: string}} opts
- *   onFinish 在按下結果卡的按鈕、或略過時呼叫；略過時 result 為 null
+ *   onFinish 在按下結果卡的按鈕時呼叫；萬一算不出類型（題目壞掉）時 result 為 null
  */
 function runPersonaQuiz(box, { onFinish, finishLabel = '繼續', autoFinish = false }) {
   const { quiz, version } = personaQuiz;
@@ -3529,7 +4407,7 @@ function runPersonaQuiz(box, { onFinish, finishLabel = '繼續', autoFinish = fa
     });
     const foot = document.createElement('div');
     foot.className = 'pq-foot';
-    // 上一題：按錯了可以回去改，不必整份略過或答完再重答
+    // 上一題：按錯了可以回去改，不必答完再重答
     if (i > 0) {
       const back = document.createElement('button');
       back.type = 'button';
@@ -3538,12 +4416,6 @@ function runPersonaQuiz(box, { onFinish, finishLabel = '繼續', autoFinish = fa
       back.addEventListener('click', () => { answers.pop(); renderQuestion(); });
       foot.append(back);
     }
-    const skip = document.createElement('button');
-    skip.type = 'button';
-    skip.className = 'btn-link pq-skip';
-    skip.textContent = '略過問卷';
-    skip.addEventListener('click', () => onFinish(null));
-    foot.append(skip);
     box.append(head, title, list, foot);
     list.querySelector('button')?.focus({ preventScroll: true });
     // 小螢幕上問卷可能落在畫面下緣之外：換題時把整份題目捲進畫面
@@ -3631,7 +4503,7 @@ function runPersonaInScan(box) {
     onFinish: (result) => {
       personaScanActive = false;
       // 角色已經好了：直接進確認頁（類型顯示在那一頁）。
-      // 還沒好：結果卡留在這裡陪他等，showScanDone 會自動換頁。略過（result 為 null）就收起來。
+      // 還沒好：結果卡留在這裡陪他等，showScanDone 會自動換頁。算不出類型（result 為 null）就收起來。
       if (scanReady) { box.hidden = true; showScanPhase('done'); }
       else if (!result) box.hidden = true;
     },
@@ -3643,7 +4515,7 @@ function stopPersonaDuringScan() {
   $('#persona-scan').hidden = true;
 }
 
-/** 生成完成。問卷還在作答就先等，答完（或略過）才換到確認頁 */
+/** 生成完成。問卷還在作答就先等，答完才換到確認頁 */
 function showScanDone() {
   scanReady = true;
   const box = $('#persona-scan');
@@ -3659,7 +4531,8 @@ async function askPersonaThen(next) {
   const overlay = $('#persona-overlay');
   overlay.hidden = false;
   const close = () => { overlay.hidden = true; popOverlay(overlay); };
-  pushOverlay(overlay, { onEscape: () => { close(); next(); } });
+  // Esc 不關：關掉就等於略過（問卷不能略過，見上方說明）
+  pushOverlay(overlay, { onEscape: () => {} });
   runPersonaQuiz($('#persona-builder'), {
     finishLabel: '進入現場',
     onFinish: () => { close(); next(); },

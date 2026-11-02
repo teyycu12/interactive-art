@@ -1,12 +1,12 @@
 /**
- * 話題桌：兩人以上在同一張桌子旁停留一下，手機同時跳出同一題聊天題。
+ * 話題桌：兩人以上在同一張桌子旁停留一下，手機同時跳出同一題。
  *
  * 參考 Brella 這類活動平台「預約桌位、坐下來當面聊」的做法，但不用預約：
  * 走過去坐下就有題目。這是場景道具第一次在「沒有主辦端開活動」的空檔也有作用 ——
  * 原本道具只在問卷、尋寶、採收時才派得上用場，大部分時間只是背景。
  *
- * 判準（INTERACTION-DESIGN）：一個人走到桌邊什麼都不會發生；要兩個人以上，
- * 而題目丟給在場所有人 —— 拿到同一題的人自然會轉頭問「那你呢？」。
+ * 判準（INTERACTION-DESIGN）：一個人走到桌邊什麼都不會發生；要兩個人以上。
+ * 題目發下去之後怎麼玩（每人猜同桌的一個人）在 topicGuess.js。
  *
  * 桌子是哪幾張，來自目前主題的 spots（shared/themes.js，「1號桌」那種號碼牌），
  * 本模組不寫死任何道具。純邏輯：吃座標與時間，回傳該發的題目。
@@ -20,7 +20,7 @@
 export class TopicTables {
   /**
    * @param {object} opts
-   * @param {string[]} opts.questions
+   * @param {any[]} opts.questions
    * @param {number} opts.reach
    * @param {number} opts.dwellMs
    * @param {number} opts.groupCooldownMs
@@ -51,9 +51,12 @@ export class TopicTables {
    * 推進一步。
    * @param {Spot[]} spots
    * @param {Iterable<AgentLike>} agents
-   * @returns {{spotId: string, label: string, ids: string[], question: string}[]} 這一步要發的題目
+   * @param {number} [now]
+   * @param {(id: string) => boolean} [busy] 這個人手上的題目還沒做完（topicGuess.js）：
+   *   有新的人坐下也先不換題，等這一題揭曉 —— 換題會把正在問、正在猜的那一半蓋掉
+   * @returns {{spotId: string, label: string, ids: string[], question: any}[]} 這一步要發的題目
    */
-  update(spots, agents, now = Date.now()) {
+  update(spots, agents, now = Date.now(), busy = () => false) {
     if (!this.enabled) return [];
     const online = [...agents].filter((a) => a.disconnectedAt === null);
     const deals = [];
@@ -77,6 +80,7 @@ export class TopicTables {
       if (now - st.since < this.dwellMs) continue;
       if (now - st.dealtAt < this.tableGapMs) continue;
       if (now - (this.groupDealtAt.get(sig) ?? -Infinity) < this.groupCooldownMs) continue;
+      if (ids.some(busy)) continue;
       st.dealtAt = now;
       this.groupDealtAt.set(sig, now);
       deals.push({ spotId: spot.id, label: spot.label, ids, question: this.#draw() });
