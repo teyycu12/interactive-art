@@ -432,6 +432,43 @@
         <p class="err" id="persona-err" hidden></p>
       </details>
     </div>
+    <!-- NPC（server/npc.js）：人少時讓場面不要太乾。不佔參與者名額，不參加任務、配對、賓果 -->
+    <div class="panel npc-panel">
+      <div class="panel-head">
+        <h2>NPC <span class="count" id="npc-count">0</span></h2>
+        <button class="btn-ghost" id="btn-npc-toggle" aria-pressed="false">NPC：關</button>
+      </div>
+      <p class="hint">電腦控制的角色，會在場上走走停停、對經過的人揮手。不佔參與者名額，也不參加任務、配對、賓果和排行。</p>
+      <div class="npc-row">
+        <label class="field">
+          <span>數量怎麼算</span>
+          <select id="npc-mode">
+            <option value="fixed">固定幾個</option>
+            <option value="atLeast">人不夠時補到幾人</option>
+          </select>
+        </label>
+        <label class="field">
+          <span id="npc-count-label">NPC 數量</span>
+          <input type="number" id="npc-count-input" min="0" max="8" value="4">
+        </label>
+        <label class="field" id="npc-max-field" hidden>
+          <span>NPC 最多幾個</span>
+          <input type="number" id="npc-max" min="0" max="8" value="8">
+        </label>
+      </div>
+      <p class="hint tiny" id="npc-status"></p>
+      <div class="panel-head npc-looks-head">
+        <b>外型 <span class="hint tiny" id="npc-looks-summary"></span></b>
+        <span class="row-actions">
+          <button class="btn-ghost" id="btn-npc-auto">用最新的</button>
+          <button class="btn-ghost" id="btn-npc-rescan">重新整理</button>
+        </span>
+      </div>
+      <p class="hint tiny">從生成過的角色裡挑，點一下選取或取消。</p>
+      <div class="npc-looks" id="npc-looks"></div>
+      <p class="hint" id="npc-looks-empty" hidden>還沒有生成過的角色。先用手機拍照或換裝做出幾個角色，再按「重新整理」。</p>
+    </div>
+
     <div class="panel">
       <h2>參與者 <span class="count" id="people-count">0</span></h2>
       <div class="table-wrap" id="people-wrap" hidden>

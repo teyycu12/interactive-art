@@ -115,6 +115,8 @@ export const EV = {
 
   // 人物賓果（server/bingo.js）。卡片是私人的，只送給本人；大螢幕只看排行
   HOST_SET_TOPICS: 'HOST_SET_TOPICS',         // Host → Server：話題桌開關 {enabled}
+  HOST_SET_NPC: 'HOST_SET_NPC',               // Host → Server：NPC 設定 {enabled?, mode?, count?, max?, library?: string[]|null, rescan?}
+  HOST_NPC_STATE: 'HOST_NPC_STATE',           // Server → Host：NPC 設定、場上幾個、外型庫與可選的外型
   HOST_START_BINGO: 'HOST_START_BINGO',       // Host → Server：開一輪 {durationMs?}
   HOST_END_BINGO: 'HOST_END_BINGO',           // Host → Server：結束本輪
   HOST_BINGO_DEAL: 'HOST_BINGO_DEAL',         // Host → Server：自我介紹不等了，直接發卡

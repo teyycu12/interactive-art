@@ -34,10 +34,11 @@ import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js
 import {
   TICK_MS, MAX_MESSAGE_BYTES, MAX_NAME_LENGTH, RATE_LIMIT, HOST_KEY_LENGTH, SCORING,
   BINGO_COUNTDOWN_MS, PERSISTENCE, VISION_HOST, VISION_PORT, GREET, EVENTS,
-  CLIENT_SYNC_MAX_BUFFERED, STAGE_SYNC_MAX_BUFFERED,
+  CLIENT_SYNC_MAX_BUFFERED, STAGE_SYNC_MAX_BUFFERED, NPC,
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
 import { NpcDirector } from './npc.js';
+import { listHistoricalAvatars } from './devAvatars.js';
 import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
 import { photoUrlBase, savePhoto, requestOrigin, rankLanAddresses } from './photos.js';
@@ -181,6 +182,8 @@ setSceneTheme(stageTheme);
 
 /** NPC（server/npc.js）。名牌上的身分跟著目前的場景 */
 const npcs = new NpcDirector(stage, { theme: () => stageTheme });
+// 主辦端上次的 NPC 設定（數量、模式、開關）。外型庫要等掃完生成過的角色才接得上，見 refreshNpcLooks
+npcs.configure(snapshot?.npc?.settings ?? {});
 
 /**
  * 活動名稱，取代大螢幕左上角的場景名。null 代表還沒設定 ——
@@ -258,6 +261,8 @@ const snapshotData = () => ({
   attendance: attendance.export(),
   theme: stageTheme,
   event: eventInfo,
+  // NPC：設定與選了哪些外型（null = 自動用最新的幾個）。外型本身是磁碟上的貼圖，不存
+  npc: { settings: npcs.settings, library: npcLibraryIds },
   // 預設題目不存：之後改版預設題目時，沒改過的活動才會跟著用新版
   personaQuiz: personaQuiz === DEFAULT_PERSONA_QUIZ ? null : personaQuiz,
   bingoFacts: bingoFactsCustom,
@@ -1611,6 +1616,68 @@ function handleHoopsShoot(ws, msg) {
   pushHoopsState({ kind: 'shot', shooter: ws.agentId, assist: r.assist, made: r.made });
 }
 
+// ── NPC（server/npc.js）的外型庫與主辦端面板 ─────────────────────────
+/** 外型庫最多放幾個：再多主辦端的格子也挑不完，而且同時在場的 NPC 最多 NPC.maxCount 個 */
+const NPC_LIBRARY_MAX = 24;
+/** 沒挑的時候，自動用最新生成的這麼多個 */
+const NPC_AUTO_LOOKS = 12;
+/** 磁碟上所有可以直接上場的角色（server/devAvatars.js），新的在前 */
+let npcAvailable = [];
+/** 主辦端挑的外型；null = 自動（最新的 NPC_AUTO_LOOKS 個） */
+let npcLibraryIds = Array.isArray(snapshot?.npc?.library) ? snapshot.npc.library : null;
+let npcOnStageSent = -1;
+
+/**
+ * 歷史角色沒有取樣過顏色時的中性色。顏色任務讀的是 fallbackColors，
+ * 但 NPC 不參加任務（不在 stage.agents），所以這裡用一組安全的預設就好
+ */
+function npcColors(assetId) {
+  let h = 0;
+  for (let i = 0; i < assetId.length; i++) h = (h * 31 + assetId.charCodeAt(i)) >>> 0;
+  const hex = (n) => `#${(n & 0xffffff).toString(16).padStart(6, '0')}`;
+  return { skin: '#D8B49A', hair: '#3A2E27', torso: hex(h * 2654435761), legs: hex(h * 40503) };
+}
+
+function applyNpcLibrary() {
+  const pick = npcLibraryIds ?? npcAvailable.slice(0, NPC_AUTO_LOOKS).map((a) => a.assetId);
+  const want = new Set(pick);
+  const entries = [];
+  for (const a of npcAvailable) {
+    if (!want.has(a.assetId)) continue;
+    const v = validateAvatarConfig({ source: 'CV', textures: a.textures, fallbackColors: a.colors ?? npcColors(a.assetId) });
+    if (v.ok) entries.push({ assetId: a.assetId, avatar: v.value });
+  }
+  npcs.setLibrary(entries);
+}
+
+/** 重新掃一次生成過的角色（開機、主辦端按「重新整理」）。掃不到不是錯，只是沒有外型可用 */
+async function refreshNpcLooks() {
+  try { npcAvailable = await listHistoricalAvatars(PUBLIC_DIR); } catch { npcAvailable = []; }
+  applyNpcLibrary();
+  pushNpcState();
+}
+
+function npcState() {
+  return {
+    settings: npcs.settings,
+    onStage: npcs.staying().length,
+    target: npcs.target(),
+    auto: npcLibraryIds === null,
+    library: npcs.library.map((e) => e.assetId),
+    available: npcAvailable.slice(0, 60).map((a) => ({ assetId: a.assetId, full: a.textures.full })),
+    autoCount: NPC_AUTO_LOOKS,
+    maxLooks: NPC_LIBRARY_MAX,
+    maxCount: NPC.maxCount,
+  };
+}
+
+function pushNpcState() {
+  npcOnStageSent = npcs.staying().length;
+  blast(hosts, EV.HOST_NPC_STATE, npcState());
+}
+
+refreshNpcLooks();
+
 function handlePairClaim(ws, msg) {
   // 可以同時有好幾個任務：這次配對算得進哪幾個，在提交碼的當下就決定
   const pairMissions = missions.actives.filter((m) => PAIR_MISSION_TYPES.has(m.type));
@@ -2085,6 +2152,23 @@ function handleHostMessage(ws, msg) {
     case EV.HOST_START_BINGO:
       startBingo(ws, msg);
       break;
+
+    case EV.HOST_SET_NPC: {
+      // 外型：陣列 = 主辦端挑的那幾個（只收真的存在的）；null = 回到自動
+      if (msg.library === null) npcLibraryIds = null;
+      else if (Array.isArray(msg.library)) {
+        const known = new Set(npcAvailable.map((a) => a.assetId));
+        npcLibraryIds = [...new Set(msg.library.filter((id) => typeof id === 'string' && known.has(id)))]
+          .slice(0, NPC_LIBRARY_MAX);
+      }
+      const settings = npcs.configure(msg);
+      applyNpcLibrary();
+      markDirty();
+      events.log('npc_settings', { ...settings, looks: npcs.library.length });
+      if (msg.rescan === true) refreshNpcLooks();
+      else pushNpcState();
+      break;
+    }
 
     case EV.HOST_SET_TOPICS:
       topics.setEnabled(msg.enabled === true);
@@ -2589,6 +2673,7 @@ wss.on('connection', (ws, req) => {
           if (dv) send(ws, EV.DECODE_STATE, dv);
         }
         if (court) send(ws, EV.HOOPS_STATE, hoopsPublic());
+        send(ws, EV.HOST_NPC_STATE, npcState());
         send(ws, EV.HOST_SCORING, scoringView());
         // 主題選單只由 STAGE_THEME 驅動，重整後的主辦端要靠這則才知道目前選的是哪個
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
@@ -2618,6 +2703,7 @@ wss.on('connection', (ws, req) => {
       case EV.HOST_END_BINGO:
       case EV.HOST_BINGO_DEAL:
       case EV.HOST_SET_TOPICS:
+      case EV.HOST_SET_NPC:
       case EV.HOST_START_QUIZ:
       case EV.HOST_REVEAL_QUIZ:
       case EV.HOST_END_QUIZ:
@@ -2692,6 +2778,8 @@ const loop = startTicker({
   onTick(dt) {
     // NPC 的虛擬搖桿要在 tick 之前設好；問答進行中停在原地（大家在看題目）
     npcs.tick(Date.now(), { frozen: quiz.isActive });
+    // 主辦端面板的「場上 N 個」：一次只進退一個，數字有變才推
+    if (npcs.staying().length !== npcOnStageSent && hosts.size) pushNpcState();
     // 傳入社交圖譜：配對過的角色之間凝聚力較強，關係會表現為畫面上的群聚
     const zoneMoves = stage.tick(dt, graph);
     if (audienceQueue.length) promoteAudience();

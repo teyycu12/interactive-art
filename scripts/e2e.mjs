@@ -2127,6 +2127,57 @@ check('引導端點擋下過大的影格',
 }
 
 
+// ── NPC（server/npc.js）的主辦端設定 ─────────────────────────
+// 放在最後：NPC 關掉之後要走到門口才消失，會干擾前面算人數的檢查。
+// 外型來自磁碟上生成過的角色（public/assets/gen），CI 上可能一個都沒有，
+// 所以「真的走上場」只在有外型時才驗。
+{
+  const nHost = new WebSocket(URL);
+  const states = [];
+  let nRoster = null;
+  nHost.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'HOST_NPC_STATE') states.push(m); });
+  await new Promise((res) => nHost.on('open', res));
+  const intruder = new WebSocket(URL);
+  const intruderGot = [];
+  intruder.on('message', (d) => intruderGot.push(JSON.parse(d).type));
+  await new Promise((res) => intruder.on('open', res));
+  intruder.send(JSON.stringify({ type: 'HOST_SET_NPC', enabled: true, count: 8 }));
+  nHost.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(500);
+  check('主辦端連上就收到 NPC 狀態', !!states.at(-1)?.settings && Array.isArray(states.at(-1)?.available));
+  check('未認證的連線不能開 NPC', states.at(-1)?.settings?.enabled === false, JSON.stringify(states.at(-1)?.settings));
+
+  nHost.send(JSON.stringify({ type: 'HOST_SET_NPC', count: 999, mode: 'nope', library: ['not-an-asset'] }));
+  await sleep(300);
+  const st = states.at(-1);
+  check('NPC 數量夾在範圍內、不認得的模式與外型忽略',
+    st.settings.count <= st.maxCount + 40 && st.settings.mode === 'fixed' && st.library.length === 0 && st.auto === false,
+    JSON.stringify(st.settings));
+  nHost.send(JSON.stringify({ type: 'HOST_SET_NPC', library: null, enabled: true, mode: 'fixed', count: 2 }));
+  await sleep(300);
+  check('外型回到自動：用最新生成的那幾個', states.at(-1).auto === true
+    && states.at(-1).library.length === Math.min(states.at(-1).autoCount, states.at(-1).available.length));
+
+  if (states.at(-1).library.length) {
+    const watch = new WebSocket(URL);
+    watch.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'STAGE_ROSTER') nRoster = m; });
+    await new Promise((res) => watch.on('open', res));
+    watch.send(JSON.stringify({ type: 'SCREEN_HELLO' }));
+    await sleep(4000);
+    const npcs = (nRoster?.agents ?? []).filter((a) => a.npc);
+    check('開了 NPC 之後，大螢幕名冊出現 NPC', npcs.length >= 1, `${npcs.length} 個`);
+    check('主辦端看得到場上有幾個 NPC', states.at(-1).onStage >= 1, `${states.at(-1).onStage}`);
+    watch.close();
+  } else {
+    console.log('SKIP  這台機器沒有生成過的角色，略過 NPC 上場的檢查');
+  }
+  nHost.send(JSON.stringify({ type: 'HOST_SET_NPC', enabled: false }));
+  await sleep(200);
+  check('關掉 NPC 之後目標是 0', states.at(-1).settings.enabled === false && states.at(-1).target === 0);
+  nHost.close();
+  intruder.close();
+}
+
 // 重開之後才走到的玩法（賓果、候補、話題桌）也要留下事件。
 // 揮手／乾杯的成功（greet）這套 e2e 走不到：只有一個人對空氣乾杯
 {
