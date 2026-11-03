@@ -83,3 +83,23 @@ test('還沒有人生成過時回空陣列，而不是拋例外', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pf-dev-empty-'));
   assert.deepEqual(await listHistoricalAvatars(root), []);
 });
+
+test('有側面與背面就帶上，並標 turns（NPC 只挑會轉身的）', async () => {
+  const root = await fixture({
+    [HEX32('7')]: { parts: [...FOUR, 'side.webp', 'back.webp'], colors: GOOD_COLORS },
+    [HEX32('8')]: { parts: FOUR, colors: GOOD_COLORS },
+  });
+  const list = await listHistoricalAvatars(root);
+  const full = list.find((a) => a.assetId === HEX32('7'));
+  const flat = list.find((a) => a.assetId === HEX32('8'));
+  // 少了側面與背面，角色只有正面：不會轉身、走路不擺手（avatarSprite 只在有側面時載 arms.json）
+  assert.equal(full.turns, true);
+  assert.match(full.textures.side, /side\.webp$/);
+  assert.match(full.textures.back, /back\.webp$/);
+  assert.equal(flat.turns, false);
+  assert.equal(flat.textures.side, undefined);
+  // 帶上側面與背面之後，照樣過得了伺服器端的驗證
+  const res = validateAvatarConfig({ source: 'CV', textures: full.textures, fallbackColors: full.colors });
+  assert.equal(res.ok, true, res.reason);
+  assert.ok(res.value.textures.side && res.value.textures.back);
+});

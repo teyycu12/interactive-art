@@ -1652,7 +1652,8 @@ function applyNpcLibrary() {
 
 /** 重新掃一次生成過的角色（開機、主辦端按「重新整理」）。掃不到不是錯，只是沒有外型可用 */
 async function refreshNpcLooks() {
-  try { npcAvailable = await listHistoricalAvatars(PUBLIC_DIR); } catch { npcAvailable = []; }
+  // 只收有側面與背面的：少了它們的舊角色只有正面，NPC 走來走去卻永遠面向鏡頭、手腳不動
+  try { npcAvailable = (await listHistoricalAvatars(PUBLIC_DIR)).filter((a) => a.turns); } catch { npcAvailable = []; }
   applyNpcLibrary();
   pushNpcState();
 }

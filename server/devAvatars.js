@@ -32,6 +32,12 @@ const ASSET_ID_RE = /^[0-9a-f]{32}$/;
  * 匯入台上按了沒反應的那一格。
  */
 const REQUIRED_PARTS = ['head', 'torso', 'legs', 'full'];
+/**
+ * 有就帶上的側面與背面。少了它們角色只有正面：不會轉身、走路也不會擺手
+ * （shared/avatarSprite.js 只在有側面時才載入 arms.json、算擺手）。
+ * 原本這裡只列必要的四張，從這份清單上場的 NPC 與匯入台角色因此永遠面向鏡頭、手腳不動。
+ */
+const VIEW_PARTS = ['side', 'back'];
 
 const FALLBACK_KEYS = ['skin', 'hair', 'torso', 'legs'];
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
@@ -89,11 +95,21 @@ export async function listHistoricalAvatars(publicDir) {
       colors = null;  // 沒跑過取樣腳本
     }
 
+    const views = [];
+    for (const part of VIEW_PARTS) {
+      try {
+        await fs.stat(path.join(dir, `${part}.webp`));
+        views.push(part);
+      } catch { /* 改版前的資產沒有側面／背面 */ }
+    }
+
     out.push({
       assetId: entry.name,
       textures: Object.fromEntries(
-        REQUIRED_PARTS.map((part) => [part, `/assets/gen/${entry.name}/${part}.webp`]),
+        [...REQUIRED_PARTS, ...views].map((part) => [part, `/assets/gen/${entry.name}/${part}.webp`]),
       ),
+      /** 側面與背面都有：會轉身、會擺手 */
+      turns: views.length === VIEW_PARTS.length,
       colors,
       generatedAt: Math.max(...stats.map((s) => s.mtimeMs)),
     });
