@@ -142,6 +142,21 @@ SKIN_TOLERANCE = 70
 # 排除皮膚後剩下的像素少於這個比例，就當作那一塊本來就是皮膚（短褲露腿、無袖）
 MIN_CLOTH_SHARE = 0.08
 
+# 「一定是衣服」的區塊（各自切片內的比例 x0, y0, x1, y1），先在這裡取色（2026-11-04）。
+#
+# 只靠顏色排除皮膚，會把接近膚色的衣服一起排掉：SKIN_TOLERANCE 放寬到 70 是為了排掉
+# 比臉亮一階的手腳，但淺膚色配白上衣（距離 65）、一般膚色配橘上衣（66）也落在 70 以內 ——
+# 整件衣服被當成皮膚，剩下陰影與輪廓線，白上衣判成橘、橘上衣判成紅。
+# 改成先看位置：上身切片的中間偏下一條是胸口到腰（手臂在兩側、下巴與脖子在上半），
+# 下身切片的上中段是腰到大腿（上衣下擺在最上面、短褲與裙子露出的腿在下面）。
+# 這兩塊裡幾乎沒有皮膚，只排除跟膚色幾乎一樣的（SAFE_SKIN_TOLERANCE），接近膚色的衣服就留得住。
+# 取不到（角色比例特別、那一塊是空的或全是皮膚）才退回原本整塊排除膚色的取法。
+TORSO_SAFE = (0.40, 0.58, 0.60, 0.95)
+LEGS_SAFE = (0.30, 0.25, 0.70, 0.55)
+SAFE_SKIN_TOLERANCE = 25
+# 安全區塊裡排除皮膚後至少要剩這麼多，不然就是那一塊其實是皮膚（無袖、超短褲）
+SAFE_MIN_CLOTH_SHARE = 0.35
+
 
 def _hex_rgb(hex_str: str) -> Tuple[int, int, int]:
     n = int(hex_str[1:], 16)
@@ -184,6 +199,22 @@ def _clothing_color(img: PILImage.Image, region: Tuple[float, float, float, floa
     return _dominant_hex(cloth)
 
 
+def _safe_clothing_color(img: PILImage.Image, region: Tuple[float, float, float, float], skin: str) -> Optional[str]:
+    """在「一定是衣服」的區塊取色（見 TORSO_SAFE 的說明）；那一塊不像衣服時回 None。"""
+    arr = np.asarray(img)
+    h, w = arr.shape[:2]
+    x0, y0, x1, y1 = region
+    arr = arr[round(y0 * h):round(y1 * h), round(x0 * w):round(x1 * w)]
+    flat = arr.reshape(-1, 4)
+    opaque = flat[flat[:, 3] >= OPAQUE_ALPHA][:, :3].astype(int)
+    if len(opaque) < 30:
+        return None
+    cloth = opaque[np.linalg.norm(opaque - np.array(_hex_rgb(skin)), axis=1) > SAFE_SKIN_TOLERANCE]
+    if len(cloth) < len(opaque) * SAFE_MIN_CLOTH_SHARE:
+        return None
+    return _dominant_hex(cloth)
+
+
 def _skin_color(head: PILImage.Image, torso: PILImage.Image) -> str:
     """膚色：頭部與上身裡「像皮膚的顏色」出現最多的那個。
 
@@ -220,15 +251,17 @@ def sample_fallback_colors(parts: Dict[str, PILImage.Image]) -> Dict[str, str]:
 
     取樣區域刻意避開邊緣：
       hair 取頭部最上緣的橫帶，skin 取頭部中段（臉），
-      torso 與 legs 取各自的中央區塊，避開手臂與雙腿之間的鏤空；
-      這兩塊排除膚色後取最多的顏色（見 _clothing_color）。
+      torso 與 legs 先取「一定是衣服」的區塊（TORSO_SAFE / LEGS_SAFE），
+      取不到才退回各自的中央區塊、排除膚色後取最多的顏色（見 _clothing_color）。
     """
     skin = _skin_color(parts["head"], parts["torso"])
     return {
         "hair": _median_color(parts["head"], (0.25, 0.00, 0.75, 0.25)),
         "skin": skin,
-        "torso": _clothing_color(parts["torso"], (0.30, 0.10, 0.70, 0.95), skin),
-        "legs": _clothing_color(parts["legs"], (0.25, 0.10, 0.75, 0.70), skin),
+        "torso": _safe_clothing_color(parts["torso"], TORSO_SAFE, skin)
+        or _clothing_color(parts["torso"], (0.30, 0.10, 0.70, 0.95), skin),
+        "legs": _safe_clothing_color(parts["legs"], LEGS_SAFE, skin)
+        or _clothing_color(parts["legs"], (0.25, 0.10, 0.75, 0.70), skin),
     }
 
 
