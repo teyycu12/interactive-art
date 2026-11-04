@@ -89,8 +89,12 @@ export async function listHistoricalAvatars(publicDir) {
     }
 
     let colors = null;
+    let outfit = [];
     try {
-      colors = validColors(JSON.parse(await fs.readFile(path.join(dir, 'colors.json'), 'utf8')));
+      const raw = JSON.parse(await fs.readFile(path.join(dir, 'colors.json'), 'utf8'));
+      colors = validColors(raw);
+      // 身上的衣服顏色清單（generation 與 scripts/asset_colors.py 寫在同一個檔）
+      if (Array.isArray(raw?.outfit)) outfit = raw.outfit.filter((h) => typeof h === 'string' && HEX_RE.test(h));
     } catch {
       colors = null;  // 沒跑過取樣腳本
     }
@@ -111,6 +115,7 @@ export async function listHistoricalAvatars(publicDir) {
       /** 側面與背面都有：會轉身、會擺手 */
       turns: views.length === VIEW_PARTS.length,
       colors,
+      outfit,
       generatedAt: Math.max(...stats.map((s) => s.mtimeMs)),
     });
   }

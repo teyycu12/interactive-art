@@ -142,6 +142,102 @@ SKIN_TOLERANCE = 70
 # 排除皮膚後剩下的像素少於這個比例，就當作那一塊本來就是皮膚（短褲露腿、無袖）
 MIN_CLOTH_SHARE = 0.08
 
+# ── 身上的衣服顏色清單（outfitColors，2026-11-04）──
+# torso / legs 各一個代表色，對穿外套、戴圍巾的人不夠：牛仔外套＋米色大圍巾＋灰上衣，
+# 不管取哪一個都漏掉其他的，「身上有藍色的人」就找不到他（試玩回饋）。
+# 賓果與顏色任務問的是「身上有沒有這個顏色」，所以另外記一份清單：上身與下身各自
+# 佔衣服面積 OUTFIT_MIN_SHARE 以上的顏色，最多 OUTFIT_MAX 個。判定看清單（shared/colorFamily.js）。
+OUTFIT_TORSO_AREA = (0.15, 0.45, 0.85, 1.0)   # 下巴以下、兩手之間
+OUTFIT_LEGS_AREA = (0.20, 0.10, 0.80, 0.70)   # 腰到小腿
+# 中間這幾欄沒有手臂：只排除幾乎等於膚色的（接近膚色的衣服留得住）；兩側照舊排得寬
+OUTFIT_CORE_X = (0.30, 0.70)
+OUTFIT_MIN_SHARE = 0.22
+OUTFIT_PER_PART = 2
+OUTFIT_MAX = 4
+# 兩個顏色離這麼近就當同一個（陰影、亮面不另算一色）
+OUTFIT_MERGE = 40
+
+
+def _outfit_pixels(img: PILImage.Image, region: Tuple[float, float, float, float], skin: str) -> np.ndarray:
+    arr = np.asarray(img)
+    h, w = arr.shape[:2]
+    x0, y0, x1, y1 = region
+    c0, r0 = round(x0 * w), round(y0 * h)
+    sub = arr[r0:round(y1 * h), c0:round(x1 * w)]
+    xs = (np.arange(sub.shape[1]) + c0) / w
+    core = ((xs >= OUTFIT_CORE_X[0]) & (xs < OUTFIT_CORE_X[1]))[None, :]
+    rgb = sub[..., :3].astype(int)
+    dist = np.linalg.norm(rgb - np.array(_hex_rgb(skin)), axis=2)
+    keep = (sub[..., 3] >= OPAQUE_ALPHA) & np.where(core, dist > SAFE_SKIN_TOLERANCE, dist > SKIN_TOLERANCE)
+    return rgb[keep]
+
+
+# 有彩色：HSV 飽和度與亮度都超過這個值。以下是黑白灰，全部算同一群
+OUTFIT_CHROMA_S = 0.18
+OUTFIT_CHROMA_V = 0.15
+# 同一件衣服的亮面與陰影色相差不多，明度差很多：以色相分群，視窗寬 ±OUTFIT_HUE_SPAN 度
+OUTFIT_HUE_SPAN = 25
+
+
+def _main_colors(rgb: np.ndarray, k: int) -> List[str]:
+    """一群像素裡面積夠大的幾個顏色，大的在前。
+
+    以**色相**分群，不以 RGB 距離：像素風的衣服是好幾階明暗畫出來的，牛仔外套的亮面、
+    陰影、縫線 RGB 差了 50 以上，按距離分會拆成五小塊、每塊都不到門檻 —— 合起來其實是
+    整件衣服裡面積最大的（試玩：只判出圍巾的米色，漏掉藍色外套）。黑白灰另成一群。
+    """
+    if not len(rgb):
+        return []
+    f = rgb.astype(float) / 255.0
+    mx, mn = f.max(axis=1), f.min(axis=1)
+    d = mx - mn
+    sat = np.where(mx > 0, d / np.maximum(mx, 1e-6), 0)
+    safe = np.maximum(d, 1e-6)
+    r, g, b = f[:, 0], f[:, 1], f[:, 2]
+    hue = np.where(mx == r, ((g - b) / safe) % 6, np.where(mx == g, (b - r) / safe + 2, (r - g) / safe + 4)) * 60
+    chroma = (sat >= OUTFIT_CHROMA_S) & (mx >= OUTFIT_CHROMA_V)
+    total = len(rgb)
+    left = np.ones(total, dtype=bool)
+    out: List[str] = []
+    while len(out) < k:
+        groups = []
+        mono = left & ~chroma
+        if mono.any():
+            groups.append(mono)
+        ch = left & chroma
+        if ch.any():
+            hist, _ = np.histogram(hue[ch], bins=36, range=(0, 360))
+            peak = (np.argmax(hist) + 0.5) * 10
+            diff = np.abs((hue - peak + 180) % 360 - 180)
+            groups.append(ch & (diff <= OUTFIT_HUE_SPAN))
+        if not groups:
+            break
+        best = max(groups, key=lambda m: m.sum())
+        if best.sum() < total * OUTFIT_MIN_SHARE:
+            break
+        if best is groups[0] and mono.any():
+            out.append(_dominant_hex(rgb[best]))   # 黑白灰：取最多的那一個（白襯衫配黑褲不要混成灰）
+        else:
+            # 有彩色：取中位數。「最多的那一階」常常是陰影（牛仔外套最暗那階 #2B3B4B 已經看不出是藍）
+            r, g, b = (int(np.median(rgb[best][:, i])) for i in range(3))
+            out.append(f"#{r:02X}{g:02X}{b:02X}")
+        left &= ~best
+    return out
+
+
+def sample_outfit_colors(parts: Dict[str, PILImage.Image], skin: str) -> List[str]:
+    """身上的衣服顏色清單（見 OUTFIT_TORSO_AREA 的說明）。取不到就是空的，判定退回 torso / legs。"""
+    out: List[str] = []
+    for part, area in (("torso", OUTFIT_TORSO_AREA), ("legs", OUTFIT_LEGS_AREA)):
+        px = _outfit_pixels(parts[part], area, skin)
+        if len(px) < 30:
+            continue
+        for c in _main_colors(px, OUTFIT_PER_PART):
+            if all(np.linalg.norm(np.array(_hex_rgb(c)) - np.array(_hex_rgb(o))) > OUTFIT_MERGE for o in out):
+                out.append(c)
+    return out[:OUTFIT_MAX]
+
+
 # 「一定是衣服」的區塊（各自切片內的比例 x0, y0, x1, y1），先在這裡取色（2026-11-04）。
 #
 # 只靠顏色排除皮膚，會把接近膚色的衣服一起排掉：SKIN_TOLERANCE 放寬到 70 是為了排掉
@@ -305,6 +401,7 @@ def slice_character(
     img = normalize(decode_png(png_b64))
     parts = slice_parts(img)
     colors = sample_fallback_colors(parts)
+    outfit = sample_outfit_colors(parts, colors["skin"])
 
     out_dir = os.path.join(asset_dir, asset_id)
     os.makedirs(out_dir, exist_ok=True)
@@ -354,7 +451,7 @@ def slice_character(
     # 格式與 scripts/asset_colors.py 寫的 colors.json 相同。
     try:
         with open(os.path.join(out_dir, "colors.json"), "w", encoding="utf-8") as f:
-            json.dump(colors, f, ensure_ascii=False)
+            json.dump({**colors, "outfit": outfit}, f, ensure_ascii=False)
     except OSError:
         pass  # 只是少一份快取，匯出時會重新取樣；不該讓已經生成好的角色失敗
 
@@ -363,6 +460,8 @@ def slice_character(
         "assetId": asset_id,
         "textures": textures,
         "fallbackColors": colors,
+        # 身上的衣服顏色清單：賓果與顏色任務的判定依據（shared/colorFamily.js）
+        "outfitColors": outfit,
         # fullPng 是 textures["full"] 的別名，保留給大合照那條既有呼叫端。
         # 名稱沿用歷史（實際上是 webp）—— 改名要同時動 service.py 的 /compose、
         # server 的名冊組裝與兩邊測試，不值得在這次合併一起做。

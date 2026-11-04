@@ -481,3 +481,11 @@ def test_sampling_reads_shorts_close_to_skin():
     h, l, s = colorsys.rgb_to_hls(r, g, b)
     assert 15 <= h * 360 <= 40 and s > 0.4, colors
     assert colors["legs"] != colors["skin"], colors
+
+
+def test_outfit_palette_lists_every_visible_garment():
+    """換裝角色的衣服顏色清單：外套與裡面的上衣都看得到；洋裝蓋住上衣與外套"""
+    col = {"top": "#f4f1ea", "outer": "#4a6fa5", "bottom": "#2b2b30"}
+    assert dressup.outfit_palette({"outer": "top_hoodie"}, col) == ["#4A6FA5", "#F4F1EA", "#2B2B30"]
+    assert dressup.outfit_palette({}, col) == ["#F4F1EA", "#2B2B30"]
+    assert dressup.outfit_palette({"bottom": "bottom_dress", "outer": "top_hoodie"}, {"bottom": "#E9A9B8"}) == ["#E9A9B8"]

@@ -920,8 +920,9 @@ def dressup_character():
         # colors.json 一起蓋掉，匯出與 NPC、匯入台讀到的才是同一組
         import dressup
         result["fallbackColors"] = dressup.outfit_colors(sel, col)
+        result["outfitColors"] = dressup.outfit_palette(sel, col)
         with open(os.path.join(ASSET_DIR, request_id, "colors.json"), "w", encoding="utf-8") as f:
-            json.dump(result["fallbackColors"], f, ensure_ascii=False)
+            json.dump({**result["fallbackColors"], "outfit": result["outfitColors"]}, f, ensure_ascii=False)
         if arms:
             # 跟貼圖放在同一個資料夾；大螢幕從側面貼圖的網址推得到（不必改傳輸格式）
             with open(os.path.join(ASSET_DIR, request_id, "arms.json"), "w", encoding="utf-8") as f:

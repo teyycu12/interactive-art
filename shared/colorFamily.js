@@ -128,8 +128,11 @@ export function familyOf(hex) {
  */
 export function familiesOfAvatar(avatar) {
   if (!avatar || typeof avatar !== 'object') return [];
+  // CV 角色另外帶 outfitColors（身上看得到的每一件衣服，見 avatars.js）：
+  // 穿牛仔外套戴米色圍巾的人，torso 只記得圍巾，「身上有藍色」要靠這份清單才找得到
   const hexes = avatar.source === 'CV'
-    ? [avatar.fallbackColors?.torso, avatar.fallbackColors?.legs]
+    ? [avatar.fallbackColors?.torso, avatar.fallbackColors?.legs,
+      ...(Array.isArray(avatar.outfitColors) ? avatar.outfitColors : [])]
     : [avatar.accentColor];
   const out = new Set();
   for (const hex of hexes) {

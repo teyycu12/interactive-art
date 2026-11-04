@@ -441,3 +441,30 @@ class TestClothingColorOnBigHeadFigures:
         """整塊都是皮膚（無袖＋短褲）時照實回報膚色，不硬找一個衣服色"""
         c = sample_fallback_colors(self._parts(self.SKIN, self.SKIN, self.SKIN))
         assert self._close(c["legs"], self.SKIN), c
+
+
+class TestOutfitColors:
+    """身上的衣服顏色清單（判定「身上有沒有這個顏色」用，見 slicer.OUTFIT_TORSO_AREA）"""
+
+    def test_shades_of_one_garment_count_together(self):
+        """牛仔外套的亮面、中間調、陰影各自不到兩成，合起來比米色圍巾還大：要找得到藍色"""
+        from slicer import _main_colors
+        denim = [(110, 134, 158)] * 14 + [(82, 104, 125)] * 12 + [(42, 60, 75)] * 5 + [(63, 83, 101)] * 4
+        scarf = [(181, 158, 131)] * 14 + [(149, 126, 101)] * 7 + [(135, 113, 89)] * 6
+        found = _main_colors(np.array(denim + scarf), 2)
+        assert len(found) == 2
+        blues = [c for c in found if int(c[5:7], 16) > int(c[1:3], 16) + 20]
+        assert blues, found
+        # 代表色不能是最暗那一階：那一階已經看不出是藍（判定會當成黑白灰）
+        assert int(blues[0][5:7], 16) > 90, found
+
+    def test_black_and_white_are_not_mixed_into_grey(self):
+        from slicer import _main_colors
+        found = _main_colors(np.array([(250, 250, 250)] * 60 + [(10, 10, 10)] * 40), 2)
+        assert "#FAFAFA" in found
+
+    def test_small_details_are_left_out(self):
+        """面積不到門檻的（鈕扣、小印花）不算一種衣服顏色"""
+        from slicer import _main_colors
+        found = _main_colors(np.array([(40, 140, 60)] * 90 + [(220, 30, 30)] * 10), 3)
+        assert len(found) == 1

@@ -34,11 +34,11 @@ import json
 import os
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from PIL import Image
 
-from slicer import normalize, sample_fallback_colors, slice_parts
+from slicer import normalize, sample_fallback_colors, sample_outfit_colors, slice_parts
 
 FORMAT = "pixelair-character"
 # 改名前（PersonaFlow）匯出的角色檔仍可匯入
@@ -91,6 +91,22 @@ def valid_colors(raw: Any) -> Optional[Dict[str, str]]:
     return out
 
 
+def valid_outfit(raw: Any) -> List[str]:
+    """身上的衣服顏色清單（colors.json 的 outfit、角色檔的 outfitColors）：只留合法色碼，最多 4 個。"""
+    if not isinstance(raw, list):
+        return []
+    return [v for v in raw if isinstance(v, str) and HEX_RE.match(v)][:4]
+
+
+def load_outfit(out_dir: str) -> List[str]:
+    """colors.json 裡的衣服顏色清單；沒有就是空的（判定退回 torso / legs）。"""
+    try:
+        with open(os.path.join(out_dir, "colors.json"), encoding="utf-8") as f:
+            return valid_outfit(json.load(f).get("outfit"))
+    except (OSError, ValueError, AttributeError):
+        return []
+
+
 def load_or_sample_colors(out_dir: str) -> Dict[str, str]:
     """讀 colors.json；沒有或壞掉時從 full.webp 重新取樣，並補寫回去。"""
     colors_path = os.path.join(out_dir, "colors.json")
@@ -107,22 +123,27 @@ def load_or_sample_colors(out_dir: str) -> Dict[str, str]:
         raise ExportError("asset_incomplete", "缺少 full.webp，無法取樣顏色")
     with Image.open(full_path) as raw:
         img = normalize(raw.convert("RGBA"))
-    colors = sample_fallback_colors(slice_parts(img))
+    parts = slice_parts(img)
+    colors = sample_fallback_colors(parts)
     try:
         with open(colors_path, "w", encoding="utf-8") as f:
-            json.dump(colors, f, ensure_ascii=False)
+            json.dump({**colors, "outfit": sample_outfit_colors(parts, colors["skin"])}, f, ensure_ascii=False)
     except OSError:
         pass  # 寫不進去只是下次要再取樣一次，不影響這次匯出
     return colors
 
 
-def avatar_config(asset_id: str, colors: Dict[str, str], url_prefix: str = "/assets/gen") -> Dict[str, Any]:
+def avatar_config(asset_id: str, colors: Dict[str, str], url_prefix: str = "/assets/gen",
+                  outfit: Optional[List[str]] = None) -> Dict[str, Any]:
     """與手機端 CLIENT_JOIN 的外觀設定同形（見 shared/avatars.js validateCVAvatar）。"""
-    return {
+    out = {
         "source": "CV",
         "textures": {part: f"{url_prefix}/{asset_id}/{part}.webp" for part in TEXTURE_PARTS},
         "fallbackColors": colors,
     }
+    if outfit:
+        out["outfitColors"] = outfit
+    return out
 
 
 def build_bundle(asset_root: str, asset_id: str, run: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -150,7 +171,7 @@ def build_bundle(asset_root: str, asset_id: str, run: Optional[Dict[str, Any]] =
             "styleId": run.get("style_id"),
             "mode": run.get("mode"),
         },
-        "avatar": avatar_config(asset_id, load_or_sample_colors(out_dir)),
+        "avatar": avatar_config(asset_id, load_or_sample_colors(out_dir), outfit=load_outfit(out_dir)),
         "files": files,
     }
 
@@ -220,8 +241,9 @@ def restore_bundle(bundle: Any, asset_root: str, *, overwrite: bool = False) -> 
     # 顏色以角色檔帶的為準（那是原機器取樣的結果）；不合格就在這台重新取樣
     colors = valid_colors((bundle.get("avatar") or {}).get("fallbackColors"))
     if colors:
+        outfit = valid_outfit((bundle.get("avatar") or {}).get("outfitColors"))
         with open(os.path.join(out_dir, "colors.json"), "w", encoding="utf-8") as f:
-            json.dump(colors, f, ensure_ascii=False)
+            json.dump({**colors, "outfit": outfit} if outfit else colors, f, ensure_ascii=False)
     else:
         load_or_sample_colors(out_dir)
     return asset_id

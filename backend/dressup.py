@@ -250,6 +250,27 @@ def outfit_colors(sel: dict, col: dict) -> Dict[str, str]:
             {"skin": c["skin"], "hair": c["hair"], "torso": torso, "legs": c["bottom"]}.items()}
 
 
+def outfit_palette(sel: dict, col: dict) -> List[str]:
+    """換裝角色身上看得到的衣服顏色（outfitColors，判定用）：外套、上衣、下身。
+    洋裝蓋住上衣與外套（manifest 的 hides），就只有洋裝。外套是敞開的，裡面的上衣也算。"""
+    c = {**DEFAULT_COLORS, **{k: v for k, v in (col or {}).items() if isinstance(v, str)}}
+    parts = {p["id"]: p for p in load_manifest()["parts"]}
+    bottom = parts.get((sel or {}).get("bottom") or "")
+    hidden = set((bottom or {}).get("hides") or [])
+    out = []
+    if (sel or {}).get("outer") and "outer" not in hidden:
+        out.append(c["outer"])
+    if "top" not in hidden:
+        out.append(c["top"])
+    out.append(c["bottom"])
+    seen, uniq = set(), []
+    for v in out:
+        if v.upper() not in seen:
+            seen.add(v.upper())
+            uniq.append(v.upper())
+    return uniq
+
+
 def _figure_rows(shape, figures) -> np.ndarray:
     """每一格在所屬那個人身上的高度位置（0 頭頂、1 腳底）；不在任何人身上是 -1。"""
     h, w = shape[:2]

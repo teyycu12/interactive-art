@@ -130,6 +130,8 @@ const TEXTURE_PARTS = CV_PARTS;
  */
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 const FALLBACK_KEYS = ['skin', 'hair', 'torso', 'legs'];
+/** outfitColors 最多幾個（與 backend/slicer.py 的 OUTFIT_MAX 一致；換裝最多外套＋上衣＋下身三件） */
+export const OUTFIT_COLORS_MAX = 4;
 
 /**
  * 驗證掃描生成的角色外觀。
@@ -188,6 +190,13 @@ function validateCVAvatar(cfg) {
   const value = { source: 'CV', textures: cleanTextures, fallbackColors: cleanColors };
   const pixelParts = cleanPixelParts(cfg.pixelParts);
   if (pixelParts) value.pixelParts = pixelParts;
+  // 選填：身上看得到的衣服顏色清單（生成服務取樣、換裝用選的，見 backend/slicer.py 的
+  // OUTFIT_TORSO_AREA）。賓果與顏色任務判「身上有沒有這個顏色」看它 —— torso / legs
+  // 各一色，穿外套戴圍巾的人只記得到其中一件。只收合法色碼，最多 OUTFIT_COLORS_MAX 個
+  const outfit = Array.isArray(cfg.outfitColors)
+    ? cfg.outfitColors.filter((h) => typeof h === 'string' && HEX_RE.test(h)).slice(0, OUTFIT_COLORS_MAX)
+    : [];
+  if (outfit.length) value.outfitColors = outfit;
 
   // 同樣只取白名單欄位，丟棄客戶端夾帶的任何額外屬性
   return { ok: true, value };

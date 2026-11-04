@@ -76,11 +76,15 @@ class TestBundle:
         """生成當下就存顏色，匯出時不必重新取樣（也與回應裡的 fallbackColors 一致）。"""
         with open(asset_root / ASSET_ID / "colors.json", encoding="utf-8") as f:
             saved = json.load(f)
-        assert build_bundle(str(asset_root), ASSET_ID)["avatar"]["fallbackColors"] == saved
+        avatar = build_bundle(str(asset_root), ASSET_ID)["avatar"]
+        # colors.json 另外帶身上的衣服顏色清單（outfit），角色檔裡是 outfitColors
+        assert avatar["fallbackColors"] == {k: v for k, v in saved.items() if k != "outfit"}
+        assert avatar.get("outfitColors", []) == saved.get("outfit", [])
 
     def test_old_assets_without_colors_are_resampled_and_cached(self, asset_root):
         colors_path = asset_root / ASSET_ID / "colors.json"
         expected = json.loads(colors_path.read_text(encoding="utf-8"))
+        expected.pop("outfit", None)
         colors_path.unlink()
         assert close_colors(load_or_sample_colors(str(asset_root / ASSET_ID)), expected)
         assert colors_path.exists()
@@ -168,7 +172,9 @@ class TestRestore:
         bundle["avatar"]["fallbackColors"] = {"skin": "red; background:url(x)"}
         target = tmp_path_factory.mktemp("other-machine")
         restore_bundle(bundle, str(target))
-        assert close_colors(json.loads((target / ASSET_ID / "colors.json").read_text(encoding="utf-8")), good)
+        resampled = json.loads((target / ASSET_ID / "colors.json").read_text(encoding="utf-8"))
+        resampled.pop("outfit", None)
+        assert close_colors(resampled, good)
 
 
 class TestEndpoints:
