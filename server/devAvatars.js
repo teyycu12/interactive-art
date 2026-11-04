@@ -19,6 +19,7 @@
  */
 
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 
 /** 與 shared/avatars.js 的 TEXTURE_URL_RE 同一組字元集：資產目錄名是 uuid4().hex */
@@ -123,4 +124,31 @@ export async function listHistoricalAvatars(publicDir) {
   // 新的排前面：開發時最想重看的通常是剛生成的那幾個
   out.sort((a, b) => b.generatedAt - a.generatedAt);
   return out;
+}
+
+/**
+ * CV 角色進場時沒帶 outfitColors，就從它的貼圖目錄的 colors.json 補上。
+ *
+ * 清單是 2026-11-04 才加的：在那之前就開著的手機分頁、存在 localStorage 的舊角色
+ * 都不會送它，賓果與顏色任務就退回只看上衣、褲子各一色 —— 穿牛仔外套戴米色圍巾的人
+ * 會被判成「只有橘黃」。生成服務寫的 colors.json 裡已經有清單，伺服器自己讀就不必
+ * 等每支手機重新整理。讀不到、或角色不是生成服務做的（貼圖不在 /assets/gen/）就原樣回傳。
+ *
+ * @param {string} publicDir 靜態站台根目錄
+ * @param {object} avatar validateAvatarConfig 驗過的 value
+ * @param {number} max 最多幾個（shared/avatars.js 的 OUTFIT_COLORS_MAX）
+ */
+export function withAssetOutfit(publicDir, avatar, max) {
+  if (avatar?.source !== 'CV' || avatar.outfitColors?.length) return avatar;
+  const id = /^\/assets\/gen\/([0-9a-f]{32})\//.exec(avatar.textures?.full ?? '')?.[1];
+  if (!id) return avatar;
+  try {
+    const raw = JSON.parse(fsSync.readFileSync(path.join(publicDir, 'assets', 'gen', id, 'colors.json'), 'utf8'));
+    const outfit = Array.isArray(raw?.outfit)
+      ? raw.outfit.filter((h) => typeof h === 'string' && HEX_RE.test(h)).slice(0, max)
+      : [];
+    return outfit.length ? { ...avatar, outfitColors: outfit } : avatar;
+  } catch {
+    return avatar;   // 舊資產沒有 colors.json：照舊只看上衣與褲子
+  }
 }

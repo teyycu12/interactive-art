@@ -28,7 +28,7 @@ import {
   CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS,
   SCORE_SOURCES, EVENT_INFO, GREET_OUTCOME,
 } from '../shared/protocol.js';
-import { validateAvatarConfig } from '../shared/avatars.js';
+import { OUTFIT_COLORS_MAX, validateAvatarConfig } from '../shared/avatars.js';
 import { avatarMatchesFamily, COLOR_FAMILIES, COLOR_FAMILY_MAP, familiesOfAvatar } from '../shared/colorFamily.js';
 import { DEFAULT_THEME, isSelectableTheme, THEME_MAP } from '../shared/themes.js';
 import {
@@ -38,7 +38,7 @@ import {
 } from './config.js';
 import { Stage, tokensMatch } from './state.js';
 import { NpcDirector } from './npc.js';
-import { listHistoricalAvatars } from './devAvatars.js';
+import { listHistoricalAvatars, withAssetOutfit } from './devAvatars.js';
 import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
 import { photoUrlBase, savePhoto, requestOrigin, rankLanAddresses } from './photos.js';
@@ -712,6 +712,12 @@ function bingoFactsOf(agentId) {
  * 看的是大螢幕上那個角色的上身與褲子各取一色，不是真人的衣服 —— 像素圖的顏色常跟本人不一樣，
  * 而玩家原本完全看不到系統判成什麼（2026-10-19 試玩回饋「衣服顏色不知道怎麼判定」）。
  */
+/** 進場帶來的外觀：驗過之後，舊手機沒送的衣服顏色清單由伺服器從資產目錄補上（見 withAssetOutfit） */
+function joinAvatar(msg) {
+  const v = validateAvatarConfig(msg.avatar ?? msg.avatarConfig);
+  return v.ok ? { ...v, value: withAssetOutfit(PUBLIC_DIR, v.value, OUTFIT_COLORS_MAX) } : v;
+}
+
 function colorLabelsOf(agentId) {
   return familiesOfAvatar(stage.get(agentId)?.avatar)
     .map((id) => COLOR_FAMILY_MAP[id]).filter(Boolean).map((f) => `${f.glyph} ${f.label}`);
@@ -1086,7 +1092,7 @@ function handleJoin(ws, msg) {
         send(ws, EV.CLIENT_REJECT, { reason: NAME_BLOCKED_REASON });
         return;
       }
-      const restyle = validateAvatarConfig(msg.avatar ?? msg.avatarConfig);
+      const restyle = joinAvatar(msg);
       if (rename) existing.name = rename;
       if (restyle.ok) existing.avatar = restyle.value;
       stage.rosterDirty = true;
@@ -1119,7 +1125,7 @@ function handleJoin(ws, msg) {
     send(ws, EV.CLIENT_REJECT, { reason: NAME_BLOCKED_REASON });
     return;
   }
-  const avatar = validateAvatarConfig(msg.avatar ?? msg.avatarConfig);
+  const avatar = joinAvatar(msg);
   if (!avatar.ok) {
     send(ws, EV.CLIENT_REJECT, { reason: avatar.reason });
     return;
