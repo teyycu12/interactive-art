@@ -75,6 +75,7 @@ a { color: inherit; }
 .btn:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--ink); }
 .btn--primary { background: var(--sun); }
 .btn--block { width: 100%; }
+.btn--ghost { margin-top: 12px; min-height: 40px; padding: 8px 16px; box-shadow: 3px 3px 0 var(--ink); }
 kbd { font-family: var(--mono); font-size: 18px; border: 2px solid currentColor; padding: 0 5px; line-height: 1.1; }
 
 .chip {
@@ -243,6 +244,7 @@ mark { background: linear-gradient(transparent 55%, var(--sun) 55%); color: inhe
 }
 
 /* ---------- demo ---------- */
+.demo__note { margin: -24px 0 32px; max-width: 46em; font-size: 14.5px; color: var(--muted); border-left: 4px solid var(--sun); padding: 4px 0 4px 14px; }
 .demo { display: grid; grid-template-columns: 1fr 300px; gap: 22px; align-items: start; }
 .demo__screen { position: relative; border: 4px solid var(--ink); box-shadow: 8px 8px 0 var(--ink); background: var(--floor); aspect-ratio: 16 / 9; overflow: hidden; }
 .demo__screen canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; image-rendering: pixelated; }
@@ -279,7 +281,10 @@ mark { background: linear-gradient(transparent 55%, var(--sun) 55%); color: inhe
 .card__f p { margin: 0; font-size: 14.5px; color: #4a4f5b; line-height: 1.65; }
 .card__flip { margin-top: auto; font-family: var(--pixel); font-size: 11px; color: var(--coral); padding-top: 10px; }
 .card__b .k { font-family: var(--pixel); font-size: 11px; color: var(--sun); }
-.card__b p { margin: 8px 0 0; font-size: 17px; font-weight: 700; line-height: 1.6; }
+.card__how { font-size: 18px; font-weight: 900; margin: 2px 0 6px; }
+.card__b ol { margin: 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 6px; }
+.card__b li { counter-increment: s; display: grid; grid-template-columns: 22px 1fr; gap: 8px; font-size: 14.5px; line-height: 1.55; }
+.card__b li::before { content: counter(s); font-family: var(--mono); font-size: 18px; line-height: 20px; height: 22px; text-align: center; background: var(--sun); color: var(--ink); }
 .card .code { font-family: var(--mono); font-size: 26px; background: var(--ink); color: var(--sun); padding: 0 8px; display: inline-block; margin-top: 8px; letter-spacing: .12em; }
 .card .code small { font-size: 16px; color: var(--teal-l); letter-spacing: 0; margin-left: 6px; }
 
@@ -416,4 +421,54 @@ mark { background: linear-gradient(transparent 55%, var(--sun) 55%); color: inhe
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .reveal { opacity: 1; transform: none; }
   html { scroll-behavior: auto; }
+}
+
+/* ---------- 功能 × 理論 ---------- */
+.quote { margin: 40px 0 0; padding: 18px 22px; background: var(--wall); color: var(--paper); border-left: 8px solid var(--coral); box-shadow: 5px 5px 0 var(--ink); max-width: 40em; }
+.quote p { margin: 0; font-size: clamp(18px, 2.2vw, 22px); font-weight: 900; }
+.quote cite { display: block; margin-top: 6px; font-style: normal; font-size: 13px; color: #b8bcc8; }
+.theory__lead { margin: -8px 0 18px; color: #4a4f5b; }
+.theory { border: 3px solid var(--ink); box-shadow: 6px 6px 0 var(--ink); background: var(--paper); }
+.theory__tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 3px solid var(--ink); }
+.theory__tab { text-align: left; padding: 12px 16px; min-height: 64px; border: 0; border-right: 3px solid var(--ink); background: var(--cream); cursor: pointer; font-size: 19px; font-weight: 900; }
+.theory__tab:last-child { border-right: 0; }
+.theory__tab small { display: block; font-family: var(--pixel); font-size: 11px; font-weight: 400; letter-spacing: .08em; color: var(--muted); }
+.theory__tab[aria-selected="true"] { color: var(--ink); }
+.theory__tab--coral[aria-selected="true"] { background: #f7b39d; }
+.theory__tab--blue[aria-selected="true"] { background: #b9c6e6; }
+.theory__tab--sun[aria-selected="true"] { background: #f6d58c; }
+.theory__panel { padding: 24px; animation: pop .3s steps(3) both; }
+.theory__map { display: grid; grid-template-columns: 1fr 48px 1fr; gap: 12px; align-items: stretch; }
+.theory__side { border: 3px solid var(--ink); padding: 16px 18px; background: var(--cream); }
+.theory__side p { margin: 0 0 8px; }
+.theory__k { font-family: var(--pixel); font-size: 11px; letter-spacing: .1em; color: var(--muted); }
+.theory__big { font-size: clamp(20px, 2.4vw, 25px); font-weight: 900; line-height: 1.35; }
+.theory__panel--coral .theory__big { color: #b4472c; }
+.theory__panel--blue .theory__big { color: #3d5aa0; }
+.theory__panel--sun .theory__big { color: #8a6511; }
+.theory__arrow { display: grid; place-items: center; font-size: 28px; font-weight: 900; }
+.theory__cite { font-size: 13px; color: var(--muted); }
+.chip--sm { font-size: 13.5px; padding: 3px 10px; box-shadow: 2px 2px 0 var(--ink); border-width: 2px; }
+.theory__how { margin: 18px 0 0; padding: 14px 18px; background: var(--wall); color: var(--paper); line-height: 1.75; }
+.theory__how b, .theory__use b { display: inline-block; margin-right: 10px; padding: 0 8px; background: var(--sun); color: var(--ink); font-size: 13px; }
+.theory__ev { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+.theory__ev div { border-left: 6px solid var(--teal); background: var(--cream); padding: 8px 14px; }
+.theory__ev b { display: block; font-family: var(--mono); font-size: 34px; font-weight: 400; line-height: 1.1; }
+.theory__ev span { font-size: 14px; }
+.theory__more-title { margin: 36px 0 12px; font-weight: 900; font-size: 18px; }
+.theory__more { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.theory__more article { border: 3px solid var(--ink); background: var(--paper); padding: 14px 18px; }
+.theory__more p { margin: 0 0 6px; font-size: 15px; line-height: 1.65; }
+.theory__name { font-weight: 900; font-size: 17px !important; }
+.theory__use { margin-top: 8px !important; color: #3a3f4b; }
+.refs { margin-top: 18px; font-size: 13.5px; color: #4a4f5b; }
+.refs summary { cursor: pointer; font-weight: 700; }
+.refs ul { padding-left: 1.2em; margin: 8px 0 0; }
+.refs li { margin: 4px 0; line-height: 1.6; }
+@media (max-width: 760px) {
+  .theory__tab { font-size: 16px; padding: 10px; }
+  .theory__map { grid-template-columns: 1fr; }
+  .theory__arrow { height: 28px; transform: rotate(90deg); }
+  .theory__panel { padding: 16px; }
+  .theory__ev, .theory__more { grid-template-columns: 1fr; }
 }

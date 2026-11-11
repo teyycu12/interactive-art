@@ -25,6 +25,8 @@
     front: ['..tttttttt..', '.tttttttttt.', '.atttttttta.', '.atttttttta.', '.k.tttttt.k.'],
     side: ['...tttttt...', '...tttttt...', '...ttaatt...', '...ttaatt...', '...ttkktt...'],
   };
+  // 正面、背面：兩腿分開，跨步時一隻腳抬高一格（2026-11-11 試過併腿，往前後走時反而怪，改回這版）。
+  // 側面：左腿 p、右腿 q（深一階）分出前後腳，跨步收窄，不要張成剪刀腳
   const LEGS = {
     front: [
       ['...pppppp...', '...pp..pp...', '...pp..pp...', '...pp..pp...', '..bbb..bbb..'],
@@ -37,8 +39,9 @@
       ['..pppppppp..', '..pppppppp..', '.pppppppppp.', '...kk..bbb..', '..bbb.......'],
     ],
     side: [
-      ['....pppp....', '....pppp....', '....pppp....', '....pppp....', '....bbbbb...'],
-      ['....pppp....', '...pp..pp...', '..pp....pp..', '..pp....pp..', '.bbb....bbb.'],
+      ['....pppp....', '....ppqq....', '....ppqq....', '....ppqq....', '....bbbbb...'],
+      ['....pppp....', '....ppqq....', '...pp.qq....', '...pp..qq...', '..bbb..bbb..'],
+      ['....pppp....', '....qqpp....', '...qq.pp....', '...qq..pp...', '..bbb..bbb..'],
     ],
   };
 
@@ -54,6 +57,15 @@
     fringe: ['...hhhhhh...', '..hhhhhhhh..', '.hhhhhhhhhh.', '.hhhhhhhhhh.', '.hsessssesh.', '.hssssssssh.', '..sssmmsss..', '...ssssss...'],
     part: ['...hhhhhh...', '..hhhhhhhh..', '.hhhhshhhhh.', '.hhsssssshh.', '.hsessssesh.', '.hssssssssh.', '..sssmmsss..', '...ssssss...'],
   };
+
+  /** 顏色調暗一階（右腿用，跟左腿分得出來）；太深的顏色改成調亮 */
+  function shade(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    let r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+    const f = r + g + b < 150 ? 1.45 : 0.78;
+    [r, g, b] = [r, g, b].map((c) => Math.min(255, Math.round(c * f + (f > 1 ? 18 : 0))));
+    return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
+  }
 
   function randLook(rnd = Math.random) {
     const pick = (a) => a[Math.floor(rnd() * a.length)];
@@ -71,7 +83,7 @@
     const head = side ? HEAD.side : (dir === 'down' && HEADS[look.head]) || HEAD[dir];
     const body = side ? BODY.side : gown ? GOWN_BODY : BODY.front;
     let legs;
-    if (side) legs = LEGS.side[frame === 0 ? 0 : 1];
+    if (side) legs = LEGS.side[frame];
     else if (gown) legs = GOWN_LEGS[frame];
     else legs = (look.skirt ? LEGS.skirt : LEGS.front)[frame];
     const rows = [...head, ...body, ...legs].map((r) => r.split(''));
@@ -95,7 +107,7 @@
     }
     const col = {
       h: look.hair, s: look.skin, k: look.skin, e: OUTLINE, m: '#b5534a',
-      t: look.shirt, a: look.sleeve ? look.shirt : look.skin, p: look.pants, b: look.shoe,
+      t: look.shirt, a: look.sleeve ? look.shirt : look.skin, p: look.pants, q: shade(look.pants), b: look.shoe,
       g: '#35353c', w: '#f4f1ea', c: '#ffffff', r: '#e0457b', n: '#3d4a6b', x: '#4a4a52', y: '#c9ced6',
     };
     const W = 14, H = rows.length + 2;
@@ -168,6 +180,8 @@
           x: b.x0 + Math.random() * (b.x1 - b.x0), y: b.y0 + Math.random() * (b.y1 - b.y0),
           vx: Math.cos(ang) * 10, vy: Math.sin(ang) * 10,
           th: ang, dir: 'down', step: 0, jump: 0, say: '', sayT: 0,
+          // 走一陣、停一陣：一開始錯開，免得全場同時起步
+          resting: Math.random() < 0.5, phaseT: Math.random() * 4, dirHold: 0, stillT: 0,
         });
       }
       if (this.o.player) {
@@ -177,6 +191,12 @@
         p.x = (b.x0 + b.x1) / 2; p.y = (b.y0 + b.y1) / 2;
         this.player = p;
       }
+    }
+    /** 全部重來：重新生成角色、清掉配對 */
+    reset() {
+      this.agents = [];
+      this.pairs.clear();
+      this.spawn();
     }
     clampIn(a) {
       const b = this.bounds;
@@ -193,6 +213,19 @@
       this.draw();
       this.o.onFrame && this.o.onFrame(this);
       requestAnimationFrame((tt) => this.tick(tt));
+    }
+    /** 這一幀是否在休息。休息 2～5 秒、走 3～7 秒輪替；跟玩家配對的人離玩家太遠時不休息（要跟上） */
+    rests(a, dt) {
+      if (!this.o.stopGo) return false;
+      a.phaseT -= dt;
+      if (a.phaseT <= 0) {
+        a.resting = !a.resting;
+        a.phaseT = a.resting ? 2 + Math.random() * 3 : 3 + Math.random() * 4;
+        if (!a.resting) a.th = Math.random() * Math.PI * 2;
+      }
+      const p = this.player;
+      if (p && this.paired(a, p) && Math.hypot(p.x - a.x, p.y - a.y) > this.o.sep * 2) return false;
+      return a.resting;
     }
     paired(a, b) { return this.pairs.has(a.id < b.id ? a.id + ':' + b.id : b.id + ':' + a.id); }
     addPair(a, b) { this.pairs.add(a.id < b.id ? a.id + ':' + b.id : b.id + ':' + a.id); }
@@ -214,6 +247,13 @@
         const nz = (x, y) => { const l = Math.hypot(x, y); return l > 1e-6 ? [x / l, y / l] : [0, 0]; };
         let fx = 0, fy = 0, v;
         v = nz(sx, sy); fx += v[0] * P.sep; fy += v[1] * P.sep;
+        // 停下來的人：只讓開擠過來的人，其餘原地站著（真人在場上大多是站著聊天，不是一直走）
+        if (!a.player && this.rests(a, dt)) {
+          let rvx = (a.vx + v[0] * P.sep * accel * 0.5 * dt) * Math.max(0, 1 - 6 * dt);
+          let rvy = (a.vy + v[1] * P.sep * accel * 0.5 * dt) * Math.max(0, 1 - 6 * dt);
+          next.push([rvx, rvy]);
+          continue;
+        }
         if (an) {
           v = nz(ax / an - a.vx, ay / an - a.vy); fx += v[0] * P.ali; fy += v[1] * P.ali;
           v = nz(cx / cw - a.x, cy / cw - a.y); fx += v[0] * P.coh; fy += v[1] * P.coh;
@@ -237,15 +277,28 @@
         }
         next.push([vx, vy]);
       }
+      const fast = this.o.manual || speed;
       this.agents.forEach((a, i) => {
         [a.vx, a.vy] = next[i];
         a.x += a.vx * dt; a.y += a.vy * dt;
         this.clampIn(a);
         const s = Math.hypot(a.vx, a.vy);
-        if (s > speed * 0.15) {
-          a.dir = Math.abs(a.vx) > Math.abs(a.vy) ? (a.vx > 0 ? 'right' : 'left') : (a.vy > 0 ? 'down' : 'up');
-          a.step += s * dt;
-        } else a.step = 0;
+        if (s > speed * 0.2) {
+          a.stillT = 0;
+          // 轉向要穩定一小段時間才換面向；斜著走時不會在正面、側面之間一直閃
+          const ax = Math.abs(a.vx), ay = Math.abs(a.vy);
+          const want = ax > ay * 1.25 ? (a.vx > 0 ? 'right' : 'left')
+            : ay > ax * 1.25 ? (a.vy > 0 ? 'down' : 'up') : a.dir;
+          if (want !== a.dir) { a.dirHold += dt; if (a.dirHold > 0.18) { a.dir = want; a.dirHold = 0; } }
+          else a.dirHold = 0;
+          // 腳步節奏：每秒 5～11 步，跟速度成正比，不會慢慢滑
+          a.step += dt * (5 + 6 * Math.min(1, s / fast));
+        } else {
+          a.step = 0;
+          a.stillT += dt;
+          // 站定一會兒就轉回正面，像在看大螢幕
+          if (a.stillT > 0.8) a.dir = 'down';
+        }
         if (a.jump > 0) a.jump -= dt;
         if (a.sayT > 0) a.sayT -= dt;
       });
@@ -262,7 +315,7 @@
       const w = 14 * S, h = 20 * S;
       for (const a of sorted) {
         const seq = [1, 0, 2, 0];
-        const f = a.step ? seq[Math.floor(a.step / (S * 5)) % 4] : 0;
+        const f = a.step ? seq[Math.floor(a.step) % 4] : 0;
         const img = a.spr[a.dir][f];
         const jy = a.jump > 0 ? Math.sin((a.jump / 0.45) * Math.PI) * S * 5 : 0;
         g.fillStyle = 'rgba(43,47,58,.22)';
@@ -298,7 +351,7 @@
     const hello = ['嗨！', '你是哪一型？', '配對碼幾號？', '一起拍合照！', '你也是無尾熊？', '👋'];
     const hero = new Crowd(heroCanvas, {
       n: (w) => Math.max(7, Math.min(18, Math.round(w / 95))),
-      scale: 3, perc: 140, sep: 56, speed: 26, accel: 30,
+      scale: 3, perc: 140, sep: 56, speed: 26, accel: 30, stopGo: true,
       bounds: (W, H) => ({ x0: 24, x1: W - 24, y0: 66, y1: H - 26 }),
     });
     heroCanvas.addEventListener('click', (e) => {
@@ -327,7 +380,7 @@
 
     const demo = new Crowd(demoCanvas, {
       world: { w: 1920, h: 1080 }, bg, player: true,
-      n: 26, scale: 5, perc: 260, sep: 95, speed: 70, accel: 110, manual: 300,
+      n: 26, scale: 5, perc: 260, sep: 95, speed: 70, accel: 110, manual: 300, stopGo: true,
       bounds: () => ({ x0: 280, x1: 1640, y0: 300, y1: 985 }),
       beforeAgents(cr, g) {
         const p = cr.player;
@@ -457,6 +510,15 @@
       toast('配對成功！你們之間的凝聚權重 ×2.5');
     }
     $('#pairBtn').addEventListener('click', pair);
+    const DEFAULTS = { sep: 2.2, ali: 0.9, coh: 0.75, wan: 0.55 };
+    $('#resetBtn').addEventListener('click', () => {
+      demo.reset();
+      Object.assign(demo.params, DEFAULTS);
+      for (const [k, v] of Object.entries(DEFAULTS)) { $('#p-' + k).value = v; $('#o-' + k).textContent = v; }
+      input.x = input.y = 0; keys.clear(); drag = null;
+      $('#pairCount').textContent = '0';
+      toast('已重置：角色重新進場，配對與參數回到預設');
+    });
 
     for (const k of ['sep', 'ali', 'coh', 'wan']) {
       const inp = $('#p-' + k), out = $('#o-' + k);
@@ -502,12 +564,88 @@
   }), { threshold: 0.15 });
   $$('.reveal').forEach((el) => revObs.observe(el));
 
+  /* ================= 功能 × 理論 ================= */
+  // 三大功能與對應理論（同 DM 與成果報告表 2-1）。數據取自 10/19 實測
+  const PILLARS = [
+    {
+      tab: '虛擬角色', tag: 'AVATAR', color: 'coral',
+      feature: '創造獨一無二的數位分身',
+      features: ['拍照生成像素角色', '正面、側面、背面三視圖', '自訂角色', '大螢幕上的名牌'],
+      theory: '自我呈現理論', cite: 'Goffman, 1959；Schlenker & Leary, 1982',
+      idea: '人在社交場合會持續管理自己給別人的印象；想留下好印象卻沒把握時，就會產生社交焦慮。',
+      how: '由自己穿著轉譯而來的像素角色，是一層可以控制的「前台」：先以角色出場、被看見，再把開口的理由交給任務，降低開口時被評價的壓力。',
+      evidence: [['4.19', '「看到自己的角色出現在大螢幕上讓我覺得有參與感」'], ['4.31', '「我在大螢幕上很快就找到自己的角色」']],
+    },
+    {
+      tab: '互動任務', tag: 'MISSION', color: 'blue',
+      feature: '建立開口的契機與管道',
+      features: ['配對任務', '找同類／找不同類', '人物賓果', '話題桌：猜對方', '兩人解碼'],
+      theory: '社會互賴理論', cite: 'Johnson & Johnson, 2009；Aronson et al., 1978',
+      idea: '當一個人的目標只有在他人也達成時才能達成（正向互賴），成員之間就會彼此協助、交換資訊。拼圖教室讓每人只握有一部分教材，必須互相說明才能完成。',
+      how: '把通關需要的資訊分散在不同人身上：配對碼只在對方手機上、人格類型從外表看不出來、賓果條件只能當面問。開口因此成為唯一的通關路徑。',
+      evidence: [['20 / 25', '找同類任務：在場 25 人中 20 人達標，約 2 分鐘內完成'], ['2.44 → 2.88', '與現場同學的認識程度（前測 → 後測，p ≈ .013）']],
+    },
+    {
+      tab: '回憶生成', tag: 'MEMORY', color: 'sun',
+      feature: '活動後儲存互動紀念',
+      features: ['依互動排位的大合照', 'QR Code 下載', '今天遇見的人', '紀念卡'],
+      theory: '集體記憶理論', cite: 'Halbwachs, 1992',
+      idea: '記憶在群體中形成，並依附於群體共享的符號與物件。',
+      how: '大合照依當天的互動排位，越熟的人站得越近，把「我們曾一起在場」變成一張帶得走的照片；手機上也留下今天遇見的人。',
+      evidence: [['77%', '參與者掃 QR Code 下載了大合照（26 人中 20 人）'], ['2.52 → 3.40', '對今天一起參與活動的群體歸屬感（p ≈ .003）']],
+    },
+  ];
+  const theoryTabs = $('.theory__tabs'), theoryPanel = $('#theoryPanel');
+  if (theoryTabs) {
+    PILLARS.forEach((p, i) => {
+      const b = document.createElement('button');
+      b.setAttribute('role', 'tab');
+      b.id = `theory-tab-${i}`;
+      b.setAttribute('aria-controls', 'theoryPanel');
+      b.className = `theory__tab theory__tab--${p.color}`;
+      b.innerHTML = `<small>0${i + 1} · ${p.tag}</small>${p.tab}`;
+      b.addEventListener('click', () => showPillar(i));
+      b.addEventListener('keydown', (e) => {
+        const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (d) { e.preventDefault(); const n = (i + d + PILLARS.length) % PILLARS.length; showPillar(n); theoryTabs.children[n].focus(); }
+      });
+      theoryTabs.appendChild(b);
+    });
+  }
+  function showPillar(i) {
+    const p = PILLARS[i];
+    [...theoryTabs.children].forEach((b, j) => {
+      b.setAttribute('aria-selected', j === i);
+      b.tabIndex = j === i ? 0 : -1;
+    });
+    theoryPanel.setAttribute('aria-labelledby', `theory-tab-${i}`);
+    theoryPanel.className = `theory__panel theory__panel--${p.color}`;
+    theoryPanel.innerHTML = `
+      <div class="theory__map">
+        <div class="theory__side">
+          <p class="theory__k">功能</p>
+          <p class="theory__big">${p.feature}</p>
+          <div>${p.features.map((f) => `<span class="chip chip--sm">${f}</span>`).join('')}</div>
+        </div>
+        <div class="theory__arrow" aria-hidden="true">⇄</div>
+        <div class="theory__side">
+          <p class="theory__k">理論</p>
+          <p class="theory__big">${p.theory}</p>
+          <p class="theory__cite">${p.cite}</p>
+          <p>${p.idea}</p>
+        </div>
+      </div>
+      <p class="theory__how"><b>怎麼結合</b>${p.how}</p>
+      <div class="theory__ev">${p.evidence.map(([n, t]) => `<div><b>${n}</b><span>${t}</span></div>`).join('')}</div>`;
+  }
+  if (theoryTabs) showPillar(0);
+
   /* ================= 系統架構 ================= */
   const NODES = {
     phone: ['手機控制器', ['掃描入場 QR Code，拍照、從相簿選照片或自訂角色', '浮動搖桿操控自己的角色、揮手、私訊', '輸入配對碼、填賓果格子、作答與問卷', '私人資訊（配對碼、賓果卡）只出現在本人手機上']],
     screen: ['大螢幕（投影）', ['Canvas2D 角色圖層＋場景：日常廚房、共享辦公室、活力體育館', '顯示排行榜、題目、文字雲與合照 QR Code', '在看不見的畫布上另外合成大合照，場上的人照常走動', '30 人時每幀繪製約 6.0 ms（60 fps 預算 16.7 ms）']],
-    host: ['主辦端控制台', ['以每次啟動產生的 6 碼密鑰登入', '節目單：依場合套用範本，再自行增刪步驟', '發任務、出題、換場景、拍大合照', '查看生成歷史，匯出活動紀錄與參與者名單（CSV）']],
-    core: ['互動層（Node.js + ws，:3000）', ['30 Hz 主迴圈：α 仲裁 + Boids 群體行為', '任務、配對、問答、計分、社交圖譜、生成排隊（上限 60 人）', '每 5 秒「先寫暫存檔再改名」存快照，斷電最多退回 5 秒', '手機關掉 45 秒內重連可接回同一個角色；Token Bucket 速率限制防窮舉', '40 人壓測：CPU 約 9%、記憶體約 78 MB、操控延遲中位數 9 ms']],
+    host: ['主辦端控制台', ['以 6 碼通行密鑰登入（重開伺服器沿用同一組）', '活動列表：事先建好好幾場活動，資料各自分開，一次開啟一場', '節目單：依場合套用範本，再自行增刪步驟', '發任務、出題、換場景、拍大合照', '查看生成歷史，匯出活動紀錄與參與者名單（CSV）']],
+    core: ['互動層（Node.js + ws，:3000）', ['30 Hz 主迴圈：α 仲裁 + Boids 群體行為', '任務、配對、問答、計分、社交圖譜、生成排隊（上限 60 人）', '每 5 秒「先寫暫存檔再改名」存快照，斷電最多退回 5 秒', '手機關掉 45 秒內重連可接回同一個角色', 'Token Bucket 速率限制；配對碼每次嘗試都計冷卻，防止窮舉', '40 人壓測：CPU 約 9%、記憶體約 78 MB、操控延遲中位數 9 ms']],
     gen: ['生成服務（Python + Flask，只綁 127.0.0.1:5055）', ['MediaPipe 站位檢查：肩、髖、膝、腳踝、腳跟、腳尖都要入框', 'OpenCV 擷取上身、下身、手臂顏色', '本機結構驗證，通過後切成頭、身、腿三張貼圖', '大合照標題與 QR Code；每次生成的耗時、token、費用寫入 SQLite']],
     api: ['外部生圖 API', ['Gemini 影像模型：一次畫出正面、側面、背面三視圖', '送入照片、特寫拼版、姿勢結構與風格參考表', '429 / 5xx 自動重試，連續失敗時熔斷器跳開', '實測每次約 US$0.07，外部 API 佔總耗時約 85%']],
   };
@@ -522,12 +660,12 @@
 
   /* ================= 入場流程 ================= */
   const STEPS = [
-    ['掃描入場', '掃 QR Code 進場，選一條路：<b>拍照</b>、<b>從相簿選照片</b>，或<b>自訂角色</b>。相機預設關閉，按下「開啟攝影機」才請求權限。', ['QR Code', 'HTTPS']],
-    ['站位檢查', 'MediaPipe 確認肩、髖、膝、腳踝、腳跟與腳尖都在畫面內，<b>連續五幀穩定</b>才允許按快門。', ['MediaPipe Pose']],
-    ['擷取服裝色彩', 'OpenCV 取得上身、下身與手臂顏色——這就是「找顏色」任務與賓果格子的條件。依人體佔畫面比例分為矮、中、高三級，只影響顯示倍率。', ['OpenCV']],
+    ['掃描入場', '掃 QR Code、輸入名字，選<b>拍照生成角色</b>或<b>自訂角色</b>；拍照頁也能改<b>從相簿選照片</b>。按下拍照生成角色後才請求相機權限。', ['QR Code', 'HTTPS']],
+    ['站位檢查', 'MediaPipe 確認肩、髖、膝與雙腳都在畫面內，站穩幾幀後提示<b>可以拍了</b>。何時按快門由參與者決定，按下後倒數 3 秒。', ['MediaPipe Pose']],
+    ['擷取服裝色彩', 'OpenCV 取得上身、下身與手臂顏色，給模型參考，把衣服畫對。依人體佔畫面比例分為矮、中、高三級，只影響顯示倍率。', ['OpenCV']],
     ['生成＋人格問卷', '照片、特寫拼版、姿勢結構與風格參考表一起送進影像模型。等待的十幾秒，用來回答 3–5 題進場人格問卷。', ['Gemini 影像模型', 'DISC 四型']],
     ['結構驗證', '前景佔 5%–85%、不碰畫布邊界、最大連通區 ≥ 75%、底部左右都有內容；背面頭部膚色過多代表畫成側臉，丟掉重來。沒過就回傳<b>中文原因與重拍建議</b>。', ['本機驗證']],
-    ['切片進場', '切成頭、身、腿三張貼圖與一張整圖，角色走進大螢幕。實測成功率 <b>92%</b>，中位數 <b>16.9 秒</b>；自訂角色不呼叫外部 API，約 4 秒。', ['92%', '16.9 s', 'US$0.07 / 次']],
+    ['切片進場', '切成頭、身、腿三張貼圖與一張整圖，角色走進大螢幕。實測成功率 <b>92%</b>，中位數 <b>16.9 秒</b>；自訂角色不呼叫外部 API，約 4 秒。之後「找顏色」與賓果的衣服顏色，都看大螢幕上角色的衣服判定。', ['92%', '16.9 s', 'US$0.07 / 次']],
   ];
   const flow = $('#flow'), stepsEl = $('.flow__steps', flow), flowText = $('#flowText');
   STEPS.forEach(([t], i) => {
@@ -578,18 +716,20 @@
   setInterval(() => { if (turnAuto && !document.hidden) setView(view + 1); }, 2200);
 
   /* ================= 玩法卡片 ================= */
+  // 正面：這個玩法是什麼；背面：怎麼玩（三步）
   const GAMES = [
-    ['🔢', '配對任務', '每人一組 4 位數配對碼，每 100 秒換一次；輸入對方的碼，由對方確認。', '必須問對方號碼——把「搭訕」這個社交難題，降級成「請問你的號碼幾號」這個任務難題。', true],
-    ['🐯', '找同類／找不同類', '依進場人格類型配對：找同類、找不同類，或找某一類。', '類型從外表看不出來，只能當面問「你是哪一型？」實測發布後 11 秒就出現第一組。'],
-    ['🎨', '找顏色', '找身上有指定色系的人配對。', '逼人抬頭看真實的人，而不是看螢幕。'],
-    ['⭕', '湊人數集合', 'N 個人同時站進大螢幕上的集合圈，並停留 2 秒。', '必須喊人一起過去。'],
-    ['🎯', '人物賓果', '3×3 卡片，每格「找一個〔條件〕的人」，輸入對方配對碼才算。條件來自衣服顏色、人格類型與自我介紹。', '每一格都要開口問人；同一人在一張卡上原則上只能填一格。開放題中被提到最多次的環節。'],
-    ['❓', '即時問答', 'Kahoot 式作答，可設討論時間；正解在公布前不離開伺服器。', '討論時間讓人轉頭商量。'],
-    ['☁️', '文字雲', '全場回答同一題，大螢幕即時組成文字雲。', '作為轉場與共同話題。實測第二名是「我的人胖胖的」。'],
-    ['👋', '揮手', '對別人揮手，對方 8 秒內回揮才算數。', '要讓對方注意到你，才會回揮。'],
-    ['🪑', '話題桌', '兩人以上在同一張號碼牌桌停留 2 秒，手機跳出同一題聊天題。', '拿到同一題的人，自然會問「那你呢？」'],
-    ['💬', '私訊', '點附近的角色傳一句話，單則最多 60 字；紀錄只存在雙方手機，伺服器不保存。', '字數短，適合約對方「當面聊」。'],
-    ['📸', '集體大合照', '依當天互動計算熟悉度，越熟的人站得越近；QR Code 下載。', '把當天的互動變成「我們曾一起在場」的紀念物。'],
+    ['🔢', '配對任務', '交換一組號碼，就多認識一個人。', ['手機上有你的 4 位數配對碼，每 100 秒換一次', '問對方的號碼，輸入到手機', '對方按確認就算一次，配對滿任務要求的次數就得分'], true],
+    ['🐯', '找同類／找不同類', '依進場問卷的動物類型，找到跟你同類（或不同類）的人。', ['大螢幕發布任務：找同類、找不同類或找某一類', '類型看不出來，問問身邊的人「你是哪種動物？」', '找到了就輸入對方的配對碼，對方確認後算一次']],
+    ['🎨', '找顏色', '找角色穿著指定色系的人。', ['任務指定一個色系', '看大螢幕上誰的角色衣服是這個顏色（系統看角色、不看本人）', '找到本人，輸入他的配對碼、對方確認']],
+    ['⭕', '湊人數集合', '召集一群人，一起走進集合圈。', ['大螢幕出現集合圈與需要的人數', '呼朋引伴，把角色一起走進圈內', '人數到齊、一起停留 2 秒就完成']],
+    ['🔐', '兩人解碼', '一人拿符號、一人拿密碼本，只能用講的。', ['手機分你到符號隊或密碼本隊，去找同顏色的搭檔', '符號隊念出符號，密碼本隊查表報數字', '任一人輸入密碼就解開，再換新搭檔繼續']],
+    ['🎯', '人物賓果', '3×3 賓果卡，每一格都是一個要找的人。', ['每格寫著「找一個〔條件〕的人」，例如「會一種樂器」', '找到符合的人，輸入他的配對碼填格', '每格得分，連線、全滿再加分；一人原則上只填一格']],
+    ['❓', '快問快答', '全場同時用手機搶答。', ['題目出現在大螢幕上', '討論時間可以跟旁邊的人商量', '用手機作答，答對又快的人得分']],
+    ['☁️', '文字雲', '全場的答案即時浮上大螢幕。', ['主持人提出一個問題', '用手機輸入你的答案', '大家的答案組成文字雲，越多人寫的字越大']],
+    ['👋', '揮手', '一個不用說話的打招呼。', ['點手機畫面上附近的角色，送出揮手', '對方 8 秒內回揮就成功', '兩個人都會記進「今天遇見的人」']],
+    ['🪑', '話題桌：猜對方', '坐到同一桌，猜猜看對方會怎麼回答（共享辦公室場景）。', ['兩人以上停在同一張號碼牌桌，手機跳出同一題', '先選自己的答案，再幫被分到的人選一個', '兩邊都送出後揭曉，猜錯了正好問問為什麼']],
+    ['💬', '私訊', '點附近的角色，傳一句話給他。', ['點手機畫面上的角色', '傳一句話，最多 60 字', '可以封鎖、檢舉；伺服器不存檔，只在記憶體暫留 30 分鐘供檢舉']],
+    ['📸', '集體大合照', '活動最後，所有人一起入鏡。', ['主辦端按下「拍大合照」', '可原地拍，或依當天的互動排位，越熟的人站得越近', '掃大螢幕上的 QR Code 下載保存']],
   ];
   const cardsEl = $('#cards');
   GAMES.forEach(([ic, name, front, back, code]) => {
@@ -598,12 +738,12 @@
     c.tabIndex = 0;
     c.setAttribute('role', 'button');
     c.setAttribute('aria-pressed', 'false');
-    c.setAttribute('aria-label', `${name}：翻面看為什麼需要開口`);
+    c.setAttribute('aria-label', `${name}：翻面看怎麼玩`);
     c.innerHTML = `<div class="card__in">
       <div class="card__f"><span class="card__icon">${ic}</span><span class="card__name">${name}</span><p>${front}</p>
         ${code ? '<span class="code" aria-hidden="true"><span class="js-code">0000</span><small class="js-cd">100s</small></span>' : ''}
         <span class="card__flip">CLICK TO FLIP ↻</span></div>
-      <div class="card__b"><span class="k">為什麼需要開口？</span><p>${back}</p></div></div>`;
+      <div class="card__b"><span class="k">HOW TO PLAY</span><span class="card__how">${name}</span><ol>${back.map((t) => `<li>${t}</li>`).join('')}</ol></div></div>`;
     const flip = () => { const on = c.classList.toggle('is-flipped'); c.setAttribute('aria-pressed', on); };
     c.addEventListener('click', flip);
     c.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } });
@@ -648,7 +788,7 @@
     const [ic, name, desc] = TYPES[k];
     quizBody.innerHTML = `<div class="quiz__result" aria-live="polite">
       <img class="quiz__animal" src="img/badge-${ic}.webp" alt="${name}徽章" width="160" height="160"><p class="quiz__type">你是${name}型</p><p>${desc}</p>
-      <span class="quiz__bingo">🎯 賓果格子：找一個「${name}型」的人</span>
+      <span class="quiz__bingo">🎯 賓果格子可能出現：「進場問卷是${name}的人」</span>
       <p>這個標籤會顯示在手機頂欄名字旁——但大螢幕上看不到。想找到同類，只能轉頭問身邊的人。</p>
       <p><button class="btn" id="quizAgain">↺ 再測一次</button></p>
       <p class="quiz__fine">四型取自坊間常見的 DISC 分類通俗版；沒有明顯偏向者為變色龍。分類結果不宜解讀為心理測驗。</p></div>`;
