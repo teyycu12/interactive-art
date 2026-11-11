@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { listHistoricalAvatars } from '../server/devAvatars.js';
+import { listHistoricalAvatars, withAssetOutfit } from '../server/devAvatars.js';
 import { validateAvatarConfig } from '../shared/avatars.js';
 
 const HEX32 = (c) => c.repeat(32);
@@ -82,4 +82,42 @@ test('新生成的排前面', async () => {
 test('還沒有人生成過時回空陣列，而不是拋例外', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pf-dev-empty-'));
   assert.deepEqual(await listHistoricalAvatars(root), []);
+});
+
+test('有側面與背面就帶上，並標 turns（NPC 只挑會轉身的）', async () => {
+  const root = await fixture({
+    [HEX32('7')]: { parts: [...FOUR, 'side.webp', 'back.webp'], colors: GOOD_COLORS },
+    [HEX32('8')]: { parts: FOUR, colors: GOOD_COLORS },
+  });
+  const list = await listHistoricalAvatars(root);
+  const full = list.find((a) => a.assetId === HEX32('7'));
+  const flat = list.find((a) => a.assetId === HEX32('8'));
+  // 少了側面與背面，角色只有正面：不會轉身、走路不擺手（avatarSprite 只在有側面時載 arms.json）
+  assert.equal(full.turns, true);
+  assert.match(full.textures.side, /side\.webp$/);
+  assert.match(full.textures.back, /back\.webp$/);
+  assert.equal(flat.turns, false);
+  assert.equal(flat.textures.side, undefined);
+  // 帶上側面與背面之後，照樣過得了伺服器端的驗證
+  const res = validateAvatarConfig({ source: 'CV', textures: full.textures, fallbackColors: full.colors });
+  assert.equal(res.ok, true, res.reason);
+  assert.ok(res.value.textures.side && res.value.textures.back);
+});
+
+test('舊手機沒送衣服顏色清單：伺服器從資產目錄補上；有送就不動', async () => {
+  const id = HEX32('9');
+  const root = await fixture({
+    [id]: { parts: FOUR, colors: JSON.stringify({ ...JSON.parse(GOOD_COLORS), outfit: ['#52687C', '#8E775F', 'bad'] }) },
+  });
+  const textures = Object.fromEntries(['head', 'torso', 'legs', 'full'].map((p) => [p, `/assets/gen/${id}/${p}.webp`]));
+  const old = validateAvatarConfig({ source: 'CV', textures, fallbackColors: JSON.parse(GOOD_COLORS) }).value;
+  assert.deepEqual(withAssetOutfit(root, old, 4).outfitColors, ['#52687C', '#8E775F']);
+
+  const sent = { ...old, outfitColors: ['#FF0000'] };
+  assert.equal(withAssetOutfit(root, sent, 4), sent);
+  // 資產目錄不存在、或不是 CV 角色：原樣回傳，不擋進場
+  const gone = { ...old, textures: { ...textures, full: `/assets/gen/${HEX32('8')}/full.webp` } };
+  assert.equal(withAssetOutfit(root, gone, 4), gone);
+  const token = { source: 'TOKEN', accentColor: '#123456' };
+  assert.equal(withAssetOutfit(root, token, 4), token);
 });

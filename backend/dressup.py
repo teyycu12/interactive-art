@@ -227,6 +227,50 @@ def clean_request(selection, colors, base_id: Optional[str] = None) -> tuple:
     return sel, col
 
 
+def outfit_colors(sel: dict, col: dict) -> Dict[str, str]:
+    """換裝角色的 fallbackColors：直接用參與者選的顏色，不從圖上取樣。
+
+    顏色任務與賓果的「衣服顏色」判定讀的就是這裡的 torso / legs（shared/colorFamily.js）。
+    從圖上取樣會把接近膚色的衣服當成皮膚排掉（淺膚色配白上衣被判成橘色、
+    橘上衣被判成紅色，2026-11-04）；換裝時我們本來就知道每一件是什麼顏色。
+
+    上身：有外套看外套（袖子和兩側都是它）；下身那件蓋住上衣的（洋裝，manifest 的 hides）
+    就是下身的顏色。沒選的部位是素體原本那一件，顏色同樣由 col 決定（DEFAULT_COLORS 補齊）。
+    """
+    c = {**DEFAULT_COLORS, **{k: v for k, v in (col or {}).items() if isinstance(v, str)}}
+    parts = {p["id"]: p for p in load_manifest()["parts"]}
+    bottom = parts.get((sel or {}).get("bottom") or "")
+    if bottom and "top" in (bottom.get("hides") or []):
+        torso = c["bottom"]
+    elif (sel or {}).get("outer"):
+        torso = c["outer"]
+    else:
+        torso = c["top"]
+    return {k: v.upper() for k, v in
+            {"skin": c["skin"], "hair": c["hair"], "torso": torso, "legs": c["bottom"]}.items()}
+
+
+def outfit_palette(sel: dict, col: dict) -> List[str]:
+    """換裝角色身上看得到的衣服顏色（outfitColors，判定用）：外套、上衣、下身。
+    洋裝蓋住上衣與外套（manifest 的 hides），就只有洋裝。外套是敞開的，裡面的上衣也算。"""
+    c = {**DEFAULT_COLORS, **{k: v for k, v in (col or {}).items() if isinstance(v, str)}}
+    parts = {p["id"]: p for p in load_manifest()["parts"]}
+    bottom = parts.get((sel or {}).get("bottom") or "")
+    hidden = set((bottom or {}).get("hides") or [])
+    out = []
+    if (sel or {}).get("outer") and "outer" not in hidden:
+        out.append(c["outer"])
+    if "top" not in hidden:
+        out.append(c["top"])
+    out.append(c["bottom"])
+    seen, uniq = set(), []
+    for v in out:
+        if v.upper() not in seen:
+            seen.add(v.upper())
+            uniq.append(v.upper())
+    return uniq
+
+
 def _figure_rows(shape, figures) -> np.ndarray:
     """每一格在所屬那個人身上的高度位置（0 頭頂、1 腳底）；不在任何人身上是 -1。"""
     h, w = shape[:2]

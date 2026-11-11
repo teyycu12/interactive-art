@@ -19,6 +19,7 @@
  */
 
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 
 /** 與 shared/avatars.js 的 TEXTURE_URL_RE 同一組字元集：資產目錄名是 uuid4().hex */
@@ -32,6 +33,12 @@ const ASSET_ID_RE = /^[0-9a-f]{32}$/;
  * 匯入台上按了沒反應的那一格。
  */
 const REQUIRED_PARTS = ['head', 'torso', 'legs', 'full'];
+/**
+ * 有就帶上的側面與背面。少了它們角色只有正面：不會轉身、走路也不會擺手
+ * （shared/avatarSprite.js 只在有側面時才載入 arms.json、算擺手）。
+ * 原本這裡只列必要的四張，從這份清單上場的 NPC 與匯入台角色因此永遠面向鏡頭、手腳不動。
+ */
+const VIEW_PARTS = ['side', 'back'];
 
 const FALLBACK_KEYS = ['skin', 'hair', 'torso', 'legs'];
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
@@ -83,18 +90,33 @@ export async function listHistoricalAvatars(publicDir) {
     }
 
     let colors = null;
+    let outfit = [];
     try {
-      colors = validColors(JSON.parse(await fs.readFile(path.join(dir, 'colors.json'), 'utf8')));
+      const raw = JSON.parse(await fs.readFile(path.join(dir, 'colors.json'), 'utf8'));
+      colors = validColors(raw);
+      // 身上的衣服顏色清單（generation 與 scripts/asset_colors.py 寫在同一個檔）
+      if (Array.isArray(raw?.outfit)) outfit = raw.outfit.filter((h) => typeof h === 'string' && HEX_RE.test(h));
     } catch {
       colors = null;  // 沒跑過取樣腳本
+    }
+
+    const views = [];
+    for (const part of VIEW_PARTS) {
+      try {
+        await fs.stat(path.join(dir, `${part}.webp`));
+        views.push(part);
+      } catch { /* 改版前的資產沒有側面／背面 */ }
     }
 
     out.push({
       assetId: entry.name,
       textures: Object.fromEntries(
-        REQUIRED_PARTS.map((part) => [part, `/assets/gen/${entry.name}/${part}.webp`]),
+        [...REQUIRED_PARTS, ...views].map((part) => [part, `/assets/gen/${entry.name}/${part}.webp`]),
       ),
+      /** 側面與背面都有：會轉身、會擺手 */
+      turns: views.length === VIEW_PARTS.length,
       colors,
+      outfit,
       generatedAt: Math.max(...stats.map((s) => s.mtimeMs)),
     });
   }
@@ -102,4 +124,31 @@ export async function listHistoricalAvatars(publicDir) {
   // 新的排前面：開發時最想重看的通常是剛生成的那幾個
   out.sort((a, b) => b.generatedAt - a.generatedAt);
   return out;
+}
+
+/**
+ * CV 角色進場時沒帶 outfitColors，就從它的貼圖目錄的 colors.json 補上。
+ *
+ * 清單是 2026-11-04 才加的：在那之前就開著的手機分頁、存在 localStorage 的舊角色
+ * 都不會送它，賓果與顏色任務就退回只看上衣、褲子各一色 —— 穿牛仔外套戴米色圍巾的人
+ * 會被判成「只有橘黃」。生成服務寫的 colors.json 裡已經有清單，伺服器自己讀就不必
+ * 等每支手機重新整理。讀不到、或角色不是生成服務做的（貼圖不在 /assets/gen/）就原樣回傳。
+ *
+ * @param {string} publicDir 靜態站台根目錄
+ * @param {object} avatar validateAvatarConfig 驗過的 value
+ * @param {number} max 最多幾個（shared/avatars.js 的 OUTFIT_COLORS_MAX）
+ */
+export function withAssetOutfit(publicDir, avatar, max) {
+  if (avatar?.source !== 'CV' || avatar.outfitColors?.length) return avatar;
+  const id = /^\/assets\/gen\/([0-9a-f]{32})\//.exec(avatar.textures?.full ?? '')?.[1];
+  if (!id) return avatar;
+  try {
+    const raw = JSON.parse(fsSync.readFileSync(path.join(publicDir, 'assets', 'gen', id, 'colors.json'), 'utf8'));
+    const outfit = Array.isArray(raw?.outfit)
+      ? raw.outfit.filter((h) => typeof h === 'string' && HEX_RE.test(h)).slice(0, max)
+      : [];
+    return outfit.length ? { ...avatar, outfitColors: outfit } : avatar;
+  } catch {
+    return avatar;   // 舊資產沒有 colors.json：照舊只看上衣與褲子
+  }
 }

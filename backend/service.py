@@ -854,7 +854,7 @@ def _dressup_views(payload: Dict[str, Any], only_front: bool = False):
         buf = io.BytesIO()
         Image.fromarray(rgba, "RGBA").save(buf, "PNG")
         front = base64.b64encode(buf.getvalue()).decode("ascii")
-        return {"front": _remove_white_background(front, shield_mask=None)}, sel, None
+        return {"front": _remove_white_background(front, shield_mask=None)}, sel, col, None
     sheet, holes = dressup.compose(sel, col, base_id=base_id, with_holes=True)
     buf = io.BytesIO()
     sheet.save(buf, "PNG")
@@ -871,7 +871,7 @@ def _dressup_views(payload: Dict[str, Any], only_front: bool = False):
     except Exception as e:   # 手臂範圍只是加分：算不出來就讓大螢幕照舊從圖上找
         print(f"[vision] 換裝手臂範圍算不出來：{e!r}", file=sys.stderr)
         arms = None
-    return out, sel, arms
+    return out, sel, col, arms
 
 
 @app.route("/dressup/catalog", methods=["GET"])
@@ -890,7 +890,7 @@ def dressup_character():
     payload = request.get_json(silent=True) or {}
     started = time.perf_counter()
     try:
-        views, sel, arms = _dressup_views(payload, only_front=bool(payload.get("preview")))
+        views, sel, col, arms = _dressup_views(payload, only_front=bool(payload.get("preview")))
     except Exception as e:
         print(f"[vision] 換裝組圖失敗：{e!r}", file=sys.stderr)
         return jsonify({"ok": False, "error": "dressup_failed", "fallbackColors": DEFAULT_COLORS})
@@ -918,6 +918,13 @@ def dressup_character():
         for part in VIEW_PARTS:
             if views.get(part):
                 result["textures"][part] = save_view(add_transparent_margin(views[part]), ASSET_DIR, request_id, part)
+        # 衣服顏色直接用選的，不從圖上取樣：接近膚色的衣服會被當成皮膚排掉（見 dressup.outfit_colors）。
+        # colors.json 一起蓋掉，匯出與 NPC、匯入台讀到的才是同一組
+        import dressup
+        result["fallbackColors"] = dressup.outfit_colors(sel, col)
+        result["outfitColors"] = dressup.outfit_palette(sel, col)
+        with open(os.path.join(ASSET_DIR, request_id, "colors.json"), "w", encoding="utf-8") as f:
+            json.dump({**result["fallbackColors"], "outfit": result["outfitColors"]}, f, ensure_ascii=False)
         if arms:
             # 跟貼圖放在同一個資料夾；大螢幕從側面貼圖的網址推得到（不必改傳輸格式）
             with open(os.path.join(ASSET_DIR, request_id, "arms.json"), "w", encoding="utf-8") as f:

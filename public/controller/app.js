@@ -804,7 +804,10 @@ $('#btn-du-done').addEventListener('click', async () => {
     });
     const body = await res.json();
     if (!body?.ok) throw new Error(body?.error || 'dressup_failed');
-    config = { source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors };
+    config = {
+      source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors,
+      ...(Array.isArray(body.outfitColors) && { outfitColors: body.outfitColors }),
+    };
     entryRoute = 'dressup';
     try {
       localStorage.setItem(LS.avatar, JSON.stringify(config));
@@ -1321,6 +1324,8 @@ async function submitScanImage(image, source) {
   pendingScanConfig = {
     source: 'CV', textures: body.textures, fallbackColors: body.fallbackColors,
     ...(body.pixelParts && { pixelParts: body.pixelParts }),
+    // 身上的衣服顏色清單：賓果與顏色任務的判定依據（shared/colorFamily.js）
+    ...(Array.isArray(body.outfitColors) && { outfitColors: body.outfitColors }),
   };
   // previewPng 優先：確認頁把角色放進 74vh 的直式框，手機 dpr=3 時顯示高度
   // 接近 2000 實際像素，而 fullPng 是為場上渲染縮過的貼圖（1024），

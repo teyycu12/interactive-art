@@ -237,6 +237,7 @@ function spawn(avatar, name) {
         source: 'CV',
         textures: avatar.textures,
         fallbackColors: avatar.colors ?? neutralColors(avatar.assetId),
+        ...(avatar.outfit?.length && { outfitColors: avatar.outfit }),
       },
     });
   });

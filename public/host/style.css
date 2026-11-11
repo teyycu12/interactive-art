@@ -837,3 +837,22 @@ td.export { white-space: nowrap; }
 .sort-btn::after { content: ' ↕'; opacity: .35; }
 .sort-btn[data-dir="asc"]::after { content: ' ▲'; opacity: 1; }
 .sort-btn[data-dir="desc"]::after { content: ' ▼'; opacity: 1; }
+
+/* ── NPC 面板 ── */
+.npc-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.npc-row .field { flex: 1 1 140px; margin-bottom: 0; }
+.npc-looks-head { margin-top: 14px; }
+.npc-looks { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
+.npc-look {
+  position: relative; aspect-ratio: 3 / 4; padding: 2px; border-radius: 10px;
+  border: 2px solid var(--line); background: var(--sunk); cursor: pointer; overflow: hidden;
+}
+.npc-look img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; opacity: .45; }
+.npc-look.is-on { border-color: var(--ink); background: var(--surface); }
+.npc-look.is-on img { opacity: 1; }
+.npc-look.is-on::after {
+  content: '✓'; position: absolute; top: 2px; right: 4px;
+  font-size: 12px; font-weight: 800; color: var(--paper); background: var(--ink);
+  border-radius: 999px; width: 18px; height: 18px; display: grid; place-items: center;
+}
+.npc-look:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }

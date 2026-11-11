@@ -34,7 +34,7 @@ sys.path.insert(0, BACKEND)
 import console_encoding  # noqa: E402,F401  匯入即修正 Windows 主控台編碼
 from PIL import Image  # noqa: E402
 
-from slicer import normalize, sample_fallback_colors, slice_parts  # noqa: E402
+from slicer import normalize, sample_fallback_colors, sample_outfit_colors, slice_parts  # noqa: E402
 
 REPO_ROOT = os.path.dirname(BACKEND)
 ASSET_DIR = os.path.join(REPO_ROOT, "public", "assets", "gen")
@@ -43,11 +43,14 @@ ASSET_DIR = os.path.join(REPO_ROOT, "public", "assets", "gen")
 ASSET_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
-def sample_one(asset_dir: str) -> dict[str, str]:
+def sample_one(asset_dir: str) -> dict:
     """對單一資產目錄取樣。以 full.webp 為輸入，與生成當下的來源影像一致。"""
     with Image.open(os.path.join(asset_dir, "full.webp")) as raw:
         img = normalize(raw.convert("RGBA"))
-    return sample_fallback_colors(slice_parts(img))
+    parts = slice_parts(img)
+    colors = sample_fallback_colors(parts)
+    # 身上的衣服顏色清單（判定用，見 slicer.OUTFIT_TORSO_AREA）。與生成當下寫的格式相同
+    return {**colors, "outfit": sample_outfit_colors(parts, colors["skin"])}
 
 
 def main() -> int:

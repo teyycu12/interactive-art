@@ -430,3 +430,62 @@ def test_long_hair_is_not_part_of_the_arm(client, tmp_path):
     for view in ("front", "back"):
         for f, m in zip(arms[view], male[view]):
             assert top(f) >= top(m) - 2, f"{view} {f['name']} 從第 {top(f)} 列開始（男生 {top(m)}），包進了頭髮"
+
+
+# ── 衣服顏色（顏色任務、賓果的判定依據）2026-11-04 ────────────────────
+def _hexdist(a, b):
+    ra = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    rb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return sum((x - y) ** 2 for x, y in zip(ra, rb)) ** 0.5
+
+
+def test_outfit_colors_use_what_was_picked():
+    """換裝角色的 fallbackColors 直接用選的顏色：從圖上取樣會把接近膚色的衣服當成皮膚"""
+    col = {"top": "#e07a2f", "bottom": "#2f4c7a", "outer": "#4a6fa5", "skin": "#f6d3b3"}
+    plain = dressup.outfit_colors({}, col)
+    assert plain["torso"] == "#E07A2F" and plain["legs"] == "#2F4C7A" and plain["skin"] == "#F6D3B3"
+    # 外套蓋住上衣：上身看外套
+    assert dressup.outfit_colors({"outer": "top_hoodie"}, col)["torso"] == "#4A6FA5"
+    # 洋裝蓋住上衣（manifest 的 hides）：上身也是洋裝的顏色
+    dress = dressup.outfit_colors({"bottom": "bottom_dress", "outer": "top_hoodie"}, {"bottom": "#E9A9B8"})
+    assert dress["torso"] == "#E9A9B8" and dress["legs"] == "#E9A9B8"
+    # 沒選的顏色用素體原本的
+    assert dressup.outfit_colors({}, {})["torso"] == dressup.DEFAULT_COLORS["top"].upper()
+
+
+@pytest.mark.parametrize("skin, top", [
+    ("#F6D3B3", "#F4F1EA"),   # 淺膚色配白上衣：原本整件被當成皮膚，判成橘色
+    ("#D4936B", "#E07A2F"),   # 橘上衣：原本被當成皮膚，只剩陰影，判成紅色
+])
+def test_sampling_keeps_clothes_that_look_like_skin(skin, top):
+    """拍照生成的角色只能從圖上取色：先取「一定是衣服」的區塊，接近膚色的衣服不會被排掉"""
+    from slicer import decode_png, normalize, sample_fallback_colors, slice_parts
+    from avatar_quality import add_transparent_margin
+    views, sel, col, _ = service._dressup_views({"colors": {"skin": skin, "top": top}}, only_front=True)
+    colors = sample_fallback_colors(slice_parts(normalize(decode_png(add_transparent_margin(views["front"])))))
+    assert _hexdist(colors["torso"], top) < 40, colors
+
+
+def test_sampling_reads_shorts_close_to_skin():
+    """短褲顏色接近膚色、下面露出腿：取腰到大腿那一段，不被上衣下擺或腿帶走"""
+    from slicer import decode_png, normalize, sample_fallback_colors, slice_parts
+    from avatar_quality import add_transparent_margin
+    views, *_ = service._dressup_views(
+        {"selection": {"bottom": "bottom_shorts"}, "colors": {"top": "#2B2B30", "bottom": "#D9844A"}},
+        only_front=True)
+    colors = sample_fallback_colors(slice_parts(normalize(decode_png(add_transparent_margin(views["front"])))))
+    # 取到的可能是褲子陰影那一階（比選的暗）：看色相與飽和度是不是橘色，
+    # 而不是退回去取到皮膚或上衣下擺（深灰）
+    import colorsys
+    r, g, b = (int(colors["legs"][i:i + 2], 16) / 255 for i in (1, 3, 5))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    assert 15 <= h * 360 <= 40 and s > 0.4, colors
+    assert colors["legs"] != colors["skin"], colors
+
+
+def test_outfit_palette_lists_every_visible_garment():
+    """換裝角色的衣服顏色清單：外套與裡面的上衣都看得到；洋裝蓋住上衣與外套"""
+    col = {"top": "#f4f1ea", "outer": "#4a6fa5", "bottom": "#2b2b30"}
+    assert dressup.outfit_palette({"outer": "top_hoodie"}, col) == ["#4A6FA5", "#F4F1EA", "#2B2B30"]
+    assert dressup.outfit_palette({}, col) == ["#F4F1EA", "#2B2B30"]
+    assert dressup.outfit_palette({"bottom": "bottom_dress", "outer": "top_hoodie"}, {"bottom": "#E9A9B8"}) == ["#E9A9B8"]

@@ -105,6 +105,10 @@ function handle(msg, key) {
       }
       break;
 
+    case EV.HOST_NPC_STATE:
+      renderNpc(msg);
+      break;
+
     case EV.HOST_STATE:
       renderState(msg);
       // 場上的人或他們的標籤變了，可選的條件與「做不做得完」也跟著變
@@ -2968,3 +2972,75 @@ $('#btn-persona-reset').addEventListener('click', () => {
   personaSaving = false;
   ws?.send(JSON.stringify({ type: EV.HOST_SET_PERSONA_QUIZ, quiz: null }));
 });
+
+// ── NPC（server/npc.js）──────────────────────────────────────
+// 設定一改就送，伺服器回 HOST_NPC_STATE 才重畫：畫面永遠跟伺服器的實際設定一致
+/** @type {object|null} 伺服器最近一次的 NPC 狀態 */
+let npcInfo = null;
+let npcSendTimer = null;
+
+function sendNpc(patch) {
+  ws?.send(JSON.stringify({ type: EV.HOST_SET_NPC, ...patch }));
+}
+
+function renderNpc(info) {
+  npcInfo = info;
+  const s = info.settings;
+  const btn = $('#btn-npc-toggle');
+  btn.setAttribute('aria-pressed', String(s.enabled));
+  btn.textContent = s.enabled ? 'NPC：開' : 'NPC：關';
+  $('#npc-count').textContent = String(info.onStage);
+  // 正在打字的欄位不要被蓋掉
+  if (document.activeElement !== $('#npc-mode')) $('#npc-mode').value = s.mode;
+  const countIn = $('#npc-count-input');
+  const atLeast = s.mode === 'atLeast';
+  countIn.max = String(atLeast ? 99 : info.maxCount);
+  if (document.activeElement !== countIn) countIn.value = String(s.count);
+  $('#npc-count-label').textContent = atLeast ? '場上至少幾人（真人＋NPC）' : 'NPC 數量';
+  $('#npc-max-field').hidden = !atLeast;
+  $('#npc-max').max = String(info.maxCount);
+  if (document.activeElement !== $('#npc-max')) $('#npc-max').value = String(s.max);
+  $('#npc-status').textContent = !s.enabled
+    ? '目前關閉。'
+    : !info.library.length
+      ? '開了，但沒有可用的外型，場上不會出現 NPC。'
+      : `場上 ${info.onStage} 個，目標 ${info.target} 個（一次進退一個，從門口走進走出）。`;
+
+  const on = new Set(info.library);
+  $('#npc-looks-summary').textContent = info.available.length
+    ? `已選 ${on.size} 個${info.auto ? `（自動：最新的 ${info.autoCount} 個）` : ''}`
+    : '';
+  $('#btn-npc-auto').disabled = info.auto;
+  $('#npc-looks-empty').hidden = info.available.length > 0;
+  const box = $('#npc-looks');
+  box.replaceChildren(...info.available.map((a) => {
+    const b = Object.assign(document.createElement('button'), { type: 'button', className: 'npc-look' });
+    b.classList.toggle('is-on', on.has(a.assetId));
+    b.setAttribute('aria-pressed', String(on.has(a.assetId)));
+    b.title = on.has(a.assetId) ? '已選，點一下取消' : '點一下選取';
+    const img = Object.assign(document.createElement('img'), { alt: '', loading: 'lazy', src: a.full });
+    b.append(img);
+    b.addEventListener('click', () => {
+      const next = new Set(npcInfo.library);
+      if (next.has(a.assetId)) next.delete(a.assetId);
+      else if (next.size < npcInfo.maxLooks) next.add(a.assetId);
+      sendNpc({ library: [...next] });
+    });
+    return b;
+  }));
+}
+
+$('#btn-npc-toggle').addEventListener('click', () => {
+  if (npcInfo) sendNpc({ enabled: !npcInfo.settings.enabled });
+});
+$('#npc-mode').addEventListener('change', (e) => sendNpc({ mode: e.target.value }));
+for (const [id, key] of [['#npc-count-input', 'count'], ['#npc-max', 'max']]) {
+  $(id).addEventListener('input', (e) => {
+    clearTimeout(npcSendTimer);
+    const n = Number(e.target.value);
+    if (e.target.value === '' || !Number.isFinite(n)) return;
+    npcSendTimer = setTimeout(() => sendNpc({ [key]: n }), 300);
+  });
+}
+$('#btn-npc-auto').addEventListener('click', () => sendNpc({ library: null }));
+$('#btn-npc-rescan').addEventListener('click', () => sendNpc({ rescan: true }));

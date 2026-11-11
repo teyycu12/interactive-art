@@ -290,3 +290,33 @@ describe('CV avatar：三視圖的側面與背面（選用）', () => {
     assert.equal(validateAvatarConfig(cfg).ok, false);
   });
 });
+
+test('outfitColors：合法色碼留下、最多 OUTFIT_COLORS_MAX 個、不合法的丟掉', async () => {
+  const { validateAvatarConfig, OUTFIT_COLORS_MAX } = await import('../shared/avatars.js');
+  const id = 'a'.repeat(32);
+  const base = {
+    source: 'CV',
+    textures: Object.fromEntries(['head', 'torso', 'legs'].map((p) => [p, `/assets/gen/${id}/${p}.webp`])),
+    fallbackColors: { skin: '#D8B49A', hair: '#3A2E27', torso: '#B6A083', legs: '#998B67' },
+  };
+  const r = validateAvatarConfig({ ...base, outfitColors: ['#52687C', 'nope', '#B6A083', 3, '#111111', '#222222', '#333333'] });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.value.outfitColors, ['#52687C', '#B6A083', '#111111', '#222222'].slice(0, OUTFIT_COLORS_MAX));
+  // 沒有或全不合法：不帶這個欄位（舊版手機照樣進得了場）
+  assert.equal('outfitColors' in validateAvatarConfig(base).value, false);
+  assert.equal('outfitColors' in validateAvatarConfig({ ...base, outfitColors: ['x'] }).value, false);
+});
+
+test('身上的顏色看 outfitColors：外套的藍不在 torso 也算（牛仔外套＋米色圍巾）', async () => {
+  const { familiesOfAvatar, avatarMatchesFamily } = await import('../shared/colorFamily.js');
+  const avatar = {
+    source: 'CV',
+    fallbackColors: { skin: '#D5946C', hair: '#4A352A', torso: '#B59F83', legs: '#998A68' },
+    outfitColors: ['#8E775F', '#52687C'],
+  };
+  assert.ok(familiesOfAvatar(avatar).includes('BLUE'));
+  assert.ok(avatarMatchesFamily(avatar, 'BLUE'));
+  // 沒有清單的舊角色：照舊只看 torso / legs
+  const { outfitColors, ...old } = avatar;
+  assert.equal(avatarMatchesFamily(old, 'BLUE'), false);
+});
