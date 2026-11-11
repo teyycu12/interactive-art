@@ -247,7 +247,7 @@ PIXELAIR_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 
 ### 前端相依一律由 node_modules 直出，不走 CDN
 
-`nipplejs`、`roughjs`、`three` 都經由 `/vendor/*` 從本機 `node_modules` 提供
+`nipplejs`、`roughjs`、`three`、主辦端頁首的 Silkscreen 字型（`@fontsource/silkscreen`）都經由 `/vendor/*` 從本機 `node_modules` 提供
 （見 `server/httplayer.js` 的 `resolveStatic`）。**不要為了省事改用 CDN。**
 
 3D 整合初期曾把 three 指向 jsdelivr，本機開發完全正常 —— 因為開發機有網路。
@@ -255,9 +255,8 @@ PIXELAIR_IDLE_MOTION=wander npm start   # 改回原本的自由漫遊
 而這是**本機永遠測不出來的故障**。HTTPS 模式下（現場要用手機相機就必須開）
 還會多一層混合內容風險。
 
-`three/addons/` 是整棵目錄樹（OrbitControls 會再 import 同目錄的其他模組），
-因此 `/vendor/three-addons/` 走的是目錄映射而非逐檔白名單，該分支自己做了
-路徑穿越防護 —— 下方那套通用檢查只涵蓋 PUBLIC_DIR 與 shared，別誤以為它罩得到。
+3D 客廳（`RoomScene.js`）與它用的 `/vendor/three-addons/` 目錄映射、`public/assets/models/` 的家具模型
+已於 2026-11-11 移除（主辦端不要了）。three 本體仍在：大螢幕的角色圖層（`voxelCharacters.js`）用它。
 
 **這條規則涵蓋的不只函式庫本體，3D 家具模型也算。** 2026-08-28 修掉一個
 漏網之魚：`RoomScene.js` 的 `PROP_URLS` 六個 `.glb` 全部指向

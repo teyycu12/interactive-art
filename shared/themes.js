@@ -70,17 +70,6 @@ export const THEMES = [
       { glyph: '🚩', name: '旗子' },
     ],
   },
-  {
-    id: 'room',
-    label: '原始客廳（3D）',
-    occasion: '展演備援',
-    brief: '最初的 3D 客廳場景。需要 WebGL，較吃投影電腦效能。',
-    spots: {},
-    npcRoles: ['店員'],
-    // 不是正式場景：主辦端選不到、伺服器也不接受。程式碼保留給 ?scene=room 開發預覽，
-    // 以及 registry.js 的載入失敗備援 —— 所以不能直接從 THEMES 刪掉。
-    selectable: false,
-  },
 ];
 
 export const DEFAULT_THEME = 'kitchen';

@@ -121,7 +121,16 @@ input:focus, select:focus { outline: none; border-color: var(--ink); }
 }
 .setup-field .setup-optional { margin-top: 12px; font-size: 13px; font-weight: 600; color: var(--ink-soft); }
 .setup-field .hint.tiny { margin-top: 6px; }
-#setup-themes .theme-card[aria-checked="true"] { border-color: var(--teal); background: #EAF4F2; }
+#setup-themes .theme-card[aria-checked="true"] { border-color: var(--teal); background: #EAF4F2; box-shadow: 0 0 0 3px rgba(42, 140, 128, .25); }
+/* 場景三張並列（2026-11-11）：圖在上、名稱與說明在下；窄螢幕自動排成一欄 */
+.setup-card { max-width: 1040px; }
+.setup-field input { max-width: 520px; }
+#setup-themes { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+#setup-themes .theme-card { align-content: start; padding: 10px; border-width: 2px; border-radius: 14px; }
+.theme-thumb {
+  grid-column: 1 / -1; width: 100%; aspect-ratio: 2596 / 1460; object-fit: cover;
+  border-radius: 8px; margin-bottom: 8px; background: var(--sunk); image-rendering: auto;
+}
 #setup-themes .theme-card[aria-checked="true"] b::before { content: "✓ "; color: var(--teal-ink); }
 .setup-actions { display: flex; gap: 10px; }
 .setup-actions button { flex: 1; }
@@ -782,23 +791,61 @@ td.export { white-space: nowrap; }
 .bingo-picks li .none { color: var(--ink-soft); }
 
 /* ── 活動列表（起始畫面）────────────────────────────────── */
-#events { min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; }
+#events { min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 0 0 48px; }
 #events[hidden] { display: none; }
-.events-card { width: min(860px, 100%); }
-.events-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
-.events-head h1 { margin: 0 0 6px; }
-.events-head .lede { margin: 0; max-width: 620px; }
-/* 使用方法與規範：條列，粗體是重點詞 */
-.events-rules {
-  margin: 12px 0 0; padding: 12px 16px 12px 32px; max-width: 620px;
-  font-size: 14px; line-height: 1.7; color: var(--ink-soft);
-  background: var(--surface, #fff); border: 1px solid var(--line, #ddd); border-radius: 12px;
+.events-card { width: min(960px, 100%); padding: 0 16px; margin-top: 32px; }
+
+/* 頁首：深藍底，「PixelAir」用像素字，其餘不加裝飾；顏色取自三折頁。
+   像素字由本機 node_modules 直出（server/httplayer.js 的 /vendor/silkscreen-700.woff2），不走 Google Fonts：
+   展場斷網時字會整個換掉 */
+@font-face { font-family: "Silkscreen"; font-weight: 700; font-display: swap; src: url("/vendor/silkscreen-700.woff2") format("woff2"); }
+.events-hero {
+  width: 100%; padding: 20px 16px 18px; color: #fff;
+  background: #1E2235;
 }
-.events-rules b { color: var(--ink); }
+.hero-inner {
+  width: min(960px, 100%); margin: 0 auto; padding: 0 16px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px 24px; flex-wrap: wrap;
+}
+.hero-brand { display: flex; align-items: baseline; gap: 4px 16px; flex-wrap: wrap; }
+.hero-title {
+  margin: 0; line-height: 1.1; color: #FF8A5B;
+  font: 700 34px / 1.1 "Silkscreen", ui-monospace, Consolas, monospace; letter-spacing: .02em;
+}
+.hero-tagline { margin: 0; font-size: 16px; font-weight: 700; color: #fff; }
+.events-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.events-head h2 { margin: 0 0 4px; font-size: 24px; color: #1E2235; }
+.events-head .lede { margin: 0; max-width: 620px; color: var(--ink-soft); font-size: 14px; }
 .events-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
 .event-row {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-  padding: 16px 18px; border: 2px solid var(--line, #ddd); border-radius: 14px; background: var(--card, #fff);
+  padding: 14px 18px 14px 14px; border: 2px solid var(--line, #ddd); border-radius: 14px; background: var(--card, #fff);
+}
+.event-thumb {
+  width: 132px; aspect-ratio: 2596 / 1460; flex: none; border-radius: 8px;
+  object-fit: cover; background: var(--sunk); border: 1.5px solid var(--line);
+}
+
+/* 使用方式：三個步驟卡＋一行提醒，放在列表下面，第一眼先看到活動 */
+.events-howto { margin-top: 32px; }
+.events-howto h3 { margin: 0 0 12px; font-size: 20px; color: #1E2235; }
+.howto-steps {
+  list-style: none; margin: 0; padding: 0; counter-reset: step;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;
+}
+.howto-steps li {
+  counter-increment: step; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px;
+  padding: 12px 14px; border-radius: 12px; background: var(--surface); border: 1.5px solid var(--line);
+  font-size: 14px; line-height: 1.6; color: var(--ink-soft);
+}
+.howto-steps li::before {
+  content: counter(step); grid-row: span 2; width: 26px; height: 26px; border-radius: 7px;
+  display: grid; place-items: center; font-weight: 800; color: #fff; background: #1E2235;
+}
+.howto-steps b { color: var(--ink); }
+.howto-warn {
+  margin: 10px 0 0; padding: 10px 14px; border-radius: 10px; font-size: 14px;
+  background: #FBEBDD; color: var(--accent-ink); font-weight: 600;
 }
 .event-row.active { border-color: var(--ink, #333); box-shadow: 0 0 0 3px rgba(42, 140, 128, .18); }
 .event-main { flex: 1; min-width: 220px; }
@@ -841,8 +888,26 @@ td.export { white-space: nowrap; }
 /* ── NPC 面板 ── */
 .npc-row { display: flex; flex-wrap: wrap; gap: 12px; }
 .npc-row .field { flex: 1 1 140px; margin-bottom: 0; }
-.npc-looks-head { margin-top: 14px; }
-.npc-looks { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
+/* 整個面板是 <details>：標題列跟其他面板的 .panel-head 一樣，右邊多一個狀態與箭頭 */
+.npc-panel > summary { list-style: none; cursor: pointer; margin-bottom: 0; }
+.npc-panel > summary::-webkit-details-marker { display: none; }
+.npc-panel > summary h2 { margin-right: auto; }
+.npc-panel > summary::after { content: '▾'; font-size: 18px; color: var(--ink-soft); transition: transform .15s; }
+.npc-panel:not([open]) > summary::after { transform: rotate(-90deg); }
+.npc-panel[open] > summary { margin-bottom: 14px; }
+.npc-panel > summary:focus-visible { outline: 3px solid var(--ink); outline-offset: 4px; border-radius: 8px; }
+.npc-badge {
+  padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 800;
+  background: var(--sunk); color: var(--ink-soft);
+}
+.npc-badge.is-on { background: var(--ink); color: var(--paper, #fff); }
+.npc-row .field select, .npc-row .field input { min-height: 44px; }
+.npc-looks-head { margin-top: 18px; }
+.npc-actions { margin-top: 12px; }
+/* 固定組一排五個；「加入其他角色」數量多，照寬度自動排 */
+.npc-looks { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 12px; }
+#npc-looks { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+#npc-more .npc-looks { margin-top: 10px; }
 .npc-look {
   position: relative; aspect-ratio: 3 / 4; padding: 2px; border-radius: 10px;
   border: 2px solid var(--line); background: var(--sunk); cursor: pointer; overflow: hidden;
@@ -856,3 +921,12 @@ td.export { white-space: nowrap; }
   border-radius: 999px; width: 18px; height: 18px; display: grid; place-items: center;
 }
 .npc-look:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+/* 「加入其他角色」裡每格圖下面一顆「固定」 */
+.npc-look-cell { display: flex; flex-direction: column; gap: 4px; }
+.npc-pin {
+  width: 100%; min-height: 30px; padding: 2px 4px; border-radius: 8px; font-size: 12px; font-weight: 800; white-space: nowrap;
+  border: 2px solid var(--line); background: transparent; color: var(--ink-soft); cursor: pointer;
+}
+.npc-pin.is-on { background: var(--ink); border-color: var(--ink); color: var(--paper, #fff); }
+.npc-pin:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }

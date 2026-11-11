@@ -1689,6 +1689,33 @@ function handleHoopsShoot(ws, msg) {
 const NPC_LIBRARY_MAX = 24;
 /** 沒挑的時候，自動用最新生成的這麼多個 */
 const NPC_AUTO_LOOKS = 12;
+/**
+ * 固定的 NPC 外型（2026-11-11）：主辦端在 NPC 面板按「固定」的角色，整個資料夾複製到這裡。
+ * 這個資料夾**進版控**（生成的角色 public/assets/gen/ 不進），所以換一台電腦 NPC 長得一樣。
+ * 開機時複製回 public/assets/gen/<id>/ —— 貼圖網址只認那個路徑（shared/avatars.js 的 TEXTURE_URL_RE）。
+ * ⚠ repo 是公開的：拍照生成的角色是照著參與者的臉畫的，放進來等於公開。主辦端面板會標出來。
+ */
+// 環境變數只給測試用：e2e 要按「固定」，不能寫進專案裡真的固定組
+const NPC_FIXED_DIR = process.env.PIXELAIR_NPC_FIXED_DIR
+  ? path.resolve(process.env.PIXELAIR_NPC_FIXED_DIR)
+  : path.join(PUBLIC_DIR, 'assets', 'npc');
+const GEN_DIR = path.join(PUBLIC_DIR, 'assets', 'gen');
+/** 生成服務存原始照片的地方：有照片 = 這個角色是照著某個人的照片畫的 */
+const GEN_INPUTS_DIR = path.join(ROOT, 'backend', 'logs', 'inputs');
+const ASSET_ID = /^[0-9a-f]{32}$/;
+/** 固定組裡的角色 id */
+let npcFixedIds = new Set();
+/**
+ * 固定組在面板上的順序（`order.json`，跟固定組一起進 git）。主辦端排的，換電腦也是這個順序；
+ * 沒寫進去的（之後才固定的）排在後面
+ */
+const NPC_ORDER_FILE = () => path.join(NPC_FIXED_DIR, 'order.json');
+function npcFixedOrder() {
+  try {
+    const order = JSON.parse(fs.readFileSync(NPC_ORDER_FILE(), 'utf8'))?.order;
+    return Array.isArray(order) ? order.filter((id) => typeof id === 'string') : [];
+  } catch { return []; }
+}
 /** 磁碟上所有可以直接上場的角色（server/devAvatars.js），新的在前 */
 let npcAvailable = [];
 /** 主辦端挑的外型；null = 自動（最新的 NPC_AUTO_LOOKS 個） */
@@ -1706,8 +1733,57 @@ function npcColors(assetId) {
   return { skin: '#D8B49A', hair: '#3A2E27', torso: hex(h * 2654435761), legs: hex(h * 40503) };
 }
 
+/** 固定組的資料夾 → public/assets/gen/（缺的才複製）。回傳固定組的 id */
+function syncFixedNpcLooks() {
+  let names = [];
+  try { names = fs.readdirSync(NPC_FIXED_DIR).filter((n) => ASSET_ID.test(n)); } catch { /* 還沒固定過 */ }
+  for (const id of names) {
+    const dest = path.join(GEN_DIR, id);
+    if (fs.existsSync(path.join(dest, 'full.webp'))) continue;
+    try { fs.cpSync(path.join(NPC_FIXED_DIR, id), dest, { recursive: true }); } catch (err) {
+      console.warn(`[npc] 固定外型 ${id} 複製失敗：${err.message}`);
+    }
+  }
+  return new Set(names);
+}
+
+/** 把一個角色放進固定組，或拿出來。預覽大圖（preview.webp）用不到，不複製 */
+function setNpcFixed(assetId, on) {
+  if (typeof assetId !== 'string' || !ASSET_ID.test(assetId)) return;
+  const dir = path.join(NPC_FIXED_DIR, assetId);
+  try {
+    if (!on) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      writeNpcOrder(npcFixedOrder().filter((id) => id !== assetId));
+      return;
+    }
+    if (!npcAvailable.some((a) => a.assetId === assetId)) return;
+    fs.mkdirSync(dir, { recursive: true });
+    for (const f of fs.readdirSync(path.join(GEN_DIR, assetId))) {
+      if (f !== 'preview.webp') fs.copyFileSync(path.join(GEN_DIR, assetId, f), path.join(dir, f));
+    }
+    const order = npcFixedOrder();
+    if (!order.includes(assetId)) writeNpcOrder([...order, assetId]);
+  } catch (err) {
+    console.warn(`[npc] 固定外型 ${assetId} ${on ? '加入' : '移除'}失敗：${err.message}`);
+  }
+}
+
+function writeNpcOrder(order) {
+  try { fs.writeFileSync(NPC_ORDER_FILE(), `${JSON.stringify({ order }, null, 2)}
+`, 'utf8'); } catch { /* 略 */ }
+}
+
+const fromPhoto = (assetId) => ['webp', 'jpg', 'jpeg', 'png']
+  .some((ext) => fs.existsSync(path.join(GEN_INPUTS_DIR, `${assetId}.${ext}`)));
+
 function applyNpcLibrary() {
-  const pick = npcLibraryIds ?? npcAvailable.slice(0, NPC_AUTO_LOOKS).map((a) => a.assetId);
+  // 自動：有固定組就用固定組，沒有才用最新生成的那幾個
+  const auto = npcFixedIds.size
+    ? [...npcFixedIds]
+    : npcAvailable.slice(0, NPC_AUTO_LOOKS).map((a) => a.assetId);
+  // 有固定組時 NPC 只用固定組裡的（主辦端 2026-11-11：其他生成過的角色都不要出現）
+  const pick = (npcLibraryIds ?? auto).filter((id) => !npcFixedIds.size || npcFixedIds.has(id));
   const want = new Set(pick);
   const entries = [];
   for (const a of npcAvailable) {
@@ -1721,7 +1797,16 @@ function applyNpcLibrary() {
 /** 重新掃一次生成過的角色（開機、主辦端按「重新整理」）。掃不到不是錯，只是沒有外型可用 */
 async function refreshNpcLooks() {
   // 只收有側面與背面的：少了它們的舊角色只有正面，NPC 走來走去卻永遠面向鏡頭、手腳不動
+  npcFixedIds = syncFixedNpcLooks();
   try { npcAvailable = (await listHistoricalAvatars(PUBLIC_DIR)).filter((a) => a.turns); } catch { npcAvailable = []; }
+  // 固定組排最前面（面板只列前 60 個，固定的不能被擠掉），固定組裡照 order.json
+  const order = npcFixedOrder();
+  const rank = (a) => {
+    if (!npcFixedIds.has(a.assetId)) return Infinity;
+    const i = order.indexOf(a.assetId);
+    return i === -1 ? order.length : i;
+  };
+  npcAvailable.sort((a, b) => (rank(a) - rank(b)) || 0);
   applyNpcLibrary();
   pushNpcState();
 }
@@ -1733,8 +1818,11 @@ function npcState() {
     target: npcs.target(),
     auto: npcLibraryIds === null,
     library: npcs.library.map((e) => e.assetId),
-    available: npcAvailable.slice(0, 60).map((a) => ({ assetId: a.assetId, full: a.textures.full })),
-    autoCount: NPC_AUTO_LOOKS,
+    available: npcAvailable.slice(0, 60).map((a) => ({
+      assetId: a.assetId, full: a.textures.full, fixed: npcFixedIds.has(a.assetId), photo: fromPhoto(a.assetId),
+    })),
+    fixedCount: npcFixedIds.size,
+    autoCount: npcFixedIds.size || NPC_AUTO_LOOKS,
     maxLooks: NPC_LIBRARY_MAX,
     maxCount: NPC.maxCount,
   };
@@ -2234,7 +2322,11 @@ function handleHostMessage(ws, msg) {
       applyNpcLibrary();
       markDirty();
       events.log('npc_settings', { ...settings, looks: npcs.library.length });
-      if (msg.rescan === true) refreshNpcLooks();
+      // 固定組：{assetId, on}。改了就重掃一次（自動挑的外型可能跟著變）
+      if (msg.fixed && typeof msg.fixed === 'object') {
+        setNpcFixed(msg.fixed.assetId, msg.fixed.on === true);
+        refreshNpcLooks();
+      } else if (msg.rescan === true) refreshNpcLooks();
       else pushNpcState();
       break;
     }

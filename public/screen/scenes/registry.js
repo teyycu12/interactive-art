@@ -10,12 +10,6 @@ export const SCENES = Object.freeze({
   kitchen: { create: (host, props) => new KitchenScene(host, props) },
   office: { create: (host, props) => new OfficeScene(host, props) },
   gym: { create: (host, props) => new GymScene(host, props) },
-  room: { async create(host, props) {
-    const { RoomScene, populateProps } = await import('../3d/RoomScene.js');
-    const scene = new RoomScene(host);
-    await populateProps(scene, props);
-    return scene;
-  } },
 });
 
 /**
@@ -24,7 +18,7 @@ export const SCENES = Object.freeze({
  * 主辦端與大螢幕都要顯示問卷選項對應的地點名稱。名稱的唯一來源是各場景的
  * ITEMS —— 在別處再抄一份，換主題或改名時兩邊就會不一致，
  * 而症狀是「主辦端說湯鍋、大螢幕寫洗手台」且兩邊都不報錯。
- * 3D 客廳沒有自己的道具名稱，回傳道具 id 本身。
+ * 找不到名稱時回傳道具 id 本身。
  */
 const NAMED_SCENES = { kitchen: KitchenScene, office: OfficeScene, gym: GymScene };
 

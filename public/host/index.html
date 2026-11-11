@@ -13,7 +13,7 @@
 <section id="auth">
   <div class="auth-card">
     <h1>主辦端控制台</h1>
-    <p class="lede" id="key-label">請輸入伺服器終端機顯示的通行密鑰</p>
+    <p class="lede" id="key-label">請輸入通行密鑰</p>
     <!-- placeholder 不是 label（同控制器的 #name-input） -->
     <input id="key-input" maxlength="6" placeholder="6 碼" autocomplete="off"
            aria-labelledby="key-label"
@@ -27,24 +27,37 @@
 <!-- 主持人可以事先建好好幾場活動，每場的參與者、積分、節目單各自分開（server/sessions.js）。
      一次開啟一場：大螢幕與手機連的是開啟中的那場。登入後先停在這裡選要進哪一場。 -->
 <section id="events" hidden>
+  <!-- 頁首（2026-11-11）：名稱與中文全名。顏色取自三折頁，不加裝飾。內容跟下面的列表對齊同一個寬度 -->
+  <header class="events-hero" id="events-hero">
+    <div class="hero-inner">
+      <div class="hero-brand">
+        <h1 class="hero-title">PixelAir</h1>
+        <p class="hero-tagline">數位轉譯角色空間互動系統</p>
+      </div>
+    </div>
+  </header>
   <div class="events-card">
+
     <div class="events-head">
       <div>
-        <h1>活動列表</h1>
-        <p class="lede">每場活動的參與者、積分、節目單與題庫各自分開。一次只開啟一場，大螢幕與手機連的都是「開啟中」的那場。</p>
-        <!-- 使用方法與規範（2026-10-29）：主持人第一次用、或交接給別人時，看這幾行就知道怎麼操作 -->
-        <ul class="events-rules">
-          <li><b>事前準備</b>：按「＋ 創建活動」建好場次，進控制台排節目單、題庫、配分。建議在活動開始前、場上沒人時準備。</li>
-          <li><b>開始活動</b>：在要用的那場按「切換到這場」，再請參與者用手機掃 QR Code 進場。</li>
-          <li><b>中場休息</b>：按「暫停」，手機會回到進場畫面、暫時進不來，大螢幕顯示「活動暫停中」；按「重新開始」恢復，參與者再進場資料都還在。</li>
-          <li><b>切換場次會請出場上的人</b>：手機回到進場畫面，資料保留在原本那場；切回來後再進場就接得回來。活動進行中請不要切換。</li>
-          <li><b>刪除無法復原</b>：參與者、積分與紀錄會一起刪掉。開啟中的那場不能刪，要刪請先切到別場。</li>
-        </ul>
+        <h2>活動列表</h2>
+        <p class="lede">每場活動的資料各自分開，同一時間只會開啟一場。</p>
       </div>
       <button class="btn-primary" id="btn-new-event">＋ 創建活動</button>
     </div>
     <ul class="events-list" id="events-list"></ul>
     <p class="err" id="events-err" hidden role="alert" aria-live="assertive"></p>
+
+    <!-- 使用方式：主持人第一次用、或交接給別人時，看這裡就知道怎麼操作 -->
+    <section class="events-howto" aria-labelledby="howto-title">
+      <h3 id="howto-title">使用方式</h3>
+      <ol class="howto-steps">
+        <li><b>準備</b><span>按「＋ 創建活動」，進控制台排好節目單和題目。</span></li>
+        <li><b>開始</b><span>按「切換到這場」，請大家用手機掃 QR Code 進場。</span></li>
+        <li><b>休息</b><span>按「暫停」手機暫時進不來；按「重新開始」恢復，資料都在。</span></li>
+      </ol>
+      <p class="howto-warn">活動中不要切換場次，場上的人會被請出去。刪除活動後無法復原。</p>
+    </section>
   </div>
 </section>
 
@@ -55,7 +68,7 @@
   <div class="setup-card">
     <p class="setup-step">開始之前</p>
     <h1>活動設定</h1>
-    <p class="lede">選一個場景、為這場活動命名，就能進入活動編排。</p>
+    <p class="lede">選場景、取名字，就能開始安排活動。</p>
 
     <fieldset class="setup-field">
       <legend>1. 選擇場景</legend>
@@ -67,7 +80,7 @@
       <input id="event-name" autocomplete="off" placeholder="例：新生交流夜">
       <label for="event-subtitle" class="setup-optional">副標（選填）</label>
       <input id="event-subtitle" autocomplete="off" placeholder="例：一起煮點好時光">
-      <p class="hint tiny">名稱會顯示在大螢幕左上角，取代原本的場景名。</p>
+      <p class="hint tiny">名稱會顯示在大螢幕左上角。</p>
     </div>
 
     <p class="err" id="setup-err" hidden role="alert" aria-live="assertive"></p>
@@ -133,8 +146,7 @@
       <div id="mission-idle">
         <details class="howto">
           <summary>玩法說明</summary>
-          <p>可以同時進行好幾個任務（最多 4 個，同樣的任務不能重複開），例如「找一個人配對」和「找紅色的人配對」一起開。
-            參與者一次配對會同時算進符合的任務。問答、文字雲、賓果則一次只能進行一個。</p>
+          <p>任務最多可以同時開 4 個（同一種不能重複）。問答、文字雲、賓果一次只能進行一個。</p>
         </details>
         <label class="field">
           <span>任務類型</span>
@@ -151,12 +163,12 @@
           <span>依哪一題分類</span>
           <select id="mission-trait-key" aria-label="依哪一題分類"></select>
           <select id="mission-trait-value" aria-label="要找哪一類" hidden></select>
-          <p class="hint" id="mission-trait-empty" hidden>場上還沒有人答過進場問卷或轉場問卷，先問一題才有類型可以選。</p>
+          <p class="hint" id="mission-trait-empty" hidden>還沒有人答過問卷，暫時沒有類型可以選。</p>
         </div>
         <div class="field" id="mission-spot-field" hidden>
           <span>集合地點</span>
           <select id="mission-spot" aria-label="集合地點"></select>
-          <p class="hint" id="mission-spot-empty" hidden>目前的場景沒有集合點，換一個有號碼牌桌的場景。</p>
+          <p class="hint" id="mission-spot-empty" hidden>這個場景沒有集合點，請換一個場景。</p>
           <span>每組人數</span>
           <input type="number" id="mission-team" min="2" max="8" value="3">
         </div>
@@ -194,13 +206,11 @@
       <h2>文字雲</h2>
 
       <div id="wordcloud-idle">
-        <p class="hint">出一題，參與者用手機輸入短答（每人最多 3 個、每個 12 字內），
-          大螢幕會即時長成文字雲，越多人寫的詞越大。</p>
+        <p class="hint">出一題，大家用手機回答，答案會在大螢幕組成文字雲，越多人寫的詞越大。</p>
         <details class="howto">
           <summary>玩法說明</summary>
-          <p>答案會投在大螢幕上，但不顯示是誰寫的。不雅字會自動擋下；
-            看到不適合的詞，在進行中的清單按「隱藏」，就會立刻從大螢幕拿掉。</p>
-          <p>文字雲本身不需要開口 —— 收題後挑幾個詞問「誰寫了這個？」，讓它變成話題。</p>
+          <p>不會顯示是誰寫的，髒話會自動擋掉。</p>
+          <p>收題後挑幾個詞問「這是誰寫的？」，就能帶出話題。</p>
         </details>
         <label class="field">
           <span>題目</span>
@@ -219,7 +229,7 @@
         </div>
         <ul class="wc-words" id="wordcloud-words"></ul>
         <p class="hint tiny" id="wordcloud-empty">還沒有人送出答案。</p>
-        <p class="hint tiny">看到不適合的詞，按「隱藏」會立刻從大螢幕拿掉（本題內同一個詞不會再出現）。</p>
+        <p class="hint tiny">不適合的詞按「隱藏」，大螢幕會馬上拿掉。</p>
         <button class="btn-danger" id="btn-wordcloud-close">收題</button>
       </div>
       <!-- 收題後結果還留在大螢幕上：按這顆收起（沒按的話 60 秒後自動收起，開始問答或賓果時也會收起） -->
@@ -232,19 +242,17 @@
     <div class="panel act-panel" data-act="bingo" hidden>
       <h2>人物賓果</h2>
       <div id="bingo-idle">
-        <p class="hint">每人一張 3×3 卡，每格「找一個〔條件〕的人」，輸入對方的配對碼才算。
-          開局先在手機上勾幾句自我介紹（最多 30 秒），卡上就會出現「會一種樂器的人」這種格子。
-          <b>同一個人只能填一格</b>（不到 10 人時可以填兩格以上），連成一線有加分。</p>
+        <p class="hint">每人一張 3×3 卡，每格要找一個符合條件的人，輸入對方的配對碼才算。
+          <b>同一個人只能填一格</b>，連成一線有加分。</p>
         <details class="howto">
           <summary>玩法說明</summary>
-          <p>條件取自：開局勾的自我介紹、衣服顏色、進場問卷的類型，每類最多 3 格。
-            自我介紹與類型只有本人知道，所以一定得開口問；條件湊不滿時會補「找一個你還不認識的人」。</p>
-          <p>被找的人如果也需要找對方（對方剛好符合他卡上的某一格），手機會問他要不要順便填上，不必再輸碼。</p>
+          <p>開始時大家先在手機勾幾句自我介紹，卡上的條件就來自這些，加上衣服顏色和問卷類型。</p>
+          <p>被找到的人如果也符合自己卡上的格子，可以順便互相填上。</p>
         </details>
         <details class="persona-editor" id="bingo-facts-editor">
           <summary>自我介紹題 <span class="badge-off" id="bingo-facts-default">依場景預設</span></summary>
-          <p class="hint">一行一題，每輪隨機挑 6 題問。寫成「會游泳」這樣的描述，卡上會變成「會游泳的人」。
-            不要問感情、宗教、政治、收入、健康、住址 —— 這些會被大聲問出來。</p>
+          <p class="hint">一行一題，寫成「會游泳」，卡上會顯示「會游泳的人」。
+            避免感情、宗教、政治、收入、健康等私人話題。</p>
           <textarea id="bingo-facts" rows="8" spellcheck="false"></textarea>
           <div class="row-actions">
             <button class="btn-ghost" id="btn-bingo-facts-reset">恢復預設</button>
@@ -304,7 +312,7 @@
           <input type="file" id="bank-file" accept=".txt,text/plain" hidden>
         </div>
         <ul class="bank" id="quiz-bank"></ul>
-        <p class="hint tiny" id="bank-empty">題庫是空的。在下面「新增題目」打好題目存進來，或匯入 .txt。</p>
+        <p class="hint tiny" id="bank-empty">題庫是空的。從下面「新增題目」加入，或匯入 .txt。</p>
         <div class="bank-msg" id="bank-msg" hidden role="status"></div>
 
         <div class="row-actions quiz-run-row">
@@ -318,7 +326,7 @@
           <div class="quiz-editor">
           <label class="field">
             <span>題目</span>
-            <input id="q-text" maxlength="80" placeholder="例：Boids 演算法的三條規則不包含哪一項？"
+            <input id="q-text" maxlength="80" placeholder="例：今天的活動在哪一棟大樓？"
                    autocomplete="off">
           </label>
 
@@ -356,7 +364,7 @@
             <button class="btn-link" id="btn-quiz-edit-cancel">取消編輯</button>
           </p>
         </details>
-        <p class="hint tiny">題庫存在這台電腦的瀏覽器裡。可以下載成 .txt 用記事本修改、換電腦，再匯入回來。</p>
+        <p class="hint tiny">題庫只存在這台電腦。換電腦時先「下載 .txt」，再到另一台「匯入 .txt」。</p>
       </div>
 
       <div id="quiz-live" hidden>
@@ -391,7 +399,7 @@
       <div class="panel live-control">
         <h2>現在進行中</h2>
         <ul class="lc-list" id="lc-list"></ul>
-        <p class="hint" id="lc-empty">目前沒有進行中的活動。按節目單的「下一項」，或到「活動選單」開始一個玩法。</p>
+        <p class="hint" id="lc-empty">目前沒有進行中的活動。</p>
       </div>
 
       <!-- 節目單：活動前排好流程，現場只按「下一項」。存在這台電腦的瀏覽器裡（同題庫）。 -->
@@ -400,8 +408,7 @@
           <h2>節目單 <span class="count" id="rs-count">0</span></h2>
           <button class="btn-link" id="btn-rs-reset" hidden>從頭開始</button>
         </div>
-        <p class="hint" id="rs-empty">活動前先把流程排好，現場只要按「下一項」。
-          在下面各玩法按「加入節目單」，就會照目前的設定排進來。</p>
+        <p class="hint" id="rs-empty">先排好流程，現場只要按「下一項」。到「活動選單」的各玩法按「加入節目單」就會排進來。</p>
         <ol class="rs-list" id="rs-list"></ol>
         <button class="btn-primary" id="btn-rs-next" hidden>下一項</button>
         <!-- 配方範本（shared/recipes.js）：依目前場景預排好的一整套流程，套用後可再增刪 -->
@@ -421,7 +428,7 @@
         <div class="panel-head">
           <h2>配分 <span class="badge-off" id="scoring-default">預設</span></h2>
         </div>
-        <p class="hint">改了之後，之後得的分照新的算；已經得到的分數不變。</p>
+        <p class="hint">修改後只影響之後的得分。</p>
         <div class="scoring-grid" id="scoring-fields"></div>
         <div class="row-actions">
           <button class="btn-ghost" id="btn-scoring-reset">恢復預設</button>
@@ -437,19 +444,18 @@
          -->
     <div class="panel reports-panel" id="reports-panel" hidden>
       <h2>被檢舉的訊息 <span class="count warn" id="reports-count">0</span></h2>
-      <p class="hint">參與者在手機上檢舉了收到的私訊。確認後可以把寄件人移出現場；處理完按「已處理」。</p>
+      <p class="hint">有人檢舉收到的私訊。必要時可以請寄件人離場，處理完按「已處理」。</p>
       <ul class="reports" id="reports-list"></ul>
     </div>
     <!-- 進場問卷：參與者在生成角色時作答，依結果分成五型，作為分組依據（shared/persona.js） -->
     <div class="panel persona-panel">
       <h2>進場問卷・團隊分類</h2>
-      <p class="hint">參與者在生成角色時順便作答，依結果分成五型。下方名冊的「標籤」欄看得到每個人是哪一型。</p>
+      <p class="hint">大家進場時作答，分成五種類型。下方名單的「標籤」欄可以看到每個人的類型。</p>
       <ul class="persona-spread" id="persona-spread"></ul>
       <p class="hint tiny" id="persona-unanswered"></p>
       <details class="persona-editor" id="persona-editor">
         <summary>修改題目 <span class="badge-off" id="persona-default-badge">預設題目</span></summary>
-        <p class="hint tiny">3～5 題，每題 2～4 個選項，每個選項對應一種類型（變色龍不是選項：沒有明顯偏向的人會被判為變色龍）。
-          儲存後，之後進場的人看到新題目；已經答過的人結果不變。</p>
+        <p class="hint tiny">3～5 題，每題 2～4 個選項，每個選項對應一種類型。修改後只影響之後進場的人。</p>
         <div id="persona-questions"></div>
         <div class="row-actions persona-actions">
           <button class="btn-ghost" id="btn-persona-add-q">＋ 新增題目</button>
@@ -460,12 +466,15 @@
       </details>
     </div>
     <!-- NPC（server/npc.js）：人少時讓場面不要太乾。不佔參與者名額，不參加任務、配對、賓果 -->
-    <div class="panel npc-panel">
-      <div class="panel-head">
+    <details class="panel npc-panel" id="npc-panel">
+      <summary class="panel-head npc-summary">
         <h2>NPC <span class="count" id="npc-count">0</span></h2>
-        <button class="btn-ghost" id="btn-npc-toggle" aria-pressed="false">NPC：關</button>
+        <span class="npc-badge" id="npc-badge">關</span>
+      </summary>
+      <p class="hint">電腦控制的角色，人少時幫忙熱場。不佔名額，也不參加任務和計分。</p>
+      <div class="row-actions">
+        <button class="btn-primary" id="btn-npc-toggle" aria-pressed="false">開啟 NPC</button>
       </div>
-      <p class="hint">電腦控制的角色，會在場上走走停停、對經過的人揮手。不佔參與者名額，也不參加任務、配對、賓果和排行。</p>
       <div class="npc-row">
         <label class="field">
           <span>數量怎麼算</span>
@@ -484,17 +493,22 @@
         </label>
       </div>
       <p class="hint tiny" id="npc-status"></p>
-      <div class="panel-head npc-looks-head">
-        <b>外型 <span class="hint tiny" id="npc-looks-summary"></span></b>
-        <span class="row-actions">
-          <button class="btn-ghost" id="btn-npc-auto">用最新的</button>
-          <button class="btn-ghost" id="btn-npc-rescan">重新整理</button>
-        </span>
-      </div>
-      <p class="hint tiny">從生成過的角色裡挑，點一下選取或取消。</p>
+
+      <h3 class="field-label npc-looks-head">外型 <em id="npc-looks-summary"></em></h3>
+      <p class="hint tiny">點圖選擇要上場的角色；「自動」＝全部輪流上場。</p>
       <div class="npc-looks" id="npc-looks"></div>
-      <p class="hint" id="npc-looks-empty" hidden>還沒有生成過的角色。先用手機拍照或換裝做出幾個角色，再按「重新整理」。</p>
-    </div>
+      <p class="hint" id="npc-looks-empty" hidden>還沒有角色。到下面「加入其他角色」挑幾個按「加入」。</p>
+      <div class="row-actions npc-actions">
+        <button class="btn-ghost" id="btn-npc-auto">自動</button>
+        <button class="btn-ghost" id="btn-npc-rescan">重新整理</button>
+      </div>
+
+      <details class="persona-editor" id="npc-more">
+        <summary>加入其他角色 <em class="hint tiny" id="npc-more-count"></em></summary>
+        <p class="hint tiny">這些多半是參與者拍照生成的角色，<b>加入後會公開保存</b>，請先取得本人同意。</p>
+        <div class="npc-looks" id="npc-more-looks"></div>
+      </details>
+    </details>
 
     <div class="panel">
       <h2>參與者 <span class="count" id="people-count">0</span></h2>
@@ -511,8 +525,7 @@
 
     <div class="panel">
       <h2>活動報告</h2>
-      <p class="hint">整場的參與者與每一輪活動的結果，下載成 Excel 打得開的 CSV。
-        資料存在伺服器上，隨時下載都是最新的。</p>
+      <p class="hint">下載這場的參與者名單和活動紀錄，用 Excel 就能開。</p>
       <p class="report-summary" id="report-summary" hidden></p>
       <div class="row-actions">
         <button class="btn-ghost" id="btn-report-people">下載參與者名單</button>
@@ -535,8 +548,7 @@
     <!-- 大螢幕除錯：給技術人員現場排查用。打開後全場都看得到，所以不跟側欄的大螢幕按鈕放在一起 -->
     <div class="panel">
       <h2>大螢幕除錯</h2>
-      <p class="hint">在大螢幕上疊出 α 權重、避障半徑與速度向量，排查角色移動問題用。
-        <b>打開後全場都看得到</b>，查完記得關掉。伺服器重開後會自動關閉。</p>
+      <p class="hint">角色移動不正常時，給技術人員檢查用。<b>打開後全場都看得到</b>，用完記得關掉。</p>
       <button class="btn-ghost" id="btn-screen-debug" aria-pressed="false">除錯視圖：關</button>
       <p class="err" id="debug-err" hidden></p>
     </div>
@@ -555,7 +567,7 @@
       </div>
 
       <div id="sys-pane-people" role="tabpanel" aria-labelledby="sys-tab-people">
-        <p class="hint">這場活動進過場的每一個角色，含已經離開的。點表頭可以排序，再點一次反過來。</p>
+        <p class="hint">這場活動進過場的所有人（含已離開的）。點表頭可以排序。</p>
         <div class="table-wrap">
           <table id="people-all-table">
             <thead>
@@ -574,8 +586,7 @@
       </div>
 
       <div id="sys-pane-history" role="tabpanel" aria-labelledby="sys-tab-history" hidden>
-        <p class="hint">給技術人員排查用：掃描照片、生成結果、模型與花費。每一次生成都算一筆（含重拍、生成後沒用到的），
-          全伺服器共用、不分活動。只列最近 30 筆。</p>
+        <p class="hint">每一次拍照生成角色的紀錄（含重拍），不分場次，只列最近 30 筆。</p>
         <p class="hint tiny" id="history-summary">讀取中…</p>
         <div class="table-wrap" id="history-wrap">
           <table id="history-table">
@@ -585,8 +596,7 @@
             <tbody id="history-body"></tbody>
           </table>
         </div>
-        <p class="hint tiny">匯出：「圖檔」是去背的角色 PNG；「角色檔」是 .persona.json，內含貼圖與外觀設定，
-          換一台電腦可用 <code>python scripts/import_character.py 檔名</code> 還原，再到人物匯入台放上場。</p>
+        <p class="hint tiny">「圖檔」下載角色圖片；「角色檔」可以把角色帶到別台電腦。</p>
         <p class="err" id="history-err" hidden></p>
         <p class="hint" id="history-empty" hidden>還沒有生成紀錄。</p>
       </div>
@@ -615,7 +625,7 @@
         <button class="btn-ghost" id="btn-screen-ranks" aria-pressed="true"
                 title="大螢幕右下角的積分排行。不想讓全場比分數時可以隱藏">排行榜：顯示</button>
         <button class="btn-ghost sp-sound" id="btn-screen-sound" aria-pressed="true" aria-label="大螢幕音效：開"
-                title="配對成功、出題與公布答案時，大螢幕發出短音效。投影那台電腦要先點一下大螢幕畫面才會出聲（瀏覽器的規定）">🔊</button>
+                title="大螢幕音效。投影的電腦要先點一下大螢幕畫面才會出聲">🔊</button>
       </div>
       <!-- 大合照：原本在「場景與合照」分頁。所有角色轉向鏡頭，就定位後自動拍。
            站位兩種：原地（記錄大家自己走出來的樣子）或依互動排位（server/photoLayout.js） -->
@@ -626,7 +636,7 @@
           <option value="affinity">依互動排位：互動最多的人在中間，熟的人圍著往外站</option>
         </select>
       </label>
-      <button class="btn-primary sp-photo" id="btn-photo" title="另外合成一張全員到齊的合照（含今天參與過、已經離開的人），大螢幕畫面不受影響。拍完自動下載">拍大合照</button>
+      <button class="btn-primary sp-photo" id="btn-photo" title="合成一張所有人的合照（含已離開的人），拍完自動下載">拍大合照</button>
       <p class="hint tiny" id="photo-status" hidden></p>
       <div id="photo-result" hidden>
         <img id="photo-img" alt="大合照">
@@ -648,7 +658,7 @@
     <div class="panel">
       <h2>積分排行</h2>
       <ol class="ranks" id="ranks"></ol>
-      <p class="hint tiny" id="ranks-empty">還沒有人得分。任務與問答都會計分。</p>
+      <p class="hint tiny" id="ranks-empty">還沒有人得分。</p>
     </div>
 
     <div class="panel">

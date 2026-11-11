@@ -1,7 +1,7 @@
 # 場景銜接約束（Scene Contract）
 
 > 對象：要替 PixelAir 互動層做**新場景**的專案。
-> 參考實作：本專案的 `public/screen/screen.js` ＋ `public/screen/3d/RoomScene.js`。
+> 參考實作：本專案的 `public/screen/screen.js` ＋ `public/screen/scenes/`（像素場景）。
 > 版本：2026-09-17，對應 `shared/protocol.js` 現行協定。
 
 ## 0. 這份文件管什麼、不管什麼
@@ -34,7 +34,7 @@ Babylon、Pixi、純 Canvas、預渲染影片當底圖都可以；光線、鏡�
 
    | 路徑 | 內容 |
    |---|---|
-   | `public/screen/` | 替換 `3d/RoomScene.js`；必要時調整 `screen.js` 與場景銜接的部分 |
+   | `public/screen/` | 在 `scenes/` 新增場景並註冊到 `scenes/registry.js`；必要時調整 `screen.js` 與場景銜接的部分 |
    | `public/assets/` | 場景的模型、貼圖、字型（不可放進 `assets/gen/`，那是角色貼圖落地處） |
    | `shared/scene.js` | 佈局改變時才動（C6），改完須通過 `test/scene.test.mjs` |
    | `package.json` | 新增前端相依時；該相依須經 `server/httplayer.js` 由 `node_modules` 直出（C9） |
@@ -318,7 +318,7 @@ scaleAt(logicX, logicY, worldHeight)
 
 ## 4. 最小銜接介面（建議）
 
-場景專案只要提供符合下列形狀的物件，就能直接替換參考實作的 `RoomScene`：
+場景專案只要提供符合下列形狀的物件，就能註冊成一個新場景（參考 `scenes/KitchenScene.js`）：
 
 ```js
 export class MyScene {
@@ -371,5 +371,5 @@ export async function populateProps(scene, props) {}
 | `shared/character.js` | 角色／名牌／表情／離線標記繪製（C5） |
 | `server/state.js` | `snapshot()`、`roster()` 的欄位定義（C3） |
 | `public/screen/screen.js` | 大螢幕參考實作 |
-| `public/screen/3d/RoomScene.js` | 場景參考實作 |
+| `public/screen/scenes/` | 場景參考實作（像素場景） |
 | `docs/notes/GENERATION.md` | 切片、貼圖、手機同步的踩坑紀錄 |

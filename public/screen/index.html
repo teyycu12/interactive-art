@@ -8,9 +8,8 @@
   :root { --paper: #FAF8F5; --ink: #2F2A26; --soft: #7A716A; --line: #D8D0C6; }
   * { box-sizing: border-box; }
   /* body 不可有不透明背景。此處原為 #d9cfc0，配上 #bg3d 的 z-index:-1，
-     3D 場景會被壓在 body 背景之後 —— 整個大螢幕只剩一片米色，
-     而且不會有任何 console 錯誤。背景色現由 RoomScene 的
-     scene.background 決定。 */
+     場景會被壓在 body 背景之後 —— 整個大螢幕只剩一片米色，
+     而且不會有任何 console 錯誤。背景由 #bg3d 裡的場景畫。 */
   html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
   body {
     color: var(--ink);
@@ -315,8 +314,7 @@
      而本機開發永遠測不出這個狀況（見 §6 風險 1，同 nipplejs 的處置）。 -->
 <script type="importmap">
 { "imports": {
-  "three": "/vendor/three.module.js",
-  "three/addons/": "/vendor/three-addons/"
+  "three": "/vendor/three.module.js"
 }}
 </script>
 </head>

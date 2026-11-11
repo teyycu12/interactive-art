@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { Stage } from '../server/state.js';
 import { NpcDirector, regionOf, route, NPC_NICKS } from '../server/npc.js';
 import { NPC, MAX_AGENTS, MAX_SPEED, IDLE_MOTION } from '../server/config.js';
-import { OBSTACLES, obstacleDistance } from '../shared/scene.js';
+import { OBSTACLES, ENTRANCE, obstacleDistance } from '../shared/scene.js';
 import { THEME_MAP } from '../shared/themes.js';
 
 const TICK = 1 / 30;
@@ -131,6 +131,27 @@ describe('NPC 數量', () => {
     assert.equal(stage.npcs.size, 4, '先開始走，不是立刻刪掉');
     run(stage, npcs, (NPC.spawnGapMs / 1000) * 4 + NPC.leaveTimeoutMs / 1000 + 2);
     assert.equal(stage.npcs.size, 0);
+  });
+
+  test('從正門口的地墊進場，走回地墊才消失（不是走不到、逾時被刪掉）', () => {
+    const { stage, npcs } = setup({ count: 3 });
+    run(stage, npcs, 0.1);
+    const first = [...stage.npcs.values()][0];
+    assert.ok(Math.abs(first.x - ENTRANCE.x) <= ENTRANCE.w / 2 && Math.abs(first.y - ENTRANCE.y) < 1, `${first.x},${first.y}`);
+    run(stage, npcs, 90);
+    npcs.configure({ enabled: false });
+    const last = new Map();
+    const t0 = clock;
+    let goneAt = null;
+    run(stage, npcs, NPC.leaveTimeoutMs / 1000 + 10, () => {
+      for (const n of stage.npcs.values()) last.set(n.id, { x: n.x, y: n.y });
+      if (goneAt === null && stage.npcs.size === 0) goneAt = clock;
+    });
+    assert.equal(stage.npcs.size, 0);
+    for (const [id, p] of last) {
+      assert.ok(Math.hypot(p.x - ENTRANCE.x, p.y - ENTRANCE.y) < ENTRANCE.w, `${id} 在 ${Math.round(p.x)},${Math.round(p.y)} 消失`);
+    }
+    assert.ok(goneAt - t0 < NPC.leaveTimeoutMs, '應該是走到了才消失，不是逾時');
   });
 
   test('外型被移出庫：用著它的 NPC 退場，換別的外型補上', () => {

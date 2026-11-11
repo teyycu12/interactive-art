@@ -14,10 +14,10 @@ test('every theme in the host menu has a scene, and every scene is selectable', 
   assert.ok(isThemeId(DEFAULT_THEME));
 });
 
-// 3D 客廳不是正式場景：主辦端選單與伺服器驗證都要排除它，但大螢幕仍載得起來（開發預覽、備援）
-test('3D 客廳不開放選擇，預設主題一定選得到', () => {
+// 3D 客廳 2026-11-11 整個拿掉：舊快照或舊連結帶著 room 時要被拒絕，不能載到不存在的場景
+test('3D 客廳已移除，預設主題一定選得到', () => {
   assert.equal(isSelectableTheme('room'), false);
-  assert.ok(isThemeId('room'), '程式碼仍要能載入（?scene=room 與載入失敗備援）');
+  assert.equal(isThemeId('room'), false);
   assert.ok(!SELECTABLE_THEMES.some((t) => t.id === 'room'));
   assert.ok(isSelectableTheme(DEFAULT_THEME));
   for (const id of ['kitchen', 'office', 'gym']) assert.ok(isSelectableTheme(id), id);

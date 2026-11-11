@@ -46,6 +46,8 @@ try { fs.rmSync(STATE_FILE, { force: true }); } catch { /* 略 */ }
 try { fs.rmSync(SESSIONS_DIR, { recursive: true, force: true }); } catch { /* 略 */ }
 // 事件紀錄同理：寫到暫存目錄，不能落進專案的 data/events/ 混進真正的場次
 const EVENTS_DIR = path.join(os.tmpdir(), `pixelair-e2e-events-${process.pid}`);
+// NPC 固定組同理：按「固定」會複製角色資料夾，不能寫進專案的 public/assets/npc/
+const NPC_FIXED_DIR = path.join(os.tmpdir(), `pixelair-e2e-npc-${process.pid}`);
 const EVENTS_FILE = path.join(EVENTS_DIR, 'e2e.jsonl');
 const readEvents = () => {
   try {
@@ -70,7 +72,7 @@ async function launch() {
     // （合照合成會上傳到公開圖床），而且結果不該取決於那個服務有沒有開
     env: {
       ...process.env, PORT: String(PORT), PIXELAIR_STATE_FILE: STATE_FILE, VISION_PORT: '9',
-      PIXELAIR_SESSION: 'e2e', PIXELAIR_EVENTS_DIR: EVENTS_DIR,
+      PIXELAIR_SESSION: 'e2e', PIXELAIR_EVENTS_DIR: EVENTS_DIR, PIXELAIR_NPC_FIXED_DIR: NPC_FIXED_DIR,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -107,6 +109,7 @@ function finish() {
   try { fs.rmSync(STATE_FILE, { force: true }); } catch { /* 略 */ }
   try { fs.rmSync(SESSIONS_DIR, { recursive: true, force: true }); } catch { /* 略 */ }
   try { fs.rmSync(EVENTS_DIR, { recursive: true, force: true }); } catch { /* 略 */ }
+  try { fs.rmSync(NPC_FIXED_DIR, { recursive: true, force: true }); } catch { /* 略 */ }
   console.log(`\n${pass}/${pass + fail} 通過`);
   process.exit(fail ? 1 : 0);
 }
@@ -493,7 +496,7 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
   const rejectsBeforeRoom = hostRejects.length;
   host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'room' }));
   await sleep(200);
-  check('不開放的 3D 客廳被拒絕', hostRejects.length === rejectsBeforeRoom + 1 && !screenThemes.includes('room'));
+  check('已移除的 3D 客廳被拒絕', hostRejects.length === rejectsBeforeRoom + 1 && !screenThemes.includes('room'));
 
   host.send(JSON.stringify({ type: 'HOST_SET_THEME', theme: 'office' }));
   await sleep(300);
@@ -1788,17 +1791,16 @@ check('正常的 /shared/ 資源仍可載入',
 // 整個 3D 背景會消失 —— 而那是本機永遠測不出來的故障。
 check('three 由本機直出，不依賴 CDN',
   (await httpStatus('/vendor/three.module.js')) === 200);
-check('three addons 由本機直出',
-  (await httpStatus('/vendor/three-addons/controls/OrbitControls.js')) === 200);
+check('主辦端頁首的像素字由本機直出、主辦端不連 Google Fonts',
+  (await httpStatus('/vendor/silkscreen-700.woff2')) === 200
+    && !(await httpBody('/host/')).includes('fonts.googleapis'));
 check('大螢幕頁面不含任何 CDN 連結',
   !(await httpBody('/screen/')).includes('jsdelivr'));
 
-// addons 走目錄映射而非逐檔白名單，穿越防護是該分支自己做的，
-// 不受下方那套只涵蓋 PUBLIC_DIR 與 shared 的通用檢查保護。
-check('addons 路徑穿越讀不到 .env',
-  (await httpStatus('/vendor/three-addons/..%2f..%2f..%2f.env')) === 403);
-check('addons 路徑穿越讀不到活動快照',
-  (await httpStatus('/vendor/three-addons/..%2f..%2f..%2f..%2fdata%2fstate.json')) !== 200);
+// three addons 的目錄映射跟著 3D 客廳拿掉了（2026-11-11）：那條路不能再讀到任何東西
+check('已移除的 three addons 路徑讀不到東西',
+  (await httpStatus('/vendor/three-addons/controls/OrbitControls.js')) !== 200
+    && (await httpStatus('/vendor/three-addons/..%2f..%2f..%2f.env')) !== 200);
 
 // 曾可用一個壞掉的網址讓整個 Gateway 行程結束
 check('無效百分比編碼回 400 而非終止行程',
@@ -2287,6 +2289,27 @@ check('引導端點擋下過大的影格',
   await sleep(300);
   check('外型回到自動：用最新生成的那幾個', states.at(-1).auto === true
     && states.at(-1).library.length === Math.min(states.at(-1).autoCount, states.at(-1).available.length));
+
+  // 固定組：按「固定」把角色資料夾複製進固定組，「自動」改用固定組；不認得的 id 不理
+  nHost.send(JSON.stringify({ type: 'HOST_SET_NPC', fixed: { assetId: '../../etc', on: true } }));
+  await sleep(300);
+  check('固定組不收不認得的 id', states.at(-1).fixedCount === 0 && !fs.existsSync(path.join(NPC_FIXED_DIR, 'etc')));
+  const firstLook = states.at(-1).available[0]?.assetId;
+  if (firstLook) {
+    nHost.send(JSON.stringify({ type: 'HOST_SET_NPC', fixed: { assetId: firstLook, on: true } }));
+    await sleep(500);
+    const fx = states.at(-1);
+    check('按「固定」之後角色進固定組，自動只用固定組',
+      fx.fixedCount === 1 && fx.available.find((a) => a.assetId === firstLook)?.fixed === true
+        && fs.existsSync(path.join(NPC_FIXED_DIR, firstLook, 'full.webp'))
+        && fx.auto && fx.library.length === 1 && fx.library[0] === firstLook,
+      JSON.stringify({ fixedCount: fx.fixedCount, library: fx.library }));
+    nHost.send(JSON.stringify({ type: 'HOST_SET_NPC', fixed: { assetId: firstLook, on: false } }));
+    await sleep(500);
+    check('取消固定之後資料夾移走，自動回到最新生成的',
+      states.at(-1).fixedCount === 0 && !fs.existsSync(path.join(NPC_FIXED_DIR, firstLook))
+        && states.at(-1).library.length === Math.min(states.at(-1).autoCount, states.at(-1).available.length));
+  }
 
   if (states.at(-1).library.length) {
     const watch = new WebSocket(URL);

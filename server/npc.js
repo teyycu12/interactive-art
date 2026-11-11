@@ -14,13 +14,13 @@
  *
  * ── 數量 ──
  * 固定 N 個，或「場上至少 N 人」（N − 真人數，真人越多 NPC 越少）。一次只進退一個；
- * 退場的 NPC 走到最近的門口才消失，不憑空不見。進場也從門口走進來。
+ * 退場的 NPC 走回正門口的地墊（shared/scene.js 的 ENTRANCE）才消失，不憑空不見；進場也從那裡走進來。
  *
  * ⚠ 這個模組只讀 stage.agents（看真人在哪），從不寫它。
  */
 
 import { STAGE } from '../shared/protocol.js';
-import { PROPS, ZONES, DOORWAYS, OBSTACLES, obstacleDistance, nearestOnObstacle } from '../shared/scene.js';
+import { PROPS, ZONES, DOORWAYS, OBSTACLES, ENTRANCE, obstacleDistance, nearestOnObstacle } from '../shared/scene.js';
 import { THEME_MAP } from '../shared/themes.js';
 import { MAX_SPEED, MAX_AGENTS, NPC } from './config.js';
 import { obstacleAvoidance } from './boids.js';
@@ -164,29 +164,22 @@ export class NpcDirector {
     const nicks = new Set([...this.stage.npcs.values()].map((n) => n.npc.nick));
     const nick = NPC_NICKS.find((n) => !nicks.has(n)) ?? NPC_NICKS[this.serial % NPC_NICKS.length];
     const role = this.serial++;
-    const door = DOORS[Math.floor(this.rng() * DOORS.length)];
-    const y = door.y + (this.rng() - 0.5) * 60;
+    // 從正門口的地墊走進來（2026-11-11 前是隨機一扇側門，看起來像從牆裡冒出來）
+    const x = ENTRANCE.x + (this.rng() - 0.5) * ENTRANCE.w * 0.6;
     const meta = {
       assetId: look.assetId, nick, role, since: now,
       state: 'dwell', until: now, path: [], progressAt: now, progressDist: Infinity, greetAt: -Infinity, near: new Set(),
     };
-    this.stage.addNpc({ name: this.nameOf(meta), avatar: look.avatar, x: door.x, y, npc: meta });
+    this.stage.addNpc({ name: this.nameOf(meta), avatar: look.avatar, x, y: ENTRANCE.y, npc: meta });
     this.lastChangeAt = now;
   }
 
   leave(npc, now) {
     const m = npc.npc;
-    const region = regionOf(npc.x);
     m.state = 'leave';
     m.leaveBy = now + NPC.leaveTimeoutMs;
-    if (region === 'in') {
-      const door = DOORS.reduce((a, b) => (Math.hypot(b.x - npc.x, b.y - npc.y) < Math.hypot(a.x - npc.x, a.y - npc.y) ? b : a));
-      m.path = [{ x: door.x - door.out * DOOR_SIDE, y: door.y }, { x: door.x, y: door.y }];
-    } else {
-      // 在室外：走回自己這一側的門口就好，不必先穿過門
-      const door = DOORS.find((d) => d.side === region);
-      m.path = [{ x: door.x + door.out * DOOR_SIDE, y: door.y }, { x: door.x, y: door.y }];
-    }
+    // 走回正門口的地墊才消失；在室外的先穿過側門回到室內（route 會加上門口的點）
+    m.path = route(npc, { x: ENTRANCE.x + (this.rng() - 0.5) * ENTRANCE.w * 0.6, y: ENTRANCE.y });
     m.progressAt = now;
     m.progressDist = Infinity;
     this.lastChangeAt = now;

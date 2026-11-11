@@ -55,7 +55,7 @@ const MIME = {
   '.png': 'image/png',
   '.webp': 'image/webp',
   '.ico': 'image/x-icon',
-  '.glb': 'model/gltf-binary',
+  '.woff2': 'font/woff2',
 };
 
 /** 值得壓縮的文字類型。圖片本來就壓過，再 gzip 只是白燒 CPU */
@@ -117,15 +117,9 @@ function resolveStatic(urlPath) {
   if (urlPath === '/vendor/three.module.js') {
     return path.join(ROOT, 'node_modules', 'three', 'build', 'three.module.js');
   }
-  // three 的 addons 是整棵目錄樹：OrbitControls 等檔案會再 import 同目錄下的
-  // 其他模組，逐檔白名單列不完，因此整個目錄開放。但也因為是目錄映射，
-  // 這裡必須自己做穿越防護 —— 下方那套通用檢查只涵蓋 PUBLIC_DIR 與 shared。
-  if (urlPath.startsWith('/vendor/three-addons/')) {
-    if (urlPath.includes('\0')) return null;
-    const addonsRoot = path.join(ROOT, 'node_modules', 'three', 'examples', 'jsm');
-    const target = path.resolve(addonsRoot, urlPath.slice('/vendor/three-addons/'.length));
-    if (target !== addonsRoot && !target.startsWith(addonsRoot + path.sep)) return null;
-    return target;
+  // 主辦端頁首「PixelAir」的像素字（Silkscreen 粗體）。只開這一個檔
+  if (urlPath === '/vendor/silkscreen-700.woff2') {
+    return path.join(ROOT, 'node_modules', '@fontsource', 'silkscreen', 'files', 'silkscreen-latin-700-normal.woff2');
   }
 
   // NUL 位元組會讓底層 fs 呼叫的路徑在 C 層被截斷，先擋掉

@@ -183,6 +183,17 @@ describe('暗色不誤判成紅（2026-10-19 試玩）', () => {
     assert.equal(familyOf('#1F3A93'), 'BLUE');
   });
 
+  test('米色、卡其、象牙白看起來是白，不是橘黃（2026-11-11）', () => {
+    assert.equal(familyOf('#F1EAD7'), 'MONO');   // 米白褲
+    assert.equal(familyOf('#D8CDAD'), 'MONO');   // 卡其褲
+    assert.equal(familyOf('#DCC5A5'), 'MONO');
+    // 駝色、芥末黃、淺橘、淡黃上衣仍是橘黃
+    assert.equal(familyOf('#C7A885'), 'ORANGE');
+    assert.equal(familyOf('#E9C46A'), 'ORANGE');
+    assert.equal(familyOf('#F4A261'), 'ORANGE');
+    assert.equal(familyOf('#F7E07A'), 'ORANGE');
+  });
+
   test('一般亮度的顏色不受影響', () => {
     assert.equal(familyOf('#E63946'), 'RED');
     assert.equal(familyOf('#C7A885'), 'ORANGE');

@@ -8,7 +8,6 @@
 | `kitchen` | 日常廚房（預設） | 交誼・破冰 | `KitchenScene` + `kitchenArt.js` |
 | `office` | 共享辦公室 | 企業團建・新生訓練 | `OfficeScene` + `officeArt.js` |
 | `gym` | 活力體育館 | 運動會・體育課・社團迎新 | `GymScene` + `gymArt.js` |
-| `room` | 原始客廳（3D） | **不開放選擇**（`selectable: false`）：只供 `?scene=room` 預覽與載入失敗備援 | `../3d/RoomScene.js` |
 
 ## 切換流程
 

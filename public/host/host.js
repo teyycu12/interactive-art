@@ -18,6 +18,11 @@ import { WORDCLOUD } from '/shared/wordcloud.js';
 import { quizBankToText, parseQuizText, sameQuiz } from '/shared/quizText.js';
 import { SCORING_FIELDS, SCORING_MAX } from '/shared/scoring.js';
 import { recipesForTheme } from '/shared/recipes.js';
+import { ZONES, propsForTheme } from '/shared/scene.js';
+import { KitchenScene } from '/screen/scenes/KitchenScene.js';
+import { OfficeScene } from '/screen/scenes/OfficeScene.js';
+import { GymScene } from '/screen/scenes/GymScene.js';
+import { ROOM_W, ROOM_H } from '/screen/scenes/pixelKit.js';
 
 const $ = (s) => document.querySelector(s);
 const SS_KEY = 'pixelair.hostKey';
@@ -394,6 +399,37 @@ let setupTheme = null;
 $('#event-name').maxLength = EVENT_INFO.maxNameLength;
 $('#event-subtitle').maxLength = EVENT_INFO.maxSubtitleLength;
 
+/**
+ * 場景縮圖：用大螢幕同一支畫圖函式畫出房間與家具（不含角色），縮成卡片大小。
+ * 不用存好的截圖 —— 場景改了，縮圖自動跟著變。只畫一次，之後重開設定頁直接沿用。
+ */
+const SCENE_ART = { kitchen: KitchenScene, office: OfficeScene, gym: GymScene };
+const sceneThumbs = new Map();
+function sceneThumb(themeId) {
+  const Scene = SCENE_ART[themeId];
+  if (!Scene) return null;
+  if (!sceneThumbs.has(themeId)) {
+    const big = document.createElement('canvas');
+    big.width = ROOM_W; big.height = ROOM_H;
+    const c = big.getContext('2d');
+    try {
+      Scene.paintRoom(c, ZONES);
+      for (const p of [...propsForTheme(themeId)].sort((a, b) => a.y - b.y)) {
+        Scene.paintProp(c, p, (Scene.ITEMS[p.id] ?? Scene.FALLBACK)[0], -1, true);
+      }
+    } catch (err) {
+      console.warn('場景縮圖畫不出來', themeId, err);
+      return null;
+    }
+    const w = 640;
+    const small = document.createElement('canvas');
+    small.width = w; small.height = Math.round((w * ROOM_H) / ROOM_W);
+    small.getContext('2d').drawImage(big, 0, 0, small.width, small.height);
+    sceneThumbs.set(themeId, small.toDataURL('image/png'));
+  }
+  return sceneThumbs.get(themeId);
+}
+
 function buildThemes() {
   const list = $('#setup-themes');
   list.replaceChildren();
@@ -404,6 +440,8 @@ function buildThemes() {
     b.dataset.theme = t.id;
     b.setAttribute('role', 'radio');
     b.setAttribute('aria-checked', 'false');
+    const src = sceneThumb(t.id);
+    if (src) b.append(Object.assign(document.createElement('img'), { className: 'theme-thumb', src, alt: '' }));
     const name = document.createElement('b'); name.textContent = t.label;
     const occasion = document.createElement('span'); occasion.className = 'theme-occasion'; occasion.textContent = t.occasion;
     const brief = document.createElement('span'); brief.className = 'theme-brief'; brief.textContent = t.brief;
@@ -512,6 +550,7 @@ function showEvents() {
   renderEventsList();
 }
 
+
 /** 進開啟中那一場的控制台（還沒命名的話先進設定頁） */
 function enterActiveEvent() {
   eventChosen = true;
@@ -527,13 +566,16 @@ function renderEventsList() {
   if (!eventsState) return;
   const rows = eventsState.events;
   if (!rows.length) {
-    list.replaceChildren(Object.assign(document.createElement('li'), { className: 'events-empty', textContent: '還沒有活動，按右上角「＋ 創建活動」開始。' }));
+    list.replaceChildren(Object.assign(document.createElement('li'), { className: 'events-empty', textContent: '還沒有活動，按「＋ 創建活動」開始。' }));
     return;
   }
   list.replaceChildren(...rows.map((e) => {
     const active = e.id === eventsState.activeId;
     const li = document.createElement('li');
     li.className = `event-row${active ? ' active' : ''}`;
+    const thumbSrc = sceneThumb(e.theme);
+    const thumb = Object.assign(document.createElement(thumbSrc ? 'img' : 'div'), { className: 'event-thumb', alt: '' });
+    if (thumbSrc) thumb.src = thumbSrc;
     const main = document.createElement('div');
     main.className = 'event-main';
     const name = Object.assign(document.createElement('p'), { className: 'event-name', textContent: e.name || '（未命名活動）' });
@@ -562,7 +604,7 @@ function renderEventsList() {
       actions.append(btn('btn-primary', '切換到這場', () => openEvent(e)));
       actions.append(btn('btn-ghost', '刪除', () => deleteEvent(e)));
     }
-    li.append(main, actions);
+    li.append(thumb, main, actions);
     return li;
   }));
 }
@@ -1472,7 +1514,7 @@ function renderHistorySummary(summary) {
   showHistoryCount();
   const el = $('#history-summary');
   if (!summary || typeof summary.run_count !== 'number') {
-    el.textContent = '暫時讀不到生成服務的統計。';
+    el.textContent = '暫時讀不到生成紀錄。';
     return;
   }
   const cost = Number(summary.cost_usd || 0).toFixed(4);
@@ -2988,7 +3030,8 @@ function renderNpc(info) {
   const s = info.settings;
   const btn = $('#btn-npc-toggle');
   btn.setAttribute('aria-pressed', String(s.enabled));
-  btn.textContent = s.enabled ? 'NPC：開' : 'NPC：關';
+  btn.textContent = s.enabled ? '關閉 NPC' : '開啟 NPC';
+  btn.className = s.enabled ? 'btn-ghost' : 'btn-primary';
   $('#npc-count').textContent = String(info.onStage);
   // 正在打字的欄位不要被蓋掉
   if (document.activeElement !== $('#npc-mode')) $('#npc-mode').value = s.mode;
@@ -3000,35 +3043,67 @@ function renderNpc(info) {
   $('#npc-max-field').hidden = !atLeast;
   $('#npc-max').max = String(info.maxCount);
   if (document.activeElement !== $('#npc-max')) $('#npc-max').value = String(s.max);
+  $('#npc-badge').textContent = s.enabled ? `開・場上 ${info.onStage}` : '關';
+  $('#npc-badge').classList.toggle('is-on', s.enabled);
   $('#npc-status').textContent = !s.enabled
     ? '目前關閉。'
     : !info.library.length
-      ? '開了，但沒有可用的外型，場上不會出現 NPC。'
-      : `場上 ${info.onStage} 個，目標 ${info.target} 個（一次進退一個，從門口走進走出）。`;
+      ? '還沒有選角色，場上不會出現 NPC。'
+      : `場上 ${info.onStage} 個（目標 ${info.target} 個）。`;
 
+  // 外型分兩區：固定組（可選取）與其他生成過的角色（只能加進固定組）。NPC 只用固定組
   const on = new Set(info.library);
-  $('#npc-looks-summary').textContent = info.available.length
-    ? `已選 ${on.size} 個${info.auto ? `（自動：最新的 ${info.autoCount} 個）` : ''}`
+  const fixed = info.available.filter((a) => a.fixed);
+  const others = info.available.filter((a) => !a.fixed);
+  $('#npc-looks-summary').textContent = info.fixedCount
+    ? `共 ${info.fixedCount} 個，上場 ${on.size} 個${info.auto ? '（自動）' : ''}`
     : '';
   $('#btn-npc-auto').disabled = info.auto;
-  $('#npc-looks-empty').hidden = info.available.length > 0;
-  const box = $('#npc-looks');
-  box.replaceChildren(...info.available.map((a) => {
-    const b = Object.assign(document.createElement('button'), { type: 'button', className: 'npc-look' });
-    b.classList.toggle('is-on', on.has(a.assetId));
-    b.setAttribute('aria-pressed', String(on.has(a.assetId)));
-    b.title = on.has(a.assetId) ? '已選，點一下取消' : '點一下選取';
-    const img = Object.assign(document.createElement('img'), { alt: '', loading: 'lazy', src: a.full });
-    b.append(img);
-    b.addEventListener('click', () => {
-      const next = new Set(npcInfo.library);
-      if (next.has(a.assetId)) next.delete(a.assetId);
-      else if (next.size < npcInfo.maxLooks) next.add(a.assetId);
-      sendNpc({ library: [...next] });
+  $('#npc-looks-empty').hidden = fixed.length > 0;
+  $('#npc-more-count').textContent = `（${others.length}）`;
+
+  const pinButton = (a) => {
+    const pin = Object.assign(document.createElement('button'), { type: 'button', className: 'npc-pin', textContent: '加入' });
+    pin.addEventListener('click', () => {
+      if (a.photo
+        && !confirm('這是參與者拍照生成的角色，加入後會公開保存。確定已取得本人同意嗎？')) return;
+      sendNpc({ fixed: { assetId: a.assetId, on: true } });
     });
-    return b;
-  }));
+    return pin;
+  };
+  const look = (a, selectable) => {
+    const b = Object.assign(document.createElement(selectable ? 'button' : 'div'), { className: 'npc-look' });
+    if (selectable) {
+      b.type = 'button';
+      b.classList.toggle('is-on', on.has(a.assetId));
+      b.setAttribute('aria-pressed', String(on.has(a.assetId)));
+      b.title = on.has(a.assetId) ? '已選，點一下取消' : '點一下選取';
+      b.addEventListener('click', () => {
+        const next = new Set(npcInfo.library);
+        if (next.has(a.assetId)) next.delete(a.assetId);
+        else if (next.size < npcInfo.maxLooks) next.add(a.assetId);
+        sendNpc({ library: [...next] });
+      });
+    } else {
+      b.classList.add('is-on');   // 不能選的那一區照常顯示，不要淡掉
+    }
+    b.append(Object.assign(document.createElement('img'), { alt: '', loading: 'lazy', src: a.full }));
+    // 固定組裡的不放「移出」：主辦端要的是固定這一組，不在面板上拿掉（要拿掉就刪 public/assets/npc/ 裡的資料夾）
+    if (selectable) return b;
+    const cell = Object.assign(document.createElement('div'), { className: 'npc-look-cell' });
+    cell.append(b, pinButton(a));
+    return cell;
+  };
+  $('#npc-looks').replaceChildren(...fixed.map((a) => look(a, true)));
+  $('#npc-more-looks').replaceChildren(...others.map((a) => look(a, false)));
 }
+
+// 整個 NPC 面板可以收起來；收合狀態只是這台瀏覽器的偏好
+const NPC_OPEN_KEY = 'pixelair.hostNpcOpen';
+try { $('#npc-panel').open = localStorage.getItem(NPC_OPEN_KEY) === '1'; } catch { /* 略 */ }
+$('#npc-panel').addEventListener('toggle', () => {
+  try { localStorage.setItem(NPC_OPEN_KEY, $('#npc-panel').open ? '1' : '0'); } catch { /* 略 */ }
+});
 
 $('#btn-npc-toggle').addEventListener('click', () => {
   if (npcInfo) sendNpc({ enabled: !npcInfo.settings.enabled });

@@ -437,6 +437,27 @@ class TestClothingColorOnBigHeadFigures:
         c = sample_fallback_colors(self._parts((240, 240, 240, 255), (140, 139, 145, 255), (236, 190, 164, 255)))
         assert self._close(c["legs"], (140, 139, 145)), c
 
+    def test_open_gown_is_the_gown_not_the_collar(self):
+        """2026-11-11：學士服、西裝、敞開外套 —— 胸口正中間露出的是白領或襯衫，
+        但人看到的是整件最大片的黑袍。只看中間一條會判成白色"""
+        parts = self._parts((20, 20, 22, 255), (20, 20, 22, 255), (20, 20, 22, 255))
+        torso = np.asarray(parts["torso"]).copy()
+        h, w = torso.shape[:2]
+        torso[int(h * 0.45):, int(w * 0.40):int(w * 0.60)] = (245, 245, 245, 255)
+        parts["torso"] = PILImage.fromarray(torso, "RGBA")
+        c = sample_fallback_colors(parts)
+        assert self._close(c["torso"], (20, 20, 22)), c
+
+    def test_light_top_with_dark_trousers_cut_into_torso(self):
+        """上身切片的下緣切到黑褲頭（身材比例不同）：上衣仍是淺色那件"""
+        parts = self._parts((197, 199, 178, 255), (10, 10, 10, 255), (10, 10, 10, 255))
+        torso = np.asarray(parts["torso"]).copy()
+        h = torso.shape[0]
+        torso[int(h * 0.86):] = (10, 10, 10, 255)
+        parts["torso"] = PILImage.fromarray(torso, "RGBA")
+        c = sample_fallback_colors(parts)
+        assert self._close(c["torso"], (197, 199, 178)), c
+
     def test_all_skin_falls_back_to_skin(self):
         """整塊都是皮膚（無袖＋短褲）時照實回報膚色，不硬找一個衣服色"""
         c = sample_fallback_colors(self._parts(self.SKIN, self.SKIN, self.SKIN))

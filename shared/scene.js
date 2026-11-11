@@ -111,6 +111,14 @@ const ALL_PROPS = [
  * 一個地方、物理把缺口留在另一個地方，現場會看到角色對著一扇畫出來的門撞牆。
  * `kitchenArt` / `officeArt` 直接讀 `DOORWAYS` 來挖那個洞。
  */
+/**
+ * 正門口：地板下緣中間那塊地墊（辦公室寫 WELCOME，廚房、體育館同一個位置）。NPC 從這裡進場、走回這裡退場。
+ * 由圖面座標推來：地墊在 officeArt / kitchenArt / gymArt 都畫在 (846, 1288)、248×50，
+ * 那幾張圖在 ROOM_PAD（178）的位移裡，畫面 y = 本檔 y + 270 ——
+ * x = 846 + 124 + 178 = 1148，y = 1288 + 25 − 270 = 1043。地墊搬家時這裡要跟著改。
+ */
+export const ENTRANCE = { x: 1148, y: 1043, w: 248 };
+
 export const WALL_THICKNESS = 38;
 /** 牆的碰撞半徑。略大於實際厚度的一半，角色才不會把身體壓進牆面。 */
 const WALL_R = 26;

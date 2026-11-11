@@ -16,6 +16,7 @@
     "doctor": "python scripts/doctor.py"
   },
   "dependencies": {
+    "@fontsource/silkscreen": "^5.3.0",
     "nipplejs": "^0.10.2",
     "roughjs": "^4.6.6",
     "three": "^0.160.0",

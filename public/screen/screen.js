@@ -666,7 +666,7 @@ function characterHeightAt(v) {
  * 原本一律蓋在桌子上，看起來就是踩過去（2026-10-29）。物件擋得到這個角色時，
  * 先把角色畫在 behind 上，交給場景挖掉物件的形狀（PixelScene.cutOut），再只把角色那一塊
  * 貼回來；挖空的地方露出底下的物件。擋不到的角色（絕大多數）照舊直接畫，不多花一張畫布。
- * 沒有 occludersOf 的場景（3D 客廳）也照舊。
+ * 沒有 occludersOf 的場景也照舊。
  */
 function drawBehindProps(v, pos, height, now, draw) {
   const box = { x0: pos.x - height * 0.6, x1: pos.x + height * 0.6, y0: pos.y - height * 1.2, y1: pos.y + height * 0.15 };

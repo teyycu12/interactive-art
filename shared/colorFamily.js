@@ -66,6 +66,15 @@ const DARK_VIVID_SATURATION = 0.55;
  */
 const LIGHT_LIGHTNESS = 0.82;
 const LIGHT_PALE_SATURATION = 0.4;
+/**
+ * 米色、卡其、象牙白：暖色相、亮、不太鮮豔。人會說「米色」或「白色」，不會說它是橘的 ——
+ * 但飽和度（米白褲 #F1EAD7 是 0.48、卡其褲 #D8CDAD 是 0.37）超過上面「淡到算白」的門檻，
+ * 色相又落在橘黃，於是卡其褲被判成橘黃（2026-11-11 檢查最近的拍照角色）。
+ * 駝色 #C7A885（亮度 0.65）、芥末黃 #E9C46A（飽和度 0.73）、淺橘 #F4A261 仍是橘黃。
+ */
+const BEIGE_HUE = [20, 65];
+const BEIGE_LIGHTNESS = 0.72;
+const BEIGE_SATURATION = 0.55;
 
 /** #RRGGBB → {h: 0–360, s: 0–1, l: 0–1} */
 export function hexToHSL(hex) {
@@ -107,6 +116,7 @@ export function familyOf(hex) {
   if (hsl.s < MONO_SATURATION || hsl.l < 0.12 || hsl.l > 0.92) return 'MONO';
   if (hsl.l < DARK_LIGHTNESS && hsl.s < DARK_VIVID_SATURATION) return 'MONO';
   if (hsl.l > LIGHT_LIGHTNESS && hsl.s < LIGHT_PALE_SATURATION) return 'MONO';
+  if (hueIn(hsl.h, BEIGE_HUE) && hsl.l >= BEIGE_LIGHTNESS && hsl.s < BEIGE_SATURATION) return 'MONO';
   for (const f of COLOR_FAMILIES) {
     if (f.hueRange && hueIn(hsl.h, f.hueRange)) return f.id;
   }

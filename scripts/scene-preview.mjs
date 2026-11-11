@@ -8,9 +8,9 @@
  * rough.js 的 generator API 是純運算、不依賴 DOM，因此可以在 Node 端跑完，
  * 只需把它產生的 ops 轉成 SVG path。
  *
- * ⚠ 這是離線預覽，不是實際渲染路徑。大螢幕自 3D 整合後改由
- *   public/screen/3d/RoomScene.js 以 Three.js 繪製場景與道具，
- *   本檔的 rough.js 風格僅供離線檢視佈局，兩者視覺不再一致。
+ * ⚠ 這是離線預覽，不是實際渲染路徑。大螢幕的場景由
+ *   public/screen/scenes/ 的像素場景繪製，
+ *   本檔的 rough.js 風格僅供離線檢視佈局，兩者視覺不一致。
  *   真正必須同步的是佈局本身 —— 兩邊都從 shared/scene.js 讀 PROPS，
  *   那份定義才是單一事實來源。
  */
