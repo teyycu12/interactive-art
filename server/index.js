@@ -457,8 +457,17 @@ const server = tlsOptions
 // WebSocket 連線與訊息處理
 // ─────────────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, maxPayload: MAX_MESSAGE_BYTES });
-// 同上：伺服器層級的 error（例如 listen 之後才出的錯）沒人接也會讓行程結束
-wss.on('error', (err) => console.warn(`[ws] 伺服器錯誤：${err.message}`));
+// ws 會把 http server 的 error 轉發到 wss，所以這裡接到的包含 listen 失敗。
+// 還沒開始聽就出錯（port 被佔住、權限不足）要照樣結束並說清楚 —— 吞掉的話行程活著卻什麼都不聽，
+// start.sh 的監看迴圈也看不出它壞了。已經在聽之後的錯誤只記一行，不為它讓全場斷線
+wss.on('error', (err) => {
+  if (!server.listening) {
+    console.error(`\n  ✗ 無法在 port ${PORT} 啟動：${err.message}`);
+    if (err.code === 'EADDRINUSE') console.error('    這個 port 已經有別的程式在用（多半是另一個還開著的 PixelAir）。\n');
+    process.exit(1);
+  }
+  console.warn(`[ws] 伺服器錯誤：${err.message}`);
+});
 
 /** @type {Set<import('ws').WebSocket>} 已註冊的大螢幕連線 */
 const screens = new Set();
@@ -481,6 +490,14 @@ const audienceQueue = [];
 const send = (ws, type, payload) => {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type, ...payload }));
 };
+
+/**
+ * 不 await 的非同步工作（合照、截圖、NPC 外型重掃）一律經過這裡。
+ * 沒接住的 rejection 會走到 handleCrash 結束整個行程 —— 為了一張合照或一次重掃讓全場斷線不值得。
+ */
+function inBackground(promise, label) {
+  promise.catch((err) => console.warn(`[${label}] 失敗：${err?.stack ?? err}`));
+}
 
 /** 對指定參與者推送（如配對碼、確認請求） */
 function sendToAgent(agentId, type, payload) {
@@ -1856,7 +1873,7 @@ function pushNpcState() {
   blast(hosts, EV.HOST_NPC_STATE, npcState());
 }
 
-refreshNpcLooks();
+inBackground(refreshNpcLooks(), 'npc');
 
 function handlePairClaim(ws, msg) {
   // 可以同時有好幾個任務：這次配對算得進哪幾個，在提交碼的當下就決定
@@ -2254,7 +2271,7 @@ function handleScreenCommand(ws, msg) {
       blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
       break;
     case 'capture':
-      captureForHost(ws);
+      inBackground(captureForHost(ws), 'capture');
       break;
     default:
   }
@@ -2348,8 +2365,8 @@ function handleHostMessage(ws, msg) {
       // 固定組：{assetId, on}。改了就重掃一次（自動挑的外型可能跟著變）
       if (msg.fixed && typeof msg.fixed === 'object') {
         setNpcFixed(msg.fixed.assetId, msg.fixed.on === true);
-        refreshNpcLooks();
-      } else if (msg.rescan === true) refreshNpcLooks();
+        inBackground(refreshNpcLooks(), 'npc');
+      } else if (msg.rescan === true) inBackground(refreshNpcLooks(), 'npc');
       else pushNpcState();
       break;
     }
@@ -2593,7 +2610,7 @@ function handleHostMessage(ws, msg) {
     case EV.HOST_TAKE_PHOTO:
       // 刻意不 await：合照要等角色就定位，await 會讓這條 WebSocket 的
       // 訊息處理停擺數秒，期間主辦端的其他操作全部沒有回應。
-      takeGroupPhoto(ws, { arrange: msg.arrange });
+      inBackground(takeGroupPhoto(ws, { arrange: msg.arrange }), 'photo');
       break;
 
     case EV.HOST_REVEAL_QUIZ:
@@ -3544,6 +3561,11 @@ const takeGroupPhoto = async (ws, { arrange = 'stay' } = {}) => {
       events.log('photo', { ok: false, error });
       send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error });
     }
+  } catch (err) {
+    // 不接的話主辦端會一直停在「合成中」，而且例外會往上冒（見 inBackground）
+    console.warn(`[photo] 失敗：${err?.stack ?? err}`);
+    events.log('photo', { ok: false, error: 'exception' });
+    send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error: 'compose_failed' });
   } finally {
     photoInFlight = false;
   }
