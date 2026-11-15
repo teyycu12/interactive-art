@@ -2438,4 +2438,24 @@ check('引導端點擋下過大的影格',
     readEvents().filter((e) => e.ev === 'message').every((e) => !('text' in e)));
 }
 
+// 主辦端密鑰的失敗次數限制（REVIEW B1）：HTTP 與 WebSocket 共用同一份計數。
+// 鎖是依來源位址，而 e2e 全部來自 127.0.0.1，鎖住後 60 秒內連正確的密鑰也不收 ——
+// 所以這段必須放在整份測試的最後，後面不能再有任何要用主辦端密鑰的測試
+{
+  let last = 0;
+  for (let i = 0; i < 12 && last !== 429; i++) {
+    last = await httpStatus(`/api/host/avatars?key=WRONG${i}`);
+  }
+  check('密鑰錯太多次被鎖住（HTTP 429）', last === 429, String(last));
+  check('鎖住期間正確的密鑰也不收', (await httpStatus(`/api/host/avatars?key=${HOST_KEY}`)) === 429);
+  const ws = new WebSocket(URL);
+  let reject = null;
+  ws.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'HOST_REJECT') reject = m; });
+  await new Promise((r) => ws.on('open', r));
+  ws.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(300);
+  check('鎖住後 WebSocket 的 HOST_AUTH 也被擋（共用計數）', /嘗試次數過多/.test(reject?.reason ?? ''), reject?.reason);
+  ws.close();
+}
+
 finish();

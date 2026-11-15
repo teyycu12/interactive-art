@@ -42,6 +42,8 @@ import { photoPath } from './photos.js';
 export function createHttpLayer({
   root, publicDir, keyMatches, onScreenCapture, getPersonaQuiz = () => null, photosDir = null,
   buildCommit = 'unknown', getStarters = () => [],
+  // 主辦端密鑰比對（含失敗次數限制，見 keyGuard.js）。沒給就退回單純比對（測試用）
+  checkHostKey = (_req, key) => (keyMatches(key) ? 'ok' : 'bad'),
 }) {
 const ROOT = root;
 const PUBLIC_DIR = publicDir;
@@ -73,8 +75,15 @@ const gzipCache = new Map();
 /**
  * 送出靜態檔：有 ETag（大小＋修改時間）就能回 304，手機支援就送 gzip。
  * 保留 no-cache：git pull 之後手機一定拿到新版，只是沒變的檔案不用重下。
+ *
+ * ETag 只用到 stat，所以 304 與「gzip 已經壓好」兩種情況完全不讀檔
+ * （原本先整個讀進記憶體才比對：幾十支手機同時進場時，three.module.js 之類的大檔
+ * 每一次 304 都白讀一次）。只有真的要送內容、而且沒有現成的壓縮快取時才讀。
+ *
+ * @param {(cb: (err: Error|null, data?: Buffer) => void) => void} readFile 讀檔，只在需要時才呼叫
+ * @param {(err: Error) => void} onError 讀檔失敗（stat 之後檔案被刪掉）
  */
-function sendStatic(req, res, filePath, stat, data) {
+function sendStatic(req, res, filePath, stat, onError) {
   const ext = path.extname(filePath);
   const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
   const headers = {
@@ -87,19 +96,22 @@ function sendStatic(req, res, filePath, stat, data) {
     res.writeHead(304, headers).end();
     return;
   }
-  let body = data;
-  if (COMPRESSIBLE.has(ext) && /\bgzip\b/.test(req.headers['accept-encoding'] ?? '') && data.length > 1024) {
-    let hit = gzipCache.get(filePath);
-    if (hit?.etag !== etag) {
-      hit = { etag, gz: zlib.gzipSync(data) };
-      gzipCache.set(filePath, hit);
-    }
-    body = hit.gz;
-    headers['Content-Encoding'] = 'gzip';
-  }
-  headers['Content-Length'] = body.length;
-  res.writeHead(200, headers);
-  res.end(req.method === 'HEAD' ? undefined : body);
+  const gzip = COMPRESSIBLE.has(ext) && /\bgzip\b/.test(req.headers['accept-encoding'] ?? '') && stat.size > 1024;
+  const respond = (body) => {
+    if (gzip) headers['Content-Encoding'] = 'gzip';
+    headers['Content-Length'] = body.length;
+    res.writeHead(200, headers);
+    res.end(req.method === 'HEAD' ? undefined : body);
+  };
+  const cached = gzip ? gzipCache.get(filePath) : null;
+  if (cached?.etag === etag) { respond(cached.gz); return; }
+  fs.readFile(filePath, (err, data) => {
+    if (err) { onError(err); return; }
+    if (!gzip) { respond(data); return; }
+    const hit = { etag, gz: zlib.gzipSync(data) };
+    gzipCache.set(filePath, hit);
+    respond(hit.gz);
+  });
 }
 
 /**
@@ -533,15 +545,21 @@ const SAFE_FILENAME = /^[A-Za-z0-9_.-]+$/;
 /** request_id 是 uuid4().hex，只會有小寫十六進位 */
 const SAFE_REQUEST_ID = /^[A-Za-z0-9_-]+$/;
 
+/** 主辦端密鑰檢查。不通過就已經回應了，呼叫端直接 return */
+function authorizeHost(req, res, searchParams) {
+  const verdict = checkHostKey(req, searchParams.get('key'));
+  if (verdict === 'ok') return true;
+  if (verdict === 'locked') sendJSON(res, 429, { ok: false, error: 'too_many_attempts' });
+  else sendJSON(res, 403, { ok: false, error: 'invalid_key' });
+  return false;
+}
+
 function handleHostHistory(req, res, urlPath, searchParams) {
   if (req.method !== 'GET') {
     sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
     return;
   }
-  if (!keyMatches(searchParams.get('key'))) {
-    sendJSON(res, 403, { ok: false, error: 'invalid_key' });
-    return;
-  }
+  if (!authorizeHost(req, res, searchParams)) return;
 
   const suffix = urlPath.slice('/api/host/history'.length);
   if (suffix === '' || suffix === '/') {
@@ -592,10 +610,7 @@ function handleHostAvatars(req, res, searchParams) {
     sendJSON(res, 405, { ok: false, error: 'method_not_allowed' });
     return;
   }
-  if (!keyMatches(searchParams.get('key'))) {
-    sendJSON(res, 403, { ok: false, error: 'invalid_key' });
-    return;
-  }
+  if (!authorizeHost(req, res, searchParams)) return;
   listHistoricalAvatars(PUBLIC_DIR).then(
     (avatars) => sendJSON(res, 200, { ok: true, avatars }),
     () => sendJSON(res, 200, { ok: false, error: 'asset_scan_failed' }),
@@ -943,10 +958,7 @@ function handleRequest(req, res) {
   fs.stat(filePath, (statErr, stat) => {
     if (statErr) { notFound(statErr); return; }
     if (stat.isDirectory()) { notFound({ code: 'EISDIR' }); return; }
-    fs.readFile(filePath, (err, data) => {
-      if (err) { notFound(err); return; }
-      sendStatic(req, res, filePath, stat, data);
-    });
+    sendStatic(req, res, filePath, stat, notFound);
   });
 }
 

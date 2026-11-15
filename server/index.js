@@ -41,9 +41,11 @@ import { NpcDirector } from './npc.js';
 import { listHistoricalAvatars, withAssetOutfit } from './devAvatars.js';
 import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
+import { clientIp } from './clientIp.js';
 import { photoUrlBase, publicOrigin, savePhoto, requestOrigin, rankLanAddresses } from './photos.js';
 import { qrSvgDataUrl, joinUrlOf } from './joinQr.js';
 import { loadStarters } from './starters.js';
+import { KeyGuard } from './keyGuard.js';
 import { Attendance } from './attendance.js';
 import { startTicker } from './scheduler.js';
 import { MissionBoard } from './missions.js';
@@ -380,6 +382,14 @@ function keyMatches(input) {
   return timingSafeEqual(a, b);
 }
 
+/**
+ * 密鑰失敗次數限制（keyGuard.js）。WebSocket 的 HOST_AUTH 與 HTTP 的主辦端路徑共用，
+ * 依來源位址計 —— 經 ngrok 時 clientIp 取代理加上的那一段（見 clientIp.js）
+ */
+const keyGuard = new KeyGuard();
+/** @returns {'ok'|'bad'|'locked'} */
+const checkHostKey = (req, input) => keyGuard.check(clientIp(req), input, keyMatches);
+
 // ─────────────────────────────────────────────────────────────
 // TLS
 //
@@ -460,6 +470,7 @@ const { handleRequest } = createHttpLayer({
   root: ROOT,
   publicDir: PUBLIC_DIR,
   keyMatches,
+  checkHostKey,
   onScreenCapture: resolveScreenCapture,
   getPersonaQuiz: () => personaView(),
   // 預設角色：開機時複製到 gen/ 並驗證一次，之後 /api/starters 直接回這份（見 server/starters.js）
@@ -2678,6 +2689,7 @@ wss.on('connection', (ws, req) => {
   ws.role = null;
   // 這條連線是從哪個網址連進來的（例如 ngrok 網域）。主辦端拍合照時，QR 就指向同一個網址
   ws.origin = requestOrigin(req, SCHEME);
+  ws.ip = clientIp(req);
   ws.agentId = null;
   ws.isAlive = true;
   ws.closing = false;
@@ -2942,7 +2954,14 @@ wss.on('connection', (ws, req) => {
           send(ws, EV.HOST_REJECT, { reason: '已入場的裝置不能改登入主辦端' });
           return;
         }
-        if (!keyMatches(msg.key)) {
+        const verdict = keyGuard.check(ws.ip, msg.key, keyMatches);
+        if (verdict === 'locked') {
+          send(ws, EV.HOST_REJECT, {
+            reason: `嘗試次數過多，請 ${Math.ceil(keyGuard.retryAfterMs(ws.ip) / 1000)} 秒後再試`,
+          });
+          return;
+        }
+        if (verdict !== 'ok') {
           console.warn('[host] 通行密鑰錯誤，拒絕連線');
           send(ws, EV.HOST_REJECT, { reason: '通行密鑰錯誤' });
           return;
