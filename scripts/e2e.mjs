@@ -1891,6 +1891,30 @@ check('送出無效網址之後伺服器仍存活',
     (await httpStatus(`/api/host/history/..%2f..%2f.env/bundle?key=${HOST_KEY}`)) === 400);
 }
 
+// 預設角色（REVIEW E3）：生成服務沒開（這裡的 VISION_PORT 指向沒人聽的 port）時，
+// 手機仍然有東西可以選；選了的角色真的進得了場、貼圖網址讀得到
+{
+  const body = JSON.parse(await httpBody('/api/starters'));
+  check('生成服務沒開時，/api/starters 仍給得出 6 個預設角色', body.ok && body.starters?.length === 6,
+    String(body.starters?.length));
+  const pick = body.starters?.[0];
+  check('預設角色的貼圖讀得到', !!pick && (await httpStatus(pick.avatar.textures.full)) === 200
+    && (await httpStatus(pick.avatar.textures.side)) === 200);
+  const w = new WebSocket(URL);
+  let welcome = null; let rejected = null;
+  w.on('open', () => w.send(JSON.stringify({ type: 'CLIENT_JOIN', name: '預設角色', avatar: pick?.avatar, entry: 'dressup' })));
+  w.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'CLIENT_WELCOME') welcome = m;
+    if (m.type === 'CLIENT_REJECT') rejected = m;
+  });
+  await sleep(400);
+  check('用預設角色可以進場', !!welcome?.userId && !rejected, rejected?.reason);
+  w.send(JSON.stringify({ type: 'CLIENT_LEAVE' }));
+  await sleep(200);
+  w.close();
+}
+
 // 曾可讓已入場的控制器改註冊為大螢幕，使角色永久留在場上、耗盡人數上限
 const shifty = new WebSocket(URL);
 let shiftyGotScreenData = false;

@@ -555,9 +555,56 @@ async function loadDressupCatalog() {
 
 const DU_UNAVAILABLE = '換裝暫時不能用，請通知工作人員。';
 
-/** 進換裝頁。選單讀不到（生成服務沒開）就停在原地說明，不會卡在空白頁 */
+/**
+ * 預設角色（REVIEW E3）：換裝要靠生成服務，它一掛新來的人全部卡在門口。
+ * 伺服器備了 6 個預先組好的角色（server/starters.js），讓參與者先選一個進場。
+ * 畫法跟換裝完全一樣，所以場上仍然只有一種畫法；進場後想換可以離場再來（生成服務好了就能換裝）。
+ * @returns {Promise<boolean>} 有沒有成功顯示選擇頁
+ */
+async function showStarterPick() {
+  let starters = [];
+  try {
+    const body = await (await fetch('/api/starters')).json();
+    if (body?.ok && Array.isArray(body.starters)) starters = body.starters;
+  } catch { /* 連伺服器都連不到：下面照原樣請參與者找工作人員 */ }
+  if (!starters.length) return false;
+
+  stopScanStream();
+  showScreen('dressup');
+  $('#dressup').classList.add('is-picking');
+  $('#du-pick').hidden = false;
+  $('#du-sub').textContent = '換裝暫時不能用，先選一個進場';
+  const box = $('#du-pick-options');
+  box.classList.add('is-starters');
+  box.replaceChildren(...starters.map((s) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'du-pick-card';
+    const img = document.createElement('img');
+    img.alt = '';
+    img.src = s.avatar?.textures?.full ?? '';
+    const label = document.createElement('span');
+    label.textContent = s.label;   // manifest 來的字，一律 textContent
+    card.append(img, label);
+    card.addEventListener('click', () => {
+      config = s.avatar;
+      entryRoute = 'dressup';
+      try {
+        localStorage.setItem(LS.avatar, JSON.stringify(config));
+        localStorage.setItem(LS.entry, entryRoute);
+      } catch { /* 略 */ }
+      askPersonaThen(enterStage);
+    });
+    return card;
+  }));
+  return true;
+}
+
+/** 進換裝頁。選單讀不到（生成服務沒開）就改讓參與者選預設角色；連預設都沒有才停在原地說明 */
 async function goDressup(opts = {}) {
+  $('#du-pick-options').classList.remove('is-starters');
   if (!(await loadDressupCatalog())) {
+    if (await showStarterPick()) return true;
     showToast(DU_UNAVAILABLE, 5000);
     return false;
   }

@@ -41,7 +41,7 @@ import { photoPath } from './photos.js';
  */
 export function createHttpLayer({
   root, publicDir, keyMatches, onScreenCapture, getPersonaQuiz = () => null, photosDir = null,
-  buildCommit = 'unknown',
+  buildCommit = 'unknown', getStarters = () => [],
 }) {
 const ROOT = root;
 const PUBLIC_DIR = publicDir;
@@ -881,6 +881,14 @@ function handleRequest(req, res) {
   // 這個行程是用哪個 commit 啟動的。git pull 之後沒重開的話，跟硬碟上的會不一樣
   if (urlPath === '/api/version') {
     sendJSON(res, 200, { ok: true, commit: buildCommit });
+    return;
+  }
+
+  // 預設角色：生成服務掛了、換裝進不去時，手機改讓參與者從這幾個裡選一個先進場。
+  // 公開讀取：沒有任何人的資料（不是照片生成的），而且不能靠生成服務
+  if (urlPath === '/api/starters') {
+    if (req.method !== 'GET') { sendJSON(res, 405, { ok: false, error: 'method_not_allowed' }); return; }
+    sendJSON(res, 200, { ok: true, starters: getStarters() });
     return;
   }
 

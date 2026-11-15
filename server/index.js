@@ -43,6 +43,7 @@ import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
 import { photoUrlBase, publicOrigin, savePhoto, requestOrigin, rankLanAddresses } from './photos.js';
 import { qrSvgDataUrl, joinUrlOf } from './joinQr.js';
+import { loadStarters } from './starters.js';
 import { Attendance } from './attendance.js';
 import { startTicker } from './scheduler.js';
 import { MissionBoard } from './missions.js';
@@ -453,12 +454,16 @@ function resolveScreenCapture(requestId, image) {
   return true;
 }
 
+const STARTERS = loadStarters(PUBLIC_DIR);
+
 const { handleRequest } = createHttpLayer({
   root: ROOT,
   publicDir: PUBLIC_DIR,
   keyMatches,
   onScreenCapture: resolveScreenCapture,
   getPersonaQuiz: () => personaView(),
+  // 預設角色：開機時複製到 gen/ 並驗證一次，之後 /api/starters 直接回這份（見 server/starters.js）
+  getStarters: () => STARTERS,
   photosDir: PHOTOS_DIR,
   buildCommit: BUILD_COMMIT,
 });
