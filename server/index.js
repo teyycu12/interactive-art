@@ -3582,6 +3582,7 @@ function freshEventState() {
   clearTimeout(wordcloudResultTimer);
   wordcloudResultShown = false;
   gatherTrackers.clear();
+  decodeRounds.clear();
   loggedMode.clear();
   scoresDirty = true;
   linksDirty = true;
@@ -3747,6 +3748,10 @@ function switchEvent(id) {
   // 3. 換成那一場
   freshEventState();
   applyEventSnapshot(target);
+  // 球場跟著場景走。applyEventSnapshot 直接改 stageTheme、不經 setStageTheme，
+  // 所以 resetHoops 不會被叫到：從體育館切到廚房投籃還開著，反過來體育館卻沒有投籃。
+  // 不必推送 —— 大螢幕與主辦端下面就會被關線、重連時拿到新的
+  court = hoopsFor(stageTheme) ? new HoopCourt(hoopsFor(stageTheme)) : null;
   // 切過去就是要開始這場：之前暫停過的一併恢復開放
   eventPaused = false;
   activeEventId = id;

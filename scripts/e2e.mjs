@@ -1554,7 +1554,8 @@ await sleep(200);
   const p1InA = p1.welcome;
   let closedWith = null;
   h.w.on('close', (code) => { closedWith = code; });
-  h.w.send(JSON.stringify({ type: 'HOST_CREATE_EVENT', name: '第二場', theme: 'kitchen' }));
+  // 第二場用體育館：甲場是辦公室，一來一回剛好驗到球場有沒有跟著場景換
+  h.w.send(JSON.stringify({ type: 'HOST_CREATE_EVENT', name: '第二場', theme: 'gym' }));
   await sleep(700);
   check('建立新活動後，場上的手機回到進場畫面（說明是切換了活動）',
     p1Rejects.some((m) => m.kind === 'event_switched'), JSON.stringify(p1Rejects));
@@ -1565,7 +1566,9 @@ await sleep(200);
   const bId = evB?.activeId;
   check('新活動成為開啟中的那場', bId && bId !== aId && evB.events.find((e) => e.id === bId)?.name === '第二場'
     && evB.events.some((e) => e.id === aId));
-  check('新活動的名稱與場景', last(h, 'STAGE_EVENT')?.event?.name === '第二場' && last(h, 'STAGE_THEME')?.theme === 'kitchen');
+  check('新活動的名稱與場景', last(h, 'STAGE_EVENT')?.event?.name === '第二場' && last(h, 'STAGE_THEME')?.theme === 'gym');
+  // 球場原本不跟著活動換（applyEventSnapshot 不經 setStageTheme）：從辦公室切到體育館沒有投籃
+  check('切到體育館的活動：球場開著', last(h, 'HOOPS_STATE')?.active === true, JSON.stringify(last(h, 'HOOPS_STATE')));
   check('新活動場上沒有人、積分是空的',
     last(h, 'HOST_STATE')?.agents?.length === 0 && (last(h, 'HOST_STATE')?.leaderboard?.length ?? 0) === 0,
     JSON.stringify(last(h, 'HOST_STATE')?.leaderboard));
@@ -1587,6 +1590,8 @@ await sleep(200);
   await sleep(700);
   h = await openHost();
   check('切回原本那場', last(h, 'HOST_EVENTS')?.activeId === aId && last(h, 'STAGE_EVENT')?.event?.name === eventName);
+  check('切回辦公室的活動：球場收掉了', !h.msgs.some((m) => m.type === 'HOOPS_STATE' && m.active),
+    JSON.stringify(last(h, 'HOOPS_STATE')));
   check('切回來後，第二場的人不在這場', !(last(h, 'HOST_STATE')?.agents ?? []).some((a) => a.name === '第二場的人'));
   // 切回甲場：甲場的人用甲場的憑證進場，認得回原本的身分
   rejoin(p1);
