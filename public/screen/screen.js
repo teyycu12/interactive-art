@@ -193,9 +193,6 @@ const pulse = new Map();
  */
 const arrivals = new Map();
 const ARRIVAL_MS = 6000;
-/** 「我在哪」（EV.STAGE_FIND）：參與者按了手機上的鍵，把他的角色標出來。id → 開始時間 */
-const finds = new Map();
-const FIND_MS = 3000;
 let rosterSeenOnce = false;
 /**
  * 社交圖譜的邊。
@@ -317,7 +314,7 @@ function connect() {
           // 觀眾會以為是系統出錯，而不是有人離開了。
           // 首次名冊同樣不報（那只是本機還沒有名冊，不是有人離場）。
           if (!firstRoster) toast(`${roster.get(id).name} 離開了`);
-          roster.delete(id); view.delete(id); pulse.delete(id); arrivals.delete(id); finds.delete(id);
+          roster.delete(id); view.delete(id); pulse.delete(id); arrivals.delete(id);
           plateOffset.delete(id);
           voxels?.dispose(id);
         }
@@ -345,10 +342,6 @@ function connect() {
         if (typeof msg.spotId === 'string' && typeof msg.question === 'string') {
           topicBubbles.set(msg.spotId, { question: msg.question, at: performance.now() });
         }
-        break;
-
-      case EV.STAGE_FIND:
-        if (roster.has(msg.id)) finds.set(msg.id, performance.now());
         break;
 
       case EV.STAGE_GREET:
@@ -1008,36 +1001,6 @@ function drawFrame(now) {
         ctx.lineWidth = 4 * scale;
         ctx.stroke();
         ctx.globalAlpha = 1;
-      }
-    }
-
-    // 「我在哪」：三圈由內往外擴散的光圈（比進場的單圈大、持續久），加上頭頂的箭頭
-    const foundAt = finds.get(a.id);
-    if (foundAt !== undefined) {
-      const t = (now - foundAt) / FIND_MS;
-      if (t >= 1) {
-        finds.delete(a.id);
-      } else {
-        ctx.save();
-        const fade = t > 0.8 ? (1 - t) / 0.2 : 1;
-        // 底色：整個角色罩一層淡淡的橘，光圈細線在縮小的畫面（主控台預覽、遠處）裡容易看漏
-        ctx.globalAlpha = 0.22 * fade;
-        ctx.fillStyle = COLOR_ACTIVE;
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y - height * 0.45, height * 0.62, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = COLOR_ACTIVE;
-        ctx.lineWidth = 8 * scale;
-        for (let i = 0; i < 3; i++) {
-          const phase = (t * 2.2 + i / 3) % 1;
-          ctx.globalAlpha = (1 - phase * 0.7) * fade;
-          ctx.beginPath();
-          ctx.arc(pos.x, pos.y - height * 0.45, height * (0.4 + phase * 1.1), 0, Math.PI * 2);
-          ctx.stroke();
-        }
-        ctx.restore();
-        // 箭頭沿用進場那一個：把進場標示重新開始，這幾秒內持續顯示
-        arrivals.set(a.id, now - ARRIVAL_MS * 0.5);
       }
     }
 

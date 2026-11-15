@@ -12,7 +12,7 @@ import { scorePersona, PERSONA_RESULT_MAP } from '/shared/persona.js';
 import { SKIN_TONES } from '/shared/avatars.js';
 import {
   EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS, DIRECT_MESSAGE, MSG_ERRORS,
-  QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME, EMOJI_EMOTES, MOTION_EMOTES, FIND_ME_COOLDOWN_MS,
+  QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME, EMOJI_EMOTES, MOTION_EMOTES,
 } from '/shared/protocol.js';
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
@@ -3629,22 +3629,7 @@ function sendEmote(btn) {
   );
 }
 
-// 「我在哪」：大螢幕把我的角色標出來。冷卻在這裡也擋一次（伺服器那邊是防繞過的）：
-// 按鈕變灰並寫「看大螢幕」，比按了沒反應清楚
-let findCooling = false;
-function findMe() {
-  if (findCooling) return;
-  findCooling = true;
-  sendMsg(EV.FIND_ME);
-  const btn = $('#btn-find');
-  const label = btn.lastChild;
-  btn.disabled = true;
-  label.textContent = '看大螢幕';
-  setTimeout(() => { findCooling = false; btn.disabled = false; label.textContent = '我在哪'; }, FIND_ME_COOLDOWN_MS);
-}
-
 $('#emotes').addEventListener('click', (e) => {
-  if (e.target.closest('#btn-find')) { findMe(); return; }
   if (e.target.closest('#btn-emote-menu')) { toggleEmotePalette(); return; }
   const btn = e.target.closest('button[data-action]');
   if (btn) sendEmote(btn);
