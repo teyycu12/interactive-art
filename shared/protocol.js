@@ -11,6 +11,7 @@ export const EV = {
   CLIENT_JOIN: 'CLIENT_JOIN',       // 捏臉完成登入
   INPUT_MOVE: 'INPUT_MOVE',         // 搖桿即時向量（節流 20Hz）
   INPUT_ACTION: 'INPUT_ACTION',     // 社交動作
+  FIND_ME: 'FIND_ME',               // 「我在哪」：請大螢幕把我的角色標出來（伺服器限每人 FIND_ME_COOLDOWN_MS 一次）
   CLIENT_LEAVE: 'CLIENT_LEAVE',     // 主動退出，角色立即離場
   CLIENT_RETIRE: 'CLIENT_RETIRE',   // 換新角色：憑舊憑證讓斷線中的舊角色立即離場（不必先進場）
   // Screen → Server
@@ -52,6 +53,7 @@ export const EV = {
   SCREEN_PHOTO_QR: 'SCREEN_PHOTO_QR',         // Server → Screen：大合照的下載 QR {qr, visible}，右下角顯示
   HOST_PHOTO_QR: 'HOST_PHOTO_QR',             // Host → Server：大螢幕的下載 QR 顯示／隱藏 {visible}
   SCREEN_CAPTURE: 'SCREEN_CAPTURE',           // Screen → Server：回傳截圖（合照底圖）
+  STAGE_FIND: 'STAGE_FIND',                   // Server → Screen：把這個角色標出來 {id}（光圈與箭頭，約 3 秒）
   SCREEN_PHOTO_QR_HIDE: 'SCREEN_PHOTO_QR_HIDE', // Screen → Server：大螢幕上按了下載 QR 的 ×（等同主控端按「隱藏」）
 
   // ── 任務生命週期（規格 v3.0 §03）──────────────────────
@@ -221,14 +223,14 @@ export const MISSION_TYPES = {
   PAIRING: {
     id: 'PAIRING',
     label: '找一個人配對',
-    brief: '走向另一位參與者，互相交換配對碼',
+    brief: '找現場的一個人，面對面互相交換配對碼',
     defaultTarget: 2,   // 每人要完成幾次
     maxTarget: 10,
   },
   COLOR_HUNT: {
     id: 'COLOR_HUNT',
     label: '找特定顏色的人配對',
-    brief: '找一位身上帶指定顏色的參與者，交換配對碼',
+    brief: '找現場一位身上有指定顏色的人，面對面交換配對碼',
     defaultTarget: 2,
     maxTarget: 10,
     /**
@@ -247,7 +249,7 @@ export const MISSION_TYPES = {
   TRAIT_HUNT: {
     id: 'TRAIT_HUNT',
     label: '找某一類的人配對',
-    brief: '找一位屬於指定類型的參與者，交換配對碼 —— 看不出來，得開口問',
+    brief: '找現場一位屬於指定類型的人，面對面交換配對碼 —— 看不出來，得開口問',
     defaultTarget: 2,
     maxTarget: 10,
     param: 'trait',       // { key, value }：主辦端從場上已有的標籤裡挑
@@ -255,7 +257,7 @@ export const MISSION_TYPES = {
   DIFF_TRAIT: {
     id: 'DIFF_TRAIT',
     label: '找跟你不同類的人配對',
-    brief: '找一位跟你類型不同的參與者，交換配對碼 —— 跨出自己的小圈圈',
+    brief: '找現場一位跟你類型不同的人，面對面交換配對碼 —— 跨出自己的小圈圈',
     defaultTarget: 2,
     maxTarget: 10,
     param: 'traitKey',    // 比哪一題（標籤的鍵）
@@ -263,7 +265,7 @@ export const MISSION_TYPES = {
   SAME_TRAIT: {
     id: 'SAME_TRAIT',
     label: '找跟你同類的人配對',
-    brief: '找一位跟你類型相同的參與者，交換配對碼 —— 先找到自己人',
+    brief: '找現場一位跟你類型相同的人，面對面交換配對碼 —— 先找到自己人',
     defaultTarget: 1,
     maxTarget: 10,
     param: 'traitKey',
@@ -277,7 +279,7 @@ export const MISSION_TYPES = {
   GATHER: {
     id: 'GATHER',
     label: '湊滿人數到指定地點',
-    brief: '找齊指定人數，一起走到大螢幕上的集合點',
+    brief: '找齊指定人數，大家一起操控角色走到大螢幕上標示的集合點',
     defaultTarget: 1,
     maxTarget: 1,
     param: 'spot',        // 目前場景的集合點（shared/themes.js 的 spots）＋ teamSize
@@ -435,6 +437,9 @@ export const MOTION_EMOTES = [
 
 /** 社交動作白名單（技術文件 M1 §操控輸入發送規格）。揮手另外有「互相揮手」的判定（server/greetings.js） */
 // 乾杯已移除（2026-10-17）：EMOTE_GLYPH 與像素角色的碰杯姿勢留著，舊快照裡的動作仍畫得出來
+/** 「我在哪」的冷卻（毫秒）。手機端與伺服器共用：連按不會讓大螢幕一直閃 */
+export const FIND_ME_COOLDOWN_MS = 5000;
+
 export const ACTIONS = ['WAVE', ...EMOJI_EMOTES.map((e) => e.id), ...MOTION_EMOTES.map((e) => e.id)];
 
 /**

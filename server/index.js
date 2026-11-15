@@ -25,7 +25,7 @@ import { randomBytes, timingSafeEqual, X509Certificate } from 'node:crypto';
 
 import {
   EV, ACTIONS, PAIR_MISSION_IDS, STAGE, SYNC_FPS, PAIR_ERRORS, MISSION_TYPES,
-  CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS,
+  CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS, FIND_ME_COOLDOWN_MS,
   SCORE_SOURCES, EVENT_INFO, GREET_OUTCOME,
 } from '../shared/protocol.js';
 import { OUTFIT_COLORS_MAX, validateAvatarConfig } from '../shared/avatars.js';
@@ -1182,6 +1182,9 @@ function handleTopicAnswer(ws, msg) {
   }
 }
 
+/** 「我在哪」上次觸發的時間（agentId → ms），見 EV.FIND_ME */
+const findMeAt = new Map();
+
 const PAUSED_REASON = '活動暫停中，請等主持人重新開始';
 
 function handleJoin(ws, msg) {
@@ -1428,6 +1431,7 @@ function promoteAudience() {
  */
 function detachAgent(agentId, { forget = false } = {}) {
   controllers.delete(agentId);
+  findMeAt.delete(agentId);
   pairing.release(agentId);
   greetings.drop(agentId);
   if (forget) {
@@ -2812,6 +2816,16 @@ wss.on('connection', (ws, req) => {
         stage.applyMove(ws.agentId, { x, y, intensity });
         // 超過死區才算真的操控過（lastInputAt 由 applyMove 依死區判斷）
         if (stage.get(ws.agentId)?.lastInputAt) attendance.markMoved(ws.agentId);
+        break;
+      }
+
+      case EV.FIND_ME: {
+        if (ws.role !== 'controller' || !ws.agentId) return;
+        // 冷卻：手機端也會擋，這裡是防繞過手機端連按 —— 大螢幕上的光圈是全場看得到的
+        const nowMs = Date.now();
+        if (nowMs - (findMeAt.get(ws.agentId) ?? 0) < FIND_ME_COOLDOWN_MS) return;
+        findMeAt.set(ws.agentId, nowMs);
+        blast(screens, EV.STAGE_FIND, { id: ws.agentId });
         break;
       }
 

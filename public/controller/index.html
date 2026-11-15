@@ -334,6 +334,8 @@
     <p class="hoops-chip" id="hoops-chip" hidden role="status" aria-live="polite"></p>
     <div id="emotes">
       <button id="btn-shoot" class="btn-shoot" hidden><em>🏀</em>投籃</button>
+      <!-- 進場後在大螢幕上找不到自己（十幾個角色、名牌互相遮住）：按一下，大螢幕把自己的角色標出來 -->
+      <button id="btn-find" type="button" aria-label="我在哪：在大螢幕上標出我的角色"><em>📍</em>我在哪</button>
       <button id="btn-emote-menu" aria-expanded="false" aria-controls="emote-palette"><em>😀</em>表情</button>
       <button data-action="WAVE"><em>👋</em>揮手</button>
     </div>
@@ -446,7 +448,7 @@
   <div class="sheet-inner" role="dialog" aria-modal="true" aria-labelledby="pair-title">
     <button class="sheet-close" id="btn-pair-close" aria-label="關閉">✕</button>
     <h2 id="pair-title">找一個人配對</h2>
-    <p class="sheet-brief" id="pair-brief">走向另一位參與者，互相交換配對碼</p>
+    <p class="sheet-brief" id="pair-brief">找現場的一個人，面對面互相交換配對碼</p>
     <p class="color-chip" id="mission-color-chip" hidden></p>
 
     <div class="mycode">

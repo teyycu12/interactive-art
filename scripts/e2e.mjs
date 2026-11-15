@@ -1915,6 +1915,38 @@ check('送出無效網址之後伺服器仍存活',
   w.close();
 }
 
+// 「我在哪」（REVIEW E2）：手機按一下，大螢幕收到要標出的角色；冷卻內連按不重複；
+// 只有進場的手機能觸發，且標的永遠是自己（不能指定別人）
+{
+  const finds = [];
+  // 前面切換活動時伺服器把舊的大螢幕連線關掉了，這裡自己開一台
+  const findScreen = new WebSocket(URL);
+  findScreen.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'STAGE_FIND') finds.push(m.id); });
+  await new Promise((r) => findScreen.on('open', r));
+  findScreen.send(JSON.stringify({ type: 'SCREEN_HELLO' }));
+  const w = new WebSocket(URL);
+  let me = null;
+  w.on('open', () => w.send(JSON.stringify({ type: 'CLIENT_JOIN', name: '找自己', avatar: AVATAR })));
+  w.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'CLIENT_WELCOME') me = m.userId; });
+  await sleep(400);
+  const stranger = new WebSocket(URL);
+  await new Promise((r) => stranger.on('open', r));
+  stranger.send(JSON.stringify({ type: 'FIND_ME', id: me }));   // 沒進場的連線
+  await sleep(150);
+  check('沒進場的連線不能觸發「我在哪」', finds.length === 0);
+  stranger.close();
+  w.send(JSON.stringify({ type: 'FIND_ME', id: 'usr_someoneelse' }));   // 夾帶別人的 id 也只標自己
+  await sleep(200);
+  check('按「我在哪」：大螢幕收到、標的是自己', finds.length === 1 && finds[0] === me, JSON.stringify({ finds, me }));
+  for (let i = 0; i < 5; i++) w.send(JSON.stringify({ type: 'FIND_ME' }));
+  await sleep(200);
+  check('冷卻內連按不重複觸發', finds.length === 1, String(finds.length));
+  w.send(JSON.stringify({ type: 'CLIENT_LEAVE' }));
+  await sleep(200);
+  w.close();
+  findScreen.close();
+}
+
 // 曾可讓已入場的控制器改註冊為大螢幕，使角色永久留在場上、耗盡人數上限
 const shifty = new WebSocket(URL);
 let shiftyGotScreenData = false;

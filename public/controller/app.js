@@ -12,7 +12,7 @@ import { scorePersona, PERSONA_RESULT_MAP } from '/shared/persona.js';
 import { SKIN_TONES } from '/shared/avatars.js';
 import {
   EV, INPUT_THROTTLE_MS, IDLE_THRESHOLD_MS, PAIR_ERRORS, DIRECT_MESSAGE, MSG_ERRORS,
-  QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME, EMOJI_EMOTES, MOTION_EMOTES,
+  QUIZ_CHOICES, QUIZ_ERRORS, QUIZ_PHASE, GREET_OUTCOME, EMOJI_EMOTES, MOTION_EMOTES, FIND_ME_COOLDOWN_MS,
 } from '/shared/protocol.js';
 import {
   allCaptureIndicatorsPassed, captureGuidanceText, captureIndicators,
@@ -233,10 +233,15 @@ function showScreen(id) {
 const nameInput = $('#name-input');
 nameInput.value = displayName;
 
+const NAME_HINT = '這會顯示在大螢幕上你的角色頭上';
+const NAME_HINT_EMPTY = '先填名字，下面的按鈕才能按';
+
 function syncStartButton() {
   const empty = nameInput.value.trim().length === 0;
   $('#btn-start').disabled = empty;
   $('#btn-scan').disabled = empty;
+  // 兩顆按鈕是灰的時候要說為什麼：不說的話，看起來像壞掉或還在載入（REVIEW E8）
+  $('#name-hint').textContent = empty ? NAME_HINT_EMPTY : NAME_HINT;
 }
 // 只聽 input 不夠：iOS Safari 用注音／拼音輸入時，字還在選字（ㄛㄎ 底下有底線）
 // 的整段期間可能完全不發 input，選完字也不一定補發，按鈕就一直是灰的，
@@ -2008,7 +2013,7 @@ function renderMission() {
   $('#pair-title').textContent = single ? single.title : `${list.length} 個任務同時進行`;
   $('#pair-brief').textContent = single
     ? (single.brief ?? '')
-    : '走向另一位參與者，互相交換配對碼。一次配對會同時算進符合的任務。';
+    : '找現場的一個人，面對面互相交換配對碼。一次配對會同時算進符合的任務。';
 
   // COLOR_HUNT：把要找的顏色放在最顯眼的位置。
   // 只寫在 brief 裡不夠 —— 那行字在小螢幕上會被當成說明略過，
@@ -3624,7 +3629,22 @@ function sendEmote(btn) {
   );
 }
 
+// 「我在哪」：大螢幕把我的角色標出來。冷卻在這裡也擋一次（伺服器那邊是防繞過的）：
+// 按鈕變灰並寫「看大螢幕」，比按了沒反應清楚
+let findCooling = false;
+function findMe() {
+  if (findCooling) return;
+  findCooling = true;
+  sendMsg(EV.FIND_ME);
+  const btn = $('#btn-find');
+  const label = btn.lastChild;
+  btn.disabled = true;
+  label.textContent = '看大螢幕';
+  setTimeout(() => { findCooling = false; btn.disabled = false; label.textContent = '我在哪'; }, FIND_ME_COOLDOWN_MS);
+}
+
 $('#emotes').addEventListener('click', (e) => {
+  if (e.target.closest('#btn-find')) { findMe(); return; }
   if (e.target.closest('#btn-emote-menu')) { toggleEmotePalette(); return; }
   const btn = e.target.closest('button[data-action]');
   if (btn) sendEmote(btn);
