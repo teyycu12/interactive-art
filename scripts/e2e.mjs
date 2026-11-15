@@ -425,6 +425,33 @@ await sleep(400);
 check('可重新進場', !!welcome3?.userId);
 check('重新進場是全新角色，非接回已離場的', welcome3.userId !== uid, `${uid} → ${welcome3?.userId}`);
 
+// ── 舊連線還沒被判定斷線就重連（2026-11-15）──────────────────
+// iOS 切到背景再回來時舊連線多半是死的，但伺服器要等心跳才知道。
+// 原本這時重連一律新建角色：分數與進度全部留在舊 id 上，場上多一個同名的人
+{
+  const before = live().length;
+  const phone4 = new WebSocket(URL);
+  let welcome4 = null;
+  phone4.on('open', () => phone4.send(JSON.stringify({
+    type: 'CLIENT_JOIN', userId: welcome3.userId, rejoinToken: welcome3.rejoinToken, name: '冠儀', avatar: AVATAR,
+  })));
+  phone4.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'CLIENT_WELCOME') welcome4 = m; });
+  let oldRejected = null;
+  phone3.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'CLIENT_REJECT') oldRejected = m; });
+  await sleep(400);
+  check('舊連線還在時重連，接回同一角色', welcome4?.userId === welcome3.userId, `${welcome3.userId} → ${welcome4?.userId}`);
+  check('接手不會多出一個角色', live().length === before, `${before} → ${live().length}`);
+  check('舊連線收到 taken_over', oldRejected?.kind === 'taken_over');
+  // 舊連線晚到的 close 不能把新連線的角色標成離線
+  phone3.close();
+  await sleep(2700);
+  check('舊連線關閉後，新連線的角色沒有變成離線',
+    live().find((a) => a.id === welcome3.userId)?.offline === false);
+  phone4.send(JSON.stringify({ type: 'CLIENT_LEAVE' }));
+  await sleep(200);
+  phone4.close();
+}
+
 // ─────────────────────────────────────────────────────────
 // P2：主辦端與配對任務
 // ─────────────────────────────────────────────────────────
@@ -1807,6 +1834,21 @@ check('無效百分比編碼回 400 而非終止行程',
   (await httpStatus('/%E0%A4%A')) === 400);
 check('送出無效網址之後伺服器仍存活',
   (await httpStatus('/screen/')) === 200);
+
+// 曾可用一則超過 MAX_MESSAGE_BYTES 的 WebSocket 訊息讓整個 Gateway 行程結束：
+// ws 在那條連線上發 error，沒人接就變成 uncaughtException（2026-11-15）
+{
+  const big = new WebSocket(URL);
+  const closed = new Promise((r) => big.on('close', (code) => r(code)));
+  big.on('error', () => {});
+  await new Promise((r) => big.on('open', r));
+  big.send(JSON.stringify({ type: 'CLIENT_JOIN', name: 'x'.repeat(10_000) }));
+  const code = await Promise.race([closed, sleep(2000).then(() => null)]);
+  await sleep(200);
+  check('超大 WebSocket 訊息只關掉那條連線（1009）', code === 1009, String(code));
+  check('送出超大訊息之後伺服器仍存活',
+    server.exitCode === null && (await httpStatus('/screen/')) === 200);
+}
 
 // 匯出角色：角色檔內嵌整組貼圖（參與者照片的轉譯結果），與生成紀錄同樣要主辦端密鑰
 {

@@ -264,6 +264,26 @@ export class Stage {
     return agent;
   }
 
+  /**
+   * 角色還連著，同一個人卻從另一條連線帶著憑證回來：交給新連線（2026-11-15）。
+   *
+   * 最常見的是舊連線已經死了、伺服器還不知道 —— iOS 切到背景再回來、Wi-Fi 換基地台時，
+   * TCP 不會正常關閉，要等心跳（最慢約 10 秒）才發現；手機的重連從 0.5 秒就開始。
+   * reattach() 只收斷線中的角色，claimAgent() 在 id 還在場上時也不收，原本只能新建角色：
+   * 分數、任務進度、今天遇見的人全部留在舊 id 上，場上還多一個同名的人。
+   *
+   * 憑證就是身分證明，所以接管不會讓別人冒名。換掉舊連線（通知、解除綁定）是呼叫端的事。
+   * 失敗與不存在回傳相同結果，理由同 reattach。
+   *
+   * @returns {object|null}
+   */
+  takeover(id, rejoinToken) {
+    const agent = this.agents.get(id);
+    if (!agent || agent.disconnectedAt !== null) return null;
+    if (!tokensMatch(agent.rejoinToken, rejoinToken)) return null;
+    return agent;
+  }
+
   removeAgent(id) {
     if (this.agents.delete(id)) this.rosterDirty = true;
   }

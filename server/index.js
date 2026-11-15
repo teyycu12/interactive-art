@@ -457,6 +457,8 @@ const server = tlsOptions
 // WebSocket 連線與訊息處理
 // ─────────────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, maxPayload: MAX_MESSAGE_BYTES });
+// 同上：伺服器層級的 error（例如 listen 之後才出的錯）沒人接也會讓行程結束
+wss.on('error', (err) => console.warn(`[ws] 伺服器錯誤：${err.message}`));
 
 /** @type {Set<import('ws').WebSocket>} 已註冊的大螢幕連線 */
 const screens = new Set();
@@ -1197,8 +1199,29 @@ function handleJoin(ws, msg) {
   let agent = typeof msg.userId === 'string'
     ? stage.reattach(msg.userId, msg.rejoinToken)
     : null;
-  /** 這次入場是怎麼接上的：new 全新角色、reattach 斷線重連、claim 重開後認領 */
+  /** 這次入場是怎麼接上的：new 全新角色、reattach 斷線重連、takeover 從另一條連線接手、claim 重開後認領 */
   let rejoin = agent ? 'reattach' : 'new';
+
+  // 角色還連著：多半是舊連線已經死了、心跳還沒發現（見 stage.takeover）。
+  // 也可能是同一支手機開了第二個分頁 —— 那就是後開的接手，先開的那個收到 taken_over
+  if (!agent && typeof msg.userId === 'string') {
+    agent = stage.takeover(msg.userId, msg.rejoinToken);
+    if (agent) {
+      rejoin = 'takeover';
+      const old = controllers.get(agent.id);
+      if (old && old !== ws) {
+        send(old, EV.CLIENT_REJECT, {
+          reason: '這個角色已經在另一個分頁或另一支手機上開啟', kind: 'taken_over',
+        });
+        // 解除綁定但不關線：關了的話舊分頁會自動重連、再搶回去。
+        // 它之後的 close 事件因為 agentId 是 null，不會把角色標成離線
+        old.agentId = null;
+        old.role = null;
+        controllers.delete(agent.id);
+      }
+      console.log(`[takeover] ${agent.name} (${agent.id}) 由新連線接手`);
+    }
+  }
 
   // 伺服器重開後場上是空的，reattach 一定失敗。此時改用身分目錄認領：
   // 憑證相符就以原本的 id 重建角色，積分與社交圖譜自動接回（見 state.claimAgent）。
@@ -2612,6 +2635,13 @@ wss.on('connection', (ws, req) => {
   ws.closing = false;
   ws.limiter = new RateLimiter(RATE_LIMIT, performance.now());
   ws.on('pong', () => { ws.isAlive = true; });
+  // 一定要接：超過 MAX_MESSAGE_BYTES 的訊息、壞掉的 frame，ws 都會在這條連線上發 error。
+  // EventEmitter 的 error 沒人接就會丟例外 → uncaughtException → handleCrash 結束整個行程，
+  // 也就是任何一支手機送一則 5KB 的訊息，全場就斷線（2026-11-15 實測）。
+  // ws 自己會用對應的 close code（例如 1009）關掉這條連線，這裡只記一行
+  ws.on('error', (err) => {
+    console.warn(`[ws] 連線錯誤（${ws.agentId ?? ws.role ?? '未登入'}）：${err.message}`);
+  });
 
   ws.on('message', (raw) => {
     // close() 只是開始關閉交握，已在緩衝區中的訊息仍會繼續觸發本事件。
@@ -2954,7 +2984,9 @@ wss.on('connection', (ws, req) => {
       screens.delete(ws);
     } else if (ws.role === 'host') {
       hosts.delete(ws);
-    } else if (ws.agentId) {
+    } else if (ws.agentId && controllers.get(ws.agentId) === ws) {
+      // 只處理「目前綁著這個角色的那條連線」：角色已經交給新連線時（takeover），
+      // 舊連線晚到的 close 不能把新連線的角色標成離線。
       // 不立即移除角色：讓它先無縫轉入 Boids 漫遊（§6 風險 1）。
       // 但要解除定向推送對映，否則會對著已關閉的 socket 送配對碼。
       controllers.delete(ws.agentId);

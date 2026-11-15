@@ -1792,6 +1792,16 @@ function connect() {
       renderHoops();
     } else if (msg.type === EV.AUDIENCE_WAIT) {
       showAudienceWait(msg.ahead);
+    } else if (msg.type === EV.CLIENT_REJECT && msg.kind === 'taken_over') {
+      // 同一個角色在另一個分頁或另一支手機上開了（伺服器已經交給那邊）。
+      // 這條連線不能再自動重連：一連上就會帶著同一組憑證把角色搶回來，兩邊無止境地互搶。
+      // 回到「歡迎回來」：真的要用這一頁，按「回到場上」再接手一次
+      closeAudienceWait();
+      sock.superseded = true;
+      sock.close();
+      setStatus('已在別處開啟', 'warn');
+      showToast(msg.reason, 6000);
+      showScreen(hasSavedCharacter() ? 'return' : 'entry');
     } else if (msg.type === EV.CLIENT_REJECT) {
       closeAudienceWait();
       // 主持人切換到另一場活動：不是登入失敗，照實說明，回進場畫面重新進場（2026-10-29）
