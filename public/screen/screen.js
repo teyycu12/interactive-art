@@ -238,6 +238,9 @@ let offlineTimer = null;
  */
 function setOffline(on, secondsLeft = 0) {
   if (offlineTimer) { clearInterval(offlineTimer); offlineTimer = null; }
+  // 伺服器連不上時進場 QR 掃了也進不來，先收起（重連後 SCREEN_SETTINGS 會再帶回來）；
+  // 它也跟離線提示同在左下角
+  if (on) showJoinQr(null);
   if (!offlineEl) return;
   offlineEl.hidden = !on;
   if (!on) return;
@@ -282,6 +285,7 @@ function connect() {
 
       case EV.SCREEN_SETTINGS:
         applySettings(msg.settings);
+        showJoinQr(msg.joinQr);
         break;
 
 
@@ -314,6 +318,7 @@ function connect() {
           plateOffset.delete(id);
           voxels?.dispose(id);
         }
+        syncJoinQr();
         break;
       }
 
@@ -816,6 +821,29 @@ document.getElementById('photo-qr-close').addEventListener('click', () => {
   document.getElementById('photo-qr').hidden = true;
   if (screenWs?.readyState === WebSocket.OPEN) screenWs.send(JSON.stringify({ type: EV.SCREEN_PHOTO_QR_HIDE }));
 });
+
+// ── 進場 QR（REVIEW E1）──────────────────────────────────────
+// 主辦端打開才顯示（SCREEN_SETTINGS 的 joinQr）。場上還沒有參與者時放在正中間、放大 ——
+// 那時畫面上沒有別的東西要看，大家第一件要做的事就是掃它；有人進場後縮到左下角，
+// 讓遲到的人仍然找得到入口，又不擋住角色。NPC 不算參與者
+let joinQrShown = false;
+
+function showJoinQr(info) {
+  const box = document.getElementById('join-qr');
+  const ok = info && typeof info.qr === 'string' && info.qr.startsWith('data:image/svg+xml');
+  joinQrShown = !!ok;
+  if (!ok) { box.hidden = true; return; }
+  document.getElementById('join-qr-img').src = info.qr;
+  document.getElementById('join-qr-url').textContent = info.url ?? '';
+  box.hidden = false;
+  syncJoinQr();
+}
+
+function syncJoinQr() {
+  if (!joinQrShown) return;
+  const people = [...roster.values()].filter((a) => !a.npc).length;
+  document.getElementById('join-qr').classList.toggle('is-big', people === 0);
+}
 
 function showPhotoQr({ qr, visible } = {}) {
   const box = document.getElementById('photo-qr');

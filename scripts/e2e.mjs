@@ -639,6 +639,31 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'debug', value: false }));
   await sleep(100);
 
+  // 進場 QR（REVIEW E1）：預設關；主辦端打開後大螢幕拿到手機頁面的網址與 SVG 圖，
+  // 新連上的大螢幕也補得到；關掉後不再帶圖
+  {
+    const joins = [];
+    const onJoin = (d) => { const m = JSON.parse(d); if (m.type === 'SCREEN_SETTINGS') joins.push(m.joinQr ?? null); };
+    screen.on('message', onJoin);
+    check('進場 QR 預設不顯示', settings[0]?.joinQr === false, JSON.stringify(settings[0]));
+    host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'joinqr', value: true }));
+    await sleep(200);
+    const on = joins.at(-1);
+    check('主辦端打開進場 QR：大螢幕拿到手機頁面的網址與圖',
+      /\/controller\/$/.test(on?.url ?? '') && /^data:image\/svg\+xml;base64,/.test(on?.qr ?? ''), on?.url);
+    const late = new WebSocket(URL);
+    let lateJoin;
+    late.on('open', () => late.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
+    late.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'SCREEN_SETTINGS') lateJoin = m.joinQr; });
+    await sleep(300);
+    check('進場 QR 開著時，新連上的大螢幕也拿得到', lateJoin?.url === on?.url);
+    late.close();
+    host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'joinqr', value: false }));
+    await sleep(200);
+    check('關掉進場 QR 後不再帶圖', joins.at(-1) === null && settings.at(-1)?.joinQr === false);
+    screen.off('message', onJoin);
+  }
+
   // 音效：預設開；主辦端可以關（講者在台上說話時要能一鍵靜音）
   check('大螢幕音效預設開啟', settings[0]?.sound === true, JSON.stringify(settings[0]));
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'sound', value: false }));

@@ -41,7 +41,8 @@ import { NpcDirector } from './npc.js';
 import { listHistoricalAvatars, withAssetOutfit } from './devAvatars.js';
 import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
-import { photoUrlBase, savePhoto, requestOrigin, rankLanAddresses } from './photos.js';
+import { photoUrlBase, publicOrigin, savePhoto, requestOrigin, rankLanAddresses } from './photos.js';
+import { qrSvgDataUrl, joinUrlOf } from './joinQr.js';
 import { Attendance } from './attendance.js';
 import { startTicker } from './scheduler.js';
 import { MissionBoard } from './missions.js';
@@ -216,7 +217,20 @@ let eventInfo = null;
  * 「清除效果」也拿掉了（2026-10-17）：大螢幕上的物件不再能點，走近時的小動畫幾秒後自己消失。
  * ranks：右下角的積分排行要不要顯示（主持人不想讓全場比分數時可以關）。
  */
-const screenSettings = { debug: false, sound: true, ranks: true };
+const screenSettings = { debug: false, sound: true, ranks: true, joinQr: false };
+
+/**
+ * 大螢幕的進場 QR（server/joinQr.js）。主辦端打開時才產生：網址要用主持人當下連進來的那個
+ * （經 ngrok 就是 ngrok 網域），跟合照 QR 同一套選法（photos.js 的 publicOrigin）。
+ * @type {{url: string, qr: string}|null}
+ */
+let joinQr = null;
+
+/** SCREEN_SETTINGS 的內容。進場 QR 開著時一起帶網址與圖 —— 大螢幕要顯示、主辦端也要能看到同一張 */
+const screenSettingsPayload = () => ({
+  settings: screenSettings,
+  joinQr: screenSettings.joinQr ? joinQr : null,
+});
 
 /**
  * 進場人格問卷的題目。主持人可在主辦端修改，落地進快照 ——
@@ -2259,16 +2273,28 @@ function handleScreenCommand(ws, msg) {
   switch (msg.cmd) {
     case 'debug':
       screenSettings.debug = msg.value === true;
-      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, screenSettingsPayload());
       break;
     case 'sound':
       // 音效開關。展場若有講者在台上說話，主辦方要能一鍵關掉
       screenSettings.sound = msg.value === true;
-      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, screenSettingsPayload());
       break;
     case 'ranks':
       screenSettings.ranks = msg.value === true;
-      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, screenSettingsPayload());
+      break;
+    case 'joinqr':
+      // 打開時依主持人這條連線的網址重新產生（換過網路、改從 ngrok 開，QR 都要跟著對）
+      if (msg.value === true) {
+        const url = joinUrlOf(publicOrigin({
+          scheme: SCHEME, port: PORT, lanAddrs: lanAddresses(), publicHost: process.env.PUBLIC_HOST, viewerOrigin: ws.origin,
+        }));
+        joinQr = { url, qr: qrSvgDataUrl(url) };
+        console.log(`[screen] 大螢幕顯示進場 QR　${url}`);
+      }
+      screenSettings.joinQr = msg.value === true;
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, screenSettingsPayload());
       break;
     case 'capture':
       inBackground(captureForHost(ws), 'capture');
@@ -2708,7 +2734,7 @@ wss.on('connection', (ws, req) => {
         // 投影機中途重開或新接一台螢幕，都要知道現在該顯示哪個主題
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
         send(ws, EV.STAGE_EVENT, { event: eventInfo });
-        send(ws, EV.SCREEN_SETTINGS, { settings: screenSettings });
+        send(ws, EV.SCREEN_SETTINGS, screenSettingsPayload());
         // 一律送：重連前若是暫停中，畫面上還蓋著提示，要靠這則收起
         send(ws, EV.STAGE_PAUSED, { paused: eventPaused });
         send(ws, EV.STAGE_ROSTER, { agents: stage.roster() });
@@ -2936,7 +2962,7 @@ wss.on('connection', (ws, req) => {
         send(ws, EV.HOST_SCORING, scoringView());
         // 主題選單只由 STAGE_THEME 驅動，重整後的主辦端要靠這則才知道目前選的是哪個
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
-        send(ws, EV.SCREEN_SETTINGS, { settings: screenSettings });
+        send(ws, EV.SCREEN_SETTINGS, screenSettingsPayload());
         // 主辦端據此決定先進「活動設定」還是直接進控制台，所以排在主題之後
         //（設定頁要用目前的主題預選場景卡）
         send(ws, EV.STAGE_EVENT, { event: eventInfo });

@@ -29,12 +29,20 @@ const PHOTO_FILE = /^photo_[0-9]+_[0-9]+p_[0-9a-f]+\.png$/;
  * 原本只用第 3 條、而且不排序：這台電腦的第一張網卡是 VirtualBox 的
  * 192.168.56.1，QR 指向一個手機永遠連不到的位址（2026-10-19「QR code 不能用」）。
  */
-export function photoUrlBase({ scheme, port, lanAddrs, publicHost, viewerOrigin }) {
-  if (publicHost && /^https?:\/\//i.test(publicHost)) return `${publicHost.replace(/\/+$/, '')}/photos`;
-  if (publicHost) return `${scheme}://${publicHost}:${port}/photos`;
-  if (viewerOrigin && !isLoopbackOrigin(viewerOrigin)) return `${viewerOrigin}/photos`;
+export function photoUrlBase(opts) {
+  return `${publicOrigin(opts)}/photos`;
+}
+
+/**
+ * 手機連得到的這台電腦的網址（`https://host[:port]`，不含路徑）。選法同上。
+ * 大螢幕的進場 QR 也用它：兩個 QR 指向同一個地方，手機才不會一個掃得開、一個掃不開。
+ */
+export function publicOrigin({ scheme, port, lanAddrs, publicHost, viewerOrigin }) {
+  if (publicHost && /^https?:\/\//i.test(publicHost)) return publicHost.replace(/\/+$/, '');
+  if (publicHost) return `${scheme}://${publicHost}:${port}`;
+  if (viewerOrigin && !isLoopbackOrigin(viewerOrigin)) return viewerOrigin;
   const host = lanAddrs[0] || 'localhost';
-  return `${scheme}://${host}:${port}/photos`;
+  return `${scheme}://${host}:${port}`;
 }
 
 function isLoopbackOrigin(origin) {
