@@ -122,6 +122,10 @@
     animation: c3-pop .9s ease-out;
   }
   .c3-num.final { font-size: 20vh; }
+  /* 任務最後 10 秒（專展自動主持）：不蓋暗、數字放上方，底下的集合圈和角色照樣看得到 */
+  .countdown-321.soft { background: none; justify-content: flex-start; padding-top: 4vh; gap: 8px; }
+  .countdown-321.soft .c3-num { font-size: 18vh; }
+  .countdown-321.soft .c3-num.final { font-size: 10vh; }
   @keyframes c3-pop { from { transform: scale(1.5); opacity: .2; } 30% { opacity: 1; } to { transform: scale(1); } }
   @media (prefers-reduced-motion: reduce) { .c3-num { animation: none; } }
   .hl-kind {

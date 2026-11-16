@@ -2702,10 +2702,19 @@ $('#btn-bingo-submit').addEventListener('click', () => {
 // ── 3、2、1 倒數 ──
 // 全場同一刻開始找人、同一刻停手。不是覆蓋層：pointer-events: none，倒數中照樣可以點（結束前還能填最後一格）
 let c3Timer = null;
-function showCountdown321(label, finalText, ms = 3000) {
+/** 這次倒數屬於哪個任務（MISSION_COUNTDOWN）；任務提早結算時據此收掉 */
+let c3Owner = null;
+function cancelCountdown321() {
+  clearInterval(c3Timer);
+  c3Owner = null;
+  $('#countdown-321').hidden = true;
+}
+function showCountdown321(label, finalText, ms = 3000, { soft = false, owner = null } = {}) {
   const el = $('#countdown-321');
   const num = $('#c3-num');
   $('#c3-label').textContent = label;
+  el.classList.toggle('soft', soft);
+  c3Owner = owner;
   clearInterval(c3Timer);
   const endAt = Date.now() + ms;
   const tick = () => {
@@ -2939,7 +2948,13 @@ function handleMissionMessage(msg) {
       handleHoopsResult(msg);
       break;
 
+    // 專展自動主持：任務最後 10 秒倒數。不蓋暗畫面 —— 這時可能正在輸入配對碼
+    case EV.MISSION_COUNTDOWN:
+      showCountdown321(`${msg.title}　即將結束`, '時間到！', msg.ms, { soft: true, owner: msg.id });
+      break;
+
     case EV.MISSION_CLOSED:
+      if (!msg.id || c3Owner === msg.id) cancelCountdown321();
       // 只收掉結算的那一個；其他進行中的任務照常
       if (msg.id) missions.delete(msg.id); else missions.clear();
       renderMission();
@@ -3837,14 +3852,17 @@ function startQuizCountdown() {
 function showQuestion(q) {
   quiz = q;
   myChoice = null;
-  $('#quiz-no').textContent = `第 ${q.index} 題`;
+  $('#quiz-no').textContent = `第 ${q.number ?? q.index} 題`;
   $('#quiz-q').textContent = q.question;
   $('#quiz-result-card').hidden = true;
   $('#btn-quiz-hide').hidden = true;
   // 討論時間：選項先亮出來但鎖住。這段時間要的是轉頭跟旁邊的人商量，
   // 不是盯著手機 —— 提示寫在最顯眼的那一行
   const talking = q.phase === QUIZ_PHASE.DISCUSS;
-  showQuizMsg(talking ? '先跟身邊的人討論！倒數結束才能作答' : '');
+  const bonus = q.multiplier > 1 ? `本題分數 ×${q.multiplier}` : '';
+  showQuizMsg(talking
+    ? (q.talkKind === 'read' ? '先看題目，倒數結束就能作答' : '先跟身邊的人討論！倒數結束才能作答')
+    : bonus);
   $('#quiz-timer').classList.toggle('talk', talking);
   renderQuizOptions({ locked: talking });
   startQuizCountdown();

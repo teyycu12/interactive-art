@@ -210,7 +210,7 @@ function handle(msg, key) {
       quiz = msg.quiz;
       reveal = null;
       // 有討論時間的題目會送兩次：開始討論、討論結束開始作答
-      pushFeed(`第 ${quiz.index} 題「${quiz.question}」${quiz.phase === QUIZ_PHASE.DISCUSS ? '開始討論' : '開始作答'}`, 'ev-quiz');
+      pushFeed(`第 ${quiz.number ?? quiz.index} 題「${quiz.question}」${quiz.phase === QUIZ_PHASE.DISCUSS ? '開始討論' : '開始作答'}`, 'ev-quiz');
       renderQuiz();
       break;
 
@@ -752,6 +752,37 @@ $('#btn-topics').addEventListener('click', () => {
   lastAction = 'screen';
   ws?.send(JSON.stringify({ type: EV.HOST_SET_TOPICS, enabled: !topicsOn }));
 });
+// 專展自動主持（server/autohost.js）。同話題桌：狀態只由 HOST_STATE 決定，不樂觀切換
+let autohostOn = false;
+$('#btn-autohost').addEventListener('click', () => {
+  lastAction = 'runsheet';
+  ws?.send(JSON.stringify({ type: EV.HOST_SET_AUTOHOST, enabled: !autohostOn }));
+});
+
+function renderAutohost(v) {
+  if (!v) return;
+  autohostOn = v.enabled === true;
+  const btn = $('#btn-autohost');
+  btn.setAttribute('aria-pressed', String(autohostOn));
+  btn.textContent = autohostOn ? '自動主持：開' : '自動主持：關';
+  const status = {
+    off: `打開後，場上有 ${v.minPeople} 人以上就會自動輪流發任務、問答、文字雲。`,
+    waiting: `等人中：場上要有 ${v.minPeople} 人以上才會開始。`,
+    paused: '活動暫停中，自動主持也停著。',
+    manual: '你手動開的活動還在進行，結束後自動主持接著跑。',
+    rest: `準備下一項：${v.next ?? '—'}`,
+    running: `進行中：${v.current ?? '—'}`,
+  }[v.phase] ?? '';
+  $('#autohost-status').textContent = status;
+  // 題庫是空的、上一項被伺服器拒絕的原因：主持人才知道為什麼一直沒有問答
+  const notes = [];
+  if (autohostOn && !v.quizCount) notes.push('問答題庫是空的，問答會跳過。');
+  if (autohostOn && !v.wordcloudCount) notes.push('文字雲沒有題目，文字雲會跳過。');
+  if (autohostOn && v.lastReason) notes.push(`上次跳過：${v.lastReason}`);
+  $('#autohost-detail').textContent = notes.join(' ');
+  $('#autohost-detail').hidden = notes.length === 0;
+}
+
 $('#btn-screen-shot').addEventListener('click', () => {
   $('#btn-screen-shot').disabled = true;
   screenStatus('向大螢幕要畫面中…');
@@ -1365,6 +1396,7 @@ function renderState(state) {
   topicsOn = state.topics !== false;
   $('#btn-topics').setAttribute('aria-pressed', String(topicsOn));
   $('#btn-topics').textContent = topicsOn ? '話題桌：開' : '話題桌：關';
+  renderAutohost(state.autohost);
   $('#stat-audience-box').hidden = !state.audience;
   $('#people-count').textContent = state.agents.length;
   $('#tab-people-count').textContent = state.agents.length;

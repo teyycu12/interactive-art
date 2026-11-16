@@ -48,7 +48,14 @@ export class QuizSession {
    * 出題。
    * @returns {{ok: true, quiz: object} | {ok: false, reason: string}}
    */
-  start({ question, options, correctIndex, durationMs, talkMs = 0 }, now = Date.now()) {
+  /**
+   * talkKind：talkMs 那段時間在畫面上叫什麼。'talk'（預設）= 討論時間；
+   * 'read' = 只是先看題目（專展自動主持用：2–5 個陌生人，不一定會討論）。兩者行為相同，只差字。
+   * multiplier：這一題答對的分數乘幾倍（1–3，預設 1）。
+   * number：畫面上寫「第幾題」。沒給就用整場累計的題號（index）；專展自動主持每一輪從 1 重新數。
+   *   index 仍是整場累計的，事件紀錄與匯出照舊用它。
+   */
+  start({ question, options, correctIndex, durationMs, talkMs = 0, talkKind = 'talk', multiplier = 1, number = null }, now = Date.now()) {
     if (this.current) return { ok: false, reason: '上一題還沒收掉，請先結束本題' };
 
     const text = clean(question, QUIZ.maxQuestionLength);
@@ -78,6 +85,11 @@ export class QuizSession {
       return { ok: false, reason: `討論時間須介於 0 至 ${QUIZ.maxTalkMs / 1000} 秒` };
     }
 
+    const mult = multiplier === undefined || multiplier === null ? 1 : Number(multiplier);
+    if (!Number.isInteger(mult) || mult < 1 || mult > 3) {
+      return { ok: false, reason: '分數倍率須為 1 至 3' };
+    }
+
     this.asked++;
     // 作答從討論結束才開始：startedAt 是作答起點，速度分以它為準
     const answerFrom = now + talk;
@@ -89,6 +101,9 @@ export class QuizSession {
       correctIndex: correct,
       durationMs: ms,
       talkMs: talk,
+      talkKind: talkKind === 'read' ? 'read' : 'talk',
+      number: Number.isInteger(number) && number >= 1 ? number : null,
+      multiplier: mult,
       askedAt: now,
       startedAt: answerFrom,
       endsAt: answerFrom + ms,
@@ -118,6 +133,9 @@ export class QuizSession {
       options: q.options,
       durationMs: q.durationMs,
       talkMs: q.talkMs ?? 0,
+      talkKind: q.talkKind ?? 'talk',
+      multiplier: q.multiplier ?? 1,
+      number: q.number ?? q.index,
       // 討論中倒數的是討論時間；作答中倒數的是作答時間
       remainingMs: Math.max(0, (q.phase === QUIZ_PHASE.DISCUSS ? q.startedAt : q.endsAt) - now),
       phase: q.phase,
@@ -208,7 +226,7 @@ export class QuizSession {
       const speed = correct
         ? Math.round(SCORING.quizSpeedBonus * (1 - a.elapsedMs / q.durationMs))
         : 0;
-      const points = correct ? SCORING.quizCorrect + speed : 0;
+      const points = correct ? (SCORING.quizCorrect + speed) * (q.multiplier ?? 1) : 0;
       awards.push({ agentId, choice: a.choice, correct, elapsedMs: a.elapsedMs, points });
     }
 
@@ -273,6 +291,7 @@ export class QuizSession {
       correctIndex: q.correctIndex,
       durationMs: q.durationMs,
       talkMs: q.talkMs ?? 0,
+      multiplier: q.multiplier ?? 1,
       startedAt: q.startedAt,
       revealedAt: q.revealedAt,
       answers: [...q.answers].map(([agentId, a]) => ({

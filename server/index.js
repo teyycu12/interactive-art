@@ -26,7 +26,7 @@ import { randomBytes, timingSafeEqual, X509Certificate } from 'node:crypto';
 import {
   EV, ACTIONS, PAIR_MISSION_IDS, STAGE, SYNC_FPS, PAIR_ERRORS, MISSION_TYPES,
   CLIENT_SYNC_MS, CLIENT_SYNC_RADIUS,
-  SCORE_SOURCES, EVENT_INFO, GREET_OUTCOME,
+  SCORE_SOURCES, EVENT_INFO, GREET_OUTCOME, QUIZ_PHASE,
 } from '../shared/protocol.js';
 import { OUTFIT_COLORS_MAX, validateAvatarConfig } from '../shared/avatars.js';
 import { avatarMatchesFamily, COLOR_FAMILIES, COLOR_FAMILY_MAP, familiesOfAvatar } from '../shared/colorFamily.js';
@@ -76,6 +76,8 @@ import {
 import { EventLog, sessionName, sessionKind, generationIdOf } from './eventlog.js';
 import { pairRule, traitCatalog, buildRule, feasibility, GatherTracker } from './missionRules.js';
 import { DecodeRound } from './decode.js';
+import { AutoHost } from './autohost.js';
+import { AUTOHOST_CONTENT } from './autohostPlaylist.js';
 import { HoopCourt } from './hoops.js';
 import { hoopsFor } from '../shared/hoops.js';
 import { decodeSymbolsFor } from '../shared/decode.js';
@@ -200,6 +202,28 @@ setSceneTheme(stageTheme);
 const npcs = new NpcDirector(stage, { theme: () => stageTheme });
 // 主辦端上次的 NPC 設定（數量、模式、開關）。外型庫要等掃完生成過的角色才接得上，見 refreshNpcLooks
 npcs.configure(snapshot?.npc?.settings ?? {});
+// 專展自動主持（server/autohost.js）。宣告在前面：hostState()、snapshotData() 都會讀到它。
+// 送出訊息、組場上狀態的函式都在後面，但只在 tick 時才呼叫。
+const autohost = new AutoHost({
+  content: AUTOHOST_CONTENT,
+  status: () => ({
+    present: controllers.size,
+    paused: eventPaused,
+    quiz: quiz.isActive,
+    quizRevealed: quiz.phase === QUIZ_PHASE.REVEALED,
+    wordcloud: wordcloud.isActive,
+    wordcloudResult: wordcloudResultShown,
+    bingo: bingo.isActive,
+    missions: missions.actives.map((m) => m.id),
+    missionDone: missionDoneByAll,
+    spots: missionOptions().spots,
+  }),
+  run: autohostRun,
+  log: (line) => console.log(`[autohost] ${line}`),
+  // 任務是不限時發的（倒數由自動主持自己算），結束前送一次，手機與大螢幕各自從這一刻數
+  countdown: ({ id, title, ms }) => blastAll(EV.MISSION_COUNTDOWN, { id, title, ms }),
+});
+if (snapshot?.autohost?.enabled === true) autohost.setEnabled(true);
 
 /**
  * 活動名稱，取代大螢幕左上角的場景名。null 代表還沒設定 ——
@@ -317,6 +341,8 @@ const snapshotData = () => ({
   event: eventInfo,
   // NPC：設定與選了哪些外型（null = 自動用最新的幾個）。外型本身是磁碟上的貼圖，不存
   npc: { settings: npcs.settings, library: npcLibraryIds },
+  // 自動主持的開關：專展中途伺服器重開，要自己接著主持（跟 NPC 一樣是整台機器的，切換活動不換）
+  autohost: { enabled: autohost.enabled },
   // 預設題目不存：之後改版預設題目時，沒改過的活動才會跟著用新版
   personaQuiz: personaQuiz === DEFAULT_PERSONA_QUIZ ? null : personaQuiz,
   bingoFacts: bingoFactsCustom,
@@ -565,6 +591,7 @@ function hostState() {
     photoQr: photoQr ? { visible: photoQr.visible, qr: photoQr.qr } : null,
     paused: eventPaused,
     wordcloudResultShown,
+    autohost: autohost.view(),
   };
 }
 
@@ -2331,6 +2358,13 @@ function handleHostMessage(ws, msg) {
       break;
     }
 
+    case EV.HOST_SET_AUTOHOST:
+      autohost.setEnabled(msg.enabled === true);
+      events.log('autohost', { enabled: autohost.enabled });
+      markDirty();
+      pushHostState();
+      break;
+
     case EV.HOST_SET_TOPICS:
       topics.setEnabled(msg.enabled === true);
       console.log(`[topic] 話題桌${topics.enabled ? '開啟' : '關閉'}`);
@@ -2551,6 +2585,9 @@ function handleHostMessage(ws, msg) {
         correctIndex: msg.correctIndex,
         durationMs: msg.durationMs,
         talkMs: msg.talkMs,
+        talkKind: msg.talkKind,
+        multiplier: msg.multiplier,
+        number: msg.number,
       });
       if (!result.ok) { send(ws, EV.HOST_REJECT, { reason: result.reason }); return; }
       markDirty();
@@ -2940,6 +2977,7 @@ wss.on('connection', (ws, req) => {
       case EV.HOST_SET_BINGO_FACTS:
       case EV.HOST_SET_SCORING:
       case EV.HOST_REQUEST_REPORT:
+      case EV.HOST_SET_AUTOHOST:
         // 未通過認證的連線一律忽略，不回應也不透露任何狀態
         if (ws.role !== 'host') return;
         handleHostMessage(ws, msg);
@@ -2990,6 +3028,36 @@ let lastClientSyncAt = 0;
 let clientRosterDirty = false;
 /** 上次送給手機的名冊內容指紋，用來判斷是否真的變了 */
 let lastClientRosterSig = '';
+
+// ─────────────────────────────────────────────────────────────
+// 專展自動主持（server/autohost.js）
+// ─────────────────────────────────────────────────────────────
+// 每一步都組成主辦端的訊息走 handleHostMessage，跟主持人按按鈕是同一條路。
+// 這條假連線只收被拒絕的原因（HOST_REJECT），其他回覆（給主辦端的檢查結果之類）丟掉。
+function autohostRun(msg) {
+  let reason = null;
+  const fake = {
+    OPEN: 1, readyState: 1, role: 'host',
+    send(raw) {
+      const m = JSON.parse(raw);
+      if (m.type === EV.HOST_REJECT) reason = m.reason;
+    },
+  };
+  handleHostMessage(fake, msg);
+  return reason ? { ok: false, reason } : { ok: true };
+}
+
+/** 這個任務場上每個（連線中的）人都做完了嗎 */
+function missionDoneByAll(id) {
+  const m = missions.get(id);
+  if (!m || !controllers.size) return false;
+  return [...controllers.keys()].every((agentId) => missions.progressOf(id, agentId) >= m.target);
+}
+
+/** 主辦端面板的自動主持狀態有變才推送（倒數秒數不算，主辦端自己數） */
+let lastAutohostSig = '';
+let lastAutohostAt = 0;
+const AUTOHOST_TICK_MS = 250;
 
 const loop = startTicker({
   intervalMs: TICK_MS,
@@ -3081,6 +3149,16 @@ const loop = startTicker({
     stepGather(now);
     stepDecode(now);
     stepHoops();
+
+    // 專展自動主持：放在各玩法的時間推進之後，看到的才是這一格結算完的狀態。
+    // 不需要每格都看（它的時間單位是秒），也不能讓它的例外帶走主迴圈。
+    if (now - lastAutohostAt >= AUTOHOST_TICK_MS) {
+      lastAutohostAt = now;
+      try { autohost.tick(now); } catch (err) { console.error('[autohost]', err); }
+      const v = autohost.view(now);
+      const sig = JSON.stringify({ ...v, restMs: v.restMs > 0 });
+      if (sig !== lastAutohostSig) { lastAutohostSig = sig; pushHostState(); }
+    }
 
     // 文字雲：有新答案時才廣播，最快每 300ms 一次。三十個人同時送出時
     // 逐則廣播等於每秒上百份整片雲，而大螢幕的動畫本來就跟不上那麼快。

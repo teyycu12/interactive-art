@@ -396,6 +396,17 @@
          上面是正在跑的玩法與它的操作鍵（下一題、收題、結算……），中間是節目單的「下一項」，
          下面是配分。各玩法的詳細設定仍在「活動選單」。 -->
     <div role="tabpanel" id="tab-plan" aria-labelledby="tab-btn-plan">
+      <!-- 專展自動主持（server/autohost.js）：伺服器照 server/autohostPlaylist.js 輪流發任務、問答、文字雲。
+           打開後主持人可以不管它；自己手動發的活動優先，自動主持會等它結束再接下一項。 -->
+      <div class="panel autohost-panel">
+        <div class="panel-head">
+          <h2>專展自動主持</h2>
+          <button class="btn-ghost" id="btn-autohost" aria-pressed="false">自動主持：關</button>
+        </div>
+        <p class="hint" id="autohost-status">打開後，場上有 2 人以上就會自動輪流發任務、問答、文字雲。</p>
+        <p class="hint" id="autohost-detail" hidden></p>
+      </div>
+
       <div class="panel live-control">
         <h2>現在進行中</h2>
         <ul class="lc-list" id="lc-list"></ul>

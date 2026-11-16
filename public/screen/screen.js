@@ -403,7 +403,14 @@ function connect() {
         sparks.push({ a: msg.a.id, b: msg.b.id, at: performance.now() });
         break;
 
+      // 專展自動主持：任務最後 10 秒倒數。不蓋暗畫面 —— 集合圈、解碼這時正是大家要看的
+      case EV.MISSION_COUNTDOWN:
+        countdown321(`${msg.title}　即將結束`, '時間到！', msg.ms, { soft: true, owner: msg.id });
+        break;
+
       case EV.MISSION_CLOSED:
+        // 大家提早做完、任務先結算了：倒數不能繼續數下去
+        if (!msg.id || c3Owner === msg.id) cancelCountdown321();
         if (msg.id) gatherStates.delete(msg.id); else gatherStates.clear();
         if (msg.id) decodeStates.delete(msg.id); else decodeStates.clear();
         rebuildDecodeKeys();
@@ -566,10 +573,19 @@ function renderMissionsBar() {
 
 /** 賓果開始／結束前的 3、2、1。大螢幕跟手機各自數，起點都是收到 BINGO_COUNTDOWN 的那一刻 */
 let c3Timer = null;
-function countdown321(label, finalText, ms = 3000) {
+/** 這次倒數屬於哪個任務（MISSION_COUNTDOWN）；任務提早結算時據此收掉 */
+let c3Owner = null;
+function cancelCountdown321() {
+  clearInterval(c3Timer);
+  c3Owner = null;
+  document.getElementById('countdown-321').hidden = true;
+}
+function countdown321(label, finalText, ms = 3000, { soft = false, owner = null } = {}) {
   const el = document.getElementById('countdown-321');
   const num = document.getElementById('c3-num');
   document.getElementById('c3-label').textContent = label;
+  el.classList.toggle('soft', soft);
+  c3Owner = owner;
   clearInterval(c3Timer);
   const endAt = Date.now() + ms;
   const tick = () => {
@@ -1537,11 +1553,14 @@ function animateTimebar() {
 function showQuestion(q) {
   quiz = q;
   quizDeadline = Date.now() + (q.remainingMs ?? 0);
-  document.getElementById('q-no').textContent = `第 ${q.index} 題`;
+  document.getElementById('q-no').textContent = `第 ${q.number ?? q.index} 題`;
   // 討論時間：題目先亮給全場看，但還不能作答 —— 這是要大家轉頭商量的時間
-  document.getElementById('q-state').textContent = q.phase === QUIZ_PHASE.DISCUSS
-    ? '討論時間　跟旁邊的人商量一下，等一下才能作答'
-    : '拿起手機，按下你的答案！';
+  // talkKind 'read'：專展自動主持的「先看題目」，不叫大家討論（server/quiz.js）
+  const reading = q.talkKind === 'read';
+  const bonus = q.multiplier > 1 ? `　本題分數 ×${q.multiplier}` : '';
+  document.getElementById('q-state').textContent = (q.phase === QUIZ_PHASE.DISCUSS
+    ? (reading ? '先看題目，倒數結束就能作答' : '討論時間　跟旁邊的人商量一下，等一下才能作答')
+    : '拿起手機，按下你的答案！') + bonus;
   quizEl.classList.remove('revealed');
   document.getElementById('q-title').textContent = q.question;
   // 重建而不是只改數字：上一題揭曉時 showReveal 把整格換成「答對 N 人」，

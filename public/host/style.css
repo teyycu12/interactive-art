@@ -930,3 +930,8 @@ td.export { white-space: nowrap; }
 }
 .npc-pin.is-on { background: var(--ink); border-color: var(--ink); color: var(--paper, #fff); }
 .npc-pin:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+
+/* 專展自動主持（節目單分頁最上面）。開著時加框，主持人一眼看得出「現在是自動的」 */
+.autohost-panel:has(#btn-autohost[aria-pressed="true"]) { border-color: var(--teal); }
+#btn-autohost { width: auto; }
+#btn-autohost[aria-pressed="true"] { border-color: var(--teal); color: var(--teal-ink); background: #EAF4F2; }

@@ -2059,5 +2059,9 @@ body:has(#greet-invite:not([hidden])):has(#bingo-offer:not([hidden])) .toast { t
   animation: c3-pop .9s ease-out;
 }
 .c3-num.final { font-size: min(16vw, 14vh); }
+/* 任務最後 10 秒（專展自動主持）：不蓋暗、數字小一點放上方，底下還要能輸入配對碼 */
+.countdown-321.soft { background: none; justify-content: flex-start; padding-top: max(12px, env(safe-area-inset-top)); }
+.countdown-321.soft .c3-num { font-size: min(20vw, 14vh); }
+.countdown-321.soft .c3-num.final { font-size: min(10vw, 8vh); }
 @keyframes c3-pop { from { transform: scale(1.5); opacity: .2; } 30% { opacity: 1; } to { transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) { .c3-num { animation: none; } }

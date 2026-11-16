@@ -400,3 +400,41 @@ describe('討論時間（team talk）', () => {
     assert.equal(s.asked, 0, '被拒的題目不佔題號');
   });
 });
+
+describe('分數倍率與看題目（專展自動主持，2026-11-16）', () => {
+  test('multiplier 2：答對的分數（含速度分）加倍，答錯仍是 0', () => {
+    const q = started({ multiplier: 2 });
+    q.answer(A, 3, T0);
+    q.answer(B, 0, T0);
+    const { awards } = q.reveal(T0 + 1000);
+    assert.equal(awards.find((a) => a.agentId === A).points, 2 * (SCORING.quizCorrect + SCORING.quizSpeedBonus));
+    assert.equal(awards.find((a) => a.agentId === B).points, 0);
+    assert.equal(q.publicView(T0).multiplier, 2);
+  });
+
+  test('沒給倍率就是 1；不合理的倍率擋下', () => {
+    assert.equal(started().publicView(T0).multiplier, 1);
+    for (const bad of [0, 4, 1.5, 'x']) {
+      assert.equal(new QuizSession().start({ ...QUESTION, multiplier: bad }, T0).ok, false, String(bad));
+    }
+  });
+
+  test("talkKind 'read' 只換字，行為跟討論時間一樣（先鎖住、時間到才能答）", () => {
+    const q = started({ talkMs: 5000, talkKind: 'read' });
+    assert.equal(q.publicView(T0).talkKind, 'read');
+    assert.equal(q.answer(A, 3, T0 + 1000).ok, false);
+    assert.equal(started({ talkMs: 5000, talkKind: 'weird' }).publicView(T0).talkKind, 'talk');
+  });
+});
+
+describe('畫面上的題號（number）', () => {
+  test('沒給 number 時用整場累計的題號；給了就照給的寫，index 仍累計', () => {
+    const q = new QuizSession();
+    q.start({ ...QUESTION }, T0);
+    assert.equal(q.publicView(T0).number, 1);
+    q.end();
+    q.start({ ...QUESTION, number: 1 }, T0);
+    assert.equal(q.publicView(T0).number, 1);
+    assert.equal(q.publicView(T0).index, 2);
+  });
+});

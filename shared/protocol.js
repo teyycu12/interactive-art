@@ -117,6 +117,9 @@ export const EV = {
   HOST_SET_TOPICS: 'HOST_SET_TOPICS',         // Host → Server：話題桌開關 {enabled}
   HOST_SET_NPC: 'HOST_SET_NPC',               // Host → Server：NPC 設定 {enabled?, mode?, count?, max?, library?: string[]|null, rescan?}
   HOST_NPC_STATE: 'HOST_NPC_STATE',           // Server → Host：NPC 設定、場上幾個、外型庫與可選的外型
+  // 專展自動主持（server/autohost.js）：狀態放在 HOST_STATE 的 autohost 欄位
+  HOST_SET_AUTOHOST: 'HOST_SET_AUTOHOST',     // Host → Server：開關 {enabled}
+  MISSION_COUNTDOWN: 'MISSION_COUNTDOWN',     // Server → All：自動主持的任務快結束了，倒數 {id, title, ms}
   HOST_START_BINGO: 'HOST_START_BINGO',       // Host → Server：開一輪 {durationMs?}
   HOST_END_BINGO: 'HOST_END_BINGO',           // Host → Server：結束本輪
   HOST_BINGO_DEAL: 'HOST_BINGO_DEAL',         // Host → Server：自我介紹不等了，直接發卡
