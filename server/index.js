@@ -41,7 +41,11 @@ import { NpcDirector } from './npc.js';
 import { listHistoricalAvatars, withAssetOutfit } from './devAvatars.js';
 import { RateLimiter } from './ratelimit.js';
 import { certificateReport } from './certcheck.js';
-import { photoUrlBase, savePhoto, requestOrigin, rankLanAddresses } from './photos.js';
+import { clientIp } from './clientIp.js';
+import { photoUrlBase, publicOrigin, savePhoto, requestOrigin, rankLanAddresses } from './photos.js';
+import { qrSvgDataUrl, joinUrlOf } from './joinQr.js';
+import { loadStarters } from './starters.js';
+import { KeyGuard } from './keyGuard.js';
 import { Attendance } from './attendance.js';
 import { startTicker } from './scheduler.js';
 import { MissionBoard } from './missions.js';
@@ -240,7 +244,20 @@ let eventInfo = null;
  * 「清除效果」也拿掉了（2026-10-17）：大螢幕上的物件不再能點，走近時的小動畫幾秒後自己消失。
  * ranks：右下角的積分排行要不要顯示（主持人不想讓全場比分數時可以關）。
  */
-const screenSettings = { debug: false, sound: true, ranks: true };
+const screenSettings = { debug: false, sound: true, ranks: true, joinQr: false };
+
+/**
+ * 大螢幕的進場 QR（server/joinQr.js）。主辦端打開時才產生：網址要用主持人當下連進來的那個
+ * （經 ngrok 就是 ngrok 網域），跟合照 QR 同一套選法（photos.js 的 publicOrigin）。
+ * @type {{url: string, qr: string}|null}
+ */
+let joinQr = null;
+
+/** SCREEN_SETTINGS 的內容。進場 QR 開著時一起帶網址與圖 —— 大螢幕要顯示、主辦端也要能看到同一張 */
+const screenSettingsPayload = () => ({
+  settings: screenSettings,
+  joinQr: screenSettings.joinQr ? joinQr : null,
+});
 
 /**
  * 進場人格問卷的題目。主持人可在主辦端修改，落地進快照 ——
@@ -391,6 +408,14 @@ function keyMatches(input) {
   return timingSafeEqual(a, b);
 }
 
+/**
+ * 密鑰失敗次數限制（keyGuard.js）。WebSocket 的 HOST_AUTH 與 HTTP 的主辦端路徑共用，
+ * 依來源位址計 —— 經 ngrok 時 clientIp 取代理加上的那一段（見 clientIp.js）
+ */
+const keyGuard = new KeyGuard();
+/** @returns {'ok'|'bad'|'locked'} */
+const checkHostKey = (req, input) => keyGuard.check(clientIp(req), input, keyMatches);
+
 // ─────────────────────────────────────────────────────────────
 // TLS
 //
@@ -465,12 +490,17 @@ function resolveScreenCapture(requestId, image) {
   return true;
 }
 
+const STARTERS = loadStarters(PUBLIC_DIR);
+
 const { handleRequest } = createHttpLayer({
   root: ROOT,
   publicDir: PUBLIC_DIR,
   keyMatches,
+  checkHostKey,
   onScreenCapture: resolveScreenCapture,
   getPersonaQuiz: () => personaView(),
+  // 預設角色：開機時複製到 gen/ 並驗證一次，之後 /api/starters 直接回這份（見 server/starters.js）
+  getStarters: () => STARTERS,
   photosDir: PHOTOS_DIR,
   buildCommit: BUILD_COMMIT,
 });
@@ -483,6 +513,17 @@ const server = tlsOptions
 // WebSocket 連線與訊息處理
 // ─────────────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, maxPayload: MAX_MESSAGE_BYTES });
+// ws 會把 http server 的 error 轉發到 wss，所以這裡接到的包含 listen 失敗。
+// 還沒開始聽就出錯（port 被佔住、權限不足）要照樣結束並說清楚 —— 吞掉的話行程活著卻什麼都不聽，
+// start.sh 的監看迴圈也看不出它壞了。已經在聽之後的錯誤只記一行，不為它讓全場斷線
+wss.on('error', (err) => {
+  if (!server.listening) {
+    console.error(`\n  ✗ 無法在 port ${PORT} 啟動：${err.message}`);
+    if (err.code === 'EADDRINUSE') console.error('    這個 port 已經有別的程式在用（多半是另一個還開著的 PixelAir）。\n');
+    process.exit(1);
+  }
+  console.warn(`[ws] 伺服器錯誤：${err.message}`);
+});
 
 /** @type {Set<import('ws').WebSocket>} 已註冊的大螢幕連線 */
 const screens = new Set();
@@ -505,6 +546,14 @@ const audienceQueue = [];
 const send = (ws, type, payload) => {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type, ...payload }));
 };
+
+/**
+ * 不 await 的非同步工作（合照、截圖、NPC 外型重掃）一律經過這裡。
+ * 沒接住的 rejection 會走到 handleCrash 結束整個行程 —— 為了一張合照或一次重掃讓全場斷線不值得。
+ */
+function inBackground(promise, label) {
+  promise.catch((err) => console.warn(`[${label}] 失敗：${err?.stack ?? err}`));
+}
 
 /** 對指定參與者推送（如配對碼、確認請求） */
 function sendToAgent(agentId, type, payload) {
@@ -1224,8 +1273,29 @@ function handleJoin(ws, msg) {
   let agent = typeof msg.userId === 'string'
     ? stage.reattach(msg.userId, msg.rejoinToken)
     : null;
-  /** 這次入場是怎麼接上的：new 全新角色、reattach 斷線重連、claim 重開後認領 */
+  /** 這次入場是怎麼接上的：new 全新角色、reattach 斷線重連、takeover 從另一條連線接手、claim 重開後認領 */
   let rejoin = agent ? 'reattach' : 'new';
+
+  // 角色還連著：多半是舊連線已經死了、心跳還沒發現（見 stage.takeover）。
+  // 也可能是同一支手機開了第二個分頁 —— 那就是後開的接手，先開的那個收到 taken_over
+  if (!agent && typeof msg.userId === 'string') {
+    agent = stage.takeover(msg.userId, msg.rejoinToken);
+    if (agent) {
+      rejoin = 'takeover';
+      const old = controllers.get(agent.id);
+      if (old && old !== ws) {
+        send(old, EV.CLIENT_REJECT, {
+          reason: '這個角色已經在另一個分頁或另一支手機上開啟', kind: 'taken_over',
+        });
+        // 解除綁定但不關線：關了的話舊分頁會自動重連、再搶回去。
+        // 它之後的 close 事件因為 agentId 是 null，不會把角色標成離線
+        old.agentId = null;
+        old.role = null;
+        controllers.delete(agent.id);
+      }
+      console.log(`[takeover] ${agent.name} (${agent.id}) 由新連線接手`);
+    }
+  }
 
   // 伺服器重開後場上是空的，reattach 一定失敗。此時改用身分目錄認領：
   // 憑證相符就以原本的 id 重建角色，積分與社交圖譜自動接回（見 state.claimAgent）。
@@ -1860,7 +1930,7 @@ function pushNpcState() {
   blast(hosts, EV.HOST_NPC_STATE, npcState());
 }
 
-refreshNpcLooks();
+inBackground(refreshNpcLooks(), 'npc');
 
 function handlePairClaim(ws, msg) {
   // 可以同時有好幾個任務：這次配對算得進哪幾個，在提交碼的當下就決定
@@ -2246,19 +2316,31 @@ function handleScreenCommand(ws, msg) {
   switch (msg.cmd) {
     case 'debug':
       screenSettings.debug = msg.value === true;
-      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, screenSettingsPayload());
       break;
     case 'sound':
       // 音效開關。展場若有講者在台上說話，主辦方要能一鍵關掉
       screenSettings.sound = msg.value === true;
-      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, screenSettingsPayload());
       break;
     case 'ranks':
       screenSettings.ranks = msg.value === true;
-      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, { settings: screenSettings });
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, screenSettingsPayload());
+      break;
+    case 'joinqr':
+      // 打開時依主持人這條連線的網址重新產生（換過網路、改從 ngrok 開，QR 都要跟著對）
+      if (msg.value === true) {
+        const url = joinUrlOf(publicOrigin({
+          scheme: SCHEME, port: PORT, lanAddrs: lanAddresses(), publicHost: process.env.PUBLIC_HOST, viewerOrigin: ws.origin,
+        }));
+        joinQr = { url, qr: qrSvgDataUrl(url) };
+        console.log(`[screen] 大螢幕顯示進場 QR　${url}`);
+      }
+      screenSettings.joinQr = msg.value === true;
+      blast([...screens, ...hosts], EV.SCREEN_SETTINGS, screenSettingsPayload());
       break;
     case 'capture':
-      captureForHost(ws);
+      inBackground(captureForHost(ws), 'capture');
       break;
     default:
   }
@@ -2352,8 +2434,8 @@ function handleHostMessage(ws, msg) {
       // 固定組：{assetId, on}。改了就重掃一次（自動挑的外型可能跟著變）
       if (msg.fixed && typeof msg.fixed === 'object') {
         setNpcFixed(msg.fixed.assetId, msg.fixed.on === true);
-        refreshNpcLooks();
-      } else if (msg.rescan === true) refreshNpcLooks();
+        inBackground(refreshNpcLooks(), 'npc');
+      } else if (msg.rescan === true) inBackground(refreshNpcLooks(), 'npc');
       else pushNpcState();
       break;
     }
@@ -2607,7 +2689,7 @@ function handleHostMessage(ws, msg) {
     case EV.HOST_TAKE_PHOTO:
       // 刻意不 await：合照要等角色就定位，await 會讓這條 WebSocket 的
       // 訊息處理停擺數秒，期間主辦端的其他操作全部沒有回應。
-      takeGroupPhoto(ws, { arrange: msg.arrange });
+      inBackground(takeGroupPhoto(ws, { arrange: msg.arrange }), 'photo');
       break;
 
     case EV.HOST_REVEAL_QUIZ:
@@ -2644,11 +2726,19 @@ wss.on('connection', (ws, req) => {
   ws.role = null;
   // 這條連線是從哪個網址連進來的（例如 ngrok 網域）。主辦端拍合照時，QR 就指向同一個網址
   ws.origin = requestOrigin(req, SCHEME);
+  ws.ip = clientIp(req);
   ws.agentId = null;
   ws.isAlive = true;
   ws.closing = false;
   ws.limiter = new RateLimiter(RATE_LIMIT, performance.now());
   ws.on('pong', () => { ws.isAlive = true; });
+  // 一定要接：超過 MAX_MESSAGE_BYTES 的訊息、壞掉的 frame，ws 都會在這條連線上發 error。
+  // EventEmitter 的 error 沒人接就會丟例外 → uncaughtException → handleCrash 結束整個行程，
+  // 也就是任何一支手機送一則 5KB 的訊息，全場就斷線（2026-11-15 實測）。
+  // ws 自己會用對應的 close code（例如 1009）關掉這條連線，這裡只記一行
+  ws.on('error', (err) => {
+    console.warn(`[ws] 連線錯誤（${ws.agentId ?? ws.role ?? '未登入'}）：${err.message}`);
+  });
 
   ws.on('message', (raw) => {
     // close() 只是開始關閉交握，已在緩衝區中的訊息仍會繼續觸發本事件。
@@ -2698,7 +2788,7 @@ wss.on('connection', (ws, req) => {
         // 投影機中途重開或新接一台螢幕，都要知道現在該顯示哪個主題
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
         send(ws, EV.STAGE_EVENT, { event: eventInfo });
-        send(ws, EV.SCREEN_SETTINGS, { settings: screenSettings });
+        send(ws, EV.SCREEN_SETTINGS, screenSettingsPayload());
         // 一律送：重連前若是暫停中，畫面上還蓋著提示，要靠這則收起
         send(ws, EV.STAGE_PAUSED, { paused: eventPaused });
         send(ws, EV.STAGE_ROSTER, { agents: stage.roster() });
@@ -2901,7 +2991,14 @@ wss.on('connection', (ws, req) => {
           send(ws, EV.HOST_REJECT, { reason: '已入場的裝置不能改登入主辦端' });
           return;
         }
-        if (!keyMatches(msg.key)) {
+        const verdict = keyGuard.check(ws.ip, msg.key, keyMatches);
+        if (verdict === 'locked') {
+          send(ws, EV.HOST_REJECT, {
+            reason: `嘗試次數過多，請 ${Math.ceil(keyGuard.retryAfterMs(ws.ip) / 1000)} 秒後再試`,
+          });
+          return;
+        }
+        if (verdict !== 'ok') {
           console.warn('[host] 通行密鑰錯誤，拒絕連線');
           send(ws, EV.HOST_REJECT, { reason: '通行密鑰錯誤' });
           return;
@@ -2926,7 +3023,7 @@ wss.on('connection', (ws, req) => {
         send(ws, EV.HOST_SCORING, scoringView());
         // 主題選單只由 STAGE_THEME 驅動，重整後的主辦端要靠這則才知道目前選的是哪個
         send(ws, EV.STAGE_THEME, { theme: stageTheme });
-        send(ws, EV.SCREEN_SETTINGS, { settings: screenSettings });
+        send(ws, EV.SCREEN_SETTINGS, screenSettingsPayload());
         // 主辦端據此決定先進「活動設定」還是直接進控制台，所以排在主題之後
         //（設定頁要用目前的主題預選場景卡）
         send(ws, EV.STAGE_EVENT, { event: eventInfo });
@@ -2992,7 +3089,9 @@ wss.on('connection', (ws, req) => {
       screens.delete(ws);
     } else if (ws.role === 'host') {
       hosts.delete(ws);
-    } else if (ws.agentId) {
+    } else if (ws.agentId && controllers.get(ws.agentId) === ws) {
+      // 只處理「目前綁著這個角色的那條連線」：角色已經交給新連線時（takeover），
+      // 舊連線晚到的 close 不能把新連線的角色標成離線。
       // 不立即移除角色：讓它先無縫轉入 Boids 漫遊（§6 風險 1）。
       // 但要解除定向推送對映，否則會對著已關閉的 socket 送配對碼。
       controllers.delete(ws.agentId);
@@ -3590,6 +3689,11 @@ const takeGroupPhoto = async (ws, { arrange = 'stay' } = {}) => {
       events.log('photo', { ok: false, error });
       send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error });
     }
+  } catch (err) {
+    // 不接的話主辦端會一直停在「合成中」，而且例外會往上冒（見 inBackground）
+    console.warn(`[photo] 失敗：${err?.stack ?? err}`);
+    events.log('photo', { ok: false, error: 'exception' });
+    send(ws, EV.HOST_PHOTO_STATE, { phase: 'ERROR', error: 'compose_failed' });
   } finally {
     photoInFlight = false;
   }
@@ -3628,6 +3732,7 @@ function freshEventState() {
   clearTimeout(wordcloudResultTimer);
   wordcloudResultShown = false;
   gatherTrackers.clear();
+  decodeRounds.clear();
   loggedMode.clear();
   scoresDirty = true;
   linksDirty = true;
@@ -3793,6 +3898,10 @@ function switchEvent(id) {
   // 3. 換成那一場
   freshEventState();
   applyEventSnapshot(target);
+  // 球場跟著場景走。applyEventSnapshot 直接改 stageTheme、不經 setStageTheme，
+  // 所以 resetHoops 不會被叫到：從體育館切到廚房投籃還開著，反過來體育館卻沒有投籃。
+  // 不必推送 —— 大螢幕與主辦端下面就會被關線、重連時拿到新的
+  court = hoopsFor(stageTheme) ? new HoopCourt(hoopsFor(stageTheme)) : null;
   // 切過去就是要開始這場：之前暫停過的一併恢復開放
   eventPaused = false;
   activeEventId = id;

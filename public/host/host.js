@@ -133,7 +133,7 @@ function handle(msg, key) {
       break;
 
     case EV.SCREEN_SETTINGS:
-      renderScreenSettings(msg.settings);
+      renderScreenSettings(msg.settings, msg.joinQr);
       break;
 
     case EV.HOST_SCREEN_SHOT:
@@ -715,9 +715,20 @@ const sendScreen = (cmd, value) => {
 let screenDebug = false;
 let screenSound = true;
 let screenRanks = true;
+let screenJoinQr = false;
 
-function renderScreenSettings(settings) {
+function renderScreenSettings(settings, joinQr = null) {
   if (!settings) return;
+  screenJoinQr = settings.joinQr === true;
+  const join = $('#btn-join-qr');
+  join.setAttribute('aria-pressed', String(screenJoinQr));
+  join.textContent = screenJoinQr ? '進場 QR：顯示中' : '進場 QR：隱藏';
+  const shown = screenJoinQr && typeof joinQr?.qr === 'string';
+  $('#join-qr-host').hidden = !shown;
+  if (shown) {
+    $('#join-qr-host-img').src = joinQr.qr;
+    $('#join-qr-host-url').textContent = joinQr.url;   // 伺服器產生的網址，一律 textContent
+  }
   screenSound = settings.sound !== false;
   const sound = $('#btn-screen-sound');
   sound.setAttribute('aria-pressed', String(screenSound));
@@ -743,6 +754,7 @@ function screenStatus(text) {
 }
 
 $('#btn-screen-ranks').addEventListener('click', () => sendScreen('ranks', !screenRanks));
+$('#btn-join-qr').addEventListener('click', () => sendScreen('joinqr', !screenJoinQr));
 $('#btn-screen-debug').addEventListener('click', () => sendScreen('debug', !screenDebug));
 $('#btn-screen-sound').addEventListener('click', () => sendScreen('sound', !screenSound));
 

@@ -292,6 +292,37 @@
   }
   .photo-qr-close:hover, .photo-qr-close:focus-visible { opacity: 1; }
 
+  /* ── 進場 QR（REVIEW E1）──────────────────────────────────
+     主辦端打開才出現。平常在左下角（右下角是排行榜與合照 QR，上方中央是任務橫幅）；
+     場上還沒有參與者時（.is-big）放在正中間、放大，那時畫面上沒有別的東西要看。
+     白底、留安靜區、夠大：要隔著場地、斜著掃得到。
+     z-index 3：跟合照 QR 一樣在問答、文字雲的滿版面板後面 */
+  .join-qr {
+    position: fixed; left: 22px; bottom: 22px; z-index: 3;
+    display: flex; align-items: center; gap: 10px;
+    background: #fff;
+    border: 3px solid var(--ink); border-radius: 14px;
+    padding: 8px 14px 8px 8px;
+    box-shadow: 0 10px 30px -16px rgba(47,42,38,.55);
+  }
+  .join-qr[hidden] { display: none; }
+  .join-qr img { display: block; width: 104px; height: 104px; }
+  .join-qr-title { margin: 0; font-size: 18px; font-weight: 900; color: var(--ink); }
+  .join-qr-url {
+    margin: 4px 0 0; max-width: 170px;
+    font: 700 11px/1.3 ui-monospace, Consolas, monospace; color: var(--soft);
+    overflow-wrap: anywhere;
+  }
+  .join-qr.is-big {
+    left: 50%; bottom: auto; top: 50%; transform: translate(-50%, -50%);
+    flex-direction: column; gap: 10px;
+    padding: 18px 24px 16px; border-radius: 18px;
+    text-align: center;
+  }
+  .join-qr.is-big img { width: min(34vh, 320px); height: min(34vh, 320px); }
+  .join-qr.is-big .join-qr-title { font-size: clamp(24px, 2.6vw, 40px); }
+  .join-qr.is-big .join-qr-url { max-width: none; font-size: clamp(13px, 1.2vw, 18px); }
+
   /* 活動暫停中：蓋在所有東西上面（包括問答、文字雲面板） */
   .paused-cover {
     position: fixed; inset: 0; z-index: 40;
@@ -380,6 +411,15 @@
 </div>
 
 <!-- 大合照下載 QR：拍完後顯示幾分鐘（SCREEN_PHOTO_QR）。要放在 #ranks 後面，CSS 靠兄弟選擇器避開排行榜 -->
+<!-- 進場 QR：主辦端打開才出現（server/joinQr.js）。圖與網址都由伺服器給 -->
+<div class="join-qr" id="join-qr" hidden>
+  <img id="join-qr-img" alt="用手機掃描進場的 QR Code">
+  <div>
+    <p class="join-qr-title">📱 掃描加入</p>
+    <p class="join-qr-url" id="join-qr-url"></p>
+  </div>
+</div>
+
 <div class="photo-qr" id="photo-qr" hidden>
   <button class="photo-qr-close" id="photo-qr-close" type="button" aria-label="收起 QR Code">×</button>
   <img id="photo-qr-img" alt="大合照下載 QR Code">

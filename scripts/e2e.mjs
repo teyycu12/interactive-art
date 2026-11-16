@@ -425,6 +425,33 @@ await sleep(400);
 check('可重新進場', !!welcome3?.userId);
 check('重新進場是全新角色，非接回已離場的', welcome3.userId !== uid, `${uid} → ${welcome3?.userId}`);
 
+// ── 舊連線還沒被判定斷線就重連（2026-11-15）──────────────────
+// iOS 切到背景再回來時舊連線多半是死的，但伺服器要等心跳才知道。
+// 原本這時重連一律新建角色：分數與進度全部留在舊 id 上，場上多一個同名的人
+{
+  const before = live().length;
+  const phone4 = new WebSocket(URL);
+  let welcome4 = null;
+  phone4.on('open', () => phone4.send(JSON.stringify({
+    type: 'CLIENT_JOIN', userId: welcome3.userId, rejoinToken: welcome3.rejoinToken, name: '冠儀', avatar: AVATAR,
+  })));
+  phone4.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'CLIENT_WELCOME') welcome4 = m; });
+  let oldRejected = null;
+  phone3.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'CLIENT_REJECT') oldRejected = m; });
+  await sleep(400);
+  check('舊連線還在時重連，接回同一角色', welcome4?.userId === welcome3.userId, `${welcome3.userId} → ${welcome4?.userId}`);
+  check('接手不會多出一個角色', live().length === before, `${before} → ${live().length}`);
+  check('舊連線收到 taken_over', oldRejected?.kind === 'taken_over');
+  // 舊連線晚到的 close 不能把新連線的角色標成離線
+  phone3.close();
+  await sleep(2700);
+  check('舊連線關閉後，新連線的角色沒有變成離線',
+    live().find((a) => a.id === welcome3.userId)?.offline === false);
+  phone4.send(JSON.stringify({ type: 'CLIENT_LEAVE' }));
+  await sleep(200);
+  phone4.close();
+}
+
 // ─────────────────────────────────────────────────────────
 // P2：主辦端與配對任務
 // ─────────────────────────────────────────────────────────
@@ -611,6 +638,31 @@ check('未認證連線無法發布任務', missionStates.length === 0, `收到 $
 
   host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'debug', value: false }));
   await sleep(100);
+
+  // 進場 QR（REVIEW E1）：預設關；主辦端打開後大螢幕拿到手機頁面的網址與 SVG 圖，
+  // 新連上的大螢幕也補得到；關掉後不再帶圖
+  {
+    const joins = [];
+    const onJoin = (d) => { const m = JSON.parse(d); if (m.type === 'SCREEN_SETTINGS') joins.push(m.joinQr ?? null); };
+    screen.on('message', onJoin);
+    check('進場 QR 預設不顯示', settings[0]?.joinQr === false, JSON.stringify(settings[0]));
+    host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'joinqr', value: true }));
+    await sleep(200);
+    const on = joins.at(-1);
+    check('主辦端打開進場 QR：大螢幕拿到手機頁面的網址與圖',
+      /\/controller\/$/.test(on?.url ?? '') && /^data:image\/svg\+xml;base64,/.test(on?.qr ?? ''), on?.url);
+    const late = new WebSocket(URL);
+    let lateJoin;
+    late.on('open', () => late.send(JSON.stringify({ type: 'SCREEN_HELLO' })));
+    late.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'SCREEN_SETTINGS') lateJoin = m.joinQr; });
+    await sleep(300);
+    check('進場 QR 開著時，新連上的大螢幕也拿得到', lateJoin?.url === on?.url);
+    late.close();
+    host.send(JSON.stringify({ type: 'HOST_SCREEN_CMD', cmd: 'joinqr', value: false }));
+    await sleep(200);
+    check('關掉進場 QR 後不再帶圖', joins.at(-1) === null && settings.at(-1)?.joinQr === false);
+    screen.off('message', onJoin);
+  }
 
   // 音效：預設開；主辦端可以關（講者在台上說話時要能一鍵靜音）
   check('大螢幕音效預設開啟', settings[0]?.sound === true, JSON.stringify(settings[0]));
@@ -1527,7 +1579,8 @@ await sleep(200);
   const p1InA = p1.welcome;
   let closedWith = null;
   h.w.on('close', (code) => { closedWith = code; });
-  h.w.send(JSON.stringify({ type: 'HOST_CREATE_EVENT', name: '第二場', theme: 'kitchen' }));
+  // 第二場用體育館：甲場是辦公室，一來一回剛好驗到球場有沒有跟著場景換
+  h.w.send(JSON.stringify({ type: 'HOST_CREATE_EVENT', name: '第二場', theme: 'gym' }));
   await sleep(700);
   check('建立新活動後，場上的手機回到進場畫面（說明是切換了活動）',
     p1Rejects.some((m) => m.kind === 'event_switched'), JSON.stringify(p1Rejects));
@@ -1538,7 +1591,9 @@ await sleep(200);
   const bId = evB?.activeId;
   check('新活動成為開啟中的那場', bId && bId !== aId && evB.events.find((e) => e.id === bId)?.name === '第二場'
     && evB.events.some((e) => e.id === aId));
-  check('新活動的名稱與場景', last(h, 'STAGE_EVENT')?.event?.name === '第二場' && last(h, 'STAGE_THEME')?.theme === 'kitchen');
+  check('新活動的名稱與場景', last(h, 'STAGE_EVENT')?.event?.name === '第二場' && last(h, 'STAGE_THEME')?.theme === 'gym');
+  // 球場原本不跟著活動換（applyEventSnapshot 不經 setStageTheme）：從辦公室切到體育館沒有投籃
+  check('切到體育館的活動：球場開著', last(h, 'HOOPS_STATE')?.active === true, JSON.stringify(last(h, 'HOOPS_STATE')));
   check('新活動場上沒有人、積分是空的',
     last(h, 'HOST_STATE')?.agents?.length === 0 && (last(h, 'HOST_STATE')?.leaderboard?.length ?? 0) === 0,
     JSON.stringify(last(h, 'HOST_STATE')?.leaderboard));
@@ -1560,6 +1615,8 @@ await sleep(200);
   await sleep(700);
   h = await openHost();
   check('切回原本那場', last(h, 'HOST_EVENTS')?.activeId === aId && last(h, 'STAGE_EVENT')?.event?.name === eventName);
+  check('切回辦公室的活動：球場收掉了', !h.msgs.some((m) => m.type === 'HOOPS_STATE' && m.active),
+    JSON.stringify(last(h, 'HOOPS_STATE')));
   check('切回來後，第二場的人不在這場', !(last(h, 'HOST_STATE')?.agents ?? []).some((a) => a.name === '第二場的人'));
   // 切回甲場：甲場的人用甲場的憑證進場，認得回原本的身分
   rejoin(p1);
@@ -1808,6 +1865,21 @@ check('無效百分比編碼回 400 而非終止行程',
 check('送出無效網址之後伺服器仍存活',
   (await httpStatus('/screen/')) === 200);
 
+// 曾可用一則超過 MAX_MESSAGE_BYTES 的 WebSocket 訊息讓整個 Gateway 行程結束：
+// ws 在那條連線上發 error，沒人接就變成 uncaughtException（2026-11-15）
+{
+  const big = new WebSocket(URL);
+  const closed = new Promise((r) => big.on('close', (code) => r(code)));
+  big.on('error', () => {});
+  await new Promise((r) => big.on('open', r));
+  big.send(JSON.stringify({ type: 'CLIENT_JOIN', name: 'x'.repeat(10_000) }));
+  const code = await Promise.race([closed, sleep(2000).then(() => null)]);
+  await sleep(200);
+  check('超大 WebSocket 訊息只關掉那條連線（1009）', code === 1009, String(code));
+  check('送出超大訊息之後伺服器仍存活',
+    server.exitCode === null && (await httpStatus('/screen/')) === 200);
+}
+
 // 匯出角色：角色檔內嵌整組貼圖（參與者照片的轉譯結果），與生成紀錄同樣要主辦端密鑰
 {
   const id = '0123456789abcdef0123456789abcdef';
@@ -1817,6 +1889,30 @@ check('送出無效網址之後伺服器仍存活',
     (await httpStatus(`/api/host/history/${id}/bundle?key=WRONG1`)) === 403);
   check('匯出路徑不接受資產編號以外的字元',
     (await httpStatus(`/api/host/history/..%2f..%2f.env/bundle?key=${HOST_KEY}`)) === 400);
+}
+
+// 預設角色（REVIEW E3）：生成服務沒開（這裡的 VISION_PORT 指向沒人聽的 port）時，
+// 手機仍然有東西可以選；選了的角色真的進得了場、貼圖網址讀得到
+{
+  const body = JSON.parse(await httpBody('/api/starters'));
+  check('生成服務沒開時，/api/starters 仍給得出 6 個預設角色', body.ok && body.starters?.length === 6,
+    String(body.starters?.length));
+  const pick = body.starters?.[0];
+  check('預設角色的貼圖讀得到', !!pick && (await httpStatus(pick.avatar.textures.full)) === 200
+    && (await httpStatus(pick.avatar.textures.side)) === 200);
+  const w = new WebSocket(URL);
+  let welcome = null; let rejected = null;
+  w.on('open', () => w.send(JSON.stringify({ type: 'CLIENT_JOIN', name: '預設角色', avatar: pick?.avatar, entry: 'dressup' })));
+  w.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m.type === 'CLIENT_WELCOME') welcome = m;
+    if (m.type === 'CLIENT_REJECT') rejected = m;
+  });
+  await sleep(400);
+  check('用預設角色可以進場', !!welcome?.userId && !rejected, rejected?.reason);
+  w.send(JSON.stringify({ type: 'CLIENT_LEAVE' }));
+  await sleep(200);
+  w.close();
 }
 
 // 曾可讓已入場的控制器改註冊為大螢幕，使角色永久留在場上、耗盡人數上限
@@ -2340,6 +2436,26 @@ check('引導端點擋下過大的影格',
   check('後半段走過的玩法也都留下事件', missing.length === 0, `缺 ${missing.join('、')}`);
   check('私訊事件不含內容',
     readEvents().filter((e) => e.ev === 'message').every((e) => !('text' in e)));
+}
+
+// 主辦端密鑰的失敗次數限制（REVIEW B1）：HTTP 與 WebSocket 共用同一份計數。
+// 鎖是依來源位址，而 e2e 全部來自 127.0.0.1，鎖住後 60 秒內連正確的密鑰也不收 ——
+// 所以這段必須放在整份測試的最後，後面不能再有任何要用主辦端密鑰的測試
+{
+  let last = 0;
+  for (let i = 0; i < 12 && last !== 429; i++) {
+    last = await httpStatus(`/api/host/avatars?key=WRONG${i}`);
+  }
+  check('密鑰錯太多次被鎖住（HTTP 429）', last === 429, String(last));
+  check('鎖住期間正確的密鑰也不收', (await httpStatus(`/api/host/avatars?key=${HOST_KEY}`)) === 429);
+  const ws = new WebSocket(URL);
+  let reject = null;
+  ws.on('message', (d) => { const m = JSON.parse(d); if (m.type === 'HOST_REJECT') reject = m; });
+  await new Promise((r) => ws.on('open', r));
+  ws.send(JSON.stringify({ type: 'HOST_AUTH', key: HOST_KEY }));
+  await sleep(300);
+  check('鎖住後 WebSocket 的 HOST_AUTH 也被擋（共用計數）', /嘗試次數過多/.test(reject?.reason ?? ''), reject?.reason);
+  ws.close();
 }
 
 finish();

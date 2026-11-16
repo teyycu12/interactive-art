@@ -53,6 +53,24 @@ describe('重連憑證', () => {
     assert.equal(stage.reattach(agent.id, 'x'.repeat(32)), null);
   });
 
+  // 舊連線死了伺服器還不知道時重連：原本只能新建角色，分數全部留在舊 id 上（2026-11-15）
+  test('角色還連著時，憑證正確可交給新連線', () => {
+    const stage = new Stage();
+    const agent = add(stage, '本人');
+    assert.equal(stage.takeover(agent.id, agent.rejoinToken)?.id, agent.id);
+    assert.equal(stage.agents.size, 1);
+  });
+
+  test('接管：憑證錯誤、角色斷線中、角色不存在都回 null', () => {
+    const stage = new Stage();
+    const agent = add(stage, '本人');
+    assert.equal(stage.takeover(agent.id, 'f'.repeat(32)), null, '偽造憑證不應通過');
+    assert.equal(stage.takeover(agent.id, undefined), null);
+    assert.equal(stage.takeover('usr_deadbeef', agent.rejoinToken), null);
+    stage.markDisconnected(agent.id);
+    assert.equal(stage.takeover(agent.id, agent.rejoinToken), null, '斷線中的角色走 reattach');
+  });
+
   // 換一個新角色（EV.CLIENT_RETIRE）：舊角色原本要以離線狀態多站 45 秒、佔名額
   test('換新角色時，憑證正確即讓斷線中的舊角色立即離場', () => {
     const stage = new Stage();

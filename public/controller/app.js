@@ -233,10 +233,15 @@ function showScreen(id) {
 const nameInput = $('#name-input');
 nameInput.value = displayName;
 
+const NAME_HINT = '這會顯示在大螢幕上你的角色頭上';
+const NAME_HINT_EMPTY = '先填名字，下面的按鈕才能按';
+
 function syncStartButton() {
   const empty = nameInput.value.trim().length === 0;
   $('#btn-start').disabled = empty;
   $('#btn-scan').disabled = empty;
+  // 兩顆按鈕是灰的時候要說為什麼：不說的話，看起來像壞掉或還在載入（REVIEW E8）
+  $('#name-hint').textContent = empty ? NAME_HINT_EMPTY : NAME_HINT;
 }
 // 只聽 input 不夠：iOS Safari 用注音／拼音輸入時，字還在選字（ㄛㄎ 底下有底線）
 // 的整段期間可能完全不發 input，選完字也不一定補發，按鈕就一直是灰的，
@@ -555,9 +560,56 @@ async function loadDressupCatalog() {
 
 const DU_UNAVAILABLE = '換裝暫時不能用，請通知工作人員。';
 
-/** 進換裝頁。選單讀不到（生成服務沒開）就停在原地說明，不會卡在空白頁 */
+/**
+ * 預設角色（REVIEW E3）：換裝要靠生成服務，它一掛新來的人全部卡在門口。
+ * 伺服器備了 6 個預先組好的角色（server/starters.js），讓參與者先選一個進場。
+ * 畫法跟換裝完全一樣，所以場上仍然只有一種畫法；進場後想換可以離場再來（生成服務好了就能換裝）。
+ * @returns {Promise<boolean>} 有沒有成功顯示選擇頁
+ */
+async function showStarterPick() {
+  let starters = [];
+  try {
+    const body = await (await fetch('/api/starters')).json();
+    if (body?.ok && Array.isArray(body.starters)) starters = body.starters;
+  } catch { /* 連伺服器都連不到：下面照原樣請參與者找工作人員 */ }
+  if (!starters.length) return false;
+
+  stopScanStream();
+  showScreen('dressup');
+  $('#dressup').classList.add('is-picking');
+  $('#du-pick').hidden = false;
+  $('#du-sub').textContent = '換裝暫時不能用，先選一個進場';
+  const box = $('#du-pick-options');
+  box.classList.add('is-starters');
+  box.replaceChildren(...starters.map((s) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'du-pick-card';
+    const img = document.createElement('img');
+    img.alt = '';
+    img.src = s.avatar?.textures?.full ?? '';
+    const label = document.createElement('span');
+    label.textContent = s.label;   // manifest 來的字，一律 textContent
+    card.append(img, label);
+    card.addEventListener('click', () => {
+      config = s.avatar;
+      entryRoute = 'dressup';
+      try {
+        localStorage.setItem(LS.avatar, JSON.stringify(config));
+        localStorage.setItem(LS.entry, entryRoute);
+      } catch { /* 略 */ }
+      askPersonaThen(enterStage);
+    });
+    return card;
+  }));
+  return true;
+}
+
+/** 進換裝頁。選單讀不到（生成服務沒開）就改讓參與者選預設角色；連預設都沒有才停在原地說明 */
 async function goDressup(opts = {}) {
+  $('#du-pick-options').classList.remove('is-starters');
   if (!(await loadDressupCatalog())) {
+    if (await showStarterPick()) return true;
     showToast(DU_UNAVAILABLE, 5000);
     return false;
   }
@@ -1792,6 +1844,16 @@ function connect() {
       renderHoops();
     } else if (msg.type === EV.AUDIENCE_WAIT) {
       showAudienceWait(msg.ahead);
+    } else if (msg.type === EV.CLIENT_REJECT && msg.kind === 'taken_over') {
+      // 同一個角色在另一個分頁或另一支手機上開了（伺服器已經交給那邊）。
+      // 這條連線不能再自動重連：一連上就會帶著同一組憑證把角色搶回來，兩邊無止境地互搶。
+      // 回到「歡迎回來」：真的要用這一頁，按「回到場上」再接手一次
+      closeAudienceWait();
+      sock.superseded = true;
+      sock.close();
+      setStatus('已在別處開啟', 'warn');
+      showToast(msg.reason, 6000);
+      showScreen(hasSavedCharacter() ? 'return' : 'entry');
     } else if (msg.type === EV.CLIENT_REJECT) {
       closeAudienceWait();
       // 主持人切換到另一場活動：不是登入失敗，照實說明，回進場畫面重新進場（2026-10-29）
@@ -1951,7 +2013,7 @@ function renderMission() {
   $('#pair-title').textContent = single ? single.title : `${list.length} 個任務同時進行`;
   $('#pair-brief').textContent = single
     ? (single.brief ?? '')
-    : '走向另一位參與者，互相交換配對碼。一次配對會同時算進符合的任務。';
+    : '找現場的一個人，面對面互相交換配對碼。一次配對會同時算進符合的任務。';
 
   // COLOR_HUNT：把要找的顏色放在最顯眼的位置。
   // 只寫在 brief 裡不夠 —— 那行字在小螢幕上會被當成說明略過，

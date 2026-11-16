@@ -333,6 +333,10 @@ canvas.portrait { image-rendering: pixelated; display: block; }
   image-rendering: pixelated;
 }
 .du-pick-card:active { transform: translateY(2px); box-shadow: none; }
+/* 預設角色（生成服務掛了時）：6 張卡片，比選素體的兩張小，一頁放得下 */
+.du-pick-options.is-starters { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.du-pick-options.is-starters .du-pick-card { padding: 8px 4px 10px; font-size: 15px; }
+.du-pick-options.is-starters .du-pick-card img { height: min(24dvh, 170px); }
 
 /* ── 控制器 ─────────────────────────────────────────────── */
 /* 狀態列。

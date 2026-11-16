@@ -1,0 +1,95 @@
+{
+  "starters": [
+    {
+      "id": "9265a056c01744dfbdf8d492bd6dd537",
+      "label": "女生 A",
+      "base": "female",
+      "fallbackColors": {
+        "hair": "#42231B",
+        "legs": "#2F4C7A",
+        "skin": "#D4936B",
+        "torso": "#F4F1EA"
+      },
+      "outfitColors": [
+        "#F4F1EA",
+        "#2F4C7A"
+      ]
+    },
+    {
+      "id": "118f2e176c1d4190b9af7b23147417de",
+      "label": "女生 B",
+      "base": "female",
+      "fallbackColors": {
+        "hair": "#42231B",
+        "legs": "#E9A9B8",
+        "skin": "#D4936B",
+        "torso": "#E9A9B8"
+      },
+      "outfitColors": [
+        "#E9A9B8"
+      ]
+    },
+    {
+      "id": "ba9c400b071a44dda16f22b0918d99a1",
+      "label": "女生 C",
+      "base": "female",
+      "fallbackColors": {
+        "hair": "#42231B",
+        "legs": "#2B2B30",
+        "skin": "#D4936B",
+        "torso": "#84A98C"
+      },
+      "outfitColors": [
+        "#84A98C",
+        "#2B2B30"
+      ]
+    },
+    {
+      "id": "5f3d93df2f5e422fb6ee6dccee2b8d1f",
+      "label": "女生 D",
+      "base": "female",
+      "fallbackColors": {
+        "hair": "#42231B",
+        "legs": "#6D6875",
+        "skin": "#D4936B",
+        "torso": "#E9C46A"
+      },
+      "outfitColors": [
+        "#E9C46A",
+        "#CDCED2",
+        "#6D6875"
+      ]
+    },
+    {
+      "id": "d8a1c939aacc46eea4c9cdcb318d9e45",
+      "label": "男生 A",
+      "base": "male",
+      "fallbackColors": {
+        "hair": "#42231B",
+        "legs": "#2B2B30",
+        "skin": "#D4936B",
+        "torso": "#4A6FA5"
+      },
+      "outfitColors": [
+        "#4A6FA5",
+        "#CDCED2",
+        "#2B2B30"
+      ]
+    },
+    {
+      "id": "25cfd78181274733898065429db48cf7",
+      "label": "男生 B",
+      "base": "male",
+      "fallbackColors": {
+        "hair": "#42231B",
+        "legs": "#8B5A2B",
+        "skin": "#D4936B",
+        "torso": "#F4F1EA"
+      },
+      "outfitColors": [
+        "#F4F1EA",
+        "#8B5A2B"
+      ]
+    }
+  ]
+}

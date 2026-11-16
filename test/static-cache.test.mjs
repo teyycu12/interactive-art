@@ -54,6 +54,37 @@ describe('靜態檔：gzip 與 ETag', () => {
     assert.equal(again.body.length, 0);
   }));
 
+  // 原本先整個讀進記憶體才比對 ETag：three.module.js 這種大檔每一次 304 都白讀一次
+  test('回 304 與送現成的 gzip 快取時，不讀檔', () => withServer(async (get) => {
+    const target = path.join(process.cwd(), 'public', 'controller', 'style.css');
+    const first = await get('/controller/style.css', { 'Accept-Encoding': 'gzip' });   // 暖快取
+    assert.equal(first.status, 200);
+    const reads = [];
+    const real = fs.readFile;
+    fs.readFile = (f, ...rest) => { reads.push(String(f)); return real(f, ...rest); };
+    try {
+      const notModified = await get('/controller/style.css', { 'If-None-Match': first.headers.etag });
+      assert.equal(notModified.status, 304);
+      const cached = await get('/controller/style.css', { 'Accept-Encoding': 'gzip' });
+      assert.equal(cached.status, 200);
+      assert.equal(cached.headers['content-encoding'], 'gzip');
+      assert.deepEqual(zlib.gunzipSync(cached.body), fs.readFileSync(target));
+    } finally { fs.readFile = real; }
+    assert.deepEqual(reads.filter((f) => f === target), [], '不該讀檔');
+  }));
+
+  test('沒有壓縮快取、檔案要送內容時才讀（只讀一次）', () => withServer(async (get) => {
+    const target = path.join(process.cwd(), 'public', 'controller', 'index.html');
+    let n = 0;
+    const real = fs.readFile;
+    fs.readFile = (f, ...rest) => { if (String(f) === target) n++; return real(f, ...rest); };
+    try {
+      const r = await get('/controller/index.html');
+      assert.equal(r.status, 200);
+    } finally { fs.readFile = real; }
+    assert.equal(n, 1);
+  }));
+
   test('圖片不再壓一次', () => withServer(async (get) => {
     const r = await get('/controller/icon-192.png', { 'Accept-Encoding': 'gzip' });
     assert.equal(r.status, 200);

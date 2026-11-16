@@ -53,7 +53,7 @@
       <h3 id="howto-title">使用方式</h3>
       <ol class="howto-steps">
         <li><b>準備</b><span>按「＋ 創建活動」，進控制台排好節目單和題目。</span></li>
-        <li><b>開始</b><span>按「切換到這場」，請大家用手機掃 QR Code 進場。</span></li>
+        <li><b>開始</b><span>按「切換到這場」，再按右側欄的「進場 QR」，大螢幕就會出現讓大家用手機掃描的 QR Code。</span></li>
         <li><b>休息</b><span>按「暫停」手機暫時進不來；按「重新開始」恢復，資料都在。</span></li>
       </ol>
       <p class="howto-warn">活動中不要切換場次，場上的人會被請出去。刪除活動後無法復原。</p>
@@ -637,6 +637,14 @@
                 title="大螢幕右下角的積分排行。不想讓全場比分數時可以隱藏">排行榜：顯示</button>
         <button class="btn-ghost sp-sound" id="btn-screen-sound" aria-pressed="true" aria-label="大螢幕音效：開"
                 title="大螢幕音效。投影的電腦要先點一下大螢幕畫面才會出聲">🔊</button>
+      </div>
+      <!-- 進場 QR（REVIEW E1）：大螢幕上的「掃描加入」。場上沒有人時在正中間放大，有人進場後縮到左下角。
+           網址跟著主持人這台連進來的網址走（經 ngrok 就是 ngrok 網域），打開的當下產生 -->
+      <button class="btn-ghost sp-join" id="btn-join-qr" aria-pressed="false"
+              title="在大螢幕顯示讓手機掃描進場的 QR Code">進場 QR：隱藏</button>
+      <div class="join-qr-host" id="join-qr-host" hidden>
+        <img id="join-qr-host-img" alt="進場 QR Code">
+        <p class="hint tiny" id="join-qr-host-url"></p>
       </div>
       <!-- 大合照：原本在「場景與合照」分頁。所有角色轉向鏡頭，就定位後自動拍。
            站位兩種：原地（記錄大家自己走出來的樣子）或依互動排位（server/photoLayout.js） -->

@@ -224,14 +224,14 @@ export const MISSION_TYPES = {
   PAIRING: {
     id: 'PAIRING',
     label: '找一個人配對',
-    brief: '走向另一位參與者，互相交換配對碼',
+    brief: '找現場的一個人，面對面互相交換配對碼',
     defaultTarget: 2,   // 每人要完成幾次
     maxTarget: 10,
   },
   COLOR_HUNT: {
     id: 'COLOR_HUNT',
     label: '找特定顏色的人配對',
-    brief: '找一位身上帶指定顏色的參與者，交換配對碼',
+    brief: '找現場一位身上有指定顏色的人，面對面交換配對碼',
     defaultTarget: 2,
     maxTarget: 10,
     /**
@@ -250,7 +250,7 @@ export const MISSION_TYPES = {
   TRAIT_HUNT: {
     id: 'TRAIT_HUNT',
     label: '找某一類的人配對',
-    brief: '找一位屬於指定類型的參與者，交換配對碼 —— 看不出來，得開口問',
+    brief: '找現場一位屬於指定類型的人，面對面交換配對碼 —— 看不出來，得開口問',
     defaultTarget: 2,
     maxTarget: 10,
     param: 'trait',       // { key, value }：主辦端從場上已有的標籤裡挑
@@ -258,7 +258,7 @@ export const MISSION_TYPES = {
   DIFF_TRAIT: {
     id: 'DIFF_TRAIT',
     label: '找跟你不同類的人配對',
-    brief: '找一位跟你類型不同的參與者，交換配對碼 —— 跨出自己的小圈圈',
+    brief: '找現場一位跟你類型不同的人，面對面交換配對碼 —— 跨出自己的小圈圈',
     defaultTarget: 2,
     maxTarget: 10,
     param: 'traitKey',    // 比哪一題（標籤的鍵）
@@ -266,7 +266,7 @@ export const MISSION_TYPES = {
   SAME_TRAIT: {
     id: 'SAME_TRAIT',
     label: '找跟你同類的人配對',
-    brief: '找一位跟你類型相同的參與者，交換配對碼 —— 先找到自己人',
+    brief: '找現場一位跟你類型相同的人，面對面交換配對碼 —— 先找到自己人',
     defaultTarget: 1,
     maxTarget: 10,
     param: 'traitKey',
@@ -280,7 +280,7 @@ export const MISSION_TYPES = {
   GATHER: {
     id: 'GATHER',
     label: '湊滿人數到指定地點',
-    brief: '找齊指定人數，一起走到大螢幕上的集合點',
+    brief: '找齊指定人數，大家一起操控角色走到大螢幕上標示的集合點',
     defaultTarget: 1,
     maxTarget: 1,
     param: 'spot',        // 目前場景的集合點（shared/themes.js 的 spots）＋ teamSize

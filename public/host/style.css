@@ -706,6 +706,12 @@ td.export { white-space: nowrap; }
 .sp-controls .sp-sound { font-size: 20px; padding: 0; }
 .sp-controls button { width: 100%; min-height: 40px; padding: 6px 8px; font-size: 13px; border-width: 2px; border-radius: 9px; }
 .sp-controls button[aria-pressed="false"] { color: var(--ink-faint); }
+.sp-join { width: 100%; min-height: 40px; margin-top: 6px; font-size: 13px; border-width: 2px; border-radius: 9px; }
+.sp-join[aria-pressed="false"] { color: var(--ink-faint); }
+.join-qr-host[hidden] { display: none; }
+.join-qr-host { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.join-qr-host img { width: 72px; height: 72px; flex: none; background: #fff; border-radius: 6px; }
+.join-qr-host p { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, Consolas, monospace; }
 
 /* ── 連續問答 ─────────────────────────────────────────────── */
 .quiz-run-row { margin: 12px 0 6px; }

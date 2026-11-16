@@ -22,11 +22,13 @@ YELLOW='\033[0;33m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# Node 與 shell 都不讀 .env，自己撈這一個值
+# Node 與 shell 都不讀 .env，自己撈這一個值。根目錄與 backend/ 的 .env 都找（backend/config.py 也是兩處都讀）
 DOMAIN="${NGROK_DOMAIN:-}"
-if [ -z "$DOMAIN" ] && [ -f "$ROOT_DIR/.env" ]; then
-  DOMAIN=$(grep -E '^NGROK_DOMAIN=' "$ROOT_DIR/.env" | tail -1 | cut -d= -f2- | tr -d '"'"'"' ')
-fi
+for envfile in "$ROOT_DIR/.env" "$ROOT_DIR/backend/.env"; do
+  if [ -z "$DOMAIN" ] && [ -f "$envfile" ]; then
+    DOMAIN=$(grep -E '^NGROK_DOMAIN=' "$envfile" | tail -1 | cut -d= -f2- | tr -d '"'"'"' ' || true)
+  fi
+done
 DOMAIN="${DOMAIN#https://}"
 DOMAIN="${DOMAIN%/}"
 
@@ -48,17 +50,30 @@ if [ -f "$ROOT_DIR/certs/cert.pem" ] && [ -f "$ROOT_DIR/certs/key.pem" ]; then
   UPSTREAM="https://localhost:${NODE_PORT}"
 fi
 
+# 一個行程與它底下所有的子孫，從最底層殺起
+kill_tree() {
+  local child
+  for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$child"; done
+  kill -TERM "$1" 2>/dev/null || true
+}
+
 cleanup() {
+  trap - EXIT INT TERM
   echo ""
   echo -e "${RED}正在關閉...${NC}"
-  [ -n "$NGROK_PID" ] && kill "$NGROK_PID" 2>/dev/null
-  # 只殺 start.sh 本身時它的 trap 不一定來得及跑，生成服務與互動層會殘留佔住
-  # :3000 / :5055，下次啟動就撞埠。直接連它的子行程一起收
+  if [ -n "$NGROK_PID" ]; then kill "$NGROK_PID" 2>/dev/null || true; fi
+  # 先讓 start.sh 自己收：它知道監看迴圈底下真正的 node / python 是誰（見 start.sh 的 cleanup）。
+  # 不能先 pkill -P 它的子行程 —— 那些是監看迴圈，殺了之後 node / python 變成孤兒，
+  # 繼續佔住 :3000 / :5055，下次啟動就撞埠。5 秒內沒收完才整棵樹一起殺
   if [ -n "$START_PID" ]; then
-    pkill -TERM -P "$START_PID" 2>/dev/null
-    kill "$START_PID" 2>/dev/null
+    kill -TERM "$START_PID" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      kill -0 "$START_PID" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$START_PID" 2>/dev/null; then kill_tree "$START_PID"; fi
   fi
-  wait 2>/dev/null
+  wait 2>/dev/null || true
   echo "已關閉。"
 }
 trap cleanup EXIT INT TERM
