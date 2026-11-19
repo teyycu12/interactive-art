@@ -93,12 +93,23 @@ start_vision() {
   echo -e "${GREEN}▶ 啟動 AI 生成服務${NC}（Python，只綁本機）"
   echo ""
 
-  if [ -d "$ROOT_DIR/venv" ]; then
+  # venv 在 macOS/Linux 是 bin/，在 Windows 是 Scripts/
+  if [ -f "$ROOT_DIR/venv/bin/activate" ]; then
     # shellcheck disable=SC1091
     source "$ROOT_DIR/venv/bin/activate"
+  elif [ -f "$ROOT_DIR/venv/Scripts/activate" ]; then
+    source "$ROOT_DIR/venv/Scripts/activate"
   fi
 
-  supervise "生成服務" python3 "$BACKEND_DIR/service.py" &
+  # Windows 的 venv 只有 python.exe，沒有 python3
+  local PY=python3
+  if [ -n "$VIRTUAL_ENV" ] && [ -x "$VIRTUAL_ENV/Scripts/python.exe" ]; then
+    PY=python
+  elif ! command -v python3 >/dev/null 2>&1; then
+    PY=python
+  fi
+
+  supervise "生成服務" "$PY" "$BACKEND_DIR/service.py" &
 }
 
 start_node() {
